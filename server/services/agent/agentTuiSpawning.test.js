@@ -1,297 +1,47 @@
+import {
+  flushMicrotasks,
+  sessionCallbacks,
+  SESSION_ID,
+  defaultProvider,
+  defaultTuiConfig,
+  runSpawn,
+  claudeTuiConfig,
+  agyTuiConfig,
+  CODEX_COMPOSER,
+  pasteCount,
+  PASTE_OFF,
+  PASTE_ON,
+  AGY_COMPOSER_FOOTER,
+  SIGNAL_POLL_MS,
+  installTuiRuntimeHooks,
+} from './agentTuiSpawning.test.fixture.js';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { join } from 'path';
-
-// ─── Mocks for spawnTuiAgent tests ──────────────────────────────────────────
-// All vi.mock calls must be at the top level before any imports.
-
-vi.mock('../shell.js', () => ({
-  createShellSession: vi.fn(),
-  spawnCommandSession: vi.fn(),
-  writeToSession: vi.fn(),
-  pasteToSession: vi.fn(),
-  killSession: vi.fn(),
-  getSession: vi.fn(),
-  getSessionProcess: vi.fn(),
-  registerExternalSession: vi.fn(),
-  unregisterExternalSession: vi.fn(),
-}));
-
-// Only the spawn rpc is faked. The refusal/ambiguity classifier is the real one
-// (importOriginal): re-implementing it here would make the ledger assertions
-// below agree with a copy of the rule rather than with the rule (#4615).
-vi.mock('../cos/cosRunnerClient.js', async (importOriginal) => ({
-  ...(await importOriginal()),
-  spawnTuiSessionViaRunner: vi.fn(),
-}));
-
-vi.mock('../cos/cosEvents.js', () => ({
-  emitLog: vi.fn()
-}));
-
-vi.mock('../cos/cosAgentLifecycle.js', () => ({
-  appendAgentOutputLines: vi.fn().mockResolvedValue(undefined),
-  updateAgent: vi.fn().mockResolvedValue(undefined),
-  completeAgent: vi.fn().mockResolvedValue(undefined)
-}));
-
-
-vi.mock('../provider/providerStatus.js', () => ({
-  markProviderUsageLimit: vi.fn().mockResolvedValue(undefined),
-}));
-
-vi.mock('../cos/cosTaskStore.js', () => ({
-  updateTask: vi.fn().mockResolvedValue(undefined)
-}));
-
-
-
-vi.mock('./agentErrorAnalysis.js', () => ({
-  analyzeAgentFailure: vi.fn().mockReturnValue(null),
-  resolveFailedTaskUpdate: vi.fn().mockResolvedValue({ status: 'failed' })
-}));
-
-// The lifecycle ledger is a real file writer (data/cos/run-events.jsonl) — mocked
-// so first-output telemetry lands in a spy rather than the developing install's
-// ledger, and because this suite's fileUtils mock carries no PATHS.cos (#4540).
-const { appendRunEvent } = vi.hoisted(() => ({ appendRunEvent: vi.fn(async () => ({ appended: true })) }));
-vi.mock('./agentRunEventLog.js', () => ({ appendRunEvent }));
-
-vi.mock('./agentRunTracking.js', () => ({
-  completeAgentRun: vi.fn().mockResolvedValue(undefined)
-}));
-
-vi.mock('./agentCompletion.js', () => ({
-  processAgentCompletion: vi.fn().mockResolvedValue(undefined)
-}));
-
-// The Ollama-backed spawn path prepares the daemon's context window first, which
-// otherwise reaches a real localhost:11434 in this suite. Stub it to a no-op —
-// its own behavior is covered by services/ollamaAgentContext.test.js.
-vi.mock('../ollamaAgentContext.js', () => ({
-  ensureOllamaAgentContext: vi.fn().mockResolvedValue({ skipped: false, contextLength: null, applied: false, warning: null }),
-  beginOllamaAgentWork: vi.fn().mockResolvedValue(() => {})
-}));
-
-vi.mock('./agentFinalization.js', () => ({
-  finalizeAgent: vi.fn().mockResolvedValue(undefined),
-}));
-
-vi.mock('../codeReview.js', () => ({
-  resolveReviewLoopOptions: vi.fn().mockResolvedValue({
-    reviewers: ['codex'],
-    usernames: [],
-    optionalReviewers: [],
-    reviewerMaxRounds: {},
-    reviewStopMode: 'on-clean',
-    reviewerApplies: false,
-    reviewerModels: {},
-  })
-}));
-
-// Only the mutable registries are stubbed; the module's other state helpers
-// come from the real module so the test does not duplicate their behavior.
-vi.mock('./agentState.js', async (importOriginal) => ({
-  ...await importOriginal(),
-  activeAgents: new Map(),
-  userTerminatedAgents: new Set(),
-  pausedAgents: new Map(),
-  consumePausedAgentExit: vi.fn(),
-  registerSpawnedAgent: vi.fn(),
-  unregisterSpawnedAgent: vi.fn(),
-}));
-
-// The loopback API token the agent's own PortOS `curl`s spend. The real one
-// reads settings.json to decide whether an instance password is set; this suite
-// only cares that whatever it returns reaches the PTY env.
-vi.mock('./agentApiAuth.js', () => ({
-  resolveAgentApiEnv: vi.fn().mockResolvedValue({}),
-}));
-
-vi.mock('../git/status.js', () => ({
-  getDiff: vi.fn().mockResolvedValue('diff content here'),
-  // Read by the merge-gate contract check (#5876) to name the branch it
-  // probes the forge for.
-  getBranch: vi.fn().mockResolvedValue('claim/issue-5876'),
-}));
-vi.mock('../forgeAuth.js', () => ({
-  // No owner-matched gh account by default → empty overlay (ambient auth kept).
-  resolveForgeTokenEnv: vi.fn().mockResolvedValue({}),
-}));
-
-// The forge lookup itself (`resolveForgeForRepo` + gitlab.js/github.js) is
-// exercised on its own in prProbe.test.js — this suite only needs to drive
-// the merge-gate contract check's branching on the tri-state result.
-vi.mock('../prProbe.js', () => ({
-  probePrForBranch: vi.fn().mockResolvedValue({ prState: null, prUrl: null, prNumber: null, cli: null, readable: true }),
-}));
-
-// finish() hands the run to the shared completion dispatch (pipeline
-// progression → worktree cleanup with the PR disposition → retry-hold release).
-// Doubled at that boundary: what this suite owns is that the TUI path dispatches
-// with the right verdict and PR ownership, and only when it should — the
-// dispatch's own sequence is pinned in agentCompletionCleanup.test.js. Mocking
-// it also keeps the real cleanup graph (cos.js, worktreeManager, recoveryTasks)
-// out of this suite.
-vi.mock('./agentCompletionCleanup.js', () => ({
-  runSpawnerCompletionCleanup: vi.fn().mockResolvedValue(undefined),
-}));
-
-// Unit tests must not hit the real maintenance journal (disk locks, lstatSync on the fs mock below).
-vi.mock('../../lib/maintenanceAdmission.js', () => ({ maintenance: {
-  withResource: (_kind, _id, fn) => fn(), finishResource: vi.fn(), markResourceUnsettled: vi.fn(),
-  continueSettlement: fn => fn(), recoverOwned: vi.fn(),
-} }));
-
-vi.mock('../../lib/backupSnapshotBoundary.js', async importOriginal => ({
-  ...(await importOriginal()),
-  withBackupAssetPublication: async work => work(),
-}));
-
-vi.mock('fs', () => ({
-  readdirSync: vi.fn().mockReturnValue([]),
-  // Default: no .agent-done sentinel on disk. The completion-sentinel test
-  // overrides this to true. Re-set in beforeEach so it can't leak between tests.
-  existsSync: vi.fn().mockReturnValue(false),
-  statSync: vi.fn().mockReturnValue({ isFile: () => true, mtimeMs: Date.now() }),
-  watch: vi.fn(() => {
-    let onClose;
-    return {
-      once: vi.fn((event, callback) => {
-        if (event === 'close') onClose = callback;
-      }),
-      close: vi.fn(() => onClose?.()),
-    };
-  }),
-}));
-
-vi.mock('fs/promises', () => ({
-  writeFile: vi.fn().mockResolvedValue(undefined),
-  appendFile: vi.fn().mockResolvedValue(undefined),
-  readFile: vi.fn().mockResolvedValue(''),
-  rm: vi.fn().mockResolvedValue(undefined),
-  // raw.txt tail-read for failure analysis. The default stat → open/read
-  // chain reports a zero-byte file so non-tail-read tests don't accidentally
-  // exercise the read path. The two tail-read tests below override stat
-  // and open via mockResolvedValueOnce to assert the IO contract on the
-  // failure / success finalize branches.
-  stat: vi.fn().mockResolvedValue({ size: 0 }),
-  open: vi.fn().mockResolvedValue({
-    read: vi.fn().mockResolvedValue({ bytesRead: 0 }),
-    close: vi.fn().mockResolvedValue(undefined),
-  }),
-}));
-
-vi.mock('../../lib/fileUtils.js', async (importOriginal) => ({
-  // Keep the real pure helpers (safeJSONParse — used transitively by
-  // agentSentinel.parseSentinelPayload, etc.); only stub the I/O + PATHS.
-  ...(await importOriginal()),
-  tryReadFile: vi.fn().mockResolvedValue(null),
-  // `data` is required alongside `root`: this module pulls in taskTypeHooks.js
-  // -> ... -> lib/subscriptionSavings.js -> postStreak.js ->
-  // activeDays.js -> timezone.js -> services/settings.js, whose module-scope
-  // `join(PATHS.data, 'settings.json')` throws on load without it (#4211
-  // added the activeDays.js edge). The bare `PATHS: {...}` below fully
-  // replaces the real object (it doesn't merge), so every member this graph
-  // needs at import time has to be listed explicitly.
-  PATHS: { root: '/tmp/portos-root', data: '/tmp/portos-root/data' }
-}));
-
-vi.mock('../../lib/provider/providerModels.js', async (importOriginal) => ({
-  // Pull the real module first so pure helpers added later (isClaudeCommand,
-  // applyLeanClaudeArgs, leanClaudeAuthEnv, …) don't silently vanish from the
-  // mock — only the fns below are stubbed/spied.
-  ...(await importOriginal()),
-  // Mirror the real behaviour: pass through the model string, return null for
-  // the codex-configured-default sentinel or null/undefined input.
-  resolveCliModel: vi.fn((m) => (m === 'codex-configured-default' || !m) ? null : m),
-  // NOTE: `appendModelArgs` calls `resolveInjectedTuiModel`, which is pulled in
-  // REAL via importOriginal above and calls `resolveBedrockCliModel` /
-  // `prefixOpencodeModel` as module-INTERNAL references — a vi.mock override of
-  // those two names cannot intercept an internal call, so stubbing them here
-  // would be dead weight that reads as protection. Instead the suite pins the
-  // one input the real mapper keys on (`CLAUDE_CODE_USE_BEDROCK`, cleared in
-  // beforeEach below), so these assertions are deterministic regardless of the
-  // ambient env on a developer's Bedrock box or a CI runner.
-  // Mirror hasModelFlag (real impl unit-tested in providerModels.test.js).
-  hasModelFlag: vi.fn((a) => Array.isArray(a) && a.some((x) => x === '--model' || x === '-m' || (typeof x === 'string' && (x.startsWith('--model=') || x.startsWith('-m=')))))
-}));
-
-// Shrink buffer thresholds so the truncation tests can trip them with tiny
-// inputs. Real values (10MB output, 256MB raw spool) would force tests to
-// push millions of bytes through the spawner; the wiring under test is
-// identical at any cap. OUTPUT_BUFFER_HEADROOM is intentionally 1 byte so
-// ANY appendLine call trips it — otherwise the output-buffer overflow test
-// would assert on the byte count of the two spawn-startup string literals
-// (which would silently stop tripping if those strings change). The raw
-// spool cap is shrunk to 100 bytes so the disk-safety-valve test exercises
-// the truncation path without allocating hundreds of MB.
-vi.mock('../../lib/tuiHandshake.js', async (importOriginal) => {
-  const actual = await importOriginal();
-  return {
-    ...actual,
-    OUTPUT_BUFFER_HEADROOM: 1,
-    OUTPUT_BUFFER_CAP: 1,
-    RAW_SPOOL_MAX_BYTES: 100,
-  };
-});
-
-// child_process.execFile is used only by the TUI liveness probe
-// (shellHasLiveChild). Default to an error callback so the probe resolves
-// "assume alive" (guard bypassed) for every test that doesn't exercise it —
-// the early-exit test below overrides this to report no child process.
-vi.mock('../../lib/childProcess.js', async (importOriginal) => {
-  const actual = await importOriginal();
-  return { ...actual, execFile: vi.fn((_file, _args, _opts, cb) => cb(new Error('not mocked'))) };
-});
-
-import { existsSync, statSync } from 'fs';
-import { readFile, rm } from 'fs/promises';
+import { readFile } from 'fs/promises';
 import { execFile } from '../../lib/childProcess.js';
 import { maintenance } from '../../lib/maintenanceAdmission.js';
-import { buildTuiSpawnConfig, spawnTuiAgent } from './agentTuiSpawning.js';
+import { buildTuiSpawnConfig, } from './agentTuiSpawning.js';
 import {
   PUBLIC_REVIEW_ACTIONS_EXECUTION_PROFILE,
   PUBLIC_REVIEW_GATE_EXECUTION_PROFILE,
 } from '../../lib/agent/agentExecutionProfiles.js';
 import { runSpawnerCompletionCleanup } from './agentCompletionCleanup.js';
-import { spawnTuiSessionViaRunner, RUNNER_SPAWN_REFUSED, RUNNER_SPAWN_AMBIGUOUS } from '../cos/cosRunnerClient.js';
+import { spawnTuiSessionViaRunner } from '../cos/cosRunnerClient.js';
 import * as shellService from '../shell.js';
 import * as agentLifecycle from './agentFinalization.js';
 import { beginOllamaAgentWork, ensureOllamaAgentContext } from '../ollamaAgentContext.js';
 import * as cosAgentLifecycle from '../cos/cosAgentLifecycle.js';
 import * as gitStatusService from '../git/status.js';
 import * as forgeAuthService from '../forgeAuth.js';
-const gitService = { ...gitStatusService, ...forgeAuthService };
-import { probePrForBranch } from '../prProbe.js';
-import { promptOpensOwnPr } from '../promptSections/completion.js';
-import { activeAgents, userTerminatedAgents, pausedAgents, consumePausedAgentExit } from './agentState.js';
 import {
-  SELF_CLEARING_RESUBMIT_INTERVAL_MS,
-  OOM_NUDGE_SETTLE_MS,
-  OOM_NUDGE_ARM_WINDOW_MS,
-  OOM_NUDGE_COOLDOWN_MS,
-  OOM_NUDGE_MAX_ATTEMPTS,
-  OOM_NUDGE_TEXT,
-  TRUNCATION_NUDGE_MAX_ATTEMPTS,
-  TRUNCATION_NUDGE_TEXT,
-  CAPACITY_NUDGE_SETTLE_MS,
-  CAPACITY_NUDGE_ARM_WINDOW_MS,
-  CAPACITY_NUDGE_COOLDOWN_MS,
-  CAPACITY_NUDGE_MAX_ATTEMPTS,
-  CAPACITY_NUDGE_TEXT,
   STALL_NUDGE_IDLE_MS,
   STALL_NUDGE_MAX_ATTEMPTS,
-  STALL_NUDGE_TEXT,
   PROMPT_WORK_EVIDENCE_MS,
   UNSUBMITTED_PROMPT_SETTLE_MS,
   UNSUBMITTED_PROMPT_ENTER_MAX_ATTEMPTS,
-  RETRY_STALL_MS,
-  TOOL_PERMISSION_NUDGE_TEXT,
 } from '../../lib/tuiHandshake.js';
-// Real module, not a mock: the flag is a plain process-local boolean, so driving
-// it directly exercises the same code path production does.
-import { markHostShuttingDown, resetHostShutdownFlagForTests } from '../../lib/hostShutdown.js';
-import { emitLog } from '../cos/cosEvents.js';
+
+const gitService = { ...gitStatusService, ...forgeAuthService };
 
 describe('agent TUI spawning', () => {
   // `buildTuiSpawnConfig` → `appendModelArgs` → the REAL `resolveInjectedTuiModel`,
@@ -687,157 +437,8 @@ describe('agent TUI spawning', () => {
   });
 });
 
-// ─── spawnTuiAgent runtime tests ─────────────────────────────────────────────
-
-// Flush the microtask queue (pending Promise continuations). vi.runAllMicrotasksAsync
-// is available in neither vitest 4 nor 5 — use Promise.resolve() ticks instead.
-const flushMicrotasks = () => Promise.resolve().then(() => Promise.resolve()).then(() => Promise.resolve());
-
 describe('spawnTuiAgent runtime', () => {
-  let capturedOnData = null;
-  let capturedOnExit = null;
-
-  const SESSION_ID = 'test-session-id-abc';
-
-  const defaultProvider = { id: 'codex-tui', name: 'Codex TUI', type: 'tui', envVars: {} };
-  // Short delays so fake timers don't need to advance huge amounts of time.
-  const defaultTuiConfig = {
-    command: 'codex',
-    args: [],
-    // `spawnCommand`/`spawnArgs` are what a real `buildTuiSpawnConfig` always
-    // populates (identical to `command`/`args` absent a credentialBootstrap
-    // config) — see credentialBootstrap.test.js for that module's own coverage.
-    spawnCommand: 'codex',
-    spawnArgs: [],
-    commandLine: 'codex',
-    promptDelayMs: 100,
-  };
-
-  // The stamp `agentLifecycle` would write for this run, derived through the
-  // REAL predicate rather than hand-written. The old `!leanMode` default pinned
-  // `true` for every non-lean host, a value the spawn path never produced for a
-  // slashdo-capable one (#6869), so the suite agreed with itself and not with
-  // production. A worktree is assumed unless a case says otherwise: a PR-opening
-  // TUI run always has one.
-  function stampPrOpenedBy(overrides, task, provider) {
-    return promptOpensOwnPr(task, {
-      providerType: provider?.type ?? 'tui',
-      providerId: provider?.id ?? null,
-      providerCommand: provider?.command ?? null,
-      leanMode: overrides.leanMode ?? false,
-      worktreeInfo: overrides.worktreeInfo ?? { branchName: 'agent/t', worktreePath: '/tmp/ws', baseBranch: 'main' },
-    });
-  }
-
-  function runSpawn(overrides = {}) {
-    const agentId = overrides.agentId ?? 'agent-1';
-    const task = overrides.task ?? { id: 'task-1', description: 'do the thing', metadata: {} };
-    const prompt = overrides.prompt ?? 'do the thing';
-    const workspacePath = overrides.workspacePath ?? '/tmp/ws';
-    const model = overrides.model ?? null;
-    const provider = overrides.provider ?? defaultProvider;
-    const runId = overrides.runId ?? 'run-1';
-    const tuiConfig = overrides.tuiConfig ?? defaultTuiConfig;
-    const agentDir = overrides.agentDir ?? '/tmp/agentdir';
-    const helpers = overrides.helpers ?? {};
-    return spawnTuiAgent({
-      agentId,
-      task,
-      prompt,
-      workspacePath,
-      model,
-      provider,
-      runId,
-      tuiConfig,
-      agentDir,
-      prOpenedBy: overrides.prOpenedBy ?? stampPrOpenedBy(overrides, task, provider),
-      leanMode: overrides.leanMode ?? false,
-      useDurableRunner: overrides.useDurableRunner ?? false,
-      securityScanGrant: overrides.securityScanGrant ?? null,
-      safetyProfile: overrides.safetyProfile ?? null,
-      ...helpers,
-    });
-  }
-
-  let warnSpy = null;
-
-  beforeEach(() => {
-    vi.useFakeTimers();
-    vi.clearAllMocks();
-
-    // Clear shared mutable state between tests
-    activeAgents.clear();
-    userTerminatedAgents.clear();
-
-    capturedOnData = null;
-    capturedOnExit = null;
-
-    // Silence the truncation warn globally for this describe block — the
-    // mocked tiny OUTPUT_BUFFER_HEADROOM (above) makes every spawn trip it
-    // via the two initial appendLine calls, so non-truncation tests would
-    // otherwise spam stderr. The truncation-specific tests below reach for
-    // this same spy to assert the warn fired.
-    warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-
-    // Default createShellSession captures callbacks and returns a valid session id.
-    // Real shell.js fires onInitialCommandSent when it injects the CLI command
-    // (after its round-trip readiness probe); the claude input-ready gate only
-    // observes paste-mode toggles AFTER that fires, so invoke it here to mirror
-    // the real flow (otherwise commandInjected stays false and no paste ever gates).
-    vi.mocked(shellService.createShellSession).mockImplementation((_socket, opts) => {
-      capturedOnData = opts.onData;
-      capturedOnExit = opts.onExit;
-      opts.onInitialCommandSent?.();
-      return SESSION_ID;
-    });
-
-    // The direct-PTY path a public-content stage takes (#6159). Real shell.js
-    // has no readiness probe there — the CLI *is* the PTY — so
-    // createAgentTuiSession opens the paste gate itself before the spawn; the
-    // mock therefore does NOT invoke onInitialCommandSent.
-    vi.mocked(shellService.spawnCommandSession).mockImplementation((_command, _args, opts) => {
-      capturedOnData = opts.onData;
-      capturedOnExit = opts.onExit;
-      return SESSION_ID;
-    });
-
-    vi.mocked(shellService.getSessionProcess).mockReturnValue(null);
-    vi.mocked(shellService.getSession).mockReturnValue({ id: SESSION_ID });
-    // Restore the liveness probe's "assume alive" default. `clearAllMocks` clears
-    // call history but KEEPS implementations, so a test that makes the probe
-    // report "no live child" would otherwise leak that verdict into whichever
-    // test runs next and strand it at the paste gate.
-    vi.mocked(execFile).mockImplementation((_file, _args, _opts, cb) => cb(new Error('not mocked')));
-    vi.mocked(spawnTuiSessionViaRunner).mockImplementation(async (options) => {
-      capturedOnData = options.onData;
-      capturedOnExit = options.onExit;
-      return {
-        sessionId: SESSION_ID,
-        pid: 4321,
-        ptyProcess: {
-          pid: 4321,
-          onData: vi.fn(),
-          onExit: vi.fn(),
-          write: vi.fn(),
-          resize: vi.fn(),
-          kill: vi.fn(),
-        },
-      };
-    });
-
-    // Reset sentinel state: no .agent-done on disk, empty read. The
-    // completion-sentinel test overrides both. clearAllMocks keeps the factory
-    // implementation, so re-set explicitly to prevent cross-test leakage.
-    vi.mocked(existsSync).mockReturnValue(false);
-    vi.mocked(statSync).mockReturnValue({ isFile: () => true, mtimeMs: Date.now() });
-    vi.mocked(readFile).mockResolvedValue('');
-
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
-    warnSpy?.mockRestore();
-  });
+  installTuiRuntimeHooks();
 
   // The TUI spawn path delegates the central completion sequence
   // (completeAgent + completeAgentRun + updateTask + processAgentCompletion +
@@ -867,7 +468,7 @@ describe('spawnTuiAgent runtime', () => {
       expect.objectContaining({ agentId: 'agent-1', kind: 'agent-tui' }),
     );
 
-    await capturedOnExit({ exitCode: 1, signal: 15 });
+    await sessionCallbacks.onExit({ exitCode: 1, signal: 15 });
 
     // The runner proxy accepts writes after its PTY died, so only removing the
     // record makes a later paste report the session gone (#11861) — and it has
@@ -894,7 +495,7 @@ describe('spawnTuiAgent runtime', () => {
     );
 
     // Drive the shell-exit path so the completion chain settles and no timer leaks.
-    await capturedOnExit({ exitCode: 0, killed: false });
+    await sessionCallbacks.onExit({ exitCode: 0, killed: false });
     await completeDone;
   });
 
@@ -917,7 +518,7 @@ describe('spawnTuiAgent runtime', () => {
       expect.objectContaining({ env: expect.objectContaining({ PORTOS_API_TOKEN: 'portos-session-token' }) }),
     );
 
-    await capturedOnExit({ exitCode: 0, killed: false });
+    await sessionCallbacks.onExit({ exitCode: 0, killed: false });
     await completeDone;
   });
 
@@ -958,7 +559,7 @@ describe('spawnTuiAgent runtime', () => {
     expect(gitService.resolveForgeTokenEnv).not.toHaveBeenCalled();
 
     delete process.env.PORTOS_TEST_6062_SECRET;
-    await capturedOnExit({ exitCode: 0, killed: false });
+    await sessionCallbacks.onExit({ exitCode: 0, killed: false });
     await completeDone;
   });
 
@@ -981,7 +582,7 @@ describe('spawnTuiAgent runtime', () => {
     expect(opts.initialCommand).toBe('codex');
     expect(opts.waitForPromptReady).toBe(true);
 
-    await capturedOnExit({ exitCode: 0, killed: false });
+    await sessionCallbacks.onExit({ exitCode: 0, killed: false });
     await completeDone;
   });
 
@@ -1006,7 +607,7 @@ describe('spawnTuiAgent runtime', () => {
 
     // The TUI owns the PTY from byte zero: its composer turns bracketed-paste ON
     // with no preceding shell OFF.
-    await capturedOnData(Buffer.from('\x1b[?2004hClaude Code v2.1.186\n'));
+    await sessionCallbacks.onData(Buffer.from('\x1b[?2004hClaude Code v2.1.186\n'));
     await flushMicrotasks();
     await vi.advanceTimersByTimeAsync(2000);
     await flushMicrotasks();
@@ -1015,7 +616,7 @@ describe('spawnTuiAgent runtime', () => {
       .filter(([, data]) => typeof data === 'string' && data.includes('\x1b[200~'));
     expect(pasteWrites).toHaveLength(1);
 
-    await capturedOnExit({ exitCode: 0, killed: false });
+    await sessionCallbacks.onExit({ exitCode: 0, killed: false });
   });
 
   it('refuses to route a public-content stage through the shared CoS runner', async () => {
@@ -1064,7 +665,7 @@ describe('spawnTuiAgent runtime', () => {
     expect(env.GITHUB_TOKEN).toBe('ghp_provider_bot');
     expect(env.GH_TOKEN).toBeUndefined();
 
-    await capturedOnExit({ exitCode: 0, killed: false });
+    await sessionCallbacks.onExit({ exitCode: 0, killed: false });
     await completeDone;
   });
 
@@ -1080,7 +681,7 @@ describe('spawnTuiAgent runtime', () => {
     });
     await flushMicrotasks();
 
-    await capturedOnExit({ exitCode: 0, killed: false });
+    await sessionCallbacks.onExit({ exitCode: 0, killed: false });
     await spawnPromise;
 
     // The codex TUI drives its own push → PR → review → merge but cannot type
@@ -1110,7 +711,7 @@ describe('spawnTuiAgent runtime', () => {
     });
     await flushMicrotasks();
 
-    await capturedOnExit({ exitCode: 0, killed: false });
+    await sessionCallbacks.onExit({ exitCode: 0, killed: false });
     await spawnPromise;
 
     // Neither predicate holds for a `--bare` session, so the dispatch opens the
@@ -1125,14 +726,14 @@ describe('spawnTuiAgent runtime', () => {
       provider: { id: 'claude-ollama-tui', name: 'Lean Claude TUI', type: 'tui', command: 'claude', ollamaBacked: true, envVars: {} },
     });
     await flushMicrotasks();
-    await capturedOnExit({ exitCode: 0, killed: false });
+    await sessionCallbacks.onExit({ exitCode: 0, killed: false });
     await spawnPromise;
     expect(ensureOllamaAgentContext).toHaveBeenCalledTimes(1);
 
     vi.mocked(ensureOllamaAgentContext).mockClear();
     const cloudSpawn = runSpawn();
     await flushMicrotasks();
-    await capturedOnExit({ exitCode: 0, killed: false });
+    await sessionCallbacks.onExit({ exitCode: 0, killed: false });
     await cloudSpawn;
     expect(ensureOllamaAgentContext).not.toHaveBeenCalled();
   });
@@ -1154,7 +755,7 @@ describe('spawnTuiAgent runtime', () => {
         .toBeLessThan(vi.mocked(beginOllamaAgentWork).mock.invocationCallOrder.at(-1));
       expect(release).not.toHaveBeenCalled();
 
-      await capturedOnExit({ exitCode: 0, killed: false });
+      await sessionCallbacks.onExit({ exitCode: 0, killed: false });
       await spawnPromise;
       expect(release).toHaveBeenCalled();
     });
@@ -1184,7 +785,7 @@ describe('spawnTuiAgent runtime', () => {
     it('does not register a cloud-provider run', async () => {
       const spawnPromise = runSpawn();
       await flushMicrotasks();
-      await capturedOnExit({ exitCode: 0, killed: false });
+      await sessionCallbacks.onExit({ exitCode: 0, killed: false });
       await spawnPromise;
       expect(beginOllamaAgentWork).not.toHaveBeenCalled();
     });
@@ -1209,7 +810,7 @@ describe('spawnTuiAgent runtime', () => {
     });
     await flushMicrotasks();
 
-    await capturedOnExit({ exitCode: 0, killed: false });
+    await sessionCallbacks.onExit({ exitCode: 0, killed: false });
     await spawnPromise;
 
     // finalize ran `verifyPrClaim` for a slashdo-capable session and the verdict
@@ -1229,14 +830,14 @@ describe('spawnTuiAgent runtime', () => {
     const task = { id: 'task-1', description: 'do the thing', metadata: {} };
     const failed = runSpawn({ task });
     await flushMicrotasks();
-    await capturedOnExit({ exitCode: 1, killed: false });
+    await sessionCallbacks.onExit({ exitCode: 1, killed: false });
     await failed;
     expect(runSpawnerCompletionCleanup).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'agent-1', task, success: false }));
 
     vi.mocked(runSpawnerCompletionCleanup).mockClear();
     const clean = runSpawn();
     await flushMicrotasks();
-    await capturedOnExit({ exitCode: 0, killed: false });
+    await sessionCallbacks.onExit({ exitCode: 0, killed: false });
     await clean;
     expect(runSpawnerCompletionCleanup).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
   });
@@ -1251,7 +852,7 @@ describe('spawnTuiAgent runtime', () => {
     const spawnPromise = runSpawn();
     await flushMicrotasks();
 
-    const exited = capturedOnExit({ exitCode: 0, killed: false });
+    const exited = sessionCallbacks.onExit({ exitCode: 0, killed: false });
     try {
       await cleanupStarted.promise;
       expect(maintenance.finishResource).not.toHaveBeenCalled();
@@ -1269,7 +870,7 @@ describe('spawnTuiAgent runtime', () => {
     const { ptyProcess } = await vi.mocked(spawnTuiSessionViaRunner).mock.results[0].value;
     const [[physicalExit]] = vi.mocked(ptyProcess.onExit).mock.calls;
 
-    await capturedOnExit({ exitCode: 0, killed: true });
+    await sessionCallbacks.onExit({ exitCode: 0, killed: true });
     await spawnPromise;
     expect(runSpawnerCompletionCleanup).toHaveBeenCalledOnce();
     expect(maintenance.finishResource).not.toHaveBeenCalled();
@@ -1287,11 +888,11 @@ describe('spawnTuiAgent runtime', () => {
     const spawnPromise = runSpawn();
     await flushMicrotasks();
 
-    await capturedOnData(Buffer.from('Codex booting...\\n' + CODEX_COMPOSER));
+    await sessionCallbacks.onData(Buffer.from('Codex booting...\\n' + CODEX_COMPOSER));
     await flushMicrotasks();
     await vi.advanceTimersByTimeAsync(2000);
     await flushMicrotasks();
-    await capturedOnData(Buffer.from('do the thing\\n'));
+    await sessionCallbacks.onData(Buffer.from('do the thing\\n'));
     await flushMicrotasks();
     await vi.advanceTimersByTimeAsync(3600);
     await flushMicrotasks();
@@ -1302,7 +903,7 @@ describe('spawnTuiAgent runtime', () => {
     await flushMicrotasks();
     expect(agentLifecycle.finalizeAgent).not.toHaveBeenCalled();
 
-    await capturedOnExit({ exitCode: 0, killed: false });
+    await sessionCallbacks.onExit({ exitCode: 0, killed: false });
     await spawnPromise;
     vi.useRealTimers();
     await completeDone;
@@ -1330,18 +931,18 @@ describe('spawnTuiAgent runtime', () => {
       tuiConfig: { ...defaultTuiConfig, command: 'opencode', spawnCommand: 'opencode', commandLine: 'opencode' },
     });
     await flushMicrotasks();
-    await capturedOnData(Buffer.from('\x1b[?2004l\x1b[?2004hAsk anything…\n'));
+    await sessionCallbacks.onData(Buffer.from('\x1b[?2004l\x1b[?2004hAsk anything…\n'));
     await flushMicrotasks();
     await vi.advanceTimersByTimeAsync(2000);
     await flushMicrotasks();
-    await capturedOnData(Buffer.from('do the thing\n'));
+    await sessionCallbacks.onData(Buffer.from('do the thing\n'));
     await flushMicrotasks();
     await vi.advanceTimersByTimeAsync(3600);
     await flushMicrotasks();
     // It works for a while before going quiet: a run that never started is
     // failed instead (#12769), and this one is about the lack of a ceiling.
     await vi.advanceTimersByTimeAsync(PROMPT_WORK_EVIDENCE_MS);
-    await capturedOnData(Buffer.from('Reading the repository…\n'));
+    await sessionCallbacks.onData(Buffer.from('Reading the repository…\n'));
     await flushMicrotasks();
 
     await vi.advanceTimersByTimeAsync(24 * 60 * 60 * 1000);
@@ -1354,7 +955,7 @@ describe('spawnTuiAgent runtime', () => {
       { label: '[cosAgents] max-runtime wrap-up' },
     );
 
-    await capturedOnExit({ exitCode: 0, killed: false });
+    await sessionCallbacks.onExit({ exitCode: 0, killed: false });
     await spawnPromise;
     vi.useRealTimers();
     await completeDone;
@@ -1389,7 +990,7 @@ describe('spawnTuiAgent runtime', () => {
     const _spawnPromise = runSpawn();
     await flushMicrotasks();
 
-    await capturedOnData(Buffer.from('booting...\n' + CODEX_COMPOSER));
+    await sessionCallbacks.onData(Buffer.from('booting...\n' + CODEX_COMPOSER));
     await flushMicrotasks();
 
     // Open the ready-gate (promptDelay floor + idle threshold) so sendPrompt fires.
@@ -1413,34 +1014,19 @@ describe('spawnTuiAgent runtime', () => {
     );
   });
 
-  // ── 1c. claude waits for bracketed-paste mode (input ready) before pasting ───
-  const claudeTuiConfig = { command: 'claude', args: [], spawnCommand: 'claude', spawnArgs: [], commandLine: 'claude', promptDelayMs: 100 };
-  // Antigravity (agy) gets the SAME positive input-ready gate as claude (#2705).
-  const agyTuiConfig = { command: 'agy', args: [], spawnCommand: 'agy', spawnArgs: [], commandLine: 'agy', promptDelayMs: 100 };
-  // Codex's composer placeholder — the positive 	he input box is live signal
-  // the idle paste path now requires (CODEX_COMPOSER_READY_PATTERN). A codex
-  // that has not painted it is still booting, and a paste into it is swallowed.
-  const CODEX_COMPOSER = '> Ask Codex to do anything\n';
-  const pasteCount = () => vi.mocked(shellService.writeToSession).mock.calls
-    .filter(([, d]) => typeof d === 'string' && d.includes('\x1b[200~')).length;
-  // The launch shell turns bracketed-paste OFF to run the command, then claude
-  // turns it back ON when its input box is ready — that OFF→ON is "ready".
-  const PASTE_OFF = '\x1b[?2004l';
-  const PASTE_ON = '\x1b[?2004h';
-
   it('claude input-ready: does NOT paste on the startup banner, only once paste mode is re-enabled', async () => {
     runSpawn({ tuiConfig: claudeTuiConfig });
     await flushMicrotasks();
 
     // Startup banner (and the shell turning paste mode OFF to run the command).
-    await capturedOnData(Buffer.from(`${PASTE_OFF}Claude Code v2.1.186\nOpus 4.8 (1M context) with high effort\n`));
+    await sessionCallbacks.onData(Buffer.from(`${PASTE_OFF}Claude Code v2.1.186\nOpus 4.8 (1M context) with high effort\n`));
     await flushMicrotasks();
     await vi.advanceTimersByTimeAsync(2000);
     await flushMicrotasks();
     expect(pasteCount()).toBe(0); // banner / paste-mode-off is not "input ready"
 
     // claude re-enables bracketed-paste mode → input box live, safe to paste.
-    await capturedOnData(Buffer.from(PASTE_ON));
+    await sessionCallbacks.onData(Buffer.from(PASTE_ON));
     await flushMicrotasks();
     await vi.advanceTimersByTimeAsync(400);
     await flushMicrotasks();
@@ -1453,13 +1039,13 @@ describe('spawnTuiAgent runtime', () => {
 
     // Command launched, paste mode OFF — pasting now would send a bare ESC that
     // cancels claude's input. Gate must NOT paste.
-    await capturedOnData(Buffer.from(PASTE_OFF));
+    await sessionCallbacks.onData(Buffer.from(PASTE_OFF));
     await flushMicrotasks();
     await vi.advanceTimersByTimeAsync(2000);
     await flushMicrotasks();
     expect(pasteCount()).toBe(0);
 
-    await capturedOnData(Buffer.from(PASTE_ON));
+    await sessionCallbacks.onData(Buffer.from(PASTE_ON));
     await flushMicrotasks();
     await vi.advanceTimersByTimeAsync(400);
     await flushMicrotasks();
@@ -1481,13 +1067,13 @@ describe('spawnTuiAgent runtime', () => {
     await flushMicrotasks();
 
     // Startup banner only — no bracketed-paste OFF precedes it in runner mode.
-    await capturedOnData(Buffer.from('Claude Code v2.1.220\nOpus 5 with high effort\n'));
+    await sessionCallbacks.onData(Buffer.from('Claude Code v2.1.220\nOpus 5 with high effort\n'));
     await flushMicrotasks();
     await vi.advanceTimersByTimeAsync(2000);
     await flushMicrotasks();
     expect(pasteCount()).toBe(0); // banner alone is still not "input ready"
 
-    await capturedOnData(Buffer.from(PASTE_ON));
+    await sessionCallbacks.onData(Buffer.from(PASTE_ON));
     await flushMicrotasks();
     await vi.advanceTimersByTimeAsync(400);
     await flushMicrotasks();
@@ -1498,7 +1084,7 @@ describe('spawnTuiAgent runtime', () => {
     runSpawn({ tuiConfig: claudeTuiConfig });
     await flushMicrotasks();
 
-    await capturedOnData(Buffer.from(`${PASTE_OFF}Is this a project you trust?\n  1. Yes, I trust this folder\n  2. No, exit\n`));
+    await sessionCallbacks.onData(Buffer.from(`${PASTE_OFF}Is this a project you trust?\n  1. Yes, I trust this folder\n  2. No, exit\n`));
     await flushMicrotasks();
     await vi.advanceTimersByTimeAsync(700);
     await flushMicrotasks();
@@ -1508,7 +1094,7 @@ describe('spawnTuiAgent runtime', () => {
     expect(enters.length).toBeGreaterThanOrEqual(1);
 
     // After trust is accepted claude's input box comes up (paste mode ON) → paste.
-    await capturedOnData(Buffer.from(PASTE_ON));
+    await sessionCallbacks.onData(Buffer.from(PASTE_ON));
     await flushMicrotasks();
     await vi.advanceTimersByTimeAsync(400);
     await flushMicrotasks();
@@ -1518,13 +1104,13 @@ describe('spawnTuiAgent runtime', () => {
   it('Cursor workspace trust: selects the keyed choice before delivering the task', async () => {
     runSpawn({ tuiConfig: { command: 'cursor-agent', args: ['--force'], spawnCommand: 'cursor-agent', spawnArgs: ['--force'], commandLine: 'cursor-agent --force', promptDelayMs: 100 } });
     await flushMicrotasks();
-    await capturedOnData(Buffer.from(`${PASTE_OFF}Do you trust the contents of this directory?\n/workspace/example\n▶ [a] Trust this workspace\n[q] Quit\n`));
+    await sessionCallbacks.onData(Buffer.from(`${PASTE_OFF}Do you trust the contents of this directory?\n/workspace/example\n▶ [a] Trust this workspace\n[q] Quit\n`));
     await flushMicrotasks();
     await vi.advanceTimersByTimeAsync(700);
     await flushMicrotasks();
     expect(vi.mocked(shellService.writeToSession).mock.calls.map(([, data]) => data)).toContain('a\r');
     expect(pasteCount()).toBe(0);
-    await capturedOnData(Buffer.from(PASTE_ON));
+    await sessionCallbacks.onData(Buffer.from(PASTE_ON));
     await flushMicrotasks();
     await vi.advanceTimersByTimeAsync(2000);
     await flushMicrotasks();
@@ -1535,7 +1121,7 @@ describe('spawnTuiAgent runtime', () => {
     runSpawn({ tuiConfig: claudeTuiConfig, useDurableRunner: true });
     await flushMicrotasks();
 
-    await capturedOnData(Buffer.from(
+    await sessionCallbacks.onData(Buffer.from(
       'Quick safety check: Is this a project you created or one you trust?\n'
       + '❯ No, exit\n'
       + '  Yes, I trust this folder\n'
@@ -1551,14 +1137,14 @@ describe('spawnTuiAgent runtime', () => {
     // Replay of agent-8a2fe161's transcript: the move paints, then Claude's
     // selector resets to "No, exit". Enter here would exit claude, so PortOS
     // re-navigates instead of submitting.
-    await capturedOnData(Buffer.from('  No, exit\n❯ Yes, I trust this folder\n'));
-    await capturedOnData(Buffer.from('❯ No, exit\n  Yes, I trust this folder\n'));
+    await sessionCallbacks.onData(Buffer.from('  No, exit\n❯ Yes, I trust this folder\n'));
+    await sessionCallbacks.onData(Buffer.from('❯ No, exit\n  Yes, I trust this folder\n'));
     await flushMicrotasks();
     await vi.advanceTimersByTimeAsync(700);
     await flushMicrotasks();
     expect(writes()).toEqual(['\x1b[B', '\x1b[B']);
 
-    await capturedOnData(Buffer.from('  No, exit\n❯ Yes, I trust this folder\n'));
+    await sessionCallbacks.onData(Buffer.from('  No, exit\n❯ Yes, I trust this folder\n'));
     await flushMicrotasks();
     await vi.advanceTimersByTimeAsync(700);
     await flushMicrotasks();
@@ -1566,7 +1152,7 @@ describe('spawnTuiAgent runtime', () => {
     expect(pasteCount()).toBe(0);
 
     // The composer comes up only after trust is accepted → now the paste lands.
-    await capturedOnData(Buffer.from(PASTE_ON));
+    await sessionCallbacks.onData(Buffer.from(PASTE_ON));
     await flushMicrotasks();
     await vi.advanceTimersByTimeAsync(400);
     await flushMicrotasks();
@@ -1582,11 +1168,11 @@ describe('spawnTuiAgent runtime', () => {
     await flushMicrotasks();
 
     // Composer comes up live — under the old gate this alone would paste.
-    await capturedOnData(Buffer.from(`${PASTE_OFF}${PASTE_ON}`));
+    await sessionCallbacks.onData(Buffer.from(`${PASTE_OFF}${PASTE_ON}`));
     await flushMicrotasks();
 
     // ...then the modal paints over it, before the prompt delay elapses.
-    await capturedOnData(Buffer.from(
+    await sessionCallbacks.onData(Buffer.from(
       'Make auto mode your default permission mode?\n'
       + '   ❯ 1. Yes, set auto mode as my default permission mode\n'
       + "     2. No, keep don't ask\n"
@@ -1612,7 +1198,7 @@ describe('spawnTuiAgent runtime', () => {
     runSpawn({ tuiConfig: claudeTuiConfig });
     await flushMicrotasks();
 
-    await capturedOnData(Buffer.from(
+    await sessionCallbacks.onData(Buffer.from(
       `${PASTE_OFF}This project's CLAUDE` + '.md imports files outside the current working directory.\n'
       + 'Never allow this for third-party repositories.\n'
       + 'External imports:\n'
@@ -1631,7 +1217,7 @@ describe('spawnTuiAgent runtime', () => {
     expect(writes).not.toContain('\r');
     expect(pasteCount()).toBe(0);
 
-    await capturedOnData(Buffer.from(PASTE_ON));
+    await sessionCallbacks.onData(Buffer.from(PASTE_ON));
     await flushMicrotasks();
     await vi.advanceTimersByTimeAsync(400);
     await flushMicrotasks();
@@ -1646,33 +1232,33 @@ describe('spawnTuiAgent runtime', () => {
     await flushMicrotasks();
     // A quiet terminal-capability query used to trigger the idle paste, then
     // exhaust every retry before the composer and update offer even appeared.
-    await capturedOnData(Buffer.from('\x1bP+q4d73\x1b\\'));
+    await sessionCallbacks.onData(Buffer.from('\x1bP+q4d73\x1b\\'));
     await vi.advanceTimersByTimeAsync(15000);
     expect(pasteCount()).toBe(0);
     expect(agentLifecycle.finalizeAgent).not.toHaveBeenCalled();
 
-    await capturedOnData(Buffer.from('\x1b[?2004l\x1b[?2004hAsk anything…\n'));
+    await sessionCallbacks.onData(Buffer.from('\x1b[?2004l\x1b[?2004hAsk anything…\n'));
     await vi.advanceTimersByTimeAsync(600);
     expect(pasteCount()).toBe(0);
-    await capturedOnData(Buffer.from('Update\x1b[8;29H Available esc\nA new release v9.9.9 is avail'));
+    await sessionCallbacks.onData(Buffer.from('Update\x1b[8;29H Available esc\nA new release v9.9.9 is avail'));
     // The composer border is painted between the two wrapped message rows.
-    await capturedOnData(Buffer.from('able. Would you like to\x1b[12;4H┃\n'));
-    await capturedOnData(Buffer.from('        update now?\n┃ Ask\n┃ Buil     Skip Confirm\n'));
+    await sessionCallbacks.onData(Buffer.from('able. Would you like to\x1b[12;4H┃\n'));
+    await sessionCallbacks.onData(Buffer.from('        update now?\n┃ Ask\n┃ Buil     Skip Confirm\n'));
     await vi.advanceTimersByTimeAsync(400);
     expect(vi.mocked(shellService.writeToSession).mock.calls.map(([, data]) => data)).toEqual(['\x1b']);
     expect(pasteCount()).toBe(0);
     // Even beyond the old blind-paste deadline, require fresh output after Esc.
     await vi.advanceTimersByTimeAsync(2000);
     expect(pasteCount()).toBe(0);
-    await capturedOnData(Buffer.from('Ask anything…\n'));
+    await sessionCallbacks.onData(Buffer.from('Ask anything…\n'));
     await vi.advanceTimersByTimeAsync(1500);
     expect(pasteCount()).toBe(1);
-    await capturedOnData(Buffer.from('[Pasted ~42 lines]'));
+    await sessionCallbacks.onData(Buffer.from('[Pasted ~42 lines]'));
     await vi.advanceTimersByTimeAsync(8000);
     expect(vi.mocked(shellService.writeToSession).mock.calls.map(([, data]) => data)).toContain('\r');
     expect(pasteCount()).toBe(1);
     expect(agentLifecycle.finalizeAgent).not.toHaveBeenCalled();
-    await capturedOnExit({ exitCode: 0, killed: false });
+    await sessionCallbacks.onExit({ exitCode: 0, killed: false });
     await spawnPromise;
   });
 
@@ -1682,8 +1268,8 @@ describe('spawnTuiAgent runtime', () => {
       tuiConfig: { ...defaultTuiConfig, command: '/opt/bin/opencode', spawnCommand: 'opencode', commandLine: 'opencode' },
     });
     await flushMicrotasks();
-    await capturedOnData(Buffer.from('\x1b[?2004l\x1b[?2004hModel example-provider/exam'));
-    await capturedOnData(Buffer.from('ple-model\n┃ is not valid\nreplacement-provider/replacement-model\nAsk anything…\n'));
+    await sessionCallbacks.onData(Buffer.from('\x1b[?2004l\x1b[?2004hModel example-provider/exam'));
+    await sessionCallbacks.onData(Buffer.from('ple-model\n┃ is not valid\nreplacement-provider/replacement-model\nAsk anything…\n'));
     await vi.advanceTimersByTimeAsync(8000);
     expect(pasteCount()).toBe(0);
     await spawnPromise;
@@ -1699,7 +1285,7 @@ describe('spawnTuiAgent runtime', () => {
     runSpawn();
     await flushMicrotasks();
 
-    await capturedOnData(Buffer.from(
+    await sessionCallbacks.onData(Buffer.from(
       'Hooks need review\n'
       + '1 hook is new or changed.\n'
       + '› 1. Review hooks\n'
@@ -1717,7 +1303,7 @@ describe('spawnTuiAgent runtime', () => {
 
     // The selector clears and Codex repaints its composer; only then can the
     // ordinary Codex readiness path paste the task.
-    await capturedOnData(Buffer.from(CODEX_COMPOSER));
+    await sessionCallbacks.onData(Buffer.from(CODEX_COMPOSER));
     await vi.advanceTimersByTimeAsync(2000);
     await flushMicrotasks();
     expect(pasteCount()).toBe(1);
@@ -1732,7 +1318,7 @@ describe('spawnTuiAgent runtime', () => {
     runSpawn();
     await flushMicrotasks();
 
-    await capturedOnData(Buffer.from(
+    await sessionCallbacks.onData(Buffer.from(
       'You are in /tmp/portos-cd-cwd/agent-1\n'
       + 'Do you trust the contents of this directory? Working with untrusted contents comes with'
       + ' higher risk of prompt injection.\n'
@@ -1752,7 +1338,7 @@ describe('spawnTuiAgent runtime', () => {
     expect(pasteCount()).toBe(0);
 
     // Trust accepted → codex paints its composer → the ordinary idle path pastes.
-    await capturedOnData(Buffer.from(CODEX_COMPOSER));
+    await sessionCallbacks.onData(Buffer.from(CODEX_COMPOSER));
     await vi.advanceTimersByTimeAsync(2000);
     await flushMicrotasks();
     expect(pasteCount()).toBe(1);
@@ -1762,7 +1348,7 @@ describe('spawnTuiAgent runtime', () => {
     runSpawn();
     await flushMicrotasks();
 
-    await capturedOnData(Buffer.from(
+    await sessionCallbacks.onData(Buffer.from(
       `${PASTE_OFF}Folder access\n/workspace/example\nTrustthisfolder?\n`
       + 'Codexcanread,edit,andrunfileshere,subjecttoyourpermissionsettings.\n'
       + '› 1. Trust and cont',
@@ -1772,14 +1358,14 @@ describe('spawnTuiAgent runtime', () => {
     expect(vi.mocked(shellService.writeToSession).mock.calls.some(([, data]) => data === '\r')).toBe(false);
     expect(pasteCount()).toBe(0);
 
-    await capturedOnData(Buffer.from('inue\n2.Quit\nenter continue · esc quit\n'));
+    await sessionCallbacks.onData(Buffer.from('inue\n2.Quit\nenter continue · esc quit\n'));
     await vi.advanceTimersByTimeAsync(2000);
     await flushMicrotasks();
     expect(vi.mocked(shellService.writeToSession).mock.calls.filter(([, data]) => data === '\r')).toHaveLength(1);
     expect(pasteCount()).toBe(0);
     expect(agentLifecycle.finalizeAgent).not.toHaveBeenCalled();
 
-    await capturedOnData(Buffer.from(CODEX_COMPOSER));
+    await sessionCallbacks.onData(Buffer.from(CODEX_COMPOSER));
     await vi.advanceTimersByTimeAsync(2000);
     await flushMicrotasks();
     expect(pasteCount()).toBe(1);
@@ -1792,7 +1378,7 @@ describe('spawnTuiAgent runtime', () => {
 
     runSpawn({ tuiConfig: claudeTuiConfig });
     await flushMicrotasks();
-    await capturedOnData(Buffer.from('some startup noise but no input box ever appears\n'));
+    await sessionCallbacks.onData(Buffer.from('some startup noise but no input box ever appears\n'));
     await flushMicrotasks();
 
     // Advance past TUI_INPUT_READY_DEADLINE_MS (45s).
@@ -1806,25 +1392,12 @@ describe('spawnTuiAgent runtime', () => {
     );
   });
 
-  // ── 1c-bis. Antigravity (agy) uses the SAME positive input-ready gate (#2705) ─
-  // agy's TUI emits the bracketed-paste-mode toggle exactly like claude, so it
-  // must gate the paste on paste-mode-re-enabled rather than blind-pasting on the
-  // quiet-startup heuristic (which fired into agy's still-initializing banner and
-  // left the agent sitting at an empty prompt). Without the fix agy took that
-  // path and WOULD have pasted after ~2s of banner silence;
-  // asserting pasteCount()===0 there is what discriminates the fix.
-  //
-  // agy needs a SECOND gate on top of paste mode, because — unlike claude — it
-  // enables bracketed paste on alt-screen entry, before its composer exists. Its
-  // composer footer is the marker that says the input box is actually live.
-  const AGY_COMPOSER_FOOTER = '? for shortcuts';
-
   it('agy input-ready: does NOT paste until the composer footer follows paste-mode-on', async () => {
     runSpawn({ tuiConfig: agyTuiConfig });
     await flushMicrotasks();
 
     // Startup banner (and the shell turning paste mode OFF to run the command).
-    await capturedOnData(Buffer.from(`${PASTE_OFF}Antigravity CLI 1.1.3\nGemini 3.5 Flash (Medium)\n`));
+    await sessionCallbacks.onData(Buffer.from(`${PASTE_OFF}Antigravity CLI 1.1.3\nGemini 3.5 Flash (Medium)\n`));
     await flushMicrotasks();
     await vi.advanceTimersByTimeAsync(2000);
     await flushMicrotasks();
@@ -1832,14 +1405,14 @@ describe('spawnTuiAgent runtime', () => {
 
     // agy enables bracketed paste when it enters the alt screen — still signing
     // in, no composer yet. Paste mode ALONE must not be treated as ready.
-    await capturedOnData(Buffer.from(`${PASTE_ON}Welcome to the Antigravity CLI.\n Signing in...\n`));
+    await sessionCallbacks.onData(Buffer.from(`${PASTE_ON}Welcome to the Antigravity CLI.\n Signing in...\n`));
     await flushMicrotasks();
     await vi.advanceTimersByTimeAsync(2000);
     await flushMicrotasks();
     expect(pasteCount()).toBe(0);
 
     // Composer renders → input box live, safe to paste.
-    await capturedOnData(Buffer.from(`>\n${AGY_COMPOSER_FOOTER}Gemini 3.5 Flash · medium`));
+    await sessionCallbacks.onData(Buffer.from(`>\n${AGY_COMPOSER_FOOTER}Gemini 3.5 Flash · medium`));
     await flushMicrotasks();
     await vi.advanceTimersByTimeAsync(400);
     await flushMicrotasks();
@@ -1856,14 +1429,14 @@ describe('spawnTuiAgent runtime', () => {
     await flushMicrotasks();
 
     // Alt-screen entry enables paste mode while agy is still signing in.
-    await capturedOnData(Buffer.from(`${PASTE_OFF}${PASTE_ON}Welcome to the Antigravity CLI. You are currently not signed in.\n Signing in...\n`));
+    await sessionCallbacks.onData(Buffer.from(`${PASTE_OFF}${PASTE_ON}Welcome to the Antigravity CLI. You are currently not signed in.\n Signing in...\n`));
     await flushMicrotasks();
     await vi.advanceTimersByTimeAsync(2000);
     await flushMicrotasks();
     expect(pasteCount()).toBe(0); // would have pasted into the void before the fix
 
     // Trust gate finally paints (after the sign-in round trip).
-    await capturedOnData(Buffer.from('Do you trust the contents of this project?\nAntigravity CLI requires permission to read, edit, and execute files here.\n> Yes, I trust this folder\n  No, exit\n'));
+    await sessionCallbacks.onData(Buffer.from('Do you trust the contents of this project?\nAntigravity CLI requires permission to read, edit, and execute files here.\n> Yes, I trust this folder\n  No, exit\n'));
     await flushMicrotasks();
     await vi.advanceTimersByTimeAsync(700);
     await flushMicrotasks();
@@ -1874,7 +1447,7 @@ describe('spawnTuiAgent runtime', () => {
     expect(pasteCount()).toBe(0);
 
     // Composer comes up only after trust is accepted → now the paste lands.
-    await capturedOnData(Buffer.from(`>\n${AGY_COMPOSER_FOOTER}Gemini 3.5 Flash · medium`));
+    await sessionCallbacks.onData(Buffer.from(`>\n${AGY_COMPOSER_FOOTER}Gemini 3.5 Flash · medium`));
     await flushMicrotasks();
     await vi.advanceTimersByTimeAsync(400);
     await flushMicrotasks();
@@ -1888,7 +1461,7 @@ describe('spawnTuiAgent runtime', () => {
 
     runSpawn({ tuiConfig: agyTuiConfig });
     await flushMicrotasks();
-    await capturedOnData(Buffer.from('some agy startup noise but no input box ever appears\n'));
+    await sessionCallbacks.onData(Buffer.from('some agy startup noise but no input box ever appears\n'));
     await flushMicrotasks();
 
     // Advance past TUI_INPUT_READY_DEADLINE_MS (45s).
@@ -1902,641 +1475,24 @@ describe('spawnTuiAgent runtime', () => {
     );
   });
 
-  // ── Antigravity account-eligibility banner: a WAIT, not a verdict ───────────
-  // The banner paints while agy's `loadCodeAssist` handshake is still retrying;
-  // the CLI's own log shows the session authenticated fine and generating
-  // normally once it settles. Killing on sight cost every agy CoS run from
-  // 2026-08-07 on (5/5, each dead 3–5s in). So the signal now arms a
-  // grace window (the signal's own `graceMs`) instead of finalizing immediately.
-  const ELIGIBILITY_BANNER =
-    "We're finishing verifying your account eligibility. This usually takes a moment. Please try again shortly.";
-
-  // Drive agy to a submitted prompt, which is where the banner really appears
-  // (agent-09824620: composer up, paste lands, THEN the banner paints). Starting
-  // from a bare spawn instead would let the 45s tui-not-ready deadline finalize
-  // the run before the grace window is ever reached, masking what's under test.
-  const driveAgyToSubmittedPrompt = async () => {
-    runSpawn({ tuiConfig: agyTuiConfig });
-    await flushMicrotasks();
-    // Shell turns paste mode off to run the command, agy turns it back on at
-    // alt-screen entry, then its composer footer says the input box is live.
-    await capturedOnData(Buffer.from(`${PASTE_OFF}Antigravity CLI 1.1.12\n`));
-    await flushMicrotasks();
-    await capturedOnData(Buffer.from(`${PASTE_ON}Welcome to the Antigravity CLI.\n Signing in...\n`));
-    await flushMicrotasks();
-    await capturedOnData(Buffer.from(`>\n${AGY_COMPOSER_FOOTER}Gemini 3.6 Flash · high`));
-    await flushMicrotasks();
-    await vi.advanceTimersByTimeAsync(400);
-    await flushMicrotasks();
-    expect(pasteCount()).toBe(1);
-    // Echo the prompt back the way a real TUI renders it into the input buffer,
-    // so paste verification passes and the submit Enter goes out (issue #2192).
-    await capturedOnData(Buffer.from('do the thing\n'));
-    await flushMicrotasks();
-    await vi.advanceTimersByTimeAsync(4000); // past PASTE_TO_ENTER_FALLBACK_MS (3500ms)
-    await flushMicrotasks();
-  };
-
-  it('holds the session open when Antigravity reports that account eligibility is still being verified', async () => {
-    await driveAgyToSubmittedPrompt();
-
-    await capturedOnData(Buffer.from(ELIGIBILITY_BANNER));
-    await flushMicrotasks();
-    // The old behavior finalized here, within a second of the banner.
-    await vi.advanceTimersByTimeAsync(30000);
-    await flushMicrotasks();
-
-    expect(agentLifecycle.finalizeAgent).not.toHaveBeenCalled();
-  });
-
-  // The banner is the REJECTION of the submission — agy discards the prompt and
-  // drops back to an empty, idle composer (agent-1f08178b's raw.txt, and a live
-  // session confirmed parked there). Nothing is in flight, so a PASSIVE window
-  // can never see the generation chrome it waits for: its only reachable outcome
-  // is expiry, making it a pause bolted in front of the same fail-over. Re-asking
-  // is the only way out, and what the banner itself instructs.
-  it('re-submits the prompt while the eligibility window is open, and stops once agy answers', async () => {
-    await driveAgyToSubmittedPrompt();
-
-    await capturedOnData(Buffer.from(ELIGIBILITY_BANNER));
-    await capturedOnData(Buffer.from('> ? for shortcuts'));
-    await flushMicrotasks();
-    expect(shellService.pasteToSession).not.toHaveBeenCalled();
-
-    await vi.advanceTimersByTimeAsync(SELF_CLEARING_RESUBMIT_INTERVAL_MS + 5000);
-    await flushMicrotasks();
-    expect(shellService.pasteToSession).toHaveBeenCalledWith(
-      SESSION_ID,
-      'do the thing',
-      expect.objectContaining({ label: expect.stringContaining('handshake') }),
-    );
-
-    // The retry lands: agy paints its in-flight chrome, which closes the window
-    // and must stop the re-asking too.
-    await capturedOnData(Buffer.from('Generating...\nesc to cancel'));
-    await flushMicrotasks();
-    await vi.advanceTimersByTimeAsync(3 * SELF_CLEARING_RESUBMIT_INTERVAL_MS);
-    await flushMicrotasks();
-    expect(shellService.pasteToSession).toHaveBeenCalledTimes(1);
-    // The run belongs to the ordinary reaper again, not to the fail-over.
-    expect(agentLifecycle.finalizeAgent).not.toHaveBeenCalledWith(
-      expect.objectContaining({ completionReason: 'fallback-signal' })
-    );
-  });
-
-  it('resumes the run when the eligibility banner clears and agy starts generating', async () => {
-    await driveAgyToSubmittedPrompt();
-
-    await capturedOnData(Buffer.from(ELIGIBILITY_BANNER));
-    await flushMicrotasks();
-    // agy settles its handshake and paints its in-flight chrome.
-    await capturedOnData(Buffer.from('Generating...\nesc to cancel'));
-    await flushMicrotasks();
-
-    // Past the grace deadline — the run must NOT be failed over to a fallback.
-    await vi.advanceTimersByTimeAsync(70000);
-    await flushMicrotasks();
-
-    expect(agentLifecycle.finalizeAgent).not.toHaveBeenCalledWith(
-      expect.objectContaining({ completionReason: 'fallback-signal' })
-    );
-  });
-
-  it('falls back once the eligibility banner outlasts its grace window with no generation', async () => {
-    let resolveComplete;
-    const completeDone = new Promise((r) => { resolveComplete = r; });
-    vi.mocked(agentLifecycle.finalizeAgent).mockImplementation(async () => { resolveComplete(); });
-
-    await driveAgyToSubmittedPrompt();
-
-    await capturedOnData(Buffer.from(ELIGIBILITY_BANNER));
-    await flushMicrotasks();
-    // Only idle composer chrome repaints — no sign of life.
-    await capturedOnData(Buffer.from('> ? for shortcuts'));
-    await flushMicrotasks();
-
-    // Past the full grace window — every re-submission inside it went unanswered
-    // too, so the fail-over is the correct verdict.
-    await vi.advanceTimersByTimeAsync(130000);
-    vi.useRealTimers();
-    await completeDone;
-
-    expect(agentLifecycle.finalizeAgent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: 'agent-1',
-        success: false,
-        completionReason: 'fallback-signal',
-        error: expect.stringContaining('account eligibility')
-      })
-    );
-  });
-
-  // ── Local-runtime GPU OOM: a nudge, not a verdict ──────────────────────────
-  // MLX/MTPLX kills a turn the server had already accepted, so unlike agy's
-  // banner the session still holds the whole conversation and the prompt must
-  // NOT be re-sent — a one-word `continue` resumes it, which is exactly what a
-  // human typed to rescue agent-011d0c27 on 2026-08-22.
-  const OOM_BOX = '│  {"message":"[METAL] Command buffer execution failed: Insufficient Memory\n'
-    + '│  (00000008: kIOGPUCommandBufferCallbackErrorOutOfMemory).","type":"server_error"}';
-
-  // Long enough for the arm's silence test AND the 5s provider-signal poll that
-  // acts on it.
-  const PAST_SETTLE_MS = OOM_NUDGE_SETTLE_MS + 10000;
-
-  it('nudges a session a local-GPU OOM left parked, without re-sending the prompt', async () => {
-    await driveAgyToSubmittedPrompt();
-    vi.mocked(shellService.pasteToSession).mockClear();
-
-    await capturedOnData(Buffer.from(OOM_BOX));
-    await flushMicrotasks();
-    // The error box is still repainting — nudging into that lands on chrome,
-    // not on an idle composer.
-    await vi.advanceTimersByTimeAsync(5000);
-    await flushMicrotasks();
-    expect(shellService.pasteToSession).not.toHaveBeenCalled();
-
-    await vi.advanceTimersByTimeAsync(PAST_SETTLE_MS);
-    await flushMicrotasks();
-    expect(shellService.pasteToSession).toHaveBeenCalledWith(
-      SESSION_ID,
-      OOM_NUDGE_TEXT,
-      expect.objectContaining({ label: expect.stringContaining('OOM') }),
-    );
-    // Exactly one nudge, and the run is left alone to carry on.
-    expect(shellService.pasteToSession).toHaveBeenCalledTimes(1);
-    expect(agentLifecycle.finalizeAgent).not.toHaveBeenCalled();
-  });
-
-  it('leaves a session that kept working after the OOM alone', async () => {
-    await driveAgyToSubmittedPrompt();
-    vi.mocked(shellService.pasteToSession).mockClear();
-
-    await capturedOnData(Buffer.from(OOM_BOX));
-    await flushMicrotasks();
-    // The TUI never goes quiet — it recovered on its own — so the arm has to
-    // expire rather than wait around to fire into the next quiet stretch.
-    for (let elapsed = 0; elapsed <= OOM_NUDGE_ARM_WINDOW_MS; elapsed += 5000) {
-      await capturedOnData(Buffer.from('still working\n'));
-      await flushMicrotasks();
-      await vi.advanceTimersByTimeAsync(5000);
-      await flushMicrotasks();
-    }
-    await vi.advanceTimersByTimeAsync(PAST_SETTLE_MS);
-    await flushMicrotasks();
-
-    expect(shellService.pasteToSession).not.toHaveBeenCalled();
-  });
-
-  it('falls back once the OOM outlasts every nudge', async () => {
-    let resolveComplete;
-    const completeDone = new Promise((r) => { resolveComplete = r; });
-    vi.mocked(agentLifecycle.finalizeAgent).mockImplementation(async () => { resolveComplete(); });
-
-    await driveAgyToSubmittedPrompt();
-    vi.mocked(shellService.pasteToSession).mockClear();
-
-    for (let i = 0; i < OOM_NUDGE_MAX_ATTEMPTS; i += 1) {
-      await capturedOnData(Buffer.from(OOM_BOX));
-      await flushMicrotasks();
-      await vi.advanceTimersByTimeAsync(PAST_SETTLE_MS);
-      await flushMicrotasks();
-      // Clear the dedupe cooldown so the next box reads as a NEW OOM rather
-      // than a repaint of the one just nudged.
-      await vi.advanceTimersByTimeAsync(OOM_NUDGE_COOLDOWN_MS);
-      await flushMicrotasks();
-    }
-    expect(shellService.pasteToSession).toHaveBeenCalledTimes(OOM_NUDGE_MAX_ATTEMPTS);
-
-    // The budget is spent and it OOM'd again: the conversation no longer fits
-    // this device, so the task goes to a fallback provider.
-    await capturedOnData(Buffer.from(OOM_BOX));
-    vi.useRealTimers();
-    await completeDone;
-
-    expect(agentLifecycle.finalizeAgent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        success: false,
-        completionReason: 'fallback-signal',
-        error: expect.stringContaining('GPU memory'),
-      })
-    );
-  });
-
-  // ── Truncated response: a nudge, not a verdict ─────────────────────────────
-  // pi's TUI halts the whole session on `Response was truncated before
-  // completion.` — the turn is dead, the session holds the whole conversation,
-  // and the only resume is somebody typing `continue` and pressing Enter.
-  // Unattended, nothing ever does. Same shape as the OOM gate above, so the
-  // same three behaviors are pinned: nudge without re-sending the prompt,
-  // leave a session that carried on alone, fail over once the truncations
-  // outlast every nudge.
-  const TRUNCATION_BANNER = 'Response was truncated before completion.';
-
-  it('nudges a session a truncated response halted, without re-sending the prompt', async () => {
-    await driveAgyToSubmittedPrompt();
-    vi.mocked(shellService.pasteToSession).mockClear();
-
-    await capturedOnData(Buffer.from(TRUNCATION_BANNER));
-    await flushMicrotasks();
-    // The banner is still repainting — nudging into that lands on chrome,
-    // not on an idle composer.
-    await vi.advanceTimersByTimeAsync(5000);
-    await flushMicrotasks();
-    expect(shellService.pasteToSession).not.toHaveBeenCalled();
-
-    await vi.advanceTimersByTimeAsync(PAST_SETTLE_MS);
-    await flushMicrotasks();
-    expect(shellService.pasteToSession).toHaveBeenCalledWith(
-      SESSION_ID,
-      TRUNCATION_NUDGE_TEXT,
-      expect.objectContaining({ label: expect.stringContaining('truncated-response') }),
-    );
-    // Exactly one nudge, and the run is left alone to carry on.
-    expect(shellService.pasteToSession).toHaveBeenCalledTimes(1);
-    expect(agentLifecycle.finalizeAgent).not.toHaveBeenCalled();
-  });
-
-  it('leaves a session that kept working after the truncation alone', async () => {
-    await driveAgyToSubmittedPrompt();
-    vi.mocked(shellService.pasteToSession).mockClear();
-
-    await capturedOnData(Buffer.from(TRUNCATION_BANNER));
-    await flushMicrotasks();
-    // The TUI never goes quiet — it recovered on its own — so the arm has to
-    // expire rather than wait around to fire into the next quiet stretch.
-    for (let elapsed = 0; elapsed <= OOM_NUDGE_ARM_WINDOW_MS; elapsed += 5000) {
-      await capturedOnData(Buffer.from('still working\n'));
-      await flushMicrotasks();
-      await vi.advanceTimersByTimeAsync(5000);
-      await flushMicrotasks();
-    }
-    await vi.advanceTimersByTimeAsync(PAST_SETTLE_MS);
-    await flushMicrotasks();
-
-    expect(shellService.pasteToSession).not.toHaveBeenCalled();
-  });
-
-  it('falls back once the truncations outlast every nudge', async () => {
-    let resolveComplete;
-    const completeDone = new Promise((r) => { resolveComplete = r; });
-    vi.mocked(agentLifecycle.finalizeAgent).mockImplementation(async () => { resolveComplete(); });
-
-    await driveAgyToSubmittedPrompt();
-    vi.mocked(shellService.pasteToSession).mockClear();
-
-    for (let i = 0; i < TRUNCATION_NUDGE_MAX_ATTEMPTS; i += 1) {
-      await capturedOnData(Buffer.from(TRUNCATION_BANNER));
-      await flushMicrotasks();
-      await vi.advanceTimersByTimeAsync(PAST_SETTLE_MS);
-      await flushMicrotasks();
-      // Clear the dedupe cooldown so the next banner reads as a NEW truncation
-      // rather than a repaint of the one just nudged.
-      await vi.advanceTimersByTimeAsync(OOM_NUDGE_COOLDOWN_MS);
-      await flushMicrotasks();
-    }
-    expect(shellService.pasteToSession).toHaveBeenCalledTimes(TRUNCATION_NUDGE_MAX_ATTEMPTS);
-
-    // The budget is spent and it truncated again: this provider is not going
-    // to finish the response, so the task goes to a fallback provider.
-    await capturedOnData(Buffer.from(TRUNCATION_BANNER));
-    vi.useRealTimers();
-    await completeDone;
-
-    expect(agentLifecycle.finalizeAgent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        success: false,
-        completionReason: 'fallback-signal',
-        error: expect.stringContaining('cut the response off'),
-      })
-    );
-  });
-
-  // ── Model at capacity: a nudge after a long quiet, then fail over ──────────
-  // Codex halts the turn on `Selected model is at capacity.` and waits at the
-  // composer. Provider load clears in minutes, so the settle window is far
-  // longer than the OOM one; the same three behaviors are pinned.
-  const CAPACITY_BANNER = 'Selected model is at capacity. Please try a different model.';
-  const PAST_CAPACITY_SETTLE_MS = CAPACITY_NUDGE_SETTLE_MS + 10000;
-
-  it('nudges a session a model-at-capacity rejection parked, without re-sending the prompt', async () => {
-    await driveAgyToSubmittedPrompt();
-    vi.mocked(shellService.pasteToSession).mockClear();
-
-    await capturedOnData(Buffer.from(CAPACITY_BANNER));
-    await flushMicrotasks();
-    // Well past the OOM settle window, still inside the capacity one.
-    await vi.advanceTimersByTimeAsync(OOM_NUDGE_SETTLE_MS + 10000);
-    await flushMicrotasks();
-    expect(shellService.pasteToSession).not.toHaveBeenCalled();
-
-    await vi.advanceTimersByTimeAsync(PAST_CAPACITY_SETTLE_MS);
-    await flushMicrotasks();
-    expect(shellService.pasteToSession).toHaveBeenCalledWith(
-      SESSION_ID,
-      CAPACITY_NUDGE_TEXT,
-      expect.objectContaining({ label: expect.stringContaining('model-capacity') }),
-    );
-    expect(shellService.pasteToSession).toHaveBeenCalledTimes(1);
-    expect(agentLifecycle.finalizeAgent).not.toHaveBeenCalled();
-  });
-
-  it('leaves a session that kept working after the capacity rejection alone', async () => {
-    await driveAgyToSubmittedPrompt();
-    vi.mocked(shellService.pasteToSession).mockClear();
-
-    await capturedOnData(Buffer.from(CAPACITY_BANNER));
-    await flushMicrotasks();
-    for (let elapsed = 0; elapsed <= CAPACITY_NUDGE_ARM_WINDOW_MS; elapsed += 5000) {
-      await capturedOnData(Buffer.from('still working\n'));
-      await flushMicrotasks();
-      await vi.advanceTimersByTimeAsync(5000);
-      await flushMicrotasks();
-    }
-    await vi.advanceTimersByTimeAsync(PAST_CAPACITY_SETTLE_MS);
-    await flushMicrotasks();
-
-    expect(shellService.pasteToSession).not.toHaveBeenCalled();
-  });
-
-  it('falls back once the capacity rejections outlast every nudge', async () => {
-    let resolveComplete;
-    const completeDone = new Promise((r) => { resolveComplete = r; });
-    vi.mocked(agentLifecycle.finalizeAgent).mockImplementation(async () => { resolveComplete(); });
-
-    await driveAgyToSubmittedPrompt();
-    vi.mocked(shellService.pasteToSession).mockClear();
-
-    for (let i = 0; i < CAPACITY_NUDGE_MAX_ATTEMPTS; i += 1) {
-      await capturedOnData(Buffer.from(CAPACITY_BANNER));
-      await flushMicrotasks();
-      await vi.advanceTimersByTimeAsync(PAST_CAPACITY_SETTLE_MS);
-      await flushMicrotasks();
-      // Clear the dedupe cooldown so the next banner reads as a NEW rejection.
-      await vi.advanceTimersByTimeAsync(CAPACITY_NUDGE_COOLDOWN_MS);
-      await flushMicrotasks();
-    }
-    expect(shellService.pasteToSession).toHaveBeenCalledTimes(CAPACITY_NUDGE_MAX_ATTEMPTS);
-
-    await capturedOnData(Buffer.from(CAPACITY_BANNER));
-    vi.useRealTimers();
-    await completeDone;
-
-    expect(agentLifecycle.finalizeAgent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        success: false,
-        completionReason: 'fallback-signal',
-      })
-    );
-  });
-
-  // ── Retry stall: the provider keeps failing the same request ───────────────
-  // agent-e057cca7 (2026-09-04): a Stage 3 prefill the harness cancelled every
-  // ~6 minutes and re-sent verbatim. The screen repaints on every attempt, so
-  // every reaper saw a busy session and the run held its lane until the
-  // max-runtime ceiling.
-  it('fails over a session whose retry banner keeps advancing past the stall window', async () => {
-    let resolveComplete;
-    const completeDone = new Promise((r) => { resolveComplete = r; });
-    vi.mocked(agentLifecycle.finalizeAgent).mockImplementation(async () => { resolveComplete(); });
-
-    await driveAgyToSubmittedPrompt();
-
-    const retryCycleMs = RETRY_STALL_MS / 2 + 60_000;
-    for (const attempt of [1, 2]) {
-      await capturedOnData(Buffer.from(`API error · Retrying in 0s · attempt ${attempt}/10\n`));
-      await flushMicrotasks();
-      // The retried request is in flight: the title bar flickers, nothing else
-      // paints. Two attempts alone are not a verdict, however long they span.
-      await vi.advanceTimersByTimeAsync(retryCycleMs);
-      await flushMicrotasks();
-      expect(agentLifecycle.finalizeAgent).not.toHaveBeenCalled();
-    }
-
-    await capturedOnData(Buffer.from('API error · Retrying in 0s · attempt 3/10\n'));
-    await flushMicrotasks();
-    // Acted on by the 5s provider-signal poll, like the other gates.
-    await vi.advanceTimersByTimeAsync(5000);
-    vi.useRealTimers();
-    await completeDone;
-
-    expect(agentLifecycle.finalizeAgent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        success: false,
-        completionReason: 'fallback-signal',
-        error: expect.stringContaining('retried it 3 times'),
-      })
-    );
-  });
-
-  // ── Tool-permission dialog: decline, then nudge ───────────────────────────
-  // agent-e057cca7 (2026-09-04): under the sandboxed acceptEdits recipe a local
-  // model asked to Read an absolute path outside the worktree, and the dialog
-  // sat unanswered for the rest of the run.
-  it('declines a tool-permission dialog and nudges the session once it goes quiet', async () => {
-    // A claude session: the dialog is Claude Code chrome, and the spawner only
-    // watches claude sessions for it.
-    runSpawn({ tuiConfig: claudeTuiConfig });
-    await flushMicrotasks();
-    await capturedOnData(Buffer.from(`${PASTE_OFF}Claude Code v2.1.260\n`));
-    await flushMicrotasks();
-    await capturedOnData(Buffer.from(PASTE_ON));
-    await flushMicrotasks();
-    await vi.advanceTimersByTimeAsync(400);
-    await flushMicrotasks();
-    expect(pasteCount()).toBe(1);
-    await capturedOnData(Buffer.from('do the thing\n'));
-    await flushMicrotasks();
-    await vi.advanceTimersByTimeAsync(4000);
-    await flushMicrotasks();
-    vi.mocked(shellService.writeToSession).mockClear();
-    vi.mocked(shellService.pasteToSession).mockClear();
-
-    await capturedOnData(Buffer.from(' Read(/data.reference/providers.json) Doyouwanttoproceed? ❯1. Yes 2. Yes,allowreadingfrom/data.referenceduringthissession 3. No Esc to cancel · Tab to amend '));
-    await flushMicrotasks();
-    // Option 1 is highlighted; "No" is option 3: down, down, Enter.
-    expect(shellService.writeToSession).toHaveBeenCalledWith(SESSION_ID, '\x1b[B\x1b[B\r');
-
-    // The decline ends the turn; once the session is quiet the nudge goes out.
-    await vi.advanceTimersByTimeAsync(OOM_NUDGE_SETTLE_MS + 10000);
-    await flushMicrotasks();
-    expect(shellService.pasteToSession).toHaveBeenCalledWith(
-      SESSION_ID,
-      TOOL_PERMISSION_NUDGE_TEXT,
-      expect.objectContaining({ label: expect.stringContaining('permission') }),
-    );
-    expect(shellService.pasteToSession).toHaveBeenCalledTimes(1);
-    expect(agentLifecycle.finalizeAgent).not.toHaveBeenCalled();
-  });
-
-  // The spawner acts on every gate from one 5s poll (PROVIDER_SIGNAL_POLL_MS,
-  // module-private), so each nudge lands within a tick of its threshold.
-  const SIGNAL_POLL_MS = 5000;
-
-  it.each([
-    { maxCostUsd: 'unlimited', timeLimitSeconds: 'unlimited', nudges: false },
-    { maxCostUsd: 2, timeLimitSeconds: 180, nudges: true },
-  ])('honors a trusted $timeLimitSeconds scanner grant through a quiet outer audit', async ({ nudges, ...limits }) => {
-    runSpawn({ securityScanGrant: { model: 'example-model', effort: 'medium', auth: 'chatgpt', ...limits } });
-    await flushMicrotasks();
-    await capturedOnData(Buffer.from('Codex booting...\n' + CODEX_COMPOSER));
-    await vi.advanceTimersByTimeAsync(2000);
-    expect(pasteCount()).toBe(1);
-    await capturedOnData(Buffer.from('do the thing\n'));
-    await vi.advanceTimersByTimeAsync(4000);
-    // Both scanner work and the later source/fix/test phase can be silent.
-    await capturedOnData(Buffer.from('Reviewing source and validating fixes.\n'));
-    vi.mocked(shellService.pasteToSession).mockClear();
-    vi.mocked(shellService.writeToSession).mockClear();
-    await vi.advanceTimersByTimeAsync(nudges ? STALL_NUDGE_IDLE_MS + SIGNAL_POLL_MS : 2 * 60 * 60 * 1000);
-    if (nudges) {
-      expect(shellService.pasteToSession).toHaveBeenCalledWith(SESSION_ID, STALL_NUDGE_TEXT, expect.anything());
-    } else {
-      expect(shellService.pasteToSession).not.toHaveBeenCalled();
-      expect(shellService.writeToSession).not.toHaveBeenCalled();
-      expect(cosAgentLifecycle.updateAgent).not.toHaveBeenCalledWith('agent-1', { metadata: { phase: 'stalled' } });
-    }
-    expect(shellService.killSession).not.toHaveBeenCalled();
-    expect(agentLifecycle.finalizeAgent).not.toHaveBeenCalled();
-    await capturedOnExit({ exitCode: 1, killed: false });
-    expect(agentLifecycle.finalizeAgent).toHaveBeenCalledOnce();
-  });
-
-  // A schedule can turn the stall nudge off (taskMetadata.stallNudge: false) for a
-  // task whose long quiet stretch is a wait it owns. do-release ships that way:
-  // agent-0f4189d3 parked on its release PR's background CI watch, took the nudge
-  // as "wrap up" and wrote INCOMPLETE with the PR still open.
-  it.each([
-    { stallNudge: false, nudges: false },
-    { stallNudge: 'false', nudges: false },
-    { stallNudge: true, nudges: true },
-    { stallNudge: undefined, nudges: true },
-  ])('honors taskMetadata.stallNudge=$stallNudge once the prompt has started a turn', async ({ stallNudge, nudges }) => {
-    runSpawn({ task: { id: 'task-1', description: 'do the thing', metadata: stallNudge === undefined ? {} : { stallNudge } } });
-    await flushMicrotasks();
-    await capturedOnData(Buffer.from('Codex booting...\n' + CODEX_COMPOSER));
-    await vi.advanceTimersByTimeAsync(2000);
-    expect(pasteCount()).toBe(1);
-    await capturedOnData(Buffer.from('do the thing\n'));
-    await vi.advanceTimersByTimeAsync(4000);
-    // Output well after the submit is the run's own work, not an echo — the
-    // prompt has started a turn, which is when the opt-out takes over.
-    await vi.advanceTimersByTimeAsync(PROMPT_WORK_EVIDENCE_MS);
-    await capturedOnData(Buffer.from('Opened the release PR; waiting on its CI in the background.\n'));
-    vi.mocked(shellService.pasteToSession).mockClear();
-    await vi.advanceTimersByTimeAsync(nudges ? STALL_NUDGE_IDLE_MS + SIGNAL_POLL_MS : 2 * 60 * 60 * 1000);
-    if (nudges) {
-      expect(shellService.pasteToSession).toHaveBeenCalledWith(SESSION_ID, STALL_NUDGE_TEXT, expect.anything());
-    } else {
-      expect(shellService.pasteToSession).not.toHaveBeenCalled();
-      expect(cosAgentLifecycle.updateAgent).not.toHaveBeenCalledWith('agent-1', { metadata: { phase: 'stalled' } });
-    }
-    expect(agentLifecycle.finalizeAgent).not.toHaveBeenCalled();
-  });
-
-  // ── Stalled session: the turn just ended, with the task unfinished ─────────
-  // agent-bb3061af (2026-09-17): the run finished its /simplify pass, printed
-  // "Next: /do:pr", ended its turn and sat at an idle composer. Nothing was on
-  // screen for a detector to match and — since the wall-clock ceiling was
-  // removed — nothing would ever have touched it again. A human opened the Shell
-  // tab and typed "continue", and it finished.
-  it('dispatches bounded completion and issue-disposition guidance to a stalled session', async () => {
-    await driveAgyToSubmittedPrompt();
-    vi.mocked(shellService.pasteToSession).mockClear();
-
-    // A short lull is ordinary: a slow tool call paints nothing.
-    await vi.advanceTimersByTimeAsync(STALL_NUDGE_IDLE_MS - 60_000);
-    await flushMicrotasks();
-    expect(shellService.pasteToSession).not.toHaveBeenCalled();
-
-    await vi.advanceTimersByTimeAsync(60_000 + SIGNAL_POLL_MS);
-    await flushMicrotasks();
-    expect(shellService.pasteToSession).toHaveBeenCalledWith(
-      SESSION_ID,
-      expect.stringContaining('Continue the task from where you stopped.'),
-      expect.objectContaining({ label: expect.stringContaining("stalled") }),
-    );
-    // Assert what the recovery boundary actually sends, independently of the
-    // shared constant, so reverting it to a generic "continue" is caught here.
-    const recoveryText = vi.mocked(shellService.pasteToSession).mock.calls[0][1];
-    // A session parked on its own background CI watch must keep driving it,
-    // not read the nudge as permission to write INCOMPLETE and quit.
-    expect(recoveryText).toContain('a pending or failed check is a step to handle, not a reason to stop');
-    expect(recoveryText).toContain('Write the completion sentinel once the task is done');
-    expect(recoveryText).not.toContain('Finish what you can');
-    expect(recoveryText).toContain('File GitHub issues for anything that is too big for this session.');
-    expect(recoveryText).toContain('original task scope, permissions, and safety limits');
-    expect(recoveryText).toContain('do not bypass a refusal or permission block');
-    expect(recoveryText).toContain('owning repository\'s issue-filing instructions');
-    expect(recoveryText).toContain('search for duplicates and reuse an existing issue');
-    expect(recoveryText).toContain('redacted evidence, affected paths, a chosen next step, and acceptance criteria');
-    expect(recoveryText).toContain('If issue filing is not authorized, unavailable, or fails');
-    expect(recoveryText).toContain('report the filing blocker and ready-to-file details as an INCOMPLETE disposition');
-    expect(recoveryText).toContain('do not claim it was filed');
-    expect(recoveryText).toContain('exact sentinel path and format from your existing completion instructions');
-    expect(recoveryText).toContain('writing the sentinel does not itself mean the task succeeded');
-    // A nudge, never a verdict: the run carries on.
-    expect(shellService.pasteToSession).toHaveBeenCalledTimes(1);
-    expect(agentLifecycle.finalizeAgent).not.toHaveBeenCalled();
-  });
-
-  it("leaves a working session alone however long the run lasts", async () => {
-    await driveAgyToSubmittedPrompt();
-    vi.mocked(shellService.pasteToSession).mockClear();
-
-    // Claude Code repaints its working counter about once a second for as long
-    // as any call is in flight. A run that keeps printing is never nudged.
-    for (let elapsed = 0; elapsed < STALL_NUDGE_IDLE_MS + 60_000; elapsed += 60_000) {
-      await capturedOnData(Buffer.from("· Thinking… (42s · esc to interrupt)\n"));
-      await flushMicrotasks();
-      await vi.advanceTimersByTimeAsync(60_000);
-      await flushMicrotasks();
-    }
-    expect(shellService.pasteToSession).not.toHaveBeenCalled();
-  });
-
-  it("badges a session that ignored every nudge instead of giving up silently", async () => {
-    await driveAgyToSubmittedPrompt();
-    // A run that worked and then stopped; one that never started is failed
-    // instead (see the never-started case below).
-    await vi.advanceTimersByTimeAsync(PROMPT_WORK_EVIDENCE_MS);
-    await capturedOnData(Buffer.from('Reading the repository…\n'));
-    await flushMicrotasks();
-    vi.mocked(shellService.pasteToSession).mockClear();
-
-    // A session wedged below its composer never echoes the paste, so nothing
-    // rewinds the idle clock — the budget is the only thing that stops it.
-    // One window per nudge, plus one for the exhaustion verdict — and a spare,
-    // because each nudge lands on the first 5s tick AFTER its threshold, so the
-    // windows drift later as they stack.
-    await vi.advanceTimersByTimeAsync(STALL_NUDGE_IDLE_MS * (STALL_NUDGE_MAX_ATTEMPTS + 2));
-    await flushMicrotasks();
-    expect(shellService.pasteToSession).toHaveBeenCalledTimes(STALL_NUDGE_MAX_ATTEMPTS);
-    // There is no runtime ceiling left to reap it, so the run keeps its lane —
-    // which is only tolerable because the card now says it needs a human.
-    expect(agentLifecycle.finalizeAgent).not.toHaveBeenCalled();
-    expect(cosAgentLifecycle.updateAgent).toHaveBeenCalledWith(
-      'agent-1',
-      { metadata: { phase: 'stalled' } },
-    );
-  });
-
   // ── Unsubmitted prompt: the paste chip rendered, every submit Enter was lost ──
   // #12769: claim runs sat at `❯ [Pasted text #1 +N lines]` indefinitely. As
   // possible claim owners they held every claim checkout in their repository.
   const driveToUnsubmittedChip = async () => {
     runSpawn({ prompt: 'claim the issue and ship a PR' });
     await flushMicrotasks();
-    await capturedOnData(Buffer.from('>_ OpenAI Codex\n' + CODEX_COMPOSER));
+    await sessionCallbacks.onData(Buffer.from('>_ OpenAI Codex\n' + CODEX_COMPOSER));
     await flushMicrotasks();
     await vi.advanceTimersByTimeAsync(2000);
     await flushMicrotasks();
     expect(pasteCount()).toBe(1);
-    await capturedOnData(Buffer.from('> [Pasted Content 29448 chars]\n'));
+    await sessionCallbacks.onData(Buffer.from('> [Pasted Content 29448 chars]\n'));
     await flushMicrotasks();
     // The paste confirms and every submit Enter goes out; the TUI ignores them.
     await vi.advanceTimersByTimeAsync(2000);
     await flushMicrotasks();
   };
+
   const enterCount = () => vi.mocked(shellService.writeToSession).mock.calls
     .filter(([id, data]) => id === SESSION_ID && data === '\r').length;
 
@@ -2557,7 +1513,7 @@ describe('spawnTuiAgent runtime', () => {
 
     // That Enter started the turn: a working session is left alone.
     for (let elapsed = 0; elapsed < 3 * 60_000; elapsed += 1000) {
-      await capturedOnData(Buffer.from('• Working (12s • esc to interrupt)\n'));
+      await sessionCallbacks.onData(Buffer.from('• Working (12s • esc to interrupt)\n'));
       await vi.advanceTimersByTimeAsync(1000);
     }
     await flushMicrotasks();
@@ -2601,7 +1557,7 @@ describe('spawnTuiAgent runtime', () => {
 
     // Banner output so firstOutputAt is set, then advance past the prompt-delay
     // floor + readiness idle threshold so the ready poll fires the paste.
-    await capturedOnData(Buffer.from('Codex booting...\n' + CODEX_COMPOSER));
+    await sessionCallbacks.onData(Buffer.from('Codex booting...\n' + CODEX_COMPOSER));
     await flushMicrotasks();
     await vi.advanceTimersByTimeAsync(2000);
     await flushMicrotasks();
@@ -2618,7 +1574,7 @@ describe('spawnTuiAgent runtime', () => {
 
     // Emit the prompt echo so paste verification passes (issue #2192).
     // In a real TUI, the paste is echoed in the input buffer.
-    await capturedOnData(Buffer.from('ste me into the box\n'));
+    await sessionCallbacks.onData(Buffer.from('ste me into the box\n'));
     await flushMicrotasks();
 
     // Advance past the fallback window AND the full spread of retry spacing
@@ -2643,7 +1599,7 @@ describe('spawnTuiAgent runtime', () => {
       prompt: 'A long UX audit prompt whose full prefix is hidden by the collapsed preview.',
     });
     await flushMicrotasks();
-    await capturedOnData(Buffer.from('Grok Build 1.0.25 [stable]'));
+    await sessionCallbacks.onData(Buffer.from('Grok Build 1.0.25 [stable]'));
     await vi.advanceTimersByTimeAsync(2000);
     const writes = () => vi.mocked(shellService.writeToSession).mock.calls
       .filter(([id]) => id === SESSION_ID);
@@ -2651,8 +1607,8 @@ describe('spawnTuiAgent runtime', () => {
     expect(writes().filter(([, data]) => data === '\r')).toHaveLength(0);
 
     // ANSI styling and PTY chunk boundaries match the real size chip.
-    await capturedOnData(Buffer.from('\x1b[38;2;65;65;65m[\x1b[38;2;200;200;200mPasted: 31'));
-    await capturedOnData(Buffer.from(' KB\x1b[38;2;65;65;65m] Enter:send'));
+    await sessionCallbacks.onData(Buffer.from('\x1b[38;2;65;65;65m[\x1b[38;2;200;200;200mPasted: 31'));
+    await sessionCallbacks.onData(Buffer.from(' KB\x1b[38;2;65;65;65m] Enter:send'));
     await vi.advanceTimersByTimeAsync(1000);
     expect(writes().some(([, data]) => data === '\r')).toBe(true);
     await vi.advanceTimersByTimeAsync(20000);
@@ -2672,8 +1628,8 @@ describe('spawnTuiAgent runtime', () => {
   it('idle-detection: pre-injection PTY output does not satisfy startup-idle readiness', async () => {
     let sendInitialCommand = null;
     vi.mocked(shellService.createShellSession).mockImplementation((_socket, opts) => {
-      capturedOnData = opts.onData;
-      capturedOnExit = opts.onExit;
+      sessionCallbacks.onData = opts.onData;
+      sessionCallbacks.onExit = opts.onExit;
       // Do NOT fire onInitialCommandSent yet — mirrors the real shell.js
       // waitForPromptReady gap between the probe round-trip and command
       // injection, unlike the suite's default mock (which fires it immediately).
@@ -2685,7 +1641,7 @@ describe('spawnTuiAgent runtime', () => {
     await flushMicrotasks();
 
     // Shell-level probe echo/noise arrives BEFORE the real command is injected.
-    await capturedOnData(Buffer.from("bash-5.2$ printf '%s\\n' 'PORTOSRDY''abc123'\nPORTOSRDYabc123\n"));
+    await sessionCallbacks.onData(Buffer.from("bash-5.2$ printf '%s\\n' 'PORTOSRDY''abc123'\nPORTOSRDYabc123\n"));
     await flushMicrotasks();
 
     // Advance well past promptDelayMs + the idle threshold. Pre-fix, this probe
@@ -2701,7 +1657,7 @@ describe('spawnTuiAgent runtime', () => {
     // Now the real command is injected and the CLI produces its own output —
     // the idle clock should start from here and the paste should proceed.
     sendInitialCommand();
-    await capturedOnData(Buffer.from('Codex booting...\n' + CODEX_COMPOSER));
+    await sessionCallbacks.onData(Buffer.from('Codex booting...\n' + CODEX_COMPOSER));
     await flushMicrotasks();
     await vi.advanceTimersByTimeAsync(2000);
     await flushMicrotasks();
@@ -2729,14 +1685,14 @@ describe('spawnTuiAgent runtime', () => {
     await flushMicrotasks();
 
     // Header only — no composer. Then well past the 1200ms idle threshold.
-    await capturedOnData(Buffer.from('>_ OpenAI Codex (v0.155.1)\n'));
+    await sessionCallbacks.onData(Buffer.from('>_ OpenAI Codex (v0.155.1)\n'));
     await flushMicrotasks();
     await vi.advanceTimersByTimeAsync(3000);
     await flushMicrotasks();
     expect(pasteCount()).toBe(0);
 
     // Composer paints → the ordinary idle path delivers.
-    await capturedOnData(Buffer.from(CODEX_COMPOSER));
+    await sessionCallbacks.onData(Buffer.from(CODEX_COMPOSER));
     await flushMicrotasks();
     await vi.advanceTimersByTimeAsync(2000);
     await flushMicrotasks();
@@ -2750,12 +1706,13 @@ describe('spawnTuiAgent runtime', () => {
 
     runSpawn();
     await flushMicrotasks();
-    await capturedOnData(Buffer.from('>_ OpenAI Codex (v9.9.9)\n  some future composer wording\n'));
+    await sessionCallbacks.onData(Buffer.from('>_ OpenAI Codex (v9.9.9)\n  some future composer wording\n'));
     await flushMicrotasks();
     await vi.advanceTimersByTimeAsync(PASTE_DEADLINE_MS + 1000);
     await flushMicrotasks();
     expect(pasteCount()).toBe(1);
   });
+
   it('codex late paste commit: waits for the chip past the old window instead of re-pasting', async () => {
     const pasteFailSpy = vi.fn();
     vi.mocked(agentLifecycle.finalizeAgent).mockImplementation(async (args) => {
@@ -2766,7 +1723,7 @@ describe('spawnTuiAgent runtime', () => {
     await flushMicrotasks();
     // Ordinary banner — deliberately NOT an MCP-boot signal, so the extended
     // boot budget is not what rescues this run.
-    await capturedOnData(Buffer.from('>_ OpenAI Codex (v0.155.1)\n  directory: loading\n' + CODEX_COMPOSER));
+    await sessionCallbacks.onData(Buffer.from('>_ OpenAI Codex (v0.155.1)\n  directory: loading\n' + CODEX_COMPOSER));
     await flushMicrotasks();
     await vi.advanceTimersByTimeAsync(2000);
     await flushMicrotasks();
@@ -2780,7 +1737,7 @@ describe('spawnTuiAgent runtime', () => {
     expect(pasteFailSpy).not.toHaveBeenCalled();
 
     // Composer goes live and commits the queued paste.
-    await capturedOnData(Buffer.from('[Pasted Content 29448 chars]\n'));
+    await sessionCallbacks.onData(Buffer.from('[Pasted Content 29448 chars]\n'));
     await flushMicrotasks();
     await vi.advanceTimersByTimeAsync(400);
     await flushMicrotasks();
@@ -2802,7 +1759,7 @@ describe('spawnTuiAgent runtime', () => {
 
     runSpawn({ prompt: 'evaluate our animation prompts and generate drafts' });
     await flushMicrotasks();
-    await capturedOnData(Buffer.from('>_ OpenAI Codex (v0.155.1)\n' + CODEX_COMPOSER));
+    await sessionCallbacks.onData(Buffer.from('>_ OpenAI Codex (v0.155.1)\n' + CODEX_COMPOSER));
     await flushMicrotasks();
     await vi.advanceTimersByTimeAsync(2000);
     await flushMicrotasks();
@@ -2810,7 +1767,7 @@ describe('spawnTuiAgent runtime', () => {
 
     // Boot banner arrives only now — after the paste. The attempt must abandon
     // the patient window and fall back to the short swallow-recovery ladder.
-    await capturedOnData(Buffer.from('Starting MCP servers (1/2): codex_apps (0s • esc to interrupt)\n' + CODEX_COMPOSER));
+    await sessionCallbacks.onData(Buffer.from('Starting MCP servers (1/2): codex_apps (0s • esc to interrupt)\n' + CODEX_COMPOSER));
     await flushMicrotasks();
 
     // Well inside the patient window, so a captured 45s wait would still be
@@ -2847,7 +1804,7 @@ describe('spawnTuiAgent runtime', () => {
     // new repaint before truncating that tail, or it misses the banner and
     // kills the run at the ordinary three-attempt cap.
     const footer = `\n\n› Ask Codex to do anything\n\n  gpt-5.6-sol high · ${'workspace footer '.repeat(24)}`;
-    await capturedOnData(Buffer.from(`>_ OpenAI Codex (v0.148.0)\nStarting MCP servers (1/2): codex_apps (0s • esc to interrupt)${footer}`));
+    await sessionCallbacks.onData(Buffer.from(`>_ OpenAI Codex (v0.148.0)\nStarting MCP servers (1/2): codex_apps (0s • esc to interrupt)${footer}`));
     await flushMicrotasks();
     // Fire the paste (past prompt-delay floor + readiness idle threshold).
     await vi.advanceTimersByTimeAsync(2000);
@@ -2876,7 +1833,7 @@ describe('spawnTuiAgent runtime', () => {
 
     runSpawn({ prompt: 'evaluate our animation prompts and generate drafts' });
     await flushMicrotasks();
-    await capturedOnData(Buffer.from('Starting MCP servers (1/2): codex_apps (0s • esc to interrupt)\n' + CODEX_COMPOSER));
+    await sessionCallbacks.onData(Buffer.from('Starting MCP servers (1/2): codex_apps (0s • esc to interrupt)\n' + CODEX_COMPOSER));
     await flushMicrotasks();
     await vi.advanceTimersByTimeAsync(2000);
     await flushMicrotasks();
@@ -2892,7 +1849,7 @@ describe('spawnTuiAgent runtime', () => {
     );
     await flushMicrotasks();
 
-    await capturedOnData(Buffer.from('[Pasted Content 12345 chars]\n'));
+    await sessionCallbacks.onData(Buffer.from('[Pasted Content 12345 chars]\n'));
     await flushMicrotasks();
 
     const enterWrites = () => vi.mocked(shellService.writeToSession).mock.calls
@@ -2919,7 +1876,7 @@ describe('spawnTuiAgent runtime', () => {
 
     runSpawn();
     await flushMicrotasks();
-    await capturedOnData(Buffer.from('Booting MCP server: node_repl(0s • esc to interrupt)\n' + CODEX_COMPOSER));
+    await sessionCallbacks.onData(Buffer.from('Booting MCP server: node_repl(0s • esc to interrupt)\n' + CODEX_COMPOSER));
     await flushMicrotasks();
     await vi.advanceTimersByTimeAsync(2000);
     await flushMicrotasks();
@@ -2943,7 +1900,7 @@ describe('spawnTuiAgent runtime', () => {
     runSpawn();
     await flushMicrotasks();
     // Ordinary banner chrome — NOT an MCP-boot signal, so the budget stays fixed.
-    await capturedOnData(Buffer.from('Codex booting...\n' + CODEX_COMPOSER));
+    await sessionCallbacks.onData(Buffer.from('Codex booting...\n' + CODEX_COMPOSER));
     await flushMicrotasks();
     await vi.advanceTimersByTimeAsync(2000);
     await flushMicrotasks();
@@ -2973,7 +1930,7 @@ describe('spawnTuiAgent runtime', () => {
     runSpawn({ tuiConfig: { command: 'gemini', args: [], spawnCommand: 'gemini', spawnArgs: [], commandLine: 'gemini', promptDelayMs: 100 } });
     await flushMicrotasks();
     // Same banner text codex prints — but this is a gemini session.
-    await capturedOnData(Buffer.from('Starting MCP servers (0/3): a, b, c\n'));
+    await sessionCallbacks.onData(Buffer.from('Starting MCP servers (0/3): a, b, c\n'));
     await flushMicrotasks();
     await vi.advanceTimersByTimeAsync(2000);
     await flushMicrotasks();
@@ -2988,1108 +1945,5 @@ describe('spawnTuiAgent runtime', () => {
     expect(agentLifecycle.finalizeAgent).toHaveBeenCalledWith(
       expect.objectContaining({ agentId: 'agent-1', success: false, completionReason: 'paste-not-rendered' })
     );
-  });
-
-  // ── 2. Command-not-found path ────────────────────────────────────────────────
-  it('command-not-found: finalizeAgent called with success:false, exitCode 127, completionReason=command-not-found', async () => {
-    const spawnPromise = runSpawn();
-    await flushMicrotasks();
-
-    // Feed "command not found" output BEFORE the prompt timer fires (promptSentAt === null).
-    // commandName is derived from tuiConfig.command = 'codex' via .split('/').pop().
-    await capturedOnData(Buffer.from('bash: codex: command not found\n'));
-    await flushMicrotasks();
-
-    await spawnPromise;
-
-    expect(agentLifecycle.finalizeAgent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: 'agent-1',
-        success: false,
-        exitCode: 127,
-        completionReason: 'command-not-found',
-      })
-    );
-  });
-
-  // A credential-bootstrap provider types `token-cli run codex …` into the
-  // login shell, so the shell's "command not found" names the BOOTSTRAP binary.
-  // Keying the probe on the harness (`tuiConfig.command`) would miss it and the
-  // run would hang to the wall-clock backstop instead of exiting 127.
-  it('command-not-found: detects a missing credential-bootstrap binary by the spawned command, not the harness', async () => {
-    const spawnPromise = runSpawn({
-      tuiConfig: { ...defaultTuiConfig, spawnCommand: 'token-cli', spawnArgs: ['run', 'codex'], commandLine: 'token-cli run codex' },
-    });
-    await flushMicrotasks();
-
-    await capturedOnData(Buffer.from('zsh: command not found: token-cli\n'));
-    await flushMicrotasks();
-
-    await spawnPromise;
-
-    expect(agentLifecycle.finalizeAgent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        success: false,
-        exitCode: 127,
-        completionReason: 'command-not-found',
-        error: 'TUI command not found: token-cli',
-      })
-    );
-  });
-
-  // ── 3. Shell-exit path with non-zero exit code ───────────────────────────────
-  it('shell-exit: finalizeAgent called with success:false and exitCode 1 when shell exits non-zero', async () => {
-    const spawnPromise = runSpawn();
-    await flushMicrotasks();
-
-    await capturedOnExit({ exitCode: 1, killed: false });
-    await flushMicrotasks();
-
-    await spawnPromise;
-
-    expect(agentLifecycle.finalizeAgent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: 'agent-1',
-        success: false,
-        exitCode: 1,
-        completionReason: 'shell-exit',
-      })
-    );
-  });
-
-  it('spools the runner exit tail when an immediate exit beat live TUI output', async () => {
-    const { appendFile } = await import('fs/promises');
-    const spawnPromise = runSpawn({ useDurableRunner: true });
-    await flushMicrotasks();
-
-    await capturedOnExit({
-      exitCode: 1,
-      killed: false,
-      outputTail: 'OpenCode startup error: configured model is unavailable',
-    });
-    await flushMicrotasks();
-    await spawnPromise;
-
-    const rawTail = vi.mocked(appendFile).mock.calls.find(
-      ([path, contents]) => typeof path === 'string' && path.endsWith('raw.txt') && String(contents).includes('OpenCode startup error'),
-    );
-    expect(rawTail).toBeDefined();
-  });
-
-  it('does not revive an agent when the durable runner exits before its spawn response', async () => {
-    let resolveRunnerSession;
-    let exitPromise;
-    const session = {
-      sessionId: SESSION_ID,
-      pid: 4321,
-      ptyProcess: { pid: 4321, kill: vi.fn() },
-    };
-    vi.mocked(spawnTuiSessionViaRunner).mockImplementationOnce((options) => {
-      capturedOnData = options.onData;
-      capturedOnExit = options.onExit;
-      // The socket relay registers this callback before its POST resolves, so
-      // a CLI that exits immediately can finalize while the response is held.
-      exitPromise = options.onExit({ exitCode: 1, killed: false, outputTail: 'startup failed' });
-      return new Promise((resolve) => { resolveRunnerSession = resolve; });
-    });
-
-    const spawnPromise = runSpawn({ useDurableRunner: true });
-    await flushMicrotasks();
-    resolveRunnerSession(session);
-
-    await spawnPromise;
-    await exitPromise;
-
-    expect(activeAgents.has('agent-1')).toBe(false);
-    expect(vi.getTimerCount()).toBe(0);
-    expect(shellService.registerExternalSession, 'a PTY that already exited is not registered').not.toHaveBeenCalled();
-    expect(cosAgentLifecycle.updateAgent).not.toHaveBeenCalled();
-  });
-
-  // ── 4. Killed / user-terminated path ────────────────────────────────────────
-  it('user-terminated: finalizeAgent receives terminatedByUser:true + error=Agent terminated by user', async () => {
-    // Mark agent as user-terminated before the exit fires
-    userTerminatedAgents.add('agent-1');
-
-    const spawnPromise = runSpawn();
-    await flushMicrotasks();
-
-    await capturedOnExit({ exitCode: 0, killed: true });
-    await flushMicrotasks();
-
-    await spawnPromise;
-
-    expect(agentLifecycle.finalizeAgent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: 'agent-1',
-        success: false,
-        terminatedByUser: true,
-        error: 'Agent terminated by user',
-      })
-    );
-  });
-
-  // ── 5. Spawn-error path (createShellSession returns null) ────────────────────
-  it('spawn-error: function returns null and finalizeAgent reports spawn-error when session creation fails', async () => {
-    vi.mocked(shellService.createShellSession).mockReturnValue(null);
-
-    const result = await runSpawn();
-
-    expect(result).toBeNull();
-    expect(agentLifecycle.finalizeAgent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: 'agent-1',
-        success: false,
-        error: 'Failed to create TUI shell session',
-        completionReason: 'spawn-error',
-      })
-    );
-  });
-
-  // ── 6. Raw PTY stream spools to disk (no in-memory cap, no in-memory warn) ─
-  // Raw chunks are written to raw.txt via the debounced flush pipeline so
-  // memory stays bounded regardless of run length. analyzeAgentFailure
-  // reads the file on failure. No "raw PTY buffer exceeded" warn and no
-  // rawBufferTruncated metadata flag — those were signals of the OLD
-  // in-memory cap. Disk-side truncation has its own warn / flag covered
-  // separately by test 8b.
-  it('raw PTY bytes spool to raw.txt without the old in-memory truncation signals', async () => {
-    const { appendFile } = await import('fs/promises');
-    runSpawn();
-    await flushMicrotasks();
-
-    // Small chunks that stay under the mocked 100-byte raw-spool cap so this
-    // test exercises the normal appendFile path. The disk-safety-valve path
-    // (writeFile when over cap) is covered by test 8b.
-    await capturedOnData(Buffer.from('hello '));
-    await flushMicrotasks();
-    await capturedOnData(Buffer.from('world\n'));
-    await flushMicrotasks();
-
-    // Fire the one-second debounced raw flush.
-    await vi.advanceTimersByTimeAsync(1000);
-    await flushMicrotasks();
-
-    const inMemTruncWarns = warnSpy.mock.calls.filter(args =>
-      typeof args[0] === 'string' && args[0].includes('raw PTY buffer exceeded')
-    );
-    expect(inMemTruncWarns).toHaveLength(0);
-
-    const inMemTruncMetaCalls = vi.mocked(cosAgentLifecycle.updateAgent).mock.calls.filter(
-      ([_id, payload]) => payload?.metadata?.rawBufferTruncated === true
-    );
-    expect(inMemTruncMetaCalls).toHaveLength(0);
-
-    // raw.txt got the chunks via the batched appendFile flush.
-    const rawAppendCalls = vi.mocked(appendFile).mock.calls.filter(
-      ([path]) => typeof path === 'string' && path.endsWith('raw.txt')
-    );
-    expect(rawAppendCalls.length).toBeGreaterThan(0);
-  });
-
-  // ── 7. Output-buffer truncation warning + metadata flag ─────────────────────
-  // outputBuffer is filled via appendLine, which fires on initial spawn
-  // (session-started + open-shell-tab) plus the prompt-pasted notice. With
-  // the mocked 1-byte HEADROOM the first spawn line trips the cap, so the
-  // wiring is exercised on every spawn — but only ONCE per run regardless
-  // of how many subsequent lines arrive.
-  it('outputBuffer overflow: warns once and writes outputBufferTruncated:true to agent metadata', async () => {
-    runSpawn();
-    await flushMicrotasks();
-
-    const truncWarns = warnSpy.mock.calls.filter(args =>
-      typeof args[0] === 'string' && args[0].includes('parsed-output buffer exceeded')
-    );
-    expect(truncWarns).toHaveLength(1);
-
-    const truncMetaCalls = vi.mocked(cosAgentLifecycle.updateAgent).mock.calls.filter(
-      ([_id, payload]) => payload?.metadata?.outputBufferTruncated === true
-    );
-    expect(truncMetaCalls).toHaveLength(1);
-    expect(truncMetaCalls[0][0]).toBe('agent-1');
-  });
-
-  // ── 8. Failure-path tail-read of raw.txt ────────────────────────────────────
-  // analyzeAgentFailure needs the recent PTY tail; finalize MUST read it from
-  // raw.txt via readFileTail (NOT readFile, which would load the whole spool).
-  // This test wires stat to report a >1MB spool and asserts the tail-read
-  // pattern: stat → open → read at offset (size - RAW_TAIL_ANALYSIS_BYTES).
-  it('failure finalize: reads only the tail of raw.txt for analyzeAgentFailure', async () => {
-    const fsPromises = await import('fs/promises');
-    const RAW_TAIL_BYTES = 1024 * 1024;
-    const SPOOL_SIZE = 5 * 1024 * 1024;   // 5MB on disk
-
-    vi.mocked(fsPromises.stat).mockResolvedValueOnce({ size: SPOOL_SIZE });
-    const readMock = vi.fn().mockResolvedValue({ bytesRead: RAW_TAIL_BYTES });
-    const closeMock = vi.fn().mockResolvedValue(undefined);
-    vi.mocked(fsPromises.open).mockResolvedValueOnce({ read: readMock, close: closeMock });
-
-    const spawnPromise = runSpawn();
-    await flushMicrotasks();
-
-    // Trigger a failure finalize via the shell-exit path.
-    await capturedOnExit({ exitCode: 1, killed: false });
-    await flushMicrotasks();
-    await spawnPromise;
-
-    const statCalls = vi.mocked(fsPromises.stat).mock.calls.filter(
-      ([p]) => typeof p === 'string' && p.endsWith('raw.txt')
-    );
-    expect(statCalls.length).toBeGreaterThan(0);
-
-    const openCalls = vi.mocked(fsPromises.open).mock.calls.filter(
-      ([p]) => typeof p === 'string' && p.endsWith('raw.txt')
-    );
-    expect(openCalls.length).toBeGreaterThan(0);
-
-    // read() must be called with offset = size - tailBytes (5MB - 1MB = 4MB)
-    // so analyzeAgentFailure sees only the most-recent 1MB, not the full spool.
-    expect(readMock).toHaveBeenCalledWith(
-      expect.any(Buffer),
-      0,
-      RAW_TAIL_BYTES,
-      SPOOL_SIZE - RAW_TAIL_BYTES
-    );
-    expect(closeMock).toHaveBeenCalled();
-  });
-
-  // ── 8b. Disk safety valve ───────────────────────────────────────────────────
-  // The raw spool truncates rather than appends once it crosses
-  // RAW_SPOOL_MAX_BYTES so a runaway agent can't fill the volume. The mock
-  // above shrinks the cap to 100 bytes so we can trip it with two ~80-byte
-  // chunks instead of pushing hundreds of MB through the spawner. The wiring
-  // under test (Buffer.byteLength count, writeFile vs appendFile dispatch,
-  // once-per-run warn + metadata flag) is identical at any cap.
-  it('raw spool: truncates instead of appending once it crosses the cap', async () => {
-    const fsPromises = await import('fs/promises');
-    runSpawn();
-    await flushMicrotasks();
-
-    // First chunk (80 bytes) fits under the 100-byte cap → appendFile.
-    await capturedOnData(Buffer.alloc(80, 0x61));
-    await flushMicrotasks();
-    await vi.advanceTimersByTimeAsync(1000);
-    await flushMicrotasks();
-
-    // Second chunk (80 bytes) would push total to 160 > 100 → writeFile.
-    await capturedOnData(Buffer.alloc(80, 0x62));
-    await flushMicrotasks();
-    await vi.advanceTimersByTimeAsync(1000);
-    await flushMicrotasks();
-
-    const writeFileRawCalls = vi.mocked(fsPromises.writeFile).mock.calls.filter(
-      ([p]) => typeof p === 'string' && p.endsWith('raw.txt')
-    );
-    expect(writeFileRawCalls.length).toBeGreaterThan(0);
-
-    const truncWarns = warnSpy.mock.calls.filter(args =>
-      typeof args[0] === 'string' && args[0].includes('raw PTY spool reached')
-    );
-    expect(truncWarns).toHaveLength(1);
-
-    const truncMetaCalls = vi.mocked(cosAgentLifecycle.updateAgent).mock.calls.filter(
-      ([_id, payload]) => payload?.metadata?.rawSpoolTruncated === true
-    );
-    expect(truncMetaCalls).toHaveLength(1);
-    expect(truncMetaCalls[0][0]).toBe('agent-1');
-  });
-
-  // ── 9. Success-path skips the tail read ─────────────────────────────────────
-  // Successful finalize must not touch raw.txt — that's what makes the
-  // disk-spool's bounded-memory guarantee hold for healthy long runs.
-  it('success finalize: skips raw.txt tail read entirely', async () => {
-    const fsPromises = await import('fs/promises');
-
-    let resolveComplete;
-    const completeDone = new Promise((r) => { resolveComplete = r; });
-    vi.mocked(agentLifecycle.finalizeAgent).mockImplementation(async () => { resolveComplete(); });
-
-    const spawnPromise = runSpawn();
-    await flushMicrotasks();
-
-    // Drive the prompt far enough to exercise normal post-submit output, then
-    // use the ordinary shell-exit completion path.
-    await capturedOnData(Buffer.from('Codex booting...\n' + CODEX_COMPOSER));
-    await flushMicrotasks();
-    await vi.advanceTimersByTimeAsync(2000);
-    await flushMicrotasks();
-    // Emit the prompt echo so paste verification passes (issue #2192).
-    await capturedOnData(Buffer.from('do the thing\n'));
-    await flushMicrotasks();
-    await vi.advanceTimersByTimeAsync(3600); // submit-Enter fires → promptSubmittedAt set
-    await flushMicrotasks();
-    await capturedOnData(Buffer.from('(1s · thinking with high effort)\n'));
-    await vi.advanceTimersByTimeAsync(800);
-    await capturedOnData(Buffer.from('(2s · thinking with high effort)\n'));
-    await capturedOnExit({ exitCode: 0, killed: false });
-    await spawnPromise;
-    vi.useRealTimers();
-    await completeDone;
-
-    // No raw.txt stat / open should fire on the success path. (The mock
-    // for fs.promises.stat / open was reset between tests by clearAllMocks,
-    // so any calls here are from this run.)
-    const statCalls = vi.mocked(fsPromises.stat).mock.calls.filter(
-      ([p]) => typeof p === 'string' && p.endsWith('raw.txt')
-    );
-    expect(statCalls).toHaveLength(0);
-
-    const openCalls = vi.mocked(fsPromises.open).mock.calls.filter(
-      ([p]) => typeof p === 'string' && p.endsWith('raw.txt')
-    );
-    expect(openCalls).toHaveLength(0);
-  });
-
-  // ── 10. Completion-sentinel ingestion on the shell-exit path ─────────────────
-  // The completion workflow has the agent write `.agent-done` and then stop
-  // (it does NOT `/quit`). Normally the doneSentinelWatcher finalizes the
-  // agent, but the TUI process can also exit on its own (or be killed) before
-  // the watcher fires — when that shell-exit path wins the race, finish() MUST
-  // still ingest the sentinel so its markdown resolution lands in outputBuffer /
-  // output.txt and shows up in the completed-agent details view. Regression
-  // guard for the lost-resolution bug where the summary only got ingested by
-  // the watcher path.
-  it('shell-exit after sentinel write: ingests .agent-done summary into the persisted output (process exit beats the watcher)', async () => {
-    const { appendFile } = await import('fs/promises');
-    const sentinel = '## Summary\nImplemented the fix.\n\n## PR\nhttps://example.com/pr/42';
-    vi.mocked(existsSync).mockReturnValue(true);
-    // The agent writes the run-scoped sentinel name the prompt gave it.
-    vi.mocked(readFile).mockImplementation(async (p) =>
-      typeof p === 'string' && p.endsWith('.agent-done-agent-1') ? sentinel : ''
-    );
-
-    const spawnPromise = runSpawn({ workspacePath: '/tmp/ws' });
-    await flushMicrotasks();
-
-    // Simulate the TUI process exiting cleanly from /quit — NOT the poll.
-    await capturedOnExit({ exitCode: 0, killed: false });
-    await flushMicrotasks();
-
-    await spawnPromise;
-
-    await vi.waitFor(() => expect(agentLifecycle.finalizeAgent).toHaveBeenCalledTimes(1));
-
-    // The completed-agent details view reads output.txt (getAgent) and the
-    // in-state output stream (live view / fallback). Both must carry the
-    // sentinel resolution — assert on the persistence paths, not outputBuffer,
-    // since the test mocks OUTPUT_BUFFER_CAP down to 1 byte.
-    const flushedLines = vi.mocked(cosAgentLifecycle.appendAgentOutputLines).mock.calls
-      .flatMap(([, lines]) => lines);
-    expect(flushedLines).toContain('✅ Agent signaled completion');
-    expect(flushedLines.some(l => l.includes('Implemented the fix.'))).toBe(true);
-    expect(flushedLines.some(l => l.includes('https://example.com/pr/42'))).toBe(true);
-
-    const outputTxtWrites = vi.mocked(appendFile).mock.calls
-      .filter(([p]) => typeof p === 'string' && p.endsWith('output.txt'))
-      .map(([, data]) => String(data))
-      .join('');
-    expect(outputTxtWrites).toContain('Implemented the fix.');
-    expect(outputTxtWrites).toContain('https://example.com/pr/42');
-  });
-
-  it('finalizes a one-character-truncated sentinel and stops the idle nudge loop', async () => {
-    const truncatedName = '.agent-done-agent-ded2dcc';
-    const sentinel = '## Summary\nRecovered after a terminal path truncation.';
-    vi.mocked(existsSync).mockImplementation((filePath) =>
-      filePath === '/tmp/ws' || (typeof filePath === 'string' && filePath.endsWith(truncatedName))
-    );
-    vi.mocked(readFile).mockImplementation(async (filePath) =>
-      typeof filePath === 'string' && filePath.endsWith(truncatedName) ? sentinel : ''
-    );
-
-    const spawnPromise = runSpawn({ agentId: 'agent-ded2dccb', workspacePath: '/tmp/ws' });
-    await flushMicrotasks();
-    await capturedOnExit({ exitCode: 0, killed: false });
-    await spawnPromise;
-    await vi.advanceTimersByTimeAsync(1000);
-    await flushMicrotasks();
-
-    expect(agentLifecycle.finalizeAgent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: 'agent-ded2dccb',
-        success: true,
-        completionReason: 'agent-signaled-done',
-      }),
-    );
-
-    const pasteCount = vi.mocked(shellService.pasteToSession).mock.calls.length;
-    await vi.advanceTimersByTimeAsync(STALL_NUDGE_IDLE_MS * (STALL_NUDGE_MAX_ATTEMPTS + 1));
-    expect(shellService.pasteToSession).toHaveBeenCalledTimes(pasteCount);
-  });
-
-  // ── 11. A PortOS host restart is an interruption, never a completion ─────────
-  //
-  // Reported in #3202: `pm2 restart portos-server` TreeKills the agent's PTY.
-  // node-pty reports that as exit code 0, so `success: code === 0 && !killed`
-  // recorded a run that had produced nothing as SUCCESSFUL — and worse, finalize
-  // handed the worktree to cleanup, destroying the state a resume needs. Both
-  // halves are asserted here.
-  describe('host restart (#3202)', () => {
-    afterEach(() => resetHostShutdownFlagForTests());
-
-    it('abandons instead of finalizing when the PTY dies during shutdown', async () => {
-      const spawnPromise = runSpawn();
-      await flushMicrotasks();
-
-      markHostShuttingDown();
-      // Exactly what pm2's TreeKill looks like from node-pty: a clean exit code.
-      await capturedOnExit({ exitCode: 0, killed: false });
-      await flushMicrotasks();
-      await spawnPromise;
-
-      // No outcome recorded, and — critically — the worktree is left alone.
-      expect(agentLifecycle.finalizeAgent).not.toHaveBeenCalled();
-      expect(runSpawnerCompletionCleanup).not.toHaveBeenCalled();
-      // The record stays `running`; only the phase label is refined, so boot
-      // recovery still sees it as an agent to reconcile from the marker.
-      expect(vi.mocked(cosAgentLifecycle.updateAgent).mock.calls.some(
-        ([, patch]) => patch?.metadata?.phase === 'interrupted' && patch?.metadata?.interruptedBy === 'host-shutdown'
-      )).toBe(true);
-    });
-
-    // An abandoned run is as over as a finalized one — it just has no outcome
-    // — so nothing may record one afterwards. The shutdown flag is cleared
-    // before the second trigger so the abandoned session itself, not the flag,
-    // is the only thing between that trigger and finalizeAgent.
-    it('stays abandoned: a trigger arriving after the abandon records no outcome and runs no cleanup', async () => {
-      const spawnPromise = runSpawn();
-      await flushMicrotasks();
-
-      markHostShuttingDown();
-      await capturedOnExit({ exitCode: 0, killed: false });
-      await flushMicrotasks();
-      await spawnPromise;
-      expect(agentLifecycle.finalizeAgent).not.toHaveBeenCalled();
-
-      resetHostShutdownFlagForTests();
-      await capturedOnExit({ exitCode: 1, killed: true });
-      await flushMicrotasks();
-
-      // Still no outcome — and still no completion cleanup, so the worktree
-      // the resume needs is untouched.
-      expect(agentLifecycle.finalizeAgent).not.toHaveBeenCalled();
-      expect(runSpawnerCompletionCleanup).not.toHaveBeenCalled();
-    });
-
-    it('still finalizes as success when the agent had already written its sentinel', async () => {
-      vi.mocked(existsSync).mockReturnValue(true);
-      vi.mocked(readFile).mockImplementation(async (p) =>
-        typeof p === 'string' && p.endsWith('.agent-done') ? '## Summary\nDone.' : ''
-      );
-
-      const spawnPromise = runSpawn({ workspacePath: '/tmp/ws' });
-      await flushMicrotasks();
-
-      markHostShuttingDown();
-      await capturedOnExit({ exitCode: 0, killed: false });
-      await flushMicrotasks();
-      await spawnPromise;
-
-      await vi.waitFor(() => expect(agentLifecycle.finalizeAgent).toHaveBeenCalledWith(
-        expect.objectContaining({ agentId: 'agent-1', success: true })
-      ));
-    });
-
-    // The backstop for a SIGKILL'd or crashed portos-server, which never runs its
-    // shutdown handler — so the in-process flag is never set, and the only
-    // evidence left is node-pty's `signal`.
-    it('records a signal-terminated PTY as a failure even with exit code 0', async () => {
-      const spawnPromise = runSpawn();
-      await flushMicrotasks();
-
-      await capturedOnExit({ exitCode: 0, killed: false, signal: 15 });
-      await flushMicrotasks();
-      await spawnPromise;
-
-      expect(agentLifecycle.finalizeAgent).toHaveBeenCalledWith(
-        expect.objectContaining({
-          agentId: 'agent-1',
-          success: false,
-          completionReason: 'shell-signaled',
-          error: expect.stringContaining('signal 15'),
-        })
-      );
-    });
-
-    // Guard against over-correcting: a TUI that genuinely exits 0 on its own,
-    // outside a shutdown and with no signal, keeps its prior success semantics.
-    it('leaves an ordinary clean exit alone', async () => {
-      const spawnPromise = runSpawn();
-      await flushMicrotasks();
-
-      await capturedOnExit({ exitCode: 0, killed: false, signal: null });
-      await flushMicrotasks();
-      await spawnPromise;
-
-      expect(agentLifecycle.finalizeAgent).toHaveBeenCalledWith(
-        expect.objectContaining({ success: true, completionReason: 'shell-exit' })
-      );
-    });
-  });
-
-  // A session that never spawns at all. The runner rejects the spawn (e.g. its
-  // command allowlist doesn't carry the provider's CLI), createAgentTuiSession
-  // throws, and before this was handled the throw propagated out of
-  // spawnTuiAgent to a caller that only logs — leaving the agent record stuck in
-  // `initializing` until the zombie reaper finalized it a minute later with a
-  // generic message, so the real cause never reached the user.
-  //
-  // The reason splits on the runner hop — see spawnTuiAgent's catch. Note a
-  // refused/mid-restart runner surfaces from undici as a bare
-  // TypeError('fetch failed').
-  describe('spawn failure', () => {
-    it.each([
-      ['a runner refusal', new Error('Command not allowed: grok. Permitted commands: claude, codex'), 'Command not allowed: grok'],
-      ['an unreachable runner', new TypeError('fetch failed'), 'fetch failed'],
-    ])('finalizes %s as spawn-rejected instead of throwing', async (_label, rejection, expectedFragment) => {
-      vi.mocked(spawnTuiSessionViaRunner).mockRejectedValueOnce(rejection);
-
-      // Resolves, does not reject.
-      await expect(runSpawn({ useDurableRunner: true })).resolves.toBeNull();
-
-      expect(agentLifecycle.finalizeAgent).toHaveBeenCalledWith(
-        expect.objectContaining({
-          agentId: 'agent-1',
-          success: false,
-          completionReason: 'spawn-rejected',
-          error: expect.stringContaining(expectedFragment),
-        })
-      );
-    });
-
-    it('classifies a runner executable preflight failure as command-not-found', async () => {
-      vi.mocked(spawnTuiSessionViaRunner).mockRejectedValueOnce(
-        new Error('Command executable unavailable: opencode did not pass the CoS Runner capability check. Reinstall it or update the provider command.'),
-      );
-
-      await expect(runSpawn({ useDurableRunner: true })).resolves.toBeNull();
-
-      expect(agentLifecycle.finalizeAgent).toHaveBeenCalledWith(
-        expect.objectContaining({
-          agentId: 'agent-1',
-          success: false,
-          completionReason: 'command-not-found',
-          error: expect.stringContaining('did not pass the CoS Runner capability check'),
-        })
-      );
-    });
-
-    // The runner's two PTY diagnoses split on RETRY POLICY, and the split is the
-    // whole point of naming them separately. A PTY layer that cannot fork is
-    // broken for every task until a human reinstalls, so it must block once
-    // instead of retry-storming the fleet; a reaped worktree is cleared by the
-    // very next attempt, which provisions a fresh one, so it must NOT block.
-    // Collapsing them (an earlier revision matched both prefixes) parks work a
-    // retry would have fixed.
-    it('blocks on an unusable PTY layer as runner-pty-unavailable', async () => {
-      vi.mocked(spawnTuiSessionViaRunner).mockRejectedValueOnce(
-        new Error('CoS Runner PTY unavailable: node-pty cannot fork any process, so this is not specific to the requested command. Repair it with `node scripts/ensure-deps.js`.'),
-      );
-
-      await expect(runSpawn({ useDurableRunner: true })).resolves.toBeNull();
-
-      expect(agentLifecycle.finalizeAgent).toHaveBeenCalledWith(
-        expect.objectContaining({
-          agentId: 'agent-1',
-          success: false,
-          completionReason: 'runner-pty-unavailable',
-          error: expect.stringContaining('node scripts/ensure-deps.js'),
-        })
-      );
-    });
-
-    it('leaves a reaped workspace retryable as spawn-rejected', async () => {
-      vi.mocked(spawnTuiSessionViaRunner).mockRejectedValueOnce(
-        new Error('CoS Runner workspace missing: the workspace for this spawn does not exist. Its worktree was probably removed before the agent launched.'),
-      );
-
-      await expect(runSpawn({ useDurableRunner: true })).resolves.toBeNull();
-
-      expect(agentLifecycle.finalizeAgent).toHaveBeenCalledWith(
-        expect.objectContaining({
-          agentId: 'agent-1',
-          success: false,
-          completionReason: 'spawn-rejected',
-          error: expect.stringContaining('worktree was probably removed'),
-        })
-      );
-    });
-
-    // The ledger has to carry the outcome it actually knows (#4615). A runner
-    // that ANSWERED with a refusal and a transport failure that answered
-    // nothing are different facts, and a diagnostic that reads the second as
-    // the first sends the reader after a rejection that never happened.
-    const handoffs = () => appendRunEvent.mock.calls.map(([e]) => e).filter((e) => e.kind === 'run.handoff');
-
-    it('records a refused handoff as accepted:false', async () => {
-      vi.mocked(spawnTuiSessionViaRunner).mockRejectedValueOnce(
-        Object.assign(new Error('Command not allowed: grok'), { spawnOutcome: RUNNER_SPAWN_REFUSED, status: 400 }),
-      );
-
-      await runSpawn({ useDurableRunner: true });
-
-      expect(handoffs()).toEqual([expect.objectContaining({
-        eventId: 'handoff:agent-1:run-1:rejected',
-        data: expect.objectContaining({ to: 'none', accepted: false, outcome: RUNNER_SPAWN_REFUSED, kind: 'tui' }),
-      })]);
-    });
-
-    it('records an ambiguous handoff as accepted:null with the transport reason', async () => {
-      vi.mocked(spawnTuiSessionViaRunner).mockRejectedValueOnce(
-        Object.assign(new TypeError('fetch failed'), { spawnOutcome: RUNNER_SPAWN_AMBIGUOUS }),
-      );
-
-      await runSpawn({ useDurableRunner: true });
-
-      expect(handoffs()).toEqual([expect.objectContaining({
-        eventId: 'handoff:agent-1:run-1:unconfirmed',
-        data: expect.objectContaining({
-          to: 'none',
-          accepted: null,
-          outcome: RUNNER_SPAWN_AMBIGUOUS,
-          kind: 'tui',
-          reason: 'fetch failed',
-        }),
-      })]);
-    });
-
-    it('records an adopted PTY as an accepted handoff and keeps the run alive', async () => {
-      // The spawn rpc re-attached the relay to a PTY the runner already had, so
-      // this is a live run — it must not be finalized as a failed spawn.
-      const spawnDefault = vi.mocked(spawnTuiSessionViaRunner).getMockImplementation();
-      vi.mocked(spawnTuiSessionViaRunner).mockImplementationOnce(async (options) => ({
-        ...(await spawnDefault(options)),
-        adopted: true,
-        adoptedReason: 'fetch failed',
-      }));
-
-      const spawnPromise = runSpawn({ useDurableRunner: true });
-      await flushMicrotasks();
-
-      expect(handoffs()).toEqual([expect.objectContaining({
-        eventId: 'handoff:agent-1:run-1:cos-runner',
-        data: expect.objectContaining({
-          to: 'cos-runner',
-          accepted: true,
-          adopted: true,
-          outcome: RUNNER_SPAWN_AMBIGUOUS,
-          reason: 'fetch failed',
-        }),
-      })]);
-      expect(agentLifecycle.finalizeAgent).not.toHaveBeenCalled();
-
-      await capturedOnExit({ exitCode: 0, killed: false, signal: null });
-      await flushMicrotasks();
-      await spawnPromise;
-    });
-
-    it('keeps the actionable spawn-error when the local PTY path throws', async () => {
-      vi.mocked(shellService.createShellSession).mockImplementationOnce(() => {
-        throw new Error('posix_spawnp failed');
-      });
-
-      await expect(runSpawn({ useDurableRunner: false })).resolves.toBeNull();
-
-      expect(agentLifecycle.finalizeAgent).toHaveBeenCalledWith(
-        expect.objectContaining({
-          agentId: 'agent-1',
-          success: false,
-          completionReason: 'spawn-error',
-          error: 'Failed to start TUI session: posix_spawnp failed',
-        })
-      );
-    });
-
-  });
-
-  // ── Merge Gate contract check (#5876) ────────────────────────────────────
-  // A run that owns its own PR lifecycle (`openPR: true`, a TUI/CLI provider,
-  // not leaned/handed-to-a-human) is told to merge its own PR before exiting.
-  // These tests drive `finish()` via the shell-exit path (same as the
-  // completion-sentinel suite above) with a `.agent-done` sentinel already on
-  // disk, and assert on the re-prompt delivery (`shellService.pasteToSession`)
-  // and on whether `finalizeAgent` — the point of no return — was reached.
-  describe('merge-gate contract check (#5876)', () => {
-    const openPrTask = { id: 'task-1', description: 'ship the fix', metadata: { openPR: true } };
-
-    // Stateful (not a blanket `true`): `watchForFile`'s `detect()` also runs
-    // SYNCHRONOUSLY at watcher-creation time, so if the sentinel already
-    // "existed" when spawnTuiAgent creates its initial watcher, that watcher
-    // self-fires before the test ever drives an explicit trigger — and a
-    // re-prompt's `rm(doneSentinelPath)` needs to actually clear presence for
-    // the re-armed watcher's OWN creation-time check to stay quiet too.
-    // `withSentinel` therefore only wires the mocks; every test flips
-    // `sentinelExists = true` itself, only once its trigger is ready to fire.
-    let sentinelExists = false;
-    const withSentinel = (summary) => {
-      vi.mocked(existsSync).mockImplementation(() => sentinelExists);
-      vi.mocked(readFile).mockImplementation(async (p) =>
-        (typeof p === 'string' && p.endsWith('.agent-done-agent-1') && sentinelExists) ? summary : ''
-      );
-      vi.mocked(rm).mockImplementation(async () => { sentinelExists = false; });
-    };
-
-    // The merge-gate check adds real await hops (ingestDoneSentinel's readFile,
-    // git.getBranch, probePrForBranch) before finish() reaches finalizeAgent —
-    // more than the module-level `flushMicrotasks`'s fixed 3 hops reliably
-    // drains. Loop it rather than deepen the shared helper for every caller.
-    const settle = async () => {
-      for (let i = 0; i < 8; i += 1) await flushMicrotasks();
-    };
-
-    // The sentinel watcher's fallback poll, past the 5000ms tick AND the 50ms
-    // settle delay `watchForFile` applies after a `detect()`. A nudge is only
-    // ever decided on this trigger: a PTY exit means nobody is left to read it.
-    const fireSentinelWatcher = async () => {
-      await vi.advanceTimersByTimeAsync(5100);
-      await settle();
-    };
-
-    beforeEach(() => { sentinelExists = false; });
-
-    it('leaves a read-only run with an open PR to PortOS without a merge re-prompt', async () => {
-      vi.mocked(probePrForBranch).mockResolvedValue({
-        prState: 'OPEN', prUrl: 'https://example.com/pr/1', prNumber: 1, cli: 'gh', readable: true,
-      });
-      withSentinel('## Summary\nFinished the analysis.');
-      const spawnPromise = runSpawn({
-        task: { ...openPrTask, metadata: { openPR: true, readOnly: true } },
-      });
-      await flushMicrotasks();
-      sentinelExists = true;
-      await capturedOnExit({ exitCode: 0, killed: false });
-      await settle();
-      await spawnPromise;
-      expect(probePrForBranch).not.toHaveBeenCalled();
-      expect(shellService.pasteToSession).not.toHaveBeenCalled();
-      expect(runSpawnerCompletionCleanup).toHaveBeenCalledWith(expect.objectContaining({
-        prOwnership: expect.objectContaining({ taskOpenPR: true, prOpenedBy: 'portos', agentOpensOwnPr: false }),
-      }));
-    });
-
-    it('re-prompts exactly once when the PR is open and the summary names no blocker, then finalizes on the RE-ARMED watcher even if still open', async () => {
-      vi.mocked(shellService.pasteToSession).mockReturnValue(999);
-      vi.mocked(probePrForBranch).mockResolvedValue({
-        prState: 'OPEN', prUrl: 'https://example.com/pr/1', prNumber: 1, cli: 'gh', readable: true,
-      });
-      withSentinel('## Summary\nShipped the fix and opened the PR.');
-
-      const spawnPromise = runSpawn({ task: openPrTask, workspacePath: '/tmp/ws' });
-      await flushMicrotasks(); // initial watcher arms while quiet — must not self-fire
-
-      sentinelExists = true; // the agent writes .agent-done
-      await fireSentinelWatcher();
-
-      // Round 1: nudged, not finalized. The reprompt path deletes the
-      // sentinel (`rm` flips `sentinelExists` false, see withSentinel) and
-      // arms a brand-new watcher — the original is one-shot and already
-      // closed itself on this same detection.
-      expect(shellService.pasteToSession).toHaveBeenCalledTimes(1);
-      expect(shellService.pasteToSession.mock.calls[0][1]).toContain('still OPEN');
-      expect(agentLifecycle.finalizeAgent).not.toHaveBeenCalled();
-
-      // Round 2: the agent writes a fresh sentinel (still OPEN, still no
-      // blocker) and the RE-ARMED watcher's fallback poll picks it up —
-      // proving the re-arm itself works, not just a second exit event.
-      sentinelExists = true;
-      await fireSentinelWatcher();
-      await spawnPromise;
-
-      // One nudge per run: round 2 finalizes instead of nudging again.
-      expect(shellService.pasteToSession).toHaveBeenCalledTimes(1);
-      expect(agentLifecycle.finalizeAgent).toHaveBeenCalledTimes(1);
-    });
-
-    it('never nudges a clean exit that carries no real .agent-done summary, even for a run that owed a merge', async () => {
-      // success:true with nothing on disk — an ordinary quit, not the agent
-      // signaling its Merge Gate is done. Must fall straight through to a
-      // normal finalize, never probe the forge or paste into the session.
-      vi.mocked(existsSync).mockReturnValue(false);
-      vi.mocked(readFile).mockResolvedValue('');
-
-      const spawnPromise = runSpawn({ task: openPrTask, workspacePath: '/tmp/ws' });
-      await flushMicrotasks(); // initial watcher arms while quiet — must not self-fire
-
-      sentinelExists = true; // the agent writes .agent-done
-      await capturedOnExit({ exitCode: 0, killed: false });
-      await settle();
-      await spawnPromise;
-
-      expect(probePrForBranch).not.toHaveBeenCalled();
-      expect(shellService.pasteToSession).not.toHaveBeenCalled();
-      expect(agentLifecycle.finalizeAgent).toHaveBeenCalledTimes(1);
-    });
-
-    it('falls through to a normal finalize when the session is already gone (resubmit fails)', async () => {
-      // pasteToSession returns nothing → resubmit() reports it couldn't nudge.
-      // `clearAllMocks()` doesn't reset a return value set by an earlier test
-      // (only call history), so this is explicit rather than relying on the
-      // vi.fn() factory default.
-      vi.mocked(shellService.pasteToSession).mockReturnValue(undefined);
-      vi.mocked(probePrForBranch).mockResolvedValue({
-        prState: 'OPEN', prUrl: 'https://example.com/pr/1', prNumber: 1, cli: 'gh', readable: true,
-      });
-      withSentinel('## Summary\nShipped the fix and opened the PR.');
-
-      const spawnPromise = runSpawn({ task: openPrTask, workspacePath: '/tmp/ws' });
-      await flushMicrotasks(); // initial watcher arms while quiet — must not self-fire
-
-      sentinelExists = true; // the agent writes .agent-done
-      await fireSentinelWatcher();
-      await spawnPromise;
-
-      expect(shellService.pasteToSession).toHaveBeenCalledTimes(1);
-      expect(agentLifecycle.finalizeAgent).toHaveBeenCalledTimes(1);
-    });
-
-    // #11861: a runner proxy accepts a paste after its PTY died, so a truthy
-    // paste cannot prove the nudge reached anyone. When the exit is what
-    // decides, the run finalizes; the open PR takes the post-finalize path.
-    it('finalizes without nudging when a PTY exit is the deciding trigger, even if the paste would succeed', async () => {
-      vi.mocked(shellService.pasteToSession).mockReturnValue(999);
-      vi.mocked(probePrForBranch).mockResolvedValue({
-        prState: 'OPEN', prUrl: 'https://example.com/pr/1', prNumber: 1, cli: 'gh', readable: true,
-      });
-      withSentinel('## Summary\nShipped the fix and opened the PR.');
-
-      const spawnPromise = runSpawn({ task: openPrTask, workspacePath: '/tmp/ws' });
-      await flushMicrotasks(); // initial watcher arms while quiet — must not self-fire
-
-      sentinelExists = true; // the agent writes .agent-done, then exits first
-      await capturedOnExit({ exitCode: 0, killed: false });
-      await settle();
-      await spawnPromise;
-
-      expect(shellService.pasteToSession).not.toHaveBeenCalled();
-      expect(agentLifecycle.finalizeAgent).toHaveBeenCalledTimes(1);
-      expect(agentLifecycle.finalizeAgent).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
-    });
-
-    it('replays a finish() trigger dropped while the merge-gate check was deciding, instead of losing it', async () => {
-      vi.mocked(shellService.pasteToSession).mockReturnValue(999);
-      vi.mocked(probePrForBranch).mockResolvedValue({
-        prState: 'OPEN', prUrl: 'https://example.com/pr/1', prNumber: 1, cli: 'gh', readable: true,
-      });
-      withSentinel('## Summary\nShipped the fix and opened the PR.');
-
-      const spawnPromise = runSpawn({ task: openPrTask, workspacePath: '/tmp/ws' });
-      await flushMicrotasks(); // initial watcher arms while quiet — must not self-fire
-
-      // Hold the forge probe so the second trigger lands mid-decision.
-      let releaseProbe;
-      vi.mocked(probePrForBranch).mockImplementationOnce(() => new Promise((resolve) => {
-        releaseProbe = () => resolve({
-          prState: 'OPEN', prUrl: 'https://example.com/pr/1', prNumber: 1, cli: 'gh', readable: true,
-        });
-      }));
-
-      sentinelExists = true; // the agent writes .agent-done
-      // The sentinel watcher starts the merge-gate decision; a kill signal
-      // racing in while it decides is parked by the `finishing` guard. It must
-      // be replayed — not lost — once the first settles on "not finalizing
-      // after all", or the run would sit forever waiting for a nudge into a
-      // session that already died.
-      await fireSentinelWatcher();
-      expect(releaseProbe).toBeTypeOf('function');
-      const exited = capturedOnExit({ exitCode: 1, killed: true });
-      releaseProbe();
-      await settle();
-      await exited;
-      await spawnPromise;
-
-      expect(shellService.pasteToSession).toHaveBeenCalledTimes(1);
-      expect(agentLifecycle.finalizeAgent).toHaveBeenCalledTimes(1);
-      expect(agentLifecycle.finalizeAgent).toHaveBeenCalledWith(
-        expect.objectContaining({ success: false })
-      );
-    });
-
-    // The nudge's reset to 'running' has to reopen the finish gate for EVERY
-    // trigger — not only the parked replay above, and not only the re-armed
-    // sentinel watcher. After a nudge the session is live again, and the next
-    // thing to happen may be the PTY simply dying with no new sentinel at all.
-    // Swallow that and the run holds its lane to the max-runtime ceiling with
-    // no outcome recorded.
-    it('finalizes a plain PTY exit arriving after the merge-gate nudge, and ignores anything after that', async () => {
-      vi.mocked(shellService.pasteToSession).mockReturnValue(999);
-      vi.mocked(probePrForBranch).mockResolvedValue({
-        prState: 'OPEN', prUrl: 'https://example.com/pr/1', prNumber: 1, cli: 'gh', readable: true,
-      });
-      withSentinel('## Summary\nShipped the fix and opened the PR.');
-
-      const spawnPromise = runSpawn({ task: openPrTask, workspacePath: '/tmp/ws' });
-      await flushMicrotasks(); // initial watcher arms while quiet — must not self-fire
-
-      sentinelExists = true; // the agent writes .agent-done
-      await fireSentinelWatcher();
-      expect(shellService.pasteToSession).toHaveBeenCalledTimes(1);
-      expect(agentLifecycle.finalizeAgent).not.toHaveBeenCalled();
-
-      // The nudge deleted the sentinel, so this exit carries no completion
-      // signal of its own: nothing but the session phase decides whether it
-      // is heard.
-      await capturedOnExit({ exitCode: 1, killed: true });
-      await settle();
-      await spawnPromise;
-
-      expect(shellService.pasteToSession).toHaveBeenCalledTimes(1); // one nudge per run
-      expect(agentLifecycle.finalizeAgent).toHaveBeenCalledTimes(1);
-      expect(agentLifecycle.finalizeAgent).toHaveBeenCalledWith(expect.objectContaining({ success: false }));
-
-      // ...and now the run really is over — a late trigger finalizes nothing.
-      await capturedOnExit({ exitCode: 0, killed: false });
-      await settle();
-      expect(agentLifecycle.finalizeAgent).toHaveBeenCalledTimes(1);
-    });
-
-    it('finalizes on the first sentinel with no re-prompt when the PR is already merged', async () => {
-      vi.mocked(probePrForBranch).mockResolvedValue({
-        prState: 'MERGED', prUrl: 'https://example.com/pr/1', prNumber: 1, cli: 'gh', readable: true,
-      });
-      withSentinel('## Summary\nMerged the PR.');
-
-      const spawnPromise = runSpawn({ task: openPrTask, workspacePath: '/tmp/ws' });
-      await flushMicrotasks(); // initial watcher arms while quiet — must not self-fire
-
-      sentinelExists = true; // the agent writes .agent-done
-      await capturedOnExit({ exitCode: 0, killed: false });
-      await settle();
-      await spawnPromise;
-
-      expect(shellService.pasteToSession).not.toHaveBeenCalled();
-      expect(agentLifecycle.finalizeAgent).toHaveBeenCalledTimes(1);
-    });
-
-    it('finalizes on the first sentinel with no re-prompt when the summary states it is deliberately leaving the PR open', async () => {
-      vi.mocked(probePrForBranch).mockResolvedValue({
-        prState: 'OPEN', prUrl: 'https://example.com/pr/1', prNumber: 1, cli: 'gh', readable: true,
-      });
-      withSentinel('## Summary\nA required check is still red after two fix attempts — leaving the PR open for a human.');
-
-      const spawnPromise = runSpawn({ task: openPrTask, workspacePath: '/tmp/ws' });
-      await flushMicrotasks(); // initial watcher arms while quiet — must not self-fire
-
-      sentinelExists = true; // the agent writes .agent-done
-      await capturedOnExit({ exitCode: 0, killed: false });
-      await settle();
-      await spawnPromise;
-
-      expect(shellService.pasteToSession).not.toHaveBeenCalled();
-      expect(agentLifecycle.finalizeAgent).toHaveBeenCalledTimes(1);
-    });
-
-    it('finalizes on the first sentinel with no re-prompt when the forge lookup is unreadable', async () => {
-      vi.mocked(probePrForBranch).mockResolvedValue({
-        prState: null, prUrl: null, prNumber: null, cli: null, readable: false,
-      });
-      withSentinel('## Summary\nShipped the fix and opened the PR.');
-
-      const spawnPromise = runSpawn({ task: openPrTask, workspacePath: '/tmp/ws' });
-      await flushMicrotasks(); // initial watcher arms while quiet — must not self-fire
-
-      sentinelExists = true; // the agent writes .agent-done
-      await capturedOnExit({ exitCode: 0, killed: false });
-      await settle();
-      await spawnPromise;
-
-      expect(shellService.pasteToSession).not.toHaveBeenCalled();
-      expect(agentLifecycle.finalizeAgent).toHaveBeenCalledTimes(1);
-    });
-
-    it('never probes the forge or re-prompts for a run that never asked for a PR', async () => {
-      withSentinel('## Summary\nDid the audit, no PR needed.');
-
-      const spawnPromise = runSpawn({
-        task: { id: 'task-1', description: 'audit only', metadata: {} },
-        workspacePath: '/tmp/ws',
-      });
-      await flushMicrotasks();
-
-      await capturedOnExit({ exitCode: 0, killed: false });
-      await settle();
-      await spawnPromise;
-
-      expect(probePrForBranch).not.toHaveBeenCalled();
-      expect(shellService.pasteToSession).not.toHaveBeenCalled();
-      expect(agentLifecycle.finalizeAgent).toHaveBeenCalledTimes(1);
-    });
-  });
-
-  // ── Shared finalize-sequence contract (#6619) ────────────────────────────────
-  //
-  // `finish()` and the CLI close handler used to hold two hand-mirrored copies of
-  // this teardown, kept in sync by prose comments and running their two gates in
-  // OPPOSITE order. These three tests are the oracle for the invariants that
-  // mirroring protected — the same three, asserted the same way, live in
-  // agentCliSpawning.test.js. They pin the lane/registry/marker effects that this
-  // suite's finalizeAgent-argument assertions do not observe.
-  describe('shared finalize sequence (#6619)', () => {
-    afterEach(() => {
-      pausedAgents.clear();
-      userTerminatedAgents.clear();
-      resetHostShutdownFlagForTests();
-    });
-
-    // A paused run was already settled by markAgentPaused, so the paused gate
-    // must win over the host-shutdown gate.
-    it('paused run exiting during host shutdown takes the paused path, writing no interrupted marker', async () => {
-      const spawnPromise = runSpawn();
-      await flushMicrotasks();
-
-      pausedAgents.set('agent-1', true);
-      markHostShuttingDown();
-      await capturedOnExit({ exitCode: 0, killed: false });
-      await flushMicrotasks();
-      await spawnPromise;
-
-      expect(consumePausedAgentExit).toHaveBeenCalledWith('agent-1');
-      expect(agentLifecycle.finalizeAgent).not.toHaveBeenCalled();
-      expect(activeAgents.has('agent-1')).toBe(false);
-      expect(vi.mocked(cosAgentLifecycle.updateAgent).mock.calls.some(
-        ([, patch]) => patch?.metadata?.phase === 'interrupted'
-      )).toBe(false);
-    });
-
-    // The PTY can win the race and report exit 0 after the user killed it.
-    // Recording that as a success leaves the task blocked with a "successful"
-    // run attached.
-    it('user-terminated run that exits 0 finalizes as failure with the terminated error', async () => {
-      userTerminatedAgents.add('agent-1');
-
-      const spawnPromise = runSpawn();
-      await flushMicrotasks();
-
-      await capturedOnExit({ exitCode: 0, killed: true });
-      await flushMicrotasks();
-      await spawnPromise;
-
-      expect(agentLifecycle.finalizeAgent).toHaveBeenCalledWith(expect.objectContaining({
-        terminatedByUser: true,
-        success: false,
-        error: 'Agent terminated by user',
-      }));
-      // Consumed, so a later resume of the same agent id is not misread as a kill.
-      expect(userTerminatedAgents.has('agent-1')).toBe(false);
-    });
-
-    // pm2's TreeKill took the PTY down with portos-server. The run has no
-    // outcome: leave the record `running` for the next boot's orphan sweep.
-    it('run interrupted by host shutdown with no sentinel is abandoned without finalizing', async () => {
-      const spawnPromise = runSpawn();
-      await flushMicrotasks();
-
-      markHostShuttingDown();
-      await capturedOnExit({ exitCode: 0, killed: false });
-      await flushMicrotasks();
-      await spawnPromise;
-
-      expect(vi.mocked(cosAgentLifecycle.updateAgent).mock.calls.some(
-        ([, patch]) => patch?.metadata?.phase === 'interrupted' && patch?.metadata?.interruptedBy === 'host-shutdown'
-      )).toBe(true);
-      expect(agentLifecycle.finalizeAgent).not.toHaveBeenCalled();
-      // A restart the operator caused, preserved for resume, is the normal path: info, never warn.
-      expect(emitLog).toHaveBeenCalledWith('info', expect.stringContaining('interrupted by a PortOS host restart'), expect.any(Object));
-      expect(emitLog).not.toHaveBeenCalledWith('warn', expect.stringContaining('interrupted by a PortOS host restart'), expect.anything());
-    });
   });
 });
