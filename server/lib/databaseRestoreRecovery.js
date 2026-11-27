@@ -32,10 +32,9 @@ import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { PATHS } from './paths.js';
 import { assertNotRealDataWrite } from './testDataIsolation.js';
-import { syncDirectorySync, writeDurableExclusiveSync } from './fileCore.js';
-
 export const DATABASE_RESTORE_RECOVERY_FILE = 'database-restore-recovery.json';
 export const DATABASE_RESTORE_RECOVERY_STAGES = Object.freeze(['replaying', 'repairing']);
+import { syncDirectorySync, writeDurableExclusiveSync } from './fileDurability.js';
 
 const recordSchema = z.object({
   version: z.literal(1),

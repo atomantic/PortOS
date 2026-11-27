@@ -7,12 +7,14 @@
  * tail reads/watchers), time/format helpers, directory sizing, and SHA-256 helpers.
  */
 import { access, appendFile, chmod, copyFile, lstat, mkdir, open, readFile, readdir, stat, writeFile, rename, unlink, rm } from 'fs/promises';
-import { closeSync, createReadStream, createWriteStream, existsSync, fsyncSync, openSync, statSync, watch as watchFileSystem, writeFileSync } from 'fs';
+import { createReadStream, createWriteStream, existsSync, statSync, watch as watchFileSystem } from 'fs';
 import { createHash, randomUUID } from 'crypto';
 import { basename, dirname, extname, join } from 'path';
 import { promisify } from 'util';
 import { execFile } from './childProcess.js';
 import { isVitestRunner } from './runtimeEnv.js';
+
+export { syncDirectorySync, writeDurableExclusiveSync } from './fileDurability.js';
 
 // The #6176 data-root guard is loaded ONLY under an actual Vitest worker —
 // `isVitestRunner()`, narrower than `isTestRunner()`, because `scripts/
@@ -87,25 +89,6 @@ export async function syncDirectory(dir, { strict = false } = {}) {
     if (unsyncableDirs.has(dir)) return;
     unsyncableDirs.add(dir);
     console.warn(`⚠️ Directory fsync unavailable for ${dir} (${err.code}); renames there are not crash-durable`);
-  }
-}
-
-/** Flush directory metadata, propagating I/O failures on platforms that support it. */
-export function syncDirectorySync(dir) {
-  // Node cannot fsync directory handles on Windows.
-  if (isWindows()) return;
-  const fd = openSync(dir, 'r');
-  try { fsyncSync(fd); } finally { closeSync(fd); }
-}
-
-/** Create and flush a private JSON file without replacing an existing path. */
-export function writeDurableExclusiveSync(path, value, { indent = 2 } = {}) {
-  const fd = openSync(path, 'wx', 0o600);
-  try {
-    writeFileSync(fd, JSON.stringify(value, null, indent) + '\n');
-    fsyncSync(fd);
-  } finally {
-    closeSync(fd);
   }
 }
 

@@ -12,7 +12,7 @@ import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { PATHS } from './paths.js';
 import { assertNotRealDataWrite } from './testDataIsolation.js';
-import { syncDirectorySync, writeDurableExclusiveSync } from './fileCore.js';
+import { syncDirectorySync, writeDurableExclusiveSync } from './fileDurability.js';
 
 // Same shape as the maintenance journal's endpoint identity (kept local so the
 // journal can depend on this module without a cycle).

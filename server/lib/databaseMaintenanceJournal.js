@@ -13,8 +13,6 @@
  * readable while either backend is unavailable, so it cannot live in PostgreSQL; its directory is the admission
  * fence. Lifecycle and recovery commands: docs/STORAGE.md#cutover-recovery.
  */
-import { syncDirectorySync, writeDurableExclusiveSync } from './fileCore.js';
-
 import { existsSync, lstatSync, mkdirSync, linkSync, unlinkSync, openSync, closeSync, fsyncSync, readFileSync, renameSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -23,6 +21,7 @@ import { PATHS } from './paths.js';
 import { createMaintenanceJournal } from './maintenanceJournal.js';
 import { assertNotRealDataWrite } from './testDataIsolation.js';
 import { createDatabaseAuthority } from './databaseAuthority.js';
+import { syncDirectorySync, writeDurableExclusiveSync } from './fileDurability.js';
 
 export const databaseMaintenanceEndpointSchema = z.object({
   mode: z.enum(['native', 'docker']),

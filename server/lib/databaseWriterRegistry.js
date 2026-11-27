@@ -21,8 +21,6 @@ import { z } from 'zod';
 import { PATHS } from './paths.js';
 import { createDatabaseMaintenanceJournal } from './databaseMaintenanceJournal.js';
 import { assertNotRealDataWrite } from './testDataIsolation.js';
-import { syncDirectorySync, writeDurableExclusiveSync } from './fileCore.js';
-
 const reservationSchema = z.object({
   version: z.literal(1), id: z.string().uuid(), controlDir: z.string().refine(isAbsolute),
   createdAt: z.string().datetime(), processGroup: z.boolean(),
@@ -42,6 +40,7 @@ const completionSchema = z.object({
 const retirementSchema = z.object({ version: z.literal(1) }).strict();
 const RETIRED_EXITS = 'unreconciled-exits.json';
 const refused = name => new Error(`Detached writer inventory is incomplete or unreadable${name === undefined ? '' : ` at entry ${JSON.stringify(name)}`}; maintenance must remain fenced.`);
+import { syncDirectorySync, writeDurableExclusiveSync } from './fileDurability.js';
 
 function publish(directory, name, value) {
   writeDurableExclusiveSync(join(directory, name), value, { indent: 0 });
