@@ -14,16 +14,29 @@ import {
 
 export function createProjectFileStore({ file, kind, idPrefix, logEmoji, logLabel, logic }) {
   const sync = makeSyncKind(kind);
+  const summaryOmissions = logic.summaryReadOmissions;
+
+  function omitSummaryFields(project) {
+    if (!summaryOmissions) return project;
+    const { field, keys } = summaryOmissions;
+    const value = project?.[field];
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return project;
+    const kept = Object.fromEntries(Object.entries(value).filter(([key]) => !keys.includes(key)));
+    return { ...project, [field]: kept };
+  }
 
   async function loadStoredProjects() {
     const raw = await readJSONFile(file, [], { strict: true });
     return Array.isArray(raw) ? raw : [];
   }
 
-  async function loadAll() {
+  async function readProjects(summary = false) {
     const raw = await loadStoredProjects();
-    return logic.afterLoad ? raw.map((project) => logic.afterLoad(project)) : raw;
+    const projects = summary ? raw.map(omitSummaryFields) : raw;
+    return logic.afterLoad ? projects.map((project) => logic.afterLoad(project)) : projects;
   }
+
+  const loadAll = () => readProjects();
 
   async function saveAll(projects) {
     await ensureDir(dirname(file));
@@ -42,13 +55,16 @@ export function createProjectFileStore({ file, kind, idPrefix, logEmoji, logLabe
     return { all, idx };
   }
 
-  async function listProjects({ includeDeleted = false } = {}) {
-    const all = await loadAll();
+  async function readLiveProjects({ includeDeleted = false } = {}, summary = false) {
+    const all = await readProjects(summary);
     return includeDeleted ? all : all.filter((project) => !project.deleted);
   }
 
-  async function listProjectPage({ includeDeleted = false, limit = 50, offset = 0, compare, filter } = {}) {
-    const all = await listProjects({ includeDeleted });
+  const listProjects = (options) => readLiveProjects(options);
+  const listProjectSummaries = (options) => readLiveProjects(options, true);
+
+  async function listProjectPage({ includeDeleted = false, limit = 50, offset = 0, compare, filter, summary = false } = {}) {
+    const all = await readLiveProjects({ includeDeleted }, summary);
     const projects = filter ? all.filter(filter) : all;
     if (compare) projects.sort(compare);
     return { items: projects.slice(offset, offset + limit), total: projects.length, limit, offset };
@@ -61,12 +77,15 @@ export function createProjectFileStore({ file, kind, idPrefix, logEmoji, logLabe
     return includeDeleted || !found.deleted ? found : null;
   }
 
-  async function getProjectsByIds(ids, { includeDeleted = false } = {}) {
+  async function readProjectsByIds(ids, options, summary = false) {
     const wanted = new Set((ids || []).filter(Boolean));
     if (wanted.size === 0) return [];
-    const all = await loadAll();
-    return all.filter((project) => wanted.has(project.id) && (includeDeleted || !project.deleted));
+    const all = await readLiveProjects(options, summary);
+    return all.filter((project) => wanted.has(project.id));
   }
+
+  const getProjectsByIds = (ids, options) => readProjectsByIds(ids, options);
+  const getProjectSummariesByIds = (ids, options) => readProjectsByIds(ids, options, true);
 
   async function listProjectIds({ includeDeleted = false } = {}) {
     const all = await loadAll();
@@ -140,9 +159,11 @@ export function createProjectFileStore({ file, kind, idPrefix, logEmoji, logLabe
     saveAll,
     loadAllAndIndex,
     listProjects,
+    listProjectSummaries,
     listProjectPage,
     getProject,
     getProjectsByIds,
+    getProjectSummariesByIds,
     listProjectIds,
     listProjectNames,
     createProject,

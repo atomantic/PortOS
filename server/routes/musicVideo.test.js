@@ -20,6 +20,7 @@ import { resolveRenderVideoFile } from '../services/musicVideo/finalRenderFile.j
 
 vi.mock('../services/musicVideo/projects.js', () => ({
   listProjects: vi.fn(async () => [{ id: 'mv-1', name: 'A' }]),
+  listProjectSummaries: vi.fn(),
   listProjectNames: vi.fn(async () => [{ id: 'mv-1', name: 'A' }]),
   listMidiSourceRows: vi.fn(),
   listProjectPage: vi.fn(),
@@ -165,13 +166,14 @@ describe('musicVideo routes', () => {
   // Uniquely catches the unpaged list going back to every project's full record (#16210),
   // which ran past 100 MB on a real install while nothing read it.
   it('GET / lists every project as its summary, never the full record', async () => {
-    svc.listProjects.mockResolvedValueOnce([{ id: 'mv-1', name: 'A', scenes: [{ sceneId: 's1', takes: [{ takeId: 't1', prompt: 'long composed prompt' }] }],
+    svc.listProjectSummaries.mockResolvedValueOnce([{ id: 'mv-1', name: 'A', scenes: [{ sceneId: 's1', takes: [{ takeId: 't1', prompt: 'long composed prompt' }] }],
       productionReview: { draft: { storyboard: [] } } }]);
     const r = await request(app).get('/api/music-video');
     expect(r.status).toBe(200);
     expect(r.body).toHaveLength(1);
     expect(r.body[0]).toMatchObject({ id: 'mv-1', name: 'A', stage: expect.any(String) });
     for (const heavy of ['scenes', 'productionReview', 'productionReadiness']) expect(r.body[0]).not.toHaveProperty(heavy);
+    expect(svc.listProjects).not.toHaveBeenCalled();
   });
 
   it('GET /names serves sidebar rows instead of treating "names" as a project id', async () => {
@@ -300,6 +302,7 @@ describe('musicVideo routes', () => {
     expect(r.body.total).toBe(5);
     expect(r.body.limit).toBe(2);
     expect(r.body.offset).toBe(1);
+    expect(svc.listProjectPage.mock.calls[0][0]).not.toHaveProperty('summary');
   });
 
   it('GET /?summary=1 returns bounded summary projections with cursor pagination (#10169)', async () => {
@@ -332,6 +335,7 @@ describe('musicVideo routes', () => {
     expect(r1.body.offset).toBe(0);
     expect(r1.body.nextCursor).toBe('1');
     expect(r1.body.items).toHaveLength(1);
+    expect(svc.listProjectPage).toHaveBeenCalledWith(expect.objectContaining({ summary: true }));
 
     const first = r1.body.items[0];
     expect(first.id).toBe('mv-newer');

@@ -77,7 +77,7 @@ import { uploadSingle } from '../lib/multipart.js';
 import { isSupportedMusicUpload, MUSIC_UPLOAD_MAX_BYTES } from '../services/pipeline/musicLibrary.js';
 import { attachVocalStem, detachVocalStem } from '../services/musicVideo/vocalStem.js';
 import { addAudioLayer } from '../services/musicVideo/audioLayerUpload.js';
-import { listProjects, listProjectNames, listMidiSourceRows, listProjectPage, listProjectVersionPage, getProject, createProject, updateProject, deleteProject, setProjectAnalysis, setProjectSections, appendTakesAcrossScenes, mutateProjectRecord } from '../services/musicVideo/projects.js';
+import { listProjectSummaries, listProjectNames, listMidiSourceRows, listProjectPage, listProjectVersionPage, getProject, createProject, updateProject, deleteProject, setProjectAnalysis, setProjectSections, appendTakesAcrossScenes, mutateProjectRecord } from '../services/musicVideo/projects.js';
 import { updateProject as updateProjectEdit, previewProjectPacingRecut, recutProjectToPacing, markMediaPoolAssets } from '../services/musicVideo/projectBoardEdits.js';
 import { listProjectCompletion, cloneProject, refreshSongStyleFromSuno } from '../services/musicVideo/projectFilmActions.js';
 import { requireProject } from '../services/musicVideo/requireProject.js';
@@ -136,6 +136,11 @@ router.use(writeOriginScope);
 const projectCreateSchema = musicVideoProjectCreateSchema.extend(recordRenderPinFields);
 const projectUpdateSchema = musicVideoProjectUpdateSchema.extend(recordRenderPinFields);
 
+async function readProjectSummary(project) {
+  const presented = await presentProjectForRead(project);
+  return summarizeMusicVideoProject(presented, presented.productionReadiness);
+}
+
 // Unpaged, the list is every project's summary projection (#16210): full records of every
 // project ran past 100 MB, and nothing reads them; a full record is GET /:id. When a client
 // passes `limit`/`offset`, the response becomes the bounded
@@ -168,16 +173,14 @@ router.get('/', asyncHandler(async (req, res) => {
     const filter = matchesStatus || matchesName ? (project) => (!matchesStatus || matchesStatus(project)) && (!matchesName || matchesName(project)) : undefined;
     const page = await listProjectPage({
       ...paging,
-      ...(summary ? { compare: compareMusicVideoProjectsNewestFirst, filter, filterNeedsExtraHeaders: Boolean(matchesStatus) } : {}),
+      ...(summary ? { summary, compare: compareMusicVideoProjectsNewestFirst, filter, filterNeedsExtraHeaders: Boolean(matchesStatus) } : {}),
     });
-    const presented = await Promise.all(page.items.map((project) => presentProjectForRead(project)));
-    const items = summary ? presented.map(project => summarizeMusicVideoProject(project, project.productionReadiness)) : presented;
+    const items = await Promise.all(page.items.map(project => summary ? readProjectSummary(project) : presentProjectForRead(project)));
     // A deletion between header selection and hydration still consumes its slot.
     const next = Math.min(page.offset + page.limit, page.total);
     return res.json({ ...page, items, ...(summary ? { nextCursor: next < page.total ? String(next) : null } : {}) });
   }
-  const presented = await Promise.all((await listProjects()).map((project) => presentProjectForRead(project)));
-  res.json(presented.map((project) => summarizeMusicVideoProject(project, project.productionReadiness)));
+  res.json(await Promise.all((await listProjectSummaries()).map(readProjectSummary)));
 }));
 
 router.get('/catalog-completion', asyncHandler(async (req, res) => {

@@ -31,7 +31,7 @@ const store = createProjectDbStore({
 const { withLockedProject, rowToProject } = store;
 
 export const {
-  persist, listProjects, listProjectPage, getProject, getProjectsByIds, listProjectIds, listProjectNames,
+  persist, listProjects, listProjectSummaries, listProjectPage, getProject, getProjectsByIds, getProjectSummariesByIds, listProjectIds, listProjectNames,
 } = store;
 
 /** Only the version labels: do not hydrate the JSONB scenes or presentation state. */

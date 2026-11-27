@@ -67,6 +67,8 @@ export function presentProjectRecord(project, { film = null, songAudioChange = n
 // response carries `productionReadiness`: stages derive from one record, never "not done" while a
 // second request is in flight. A restart archives a thumbnail paint without clearing `pending`;
 // heal on read, and only when one is present, so a project list does not load the image stack.
+// Summary reads omit archived reviews. Thumbnail healing mutates a fresh full record under
+// the store lock, and catalog check-in only attaches read-time fields.
 // `catalogCheckinResolved`: the project came from getProject in this request, which already
 // resolved its catalog check-in; resolving it again only repeats every linked catalog read (#16210).
 export async function presentProjectForRead(project, { catalogCheckinResolved = false } = {}) {
