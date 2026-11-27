@@ -75,8 +75,10 @@ export async function getConversationalGemmaSetupStatus(deps = {}) {
   const resolveBinary = deps.resolveLlamaServerBinary
     || (await import('../llamaServerInstall.js')).resolveLlamaServerBinary;
   const readToken = deps.getHfToken || getHfToken;
+  // resolveLlamaServerBinary is a synchronous PATH probe; wrap it so a sync
+  // throw (or an async injected double) both degrade to "not installed".
   const [llamaBin, gguf, token] = await Promise.all([
-    resolveBinary().catch(() => null),
+    Promise.resolve().then(resolveBinary).catch(() => null),
     deps.readGgufStat ? deps.readGgufStat() : readGgufStat(),
     readToken().catch(() => null),
   ]);
@@ -201,7 +203,9 @@ async function ensureLlamaProviderAndVoiceConfig(deps = {}) {
 
 async function runSetupPipeline(signal, deps = {}) {
   const llamaInstallMod = deps.llamaInstallMod || await import('../llamaServerInstall.js');
-  const llamaLifecycleMod = deps.llamaLifecycleMod || await import('../llamaServerLifecycle.js');
+  // The manager, not the lifecycle module: only the manager exports the
+  // serialized `startLlamaServer` (the lifecycle module has the unlocked body).
+  const llamaLifecycleMod = deps.llamaLifecycleMod || await import('../llamaServerManager.js');
 
   const llamaBin = await llamaInstallMod.resolveLlamaServerBinary();
   if (!llamaBin) {
