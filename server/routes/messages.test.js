@@ -492,6 +492,8 @@ describe('Messages Routes', () => {
 
   describe('PUT /api/messages/drafts/:id', () => {
     it('should update a draft', async () => {
+      const emit = vi.fn();
+      app.set('io', recordingOperatorIo(emit));
       const updated = { id: DRAFT_UUID, subject: 'Updated', status: 'draft' };
       messageDrafts.updateDraft.mockResolvedValue(updated);
 
@@ -501,9 +503,13 @@ describe('Messages Routes', () => {
 
       expect(response.status).toBe(200);
       expect(messageDrafts.updateDraft.mock.calls[0][0]).toBe(DRAFT_UUID);
+      expect(emit).toHaveBeenCalledTimes(1);
+      expect(emit).toHaveBeenCalledWith('messages:changed', {});
     });
 
     it('should return 404 if draft not found', async () => {
+      const emit = vi.fn();
+      app.set('io', recordingOperatorIo(emit));
       messageDrafts.updateDraft.mockResolvedValue(null);
 
       const response = await request(app)
@@ -512,11 +518,14 @@ describe('Messages Routes', () => {
 
       expect(response.status).toBe(404);
       expect(response.body.error).toBe('Draft not found');
+      expect(emit).not.toHaveBeenCalledWith('messages:changed', expect.anything());
     });
   });
 
   describe('POST /api/messages/drafts/:id/approve', () => {
     it('should approve a draft', async () => {
+      const emit = vi.fn();
+      app.set('io', recordingOperatorIo(emit));
       const approved = { id: DRAFT_UUID, status: 'approved' };
       messageDrafts.approveDraft.mockResolvedValue(approved);
 
@@ -524,14 +533,19 @@ describe('Messages Routes', () => {
 
       expect(response.status).toBe(200);
       expect(messageDrafts.approveDraft.mock.calls[0][0]).toBe(DRAFT_UUID);
+      expect(emit).toHaveBeenCalledTimes(1);
+      expect(emit).toHaveBeenCalledWith('messages:changed', {});
     });
 
     it('should return 404 if draft not found', async () => {
+      const emit = vi.fn();
+      app.set('io', recordingOperatorIo(emit));
       messageDrafts.approveDraft.mockResolvedValue(null);
 
       const response = await request(app).post(`/api/messages/drafts/${DRAFT_UUID_2}/approve`);
 
       expect(response.status).toBe(404);
+      expect(emit).not.toHaveBeenCalledWith('messages:changed', expect.anything());
     });
   });
 
@@ -593,29 +607,39 @@ describe('Messages Routes', () => {
     ['put', '', 'updateDraft'],
     ['post', '/send', 'sendDraft']
   ])('returns the conflict envelope from %s drafts/:id%s', async (method, suffix, service) => {
+    const emit = vi.fn();
+    app.set('io', recordingOperatorIo(emit));
     const owner = service === 'sendDraft' ? messageSender : messageDrafts;
     owner[service].mockRejectedValueOnce(new ServerError('Draft state conflict', { status: 409, code: 'DRAFT_STATE_CONFLICT' }));
     const response = await request(app)[method](`/api/messages/drafts/${DRAFT_UUID}${suffix}`).send({});
     expect(response.status).toBe(409);
     expect(response.body).toMatchObject({ error: 'Draft state conflict', code: 'DRAFT_STATE_CONFLICT' });
+    expect(emit).not.toHaveBeenCalledWith('messages:changed', expect.anything());
   });
 
   describe('DELETE /api/messages/drafts/:id', () => {
     it('should delete a draft', async () => {
+      const emit = vi.fn();
+      app.set('io', recordingOperatorIo(emit));
       messageDrafts.deleteDraft.mockResolvedValue(true);
 
       const response = await request(app).delete(`/api/messages/drafts/${DRAFT_UUID}`);
 
       expect(response.status).toBe(204);
       expect(messageDrafts.deleteDraft.mock.calls[0][0]).toBe(DRAFT_UUID);
+      expect(emit).toHaveBeenCalledTimes(1);
+      expect(emit).toHaveBeenCalledWith('messages:changed', {});
     });
 
     it('should return 404 if draft not found', async () => {
+      const emit = vi.fn();
+      app.set('io', recordingOperatorIo(emit));
       messageDrafts.deleteDraft.mockResolvedValue(false);
 
       const response = await request(app).delete(`/api/messages/drafts/${DRAFT_UUID_2}`);
 
       expect(response.status).toBe(404);
+      expect(emit).not.toHaveBeenCalledWith('messages:changed', expect.anything());
     });
   });
 

@@ -212,6 +212,7 @@ router.put('/drafts/:id', asyncHandler(async (req, res) => {
   const updates = validateRequest(updateDraftSchema, req.body);
   const draft = await messageDrafts.updateDraft(req.params.id, updates);
   if (!draft) throw new ServerError('Draft not found', { status: 404 });
+  emitToOperatorsOn(req.app.get('io'), 'messages:changed', {});
   res.json(draft);
 }));
 
@@ -221,6 +222,7 @@ router.post('/drafts/:id/approve', asyncHandler(async (req, res) => {
   }
   const draft = await messageDrafts.approveDraft(req.params.id);
   if (!draft) throw new ServerError('Draft not found', { status: 404 });
+  emitToOperatorsOn(req.app.get('io'), 'messages:changed', {});
   res.json(draft);
 }));
 
@@ -252,6 +254,7 @@ router.delete('/drafts/:id', asyncHandler(async (req, res) => {
   }
   const deleted = await messageDrafts.deleteDraft(req.params.id);
   if (!deleted) throw new ServerError('Draft not found', { status: 404 });
+  emitToOperatorsOn(req.app.get('io'), 'messages:changed', {});
   res.status(204).send();
 }));
 
