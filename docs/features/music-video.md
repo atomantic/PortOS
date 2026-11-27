@@ -40,7 +40,7 @@ See the [autonomous and production routes](../../server/routes/musicVideoRuns.js
 [model routing](../../server/services/musicVideo/llmRoute.js) and
 [orchestrator review](../../server/services/musicVideo/orchestratorReview.js).
 Render placement and peer eligibility follow the
-[render-pool ADR](../decisions/2026-10-04-music-video-render-pools.md).
+[federated media provider guide](../FEDERATED_MEDIA_PROVIDERS.md#music-video-shot-pools-and-supplied-song-audio).
 
 ## Setup and production review
 

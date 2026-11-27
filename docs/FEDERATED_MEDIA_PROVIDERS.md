@@ -28,7 +28,9 @@ LoRA files, chain state, private project history, provider credentials, filesyst
 
 A Music Video project can choose **This Mac**, **Selected peers**, or **Both**, with exact models on already opted-in peers. This is local project routing state and is stripped from sync. Placement checks fresh capacity, supported conditioning and the shot's requirements. Local and peer results retain their actual renderer provenance. Supplied song audio uses the explicitly supported, project-bound conditioning path. Only the exact, negotiated sample window is staged. Native A2V capability, the provider's `sourceAudio` wire feature and a source frame are required. The provider verifies the staged stereo 48 kHz PCM, its hash and the sample/frame span (up to 60 seconds). The consumer binds the original recording hash and refuses stale takes. Retain the staged input through uncertain remote settlement.
 
-The pool applies to board-generated shots and selective revisions. Placement chooses among eligible nodes once and preserves that exact peer/model in queued work. Immutable production runs and final composition export stay local. See the [shot routing and audio ADR](decisions/2026-10-04-music-video-render-pools.md).
+The pool applies to board-generated shots and selective revisions. Placement chooses among eligible nodes once and preserves that exact peer/model in queued work. Immutable production runs and final composition export stay local. Retry, cancellation and reconciliation keep the original node and idempotency key.
+
+An uncertain operation keeps its maintenance hold until settlement is verified. Older journal readers may reject stamped uncertainty records. Stop admissions and update all journal readers and writers together before rollout. Preserve incompatible journal evidence and restore compatible code before recovery. See [interrupted maintenance transactions](STORAGE.md#interrupted-maintenance-transactions).
 
 ## Authentication and identity
 
