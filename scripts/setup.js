@@ -58,7 +58,7 @@ export function buildSetupSteps({ root, interactive }) {
     },
     {
       id: 'dependencies',
-      title: 'Installing dependencies (root, client, server) and rebuilding trusted native packages',
+      title: 'Installing dependencies (client and server) and rebuilding trusted native packages',
       run: ({ install, log }) => {
         // A CoS worktree's node_modules are symlinks into the primary checkout;
         // installing through them would empty the primary's dependencies.

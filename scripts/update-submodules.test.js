@@ -133,7 +133,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('updater submodule and dirty-checkout be
     git(checkout, env, 'config', 'user.name', 'Fixture');
     git(checkout, env, 'config', 'user.email', 'fixture@example.invalid');
 
-    const pm2 = join(checkout, 'node_modules', 'pm2', 'bin', 'pm2');
+    const pm2 = join(checkout, 'server', 'node_modules', 'pm2', 'bin', 'pm2');
     mkdirSync(join(pm2, '..'), { recursive: true });
     writeFileSync(pm2, `
       const { execFileSync } = require('node:child_process');

@@ -8,9 +8,8 @@
 import { execFileSync, spawn } from 'child_process';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
-import { createRequire } from 'module';
+import { PM2_BIN } from './lib/pm2Resolve.js';
 
-const require = createRequire(import.meta.url);
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ECO = 'ecosystem.config.cjs';
 const DEV_PM2_APPS = [
@@ -21,17 +20,14 @@ const DEV_PM2_APPS = [
   'portos-browser'
 ];
 
-// Ensure dependencies are installed BEFORE resolving pm2 path
-// (pm2 lives in node_modules — require.resolve fails if deps are missing)
+// Install dependencies before running the server-owned PM2 CLI.
 execFileSync(process.execPath, [join(__dirname, 'ensure-deps.js')], {
   stdio: 'inherit',
   windowsHide: true
 });
 
-const PM2 = join(dirname(require.resolve('pm2/package.json')), 'bin', 'pm2');
-
 function pm2(...args) {
-  execFileSync(process.execPath, [PM2, ...args], {
+  execFileSync(process.execPath, [PM2_BIN, ...args], {
     stdio: 'inherit',
     windowsHide: true
   });
@@ -53,7 +49,7 @@ await new Promise(r => setTimeout(r, 1500));
 
 // Start the full development set, including Vite on :5554, and tail logs.
 pm2('start', ECO, '--only', DEV_PM2_APPS.join(','));
-spawn(process.execPath, [PM2, 'logs'], {
+spawn(process.execPath, [PM2_BIN, 'logs'], {
   stdio: 'inherit',
   windowsHide: true
 });

@@ -21,8 +21,6 @@ Before removing a Tier 3 candidate, run a transitive-dep check (`npm ls <pkg>`).
 
 | Package | Tier | Verdict | Where Used | Notes |
 |---------|------|---------|------------|-------|
-| **Root dependencies** | | | | |
-| `pm2` | 1 | KEEP | top-level scripts | Process manager, foundational. Declared in root `dependencies` (the root manifest has no devDependencies). Uses the same pin as the server |
 | **Server dependencies** | | | | |
 | `@babel/parser` | 1 | KEEP | JavaScript parsing for server features and developer tools | Parses source without executing it, including for the complexity report and prompt-stage call-site generator |
 | `@cantoo/pdf-lib` | 2 | KEEP | PDF generation for the volume / comic / prose / legacy-archive exports | Maintained MIT fork of `pdf-lib`, which has had no publish since 2022-05. Same public API (`PDFDocument`/`rgb`/`StandardFonts`); the swap was 4 import lines. On maintenance watch — see the detailed finding |
@@ -32,7 +30,7 @@ Before removing a Tier 3 candidate, run a transitive-dep check (`npm ls <pkg>`).
 | `node-pty` | 1 | KEEP | shell/terminal services | Native PTY binding (N-API) |
 | `pg` | 1 | KEEP | Postgres access | Official `pg` driver |
 | `playwright-core` | 1 | KEEP | `server/services/fableLoom/falVideoAutomation.js` — fal.ai scene video automation | Drives the PortOS-managed browser over CDP (`chromium.connectOverCDP`). `-core` rather than the full `playwright` package deliberately: the browser is provisioned separately by `npm run setup:browser`, so the bundled browser download would be dead weight |
-| `pm2` | 1 | KEEP | app lifecycle | Process manager. Uses the same pin as the root |
+| `pm2` | 1 | KEEP | app lifecycle and top-level scripts | Process manager. The server workspace owns the shared CLI and API installation |
 | `sharp` | 1 | KEEP | image processing | Native, widely-audited |
 | `socket.io` | 1 | KEEP | realtime | Foundational |
 | `socket.io-client` | 1 | KEEP | server-to-client | Paired with socket.io |
@@ -101,7 +99,7 @@ An extreme run re-tests every `SKIPPED_INFEASIBLE` row here rather than honoring
 
 ## Override Pins (`overrides`)
 
-The authoritative current override pins are declared in the [`package.json`](../package.json) manifests for [root](../package.json), [server](../server/package.json), and [client](../client/package.json). Autofixer uses the server workspace’s Express dependency and lockfile.
+The authoritative current override pins are declared in the [server](../server/package.json) and [client](../client/package.json) manifests. Autofixer uses the server workspace’s Express dependency and lockfile.
 
 These overrides force-bump transitive dependencies to address known upstream advisories. Check the manifests for the current package and workspace list and exact versions; revisit the overrides if `npm audit` flags new advisories.
 
@@ -111,9 +109,9 @@ These overrides force-bump transitive dependencies to address known upstream adv
 
 ## Direct Dependency Pinning
 
-**Every direct dependency and devDependency, in every manifest, is an exact version — no `^`, `~`, `>=`, or `*`.** A caret range lets a fresh `npm install` (or any tree re-resolution: a Dependabot bump to a sibling package, `npm run setup`'s cwd-based `npm install --no-save` in `server/`, `scripts/ensure-deps.js`'s clean-reinstall path) float past a version nobody reviewed — the same argument that already makes an override pin exact, applied to the packages this repo depends on directly. Upgrades arrive as reviewable Dependabot PRs instead.
+**Every direct dependency and devDependency is an exact version — no `^`, `~`, `>=`, or `*`.** A caret range lets a fresh `npm install` (or any tree re-resolution: a Dependabot bump to a sibling package, `npm run setup`'s cwd-based `npm install --no-save` in `server/`, `scripts/ensure-deps.js`'s clean-reinstall path) float past a version nobody reviewed — the same argument that already makes an override pin exact, applied to the packages this repo depends on directly. Upgrades arrive as reviewable Dependabot PRs instead.
 
-`server/test/guards/repo/dependency-overrides.test.js` enforces this across all four manifests, so a dependency added with a caret fails the suite rather than shipping.
+`server/test/guards/repo/dependency-overrides.test.js` enforces this across the server and client manifests, so a dependency added with a caret fails the suite rather than shipping.
 
 ## Install-Script Policy
 
@@ -129,6 +127,6 @@ None at present. If a patch is ever needed again, the hook point is `rebuildTrus
 
 `audit=false` is pinned in the same four `.npmrc` files, enforced by the same discovered-workspace test. This turns off only the advisory lookup `npm install` performs *after* it has already resolved and written `node_modules` — it does not change what gets installed.
 
-It is off because it is a hang risk on the path that matters least. The lookup only prints a summary, but npm **blocks** on it, and a request that stalls costs `fetch-timeout` (300s by default) times `fetch-retries` (2) before npm gives up. On 2026-09-03 the endpoint began completing the TLS handshake and then never sending a byte; a warm root install that takes 0.15s took **153.88s**, of which 0.22s was CPU and the rest was a socket wait. Every managed install path runs three workspace installs in sequence (`update.sh`, `update.ps1`, `scripts/setup.js`, `scripts/ensure-deps.js`), so a self-update stalled for roughly ten minutes on a report written to `data/update.log`. PortOS is distributed software that self-updates on machines nobody is watching, so a third-party endpoint must not be able to wedge the update path for something advisory.
+It is off because it is a hang risk on the path that matters least. The lookup only prints a summary, but npm **blocks** on it, and a request that stalls costs `fetch-timeout` (300s by default) times `fetch-retries` (2) before npm gives up. On 2026-09-03 the endpoint began completing the TLS handshake and then never sending a byte; a warm root install that takes 0.15s took **153.88s**, of which 0.22s was CPU and the rest was a socket wait. At the time, managed install paths ran three workspace installs in sequence (`update.sh`, `update.ps1`, `scripts/setup.js`, `scripts/ensure-deps.js`), so a self-update stalled for roughly ten minutes on a report written to `data/update.log`. PortOS is distributed software that self-updates on machines nobody is watching, so a third-party endpoint must not be able to wedge the update path for something advisory.
 
 Nothing is lost. Dependency safety here is enforced statically rather than by a live network call: direct dependencies are pinned to exact versions and the `overrides` blocks are pinned too, both asserted by `server/test/guards/repo/dependency-overrides.test.js` — which deliberately replaced an `npm audit` shell-out because "audit needs the network and its output drifts". CI never ran `npm audit` either. Run `npm audit` directly when you want the report; the periodic dependency audits recorded in this document are where it belongs.

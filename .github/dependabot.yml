@@ -1,10 +1,5 @@
 version: 2
 updates:
-  - package-ecosystem: npm
-    directory: /
-    schedule:
-      interval: weekly
-    open-pull-requests-limit: 10
   # server/ and client/ each carry their own package.json +
   # overrides and their own lockfile, so npm resolves each tree separately —
   # list every directory so none of those trees is invisible to Dependabot (a

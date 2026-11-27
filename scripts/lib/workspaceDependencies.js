@@ -3,8 +3,8 @@ import { lstatSync, readFileSync, realpathSync, readlinkSync } from 'fs';
 import { join, resolve } from 'path';
 
 export function dependencyWorkspaces(root) {
-  return ['root', 'client', 'server'].map(label => ({
-    label, dir: label === 'root' ? root : join(root, label),
+  return ['client', 'server'].map(label => ({
+    label, dir: join(root, label),
   }));
 }
 

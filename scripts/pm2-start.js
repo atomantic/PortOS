@@ -21,6 +21,7 @@ import { dirname, isAbsolute, join, sep } from 'path';
 import { fileURLToPath } from 'url';
 import { PORTS } from '../server/lib/ports.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
+import { importPm2, PM2_BIN } from './lib/pm2Resolve.js';
 import { redactPaths } from './pm2-daemon-refresh.js';
 
 const ROOT_DIR = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -183,8 +184,8 @@ async function runCli(argv) {
     await startProductionApps({
       expectedApps,
       root: ROOT_DIR,
-      list: async () => listProcesses((await import('pm2')).default),
-      pm2: (...args) => execFileSync(process.execPath, [join(ROOT_DIR, 'node_modules', 'pm2', 'bin', 'pm2'), ...args], {
+      list: async () => listProcesses(await importPm2()),
+      pm2: (...args) => execFileSync(process.execPath, [PM2_BIN, ...args], {
         cwd: ROOT_DIR, stdio: 'inherit',
       }),
     });

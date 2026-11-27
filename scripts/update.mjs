@@ -6,6 +6,7 @@ import { delimiter, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { dependencyHash, npmConfigHash, readDependencyHashes, writeDependencyHashes } from './lib/dependencyReceipts.js';
 import { dependencyWorkspaces, hasLinkedDependencies, inspectWorkspaceDependencies } from './lib/workspaceDependencies.js';
+import { PM2_BIN } from './lib/pm2Resolve.js';
 import { clearDependencyReconcilePending, pendingReconcilePath } from './lib/dependencyReconcile.js';
 import { prepareWindowsSafeSpawn, resolveWindowsExecutable } from '../server/lib/aiToolkit/internal/windowsSafeSpawn.js';
 
@@ -21,7 +22,7 @@ const dataDir = join(root, 'data');
 const updateLog = join(dataDir, 'update.log');
 const marker = join(dataDir, 'update-complete.json');
 const pendingReconcile = pendingReconcilePath(dataDir);
-const pm2Local = [process.execPath, join(root, 'node_modules', 'pm2', 'bin', 'pm2')];
+const pm2Local = [process.execPath, PM2_BIN];
 const pm2Start = ['start', 'ecosystem.config.cjs', '--only', productionApps];
 const signals = { SIGTERM: 143, SIGINT: 130, SIGHUP: 129 };
 let stopped = false;
@@ -79,7 +80,7 @@ function pm2RecoveryCommand() {
   if (existsSync(pm2Local[1])) return pm2Local;
   if (executable('pm2')) return ['pm2'];
   let pin;
-  try { pin = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).dependencies?.pm2; } catch { /* default pinless fallback */ }
+  try { pin = JSON.parse(readFileSync(join(root, 'server', 'package.json'), 'utf8')).dependencies?.pm2; } catch { /* default pinless fallback */ }
   return ['npx', '--yes', typeof pin === 'string' && pin ? `pm2@${pin}` : 'pm2'];
 }
 const pm2 = (...args) => run(pm2Local[0], [...pm2Local.slice(1), ...args]);
@@ -277,9 +278,8 @@ async function install(previous) {
   let installed = 0;
   for (const workspace of workspaces) {
     const { dir: cwd, label } = workspace;
-    const key = label === 'root' ? '.' : label;
     const inputs = ['package.json', 'package-lock.json', '.npmrc']
-      .filter(file => changed.has(label === 'root' ? file : `${label}/${file}`));
+      .filter(file => changed.has(`${label}/${file}`));
     const hash = dependencyHash(cwd);
     const config = npmConfigHash(cwd);
     const recordedConfig = hashes.npmrc[label];
@@ -289,7 +289,7 @@ async function install(previous) {
     let reason;
     if (!known) reason = 'dependency baseline unknown';
     else if (inputs.length) reason = `${inputs.join(' and ')} changed`;
-    else if (forced.has(key)) reason = 'clean reinstall forced';
+    else if (forced.has(label)) reason = 'clean reinstall forced';
     else if (configChanged || (hashes[label] != null && hashes[label] !== hash)) reason = 'dependency receipt changed';
     else if (receiptMatches) {
       const { issues } = inspectWorkspaceDependencies(workspace);

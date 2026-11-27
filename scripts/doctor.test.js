@@ -356,8 +356,8 @@ describe('pm2 probe', () => {
     const root = mkdtempSync(join(tmpdir(), 'doctor-pm2-'));
     const oldPath = process.env.PATH;
     try {
-      mkdirSync(join(root, 'node_modules', 'pm2', 'bin'), { recursive: true });
-      writeFileSync(join(root, 'node_modules', 'pm2', 'bin', 'pm2'), "console.log('5.0.0');\n");
+      mkdirSync(join(root, 'server', 'node_modules', 'pm2', 'bin'), { recursive: true });
+      writeFileSync(join(root, 'server', 'node_modules', 'pm2', 'bin', 'pm2'), "console.log('5.0.0');\n");
       process.env.PATH = '';
       const probe = defaultProbes({ root }).find((p) => p.name === 'pm2');
       expect((await probe.run()).available).toBe(true);

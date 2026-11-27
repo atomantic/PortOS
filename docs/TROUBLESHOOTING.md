@@ -165,7 +165,7 @@ checkout and restart the runner from there:
 
 ```bash
 node scripts/ensure-deps.js
-node ./node_modules/pm2/bin/pm2 restart portos-cos
+node ./server/node_modules/pm2/bin/pm2 restart portos-cos
 ```
 
 ### Worktree Tests Load Stale Workspace Packages
@@ -219,7 +219,7 @@ Read the process's logs for crashes, missing settings or memory restarts:
 npm run pm2:logs -- portos-server --lines 200
 ```
 
-Use `node ./node_modules/pm2/bin/pm2 monit` to inspect memory. If the server
+Use `node ./server/node_modules/pm2/bin/pm2 monit` to inspect memory. If the server
 regularly hits its PM2 ceiling during expected work, adjust
 `PORTOS_SERVER_MAX_MEMORY` in `.env` and restart PortOS.
 
@@ -302,7 +302,7 @@ timing and redacted log lines around a stall.
 
 If large logs are consuming disk space, save the relevant diagnostics before
 clearing a specific process's logs with
-`node ./node_modules/pm2/bin/pm2 flush portos-server`. An unscoped flush clears
+`node ./server/node_modules/pm2/bin/pm2 flush portos-server`. An unscoped flush clears
 logs for other apps on the same daemon.
 
 ### Agent Runs Timeout

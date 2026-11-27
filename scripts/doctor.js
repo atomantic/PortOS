@@ -57,6 +57,8 @@ import { MIN_NPM, parseNpmUserAgent, readBundledNpmVersion } from './checkNpmVer
 import databaseSettings from './lib/databaseSettings.cjs';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
 import { parseEnvFile } from './lib/envFile.js';
+import { PM2_BIN_PATH } from './lib/pm2Resolve.js';
+import { dependencyWorkspaces } from './lib/workspaceDependencies.js';
 import { listPendingMigrations } from './run-migrations.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -71,9 +73,6 @@ export const PROBE_TIMEOUT_MS = 12_000;
 
 /** Shorter bound for the cheap local probes (stat, listen, `--version`). */
 const FAST_TIMEOUT_MS = 6_000;
-
-/** The workspaces `scripts/ensure-deps.js` installs — each needs node_modules. */
-const WORKSPACES = ['', 'client', 'server'];
 
 /**
  * The PortOS-owned port block: the core range (`docs/PORTS.md`) plus its
@@ -237,7 +236,7 @@ async function probeSubmodule(root) {
 }
 
 async function probeWorkspaceDeps(root, workspace) {
-  const relative = workspace ? join(workspace, 'node_modules') : 'node_modules';
+  const relative = join(workspace, 'node_modules');
   return probePath(root, relative, {
     presentDetail: `${relative.replace(/\\/g, '/')} present`,
     missingDetail: `${relative.replace(/\\/g, '/')} missing — run: npm run install:all`,
@@ -406,7 +405,7 @@ async function probeCommand(cmd, args, { presentDetail, missingDetail }) {
  * global `pm2` on PATH.
  */
 async function probePm2(root) {
-  const pm2Bin = join(root, 'node_modules', 'pm2', 'bin', 'pm2');
+  const pm2Bin = join(root, PM2_BIN_PATH);
   if (!existsSync(pm2Bin)) return { available: false, detail: 'not installed in node_modules — run: npm run install:all' };
   const available = await commandExists(process.execPath, [pm2Bin, '--version'], { timeoutMs: FAST_TIMEOUT_MS });
   return {
@@ -486,10 +485,10 @@ export function defaultProbes({ root = ROOT } = {}) {
       return { available: result.ok, detail: result.ok ? '--write-tree and --merge-base supported' : result.detail };
     } },
     { name: 'submodule:slashdo', required: true, run: () => probeSubmodule(root) },
-    ...WORKSPACES.map((workspace) => ({
-      name: `deps:${workspace || 'root'}`,
+    ...dependencyWorkspaces(root).map(({ label }) => ({
+      name: `deps:${label}`,
       required: true,
-      run: () => probeWorkspaceDeps(root, workspace),
+      run: () => probeWorkspaceDeps(root, label),
     })),
     { name: 'data:seeded', required: true, run: () => probeDataSeeded(root) },
     { name: 'postgres', required: true, run: () => probePostgres(root) },
