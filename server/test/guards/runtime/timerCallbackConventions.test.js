@@ -114,7 +114,7 @@ describe('async timer callbacks own their rejections (#5668)', () => {
     expect(sites).toEqual(expect.arrayContaining([
       'cos-runner/index.js',
       'services/mediaJobQueue/execution.js',
-      'services/tuiPromptRunner.js',
+      'services/tuiPromptRunner/responseWatcher.js',
     ]));
   });
 
