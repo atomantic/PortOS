@@ -2,7 +2,7 @@
  * One OS-isolated generated-preview session.
  *
  * Emits `generated-preview:open` for `request` and returns inert JPEG frames, seek/command functions,
- * and a recording blob. Reconnect opens a fresh session with the current controls and playhead;
+ * and recording save status. Reconnect opens a fresh session with the current controls and playhead;
  * idle/capacity closure returns `status: 'idle'` until the viewer calls `resume()`. Film-look and
  * title-card `controls` ride the open and later commands. A revision change reopens; a control change
  * does not. Unsupported hosts surface `status: 'unavailable'` and never fall back to an iframe. Use
@@ -122,6 +122,7 @@ export default function useGeneratedPreview({ active, request, controls = null }
     }
     // A desired src is not yet a known decoded picture. Cancel its browser
     // selection too, so a late decode cannot reveal a canceled playing frame.
+    const desired = frameUrls.current.get(frameUrl.current);
     if (viewer.current?.url === frameUrl.current && frameUrl.current !== decodedUrl.current) {
       frameUrl.current = decodedUrl.current;
       const image = imageRef.current;
@@ -132,6 +133,11 @@ export default function useGeneratedPreview({ active, request, controls = null }
         else if (image.src !== decodedUrl.current) image.src = decodedUrl.current;
       }
       if (mounted.current) setState((prev) => ({ ...prev, frameUrl: frameUrl.current }));
+    } else if (desired?.loader) {
+      // Exact frames decode outside the native playback queue. Keep the
+      // visible selection and retire the canceled decode before it can publish.
+      desired.retired = true;
+      frameUrl.current = imageRef.current?.getAttribute('src') || decodedUrl.current;
     }
     viewer.current = null;
     viewer.queue = [];
