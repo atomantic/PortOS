@@ -1,6 +1,6 @@
 /**
  * Matrix cell + verdict chip shared by the capability matrix and the (eagerly
- * loaded) Local Model Assessments table. Kept as a small leaf so the 1,000-line
+ * loaded) Local Model Assessments table. Kept as a small leaf so the
  * ModelCapabilityTests panel can be lazy-loaded without dragging this along.
  */
 import { Play, Check, X, AlertTriangle } from 'lucide-react';
@@ -49,7 +49,7 @@ function TestCell({ slot, onOpen, disabled }) {
       type="button"
       onClick={onOpen}
       disabled={disabled}
-      className="text-left disabled:opacity-50"
+      className="text-left pointer-coarse:min-h-11 disabled:opacity-50"
       title={slot.result ? slot.result.summary : 'Not run yet — open to see what this test does'}
     >
       {verdict
