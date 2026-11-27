@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router';
 import { ArrowRight, Bot, RefreshCw, Save, Search } from 'lucide-react';
 import toast from '../ui/Toast';
+import ConfirmButtonPair from '../ui/ConfirmButtonPair.jsx';
 import FormField from '../ui/FormField';
 import ProviderModelSelector from '../ProviderModelSelector.jsx';
 import EffortSelect from '../cos/EffortSelect.jsx';
@@ -73,6 +74,7 @@ export default function AiAssignmentsTab() {
   const [toProvider, setToProvider] = useState('');
   const [toModel, setToModel] = useState('');
   const [toEffort, setToEffort] = useState('');
+  const [confirmBulk, setConfirmBulk] = useState(false);
   const [bulkSaving, setBulkSaving] = useState(false);
   // Authoritative vision-capable ids straight from the local backends, so a
   // vision-filtered row (Scene evaluation) isn't reduced to an empty list by
@@ -215,11 +217,7 @@ export default function AiAssignmentsTab() {
   };
 
   const runBulkMigration = async () => {
-    if (!fromProvider || !toProvider || bulkSaving) return;
-    if (bulkTargets.length === 0) {
-      toast.error('No editable assignments match that provider');
-      return;
-    }
+    if (!confirmBulk || bulkSaving || bulkTargets.length === 0) return;
     setBulkSaving(true);
     let latest = data;
     const savedIds = [];
@@ -233,10 +231,7 @@ export default function AiAssignmentsTab() {
         providerId: toProvider,
         model: nextModel || null,
         ...(entry.effortEditable ? { effort: toEffort || null } : {}),
-      }, { silent: true }).catch((err) => {
-        toast.error(`${entry.label}: ${err.message}`);
-        return null;
-      });
+      }, { silent: true }).catch(() => null);
       if (next) {
         latest = next;
         savedIds.push(entry.id);
@@ -245,7 +240,10 @@ export default function AiAssignmentsTab() {
     setData(latest);
     setDrafts((prev) => reconcileDrafts(prev, latest.assignments, savedIds));
     setBulkSaving(false);
-    toast.success(`Replaced ${savedIds.length} assignment${savedIds.length === 1 ? '' : 's'}`);
+    setConfirmBulk(false);
+    const result = `Replaced ${savedIds.length} of ${bulkTargets.length} assignments`;
+    if (savedIds.length === bulkTargets.length) toast.success(result);
+    else toast.error(`${result}. ${bulkTargets.length - savedIds.length} failed.`);
   };
 
   if (loading) {
@@ -373,7 +371,7 @@ export default function AiAssignmentsTab() {
           <button
             type="button"
             onClick={() => saveEntry(entry)}
-            disabled={!dirty || saving[entry.id]}
+            disabled={!dirty || saving[entry.id] || confirmBulk}
             className="inline-flex items-center gap-1.5 px-2.5 py-1.5 bg-port-accent hover:bg-port-accent/80 disabled:opacity-50 text-white rounded text-xs"
           >
             <Save size={12} />
@@ -411,7 +409,7 @@ export default function AiAssignmentsTab() {
 
         <div className="w-full min-w-0 max-w-full shrink-0 bg-port-card border border-port-border rounded-lg p-3 space-y-2 xl:w-[720px]">
           <div className="text-xs font-medium uppercase tracking-wide text-gray-500">Replace assignments</div>
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_1fr_auto_1fr_1fr]">
+          <fieldset disabled={confirmBulk} className="grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-[1fr_1fr_auto_1fr_1fr]">
             <div className="min-w-0 flex-1">
               {/* No compose on either half. "From" names a provider some
                   assignment is ALREADY pinned to, which a route built here by
@@ -467,26 +465,40 @@ export default function AiAssignmentsTab() {
                 {targetModels.map((model) => <option key={model} value={model}>{model}</option>)}
               </select>
             </FormField>
-          </div>
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
-            <EffortSelect
-              provider={targetProvider}
-              model={toModel || targetProvider?.defaultModel}
-              value={toEffort}
-              onChange={setToEffort}
-              label="Target effort"
-              labelClassName="sr-only"
-              fieldClassName="min-w-0 sm:w-48"
-              className="w-full bg-port-bg border border-port-border rounded px-2 py-2 text-sm text-white"
-            />
-            <button
-              type="button"
-              onClick={runBulkMigration}
-              disabled={!fromProvider || !toProvider || bulkTargets.length === 0 || bulkSaving}
-              className="shrink-0 px-3 py-2 bg-port-accent hover:bg-port-accent/80 disabled:opacity-50 text-white rounded text-sm"
-            >
-              {bulkSaving ? 'Replacing...' : 'Replace all matches'}
-            </button>
+          </fieldset>
+          <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:justify-end">
+            <fieldset disabled={confirmBulk} className="min-w-0">
+              <EffortSelect
+                provider={targetProvider}
+                model={toModel || targetProvider?.defaultModel}
+                value={toEffort}
+                onChange={setToEffort}
+                label="Target effort"
+                labelClassName="sr-only"
+                fieldClassName="min-w-0 sm:w-48"
+                className="w-full bg-port-bg border border-port-border rounded px-2 py-2 text-sm text-white"
+              />
+            </fieldset>
+            {confirmBulk ? (
+              <ConfirmButtonPair
+                prompt={`Replace ${bulkTargets.length} matching ${bulkTargets.length === 1 ? 'assignment' : 'assignments'} across this install with ${providerName(data.providers, toProvider)} (${toModel || 'default model'})?`}
+                confirmText="Confirm replace"
+                onConfirm={runBulkMigration}
+                onCancel={() => setConfirmBulk(false)}
+                busy={bulkSaving}
+                busyText="Replacing..."
+                className="min-w-0 flex-wrap break-words"
+              />
+            ) : (
+              <button
+                type="button"
+                onClick={() => setConfirmBulk(true)}
+                disabled={bulkTargets.length === 0 || Object.values(saving).some(Boolean)}
+                className="shrink-0 px-3 py-2 bg-port-accent hover:bg-port-accent/80 disabled:opacity-50 text-white rounded text-sm"
+              >
+                Replace all matches
+              </button>
+            )}
           </div>
           <p className="text-xs text-gray-500">
             {fromProvider && toProvider ? `${bulkTargets.length} compatible match${bulkTargets.length === 1 ? '' : 'es'}. ` : ''}

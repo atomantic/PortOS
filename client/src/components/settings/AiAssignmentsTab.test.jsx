@@ -11,6 +11,7 @@ vi.mock('../../services/apiSystem.js', () => ({
 vi.mock('../../services/apiLocalLlm', () => ({ getVisionModels: vi.fn(), getToolUseModels: vi.fn() }));
 vi.mock('../ui/Toast');
 
+import toast from '../ui/Toast';
 import AiAssignmentsTab from './AiAssignmentsTab.jsx';
 import { getAiAssignments, updateAiAssignment } from '../../services/apiSystem.js';
 import { getVisionModels, getToolUseModels } from '../../services/apiLocalLlm';
@@ -263,12 +264,43 @@ describe('AiAssignmentsTab assignment management', () => {
     await userEvent.selectOptions(screen.getByLabelText('Replace with provider'), 'ollama');
     await userEvent.selectOptions(screen.getByLabelText('Replace with model'), 'qwen3.6:35b');
     await userEvent.click(screen.getByRole('button', { name: 'Replace all matches' }));
+    expect(screen.getByRole('group', { name: /Replace 1 matching assignment across this install with Ollama/ })).toBeInTheDocument();
+    expect(updateAiAssignment).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(updateAiAssignment).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole('button', { name: 'Replace all matches' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Confirm replace' }));
 
     await waitFor(() => expect(updateAiAssignment).toHaveBeenCalledWith(
       'creative',
       { providerId: 'ollama', model: 'qwen3.6:35b' },
       { silent: true },
     ));
+  });
+
+  it.each([0, 1])('reports %i of 2 replacements when writes fail', async (savedCount) => {
+    const assignments = [
+      entry({ id: 'creative', providerId: 'ollama' }),
+      entry({ id: 'brain', area: 'Brain', providerId: 'ollama' }),
+    ];
+    getAiAssignments.mockResolvedValue(payload(assignments));
+    updateAiAssignment.mockRejectedValue(new Error('Write failed'));
+    if (savedCount) {
+      updateAiAssignment.mockResolvedValueOnce(payload([{ ...assignments[0], providerId: 'openai' }, assignments[1]]));
+    }
+    renderTab();
+
+    await userEvent.selectOptions(await screen.findByLabelText('Replace from provider'), 'ollama');
+    await userEvent.selectOptions(screen.getByLabelText('Replace with provider'), 'openai');
+    await userEvent.click(screen.getByRole('button', { name: 'Replace all matches' }));
+    expect(screen.getByRole('group', { name: /Replace 2 matching assignments across this install with OpenAI/ })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Confirm replace' }));
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith(
+      `Replaced ${savedCount} of 2 assignments. ${2 - savedCount} failed.`,
+    ));
+    expect(updateAiAssignment).toHaveBeenCalledTimes(2);
+    expect(toast.success).not.toHaveBeenCalled();
   });
 
   it('saves reasoning effort on scheduled assignments that support it', async () => {
@@ -394,6 +426,7 @@ describe('AiAssignmentsTab assignment management', () => {
     await userEvent.selectOptions(await screen.findByLabelText('Replace from provider'), 'openai');
     await userEvent.selectOptions(screen.getByLabelText('Replace with provider'), 'lmstudio');
     await userEvent.click(screen.getByRole('button', { name: 'Replace all matches' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Confirm replace' }));
 
     await waitFor(() => expect(updateAiAssignment).toHaveBeenCalledWith(
       'settings.creativeDirector.evaluation',
