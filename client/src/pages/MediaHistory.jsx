@@ -106,6 +106,19 @@ export default function MediaHistory() {
   const [verifyModel, setVerifyModel] = useState('auto');
   const [batchVerifying, setBatchVerifying] = useState(false);
   const [batchProgress, setBatchProgress] = useState({ current: 0, total: 0 });
+  const batchController = useRef(null);
+  useEffect(() => () => {
+    batchController.current?.abort();
+    batchController.current = null;
+  }, []);
+
+  const handleCancelVerify = useCallback(() => {
+    batchController.current?.abort();
+    batchController.current = null;
+    setBatchVerifying(false);
+    setVerifyMode(false);
+    setSelectedVerify([]);
+  }, []);
 
   const visibleImages = useMemo(() => items.filter((it) => it.kind === 'image' && it.filename), [items]);
 
@@ -122,7 +135,10 @@ export default function MediaHistory() {
   }, []);
 
   const handleRunBatchVerify = useCallback(async (profileId, modelId = verifyModel) => {
-    if (selectedVerify.length === 0) return;
+    if (selectedVerify.length === 0 || batchController.current) return;
+    const controller = new AbortController();
+    const { signal } = controller;
+    batchController.current = controller;
     setBatchVerifying(true);
     setBatchProgress({ current: 0, total: selectedVerify.length });
 
@@ -131,16 +147,16 @@ export default function MediaHistory() {
     let errorCount = 0;
 
     for (let i = 0; i < selectedVerify.length; i++) {
+      if (signal.aborted || !mounted.current) return;
       const filename = selectedVerify[i];
       setBatchProgress({ current: i + 1, total: selectedVerify.length });
-      const targetItem = items.find((it) => it.filename === filename);
       try {
         const res = await verifyImageNow({
           filename,
           profileId,
-          prompt: targetItem?.prompt || '',
           reviewerModel: modelId !== 'auto' ? modelId : undefined,
-        });
+        }, { signal, silent: true });
+        if (signal.aborted || !mounted.current) return;
         if (res?.verdict === 'pass') passCount++;
         else if (res?.verdict === 'fail') failCount++;
 
@@ -155,17 +171,19 @@ export default function MediaHistory() {
           return it;
         }));
       } catch (err) {
+        if (signal.aborted || !mounted.current) return;
         errorCount++;
         console.error(`Verification error on ${filename}:`, err);
       }
     }
 
+    batchController.current = null;
     setBatchVerifying(false);
     if (errorCount > 0) toast.warning(`Batch verification: ${passCount} passed, ${failCount} defect(s) flagged, ${errorCount} could not be verified.`);
     else toast.success(`Batch verification complete: ${passCount} passed, ${failCount} defect(s) flagged.`);
     setSelectedVerify([]);
     refresh();
-  }, [selectedVerify, verifyModel, items, setItems, refresh]);
+  }, [selectedVerify, verifyModel, mounted, setItems, refresh]);
 
   const settleStitch = useCallback((id, error = null) => {
     if (!stitchJobsRef.current.delete(id)) return false;
@@ -364,21 +382,24 @@ export default function MediaHistory() {
             {VIDEO_SIZE_FILTERS.map(([bytes, label]) => <option key={bytes} value={bytes}>Over {label}</option>)}
           </select>
         </div>
-        <div className="flex items-center gap-1">
-          <Link to="/media/image" className="flex items-center gap-1.5 px-2 py-1 text-xs text-gray-300 hover:text-white border border-port-border rounded hover:bg-port-border/50">
+        <div className="flex flex-wrap items-center gap-1">
+          <Link to="/media/image" className="flex min-h-[44px] pointer-fine:sm:min-h-0 items-center gap-1.5 px-2 py-1 text-xs text-gray-300 hover:text-white border border-port-border rounded hover:bg-port-border/50">
             <ImageIcon className="w-3.5 h-3.5" /> Image
           </Link>
-          <Link to="/media/video" className="flex items-center gap-1.5 px-2 py-1 text-xs text-gray-300 hover:text-white border border-port-border rounded hover:bg-port-border/50">
+          <Link to="/media/video" className="flex min-h-[44px] pointer-fine:sm:min-h-0 items-center gap-1.5 px-2 py-1 text-xs text-gray-300 hover:text-white border border-port-border rounded hover:bg-port-border/50">
             <Film className="w-3.5 h-3.5" /> Video
           </Link>
           <button
             type="button"
+            aria-pressed={verifyMode}
             onClick={() => {
-              setVerifyMode((v) => !v);
-              setSelectedVerify([]);
-              if (!verifyMode) setStitchMode(false);
+              if (verifyMode) handleCancelVerify();
+              else {
+                setVerifyMode(true);
+                setStitchMode(false);
+              }
             }}
-            className={`flex items-center gap-1.5 px-2 py-1 text-xs rounded border ${
+            className={`flex min-h-[44px] pointer-fine:sm:min-h-0 items-center gap-1.5 px-2 py-1 text-xs rounded border ${
               verifyMode
                 ? 'bg-port-accent text-white border-port-accent'
                 : 'border-port-border text-gray-300 hover:text-white hover:bg-port-border/50'
@@ -388,8 +409,13 @@ export default function MediaHistory() {
           </button>
           <button
             type="button"
-            onClick={() => { setStitchMode((m) => !m); setSelected([]); if (!stitchMode) setVerifyMode(false); }}
-            className={`flex items-center gap-1.5 px-2 py-1 text-xs rounded border ${
+            aria-pressed={stitchMode}
+            onClick={() => {
+              setStitchMode((m) => !m);
+              setSelected([]);
+              if (verifyMode) handleCancelVerify();
+            }}
+            className={`flex min-h-[44px] pointer-fine:sm:min-h-0 items-center gap-1.5 px-2 py-1 text-xs rounded border ${
               stitchMode
                 ? 'bg-port-accent text-white border-port-accent'
                 : 'border-port-border text-gray-300 hover:text-white hover:bg-port-border/50'
@@ -401,7 +427,7 @@ export default function MediaHistory() {
             type="button"
             aria-expanded={showHosting}
             onClick={() => setShowHosting((v) => !v)}
-            className={`flex items-center gap-1.5 px-2 py-1 text-xs rounded border ${
+            className={`flex min-h-[44px] pointer-fine:sm:min-h-0 items-center gap-1.5 px-2 py-1 text-xs rounded border ${
               showHosting
                 ? 'bg-port-accent/20 border-port-accent text-port-accent'
                 : 'border-port-border text-gray-300 hover:text-white hover:bg-port-border/50'
@@ -414,7 +440,7 @@ export default function MediaHistory() {
               type="button"
               onClick={handleStitch}
               disabled={stitching}
-              className="flex items-center gap-1.5 px-2 py-1 text-xs bg-port-success hover:bg-port-success/80 disabled:opacity-50 text-white rounded"
+              className="flex min-h-[44px] pointer-fine:sm:min-h-0 items-center gap-1.5 px-2 py-1 text-xs bg-port-success hover:bg-port-success/80 disabled:opacity-50 text-white rounded"
             >
               {stitching ? 'Stitching…' : `Stitch ${selected.length}`}
             </button>
@@ -433,7 +459,7 @@ export default function MediaHistory() {
           onRunBatchVerify={handleRunBatchVerify}
           isVerifying={batchVerifying}
           progress={batchProgress}
-          onCancel={() => { setVerifyMode(false); setSelectedVerify([]); }}
+          onCancel={handleCancelVerify}
           selectedProfile={verifyProfile}
           onProfileChange={setVerifyProfile}
           selectedModel={verifyModel}

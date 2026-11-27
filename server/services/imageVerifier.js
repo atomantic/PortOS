@@ -5,11 +5,13 @@
 
 import { EventEmitter } from 'events';
 import { existsSync } from 'fs';
+import { basename } from 'path';
 import { ServerError } from '../lib/errorHandler.js';
 import { resolveGalleryImage } from '../lib/pathSafety.js';
 import { assertGalleryFilename } from './imageGen/local.js';
 import { getSettings } from './settings.js';
-import { editImageSidecar } from './imageGen/sidecarStore.js';
+import { editImageSidecar, readImageSidecar } from './imageGen/sidecarStore.js';
+import { runCancellablePrompt } from './cancellablePrompt.js';
 import { isOllamaBackedProvider } from '../lib/aiToolkit/internal/ollamaBacked.js';
 import {
   DEFAULT_VERIFICATION_PROFILES,
@@ -177,28 +179,37 @@ export async function verifyImage({
   imagePath,
   profile: profileInput,
   profileId,
-  prompt = '',
+  prompt,
   reviewer: reviewerInput,
   isImport = false,
   source = 'image-verifier',
   beforeExecute,
+  signal,
 }) {
+  signal?.throwIfAborted();
   const settings = await getVerifierSettings();
   const profile = profileInput
     ? verificationProfileSchema.parse(profileInput)
     : await getVerificationProfile(profileId || settings.defaultProfileId);
 
-  const resolvedPath = imagePath || (filename ? resolveGalleryImage(filename) : null);
+  // Use the same gallery basename for the image and both sidecar spellings.
+  const galleryFilename = filename ? basename(filename) : null;
+  const resolvedPath = imagePath || (galleryFilename ? resolveGalleryImage(galleryFilename) : null);
   if (!resolvedPath || !existsSync(resolvedPath)) {
     throw new ServerError(`Image file not found: ${filename || imagePath}`, { status: 404, code: 'IMAGE_NOT_FOUND' });
   }
 
+  let generationPrompt = prompt;
+  if (generationPrompt === undefined && galleryFilename) {
+    const { metadata } = await readImageSidecar(galleryFilename);
+    if (typeof metadata?.prompt === 'string') generationPrompt = metadata.prompt;
+  }
   const reviewer = await resolveVisionReviewer(reviewerInput || profile.reviewer || settings.reviewer);
   const { runPromptThroughProvider, assertVisionRunUsedImages } = await import('./promptRunner.js');
   const { isToolFreeOneShotProvider } = await import('../lib/provider/providerVendors.js');
 
   const runVision = async (reviewPrompt, reviewSource) => {
-    const result = await runPromptThroughProvider({
+    const result = await runCancellablePrompt(runPromptThroughProvider, {
       provider: { ...reviewer.provider, thinking: false },
       model: reviewer.model,
       prompt: reviewPrompt,
@@ -208,20 +219,21 @@ export async function verifyImage({
       toolFree: isToolFreeOneShotProvider(reviewer.provider),
       allowFallback: false,
       beforeExecute,
-    });
+    }, signal);
     assertVisionRunUsedImages(result, reviewer.provider);
     return result;
   };
 
   // Pass 1: Multi-Aspect Scan
-  const pass1Prompt = buildMultiAspectVerificationPrompt({ profile, prompt, isImport });
+  const pass1Prompt = buildMultiAspectVerificationPrompt({ profile, prompt: generationPrompt, isImport });
   const result1 = await runVision(pass1Prompt, source);
   const parsed = parseVerificationResponse(result1.text);
 
   // Pass 2: Skeptical Defect Confirmation
   if (parsed.defects.length > 0) {
-    const pass2Prompt = buildBatchDefectConfirmationPrompt({ defects: parsed.defects, prompt });
+    const pass2Prompt = buildBatchDefectConfirmationPrompt({ defects: parsed.defects, prompt: generationPrompt });
     const result2 = await runVision(pass2Prompt, `${source}-confirmation`).catch(() => null);
+    signal?.throwIfAborted();
 
     if (result2) {
       const { verdicts } = parseBatchConfirmationResponse(result2.text, parsed.defects.length);
@@ -270,14 +282,16 @@ export async function verifyImage({
   };
 
   // Persist to sidecar if filename is provided
-  if (filename) {
-    await editImageSidecar(filename, (meta) => {
+  if (galleryFilename) {
+    await editImageSidecar(galleryFilename, (meta) => {
+      if (signal?.aborted) return null;
       meta.verification = verificationRecord;
       return meta;
     }).catch((err) => console.error(`⚠️ Failed to update image sidecar verification for ${filename}:`, err.message));
   }
 
-  imageVerifierEvents.emit('verified', { filename, verification: verificationRecord });
+  signal?.throwIfAborted();
+  imageVerifierEvents.emit('verified', { filename: galleryFilename || filename, verification: verificationRecord });
   return verificationRecord;
 }
 
