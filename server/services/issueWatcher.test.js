@@ -427,6 +427,47 @@ describe('buildTaskInput', () => {
     expect(apps.get(APP.id).issueWatcherState.pendingIssueComments).toEqual([{ ...pending, ticks: 0 }]);
   });
 
+  it('preserves peer changes during the approval poll, comment gather and screening', async () => {
+    const old = { number: 7, headSha: 'a'.repeat(40) };
+    const replacement = { ...old, headSha: 'b'.repeat(40) };
+    const peer = { number: 8, headSha: 'c'.repeat(40) };
+    const carried = { issueNumber: 20, commentId: 3, ticks: 1 };
+    const gathered = { issueNumber: 21, commentId: 4, ticks: 2 };
+    const later = { issueNumber: 22, commentId: 5, ticks: 0 };
+    const updatePeer = (patch) => {
+      const app = apps.get(APP.id);
+      apps.set(APP.id, { ...app, issueWatcherState: { ...app.issueWatcherState, ...patch } });
+    };
+    installVolunteerGhMock();
+    updatePeer({ approvedPullRequests: [old], pendingIssueComments: [carried] });
+    interceptGh((args) => {
+      if (args[0] === 'pr' && args[1] === 'view') {
+        updatePeer({ approvedPullRequests: [replacement, peer] });
+        return JSON.stringify(pullRequest({ state: 'CLOSED' }));
+      }
+      if (args.includes('repos/o/r/issues/20')) {
+        updatePeer({ pendingIssueComments: [gathered] });
+        return JSON.stringify({ state: 'open' });
+      }
+      return undefined;
+    });
+    const screen = runModelAbuseScanMock.getMockImplementation();
+    let atScreen;
+    runModelAbuseScanMock.mockImplementationOnce(async (...args) => {
+      atScreen = apps.get(APP.id).issueWatcherState.pendingIssueComments;
+      updatePeer({ pendingIssueComments: [...atScreen, later] });
+      return screen(...args);
+    });
+
+    await buildTaskInput({ app: apps.get(APP.id) });
+
+    expect(atScreen.map((item) => item.commentId)).toEqual([4, 99]);
+    expect(apps.get(APP.id).issueWatcherState).toMatchObject({
+      approvedPullRequests: [replacement, peer],
+      pendingIssueComments: [gathered, later],
+    });
+  });
+
   it('continues to cognition when an explicit volunteer cannot be assigned', async () => {
     installVolunteerGhMock();
     interceptGh((args) => {
@@ -1049,6 +1090,14 @@ describe('processTaskOutput', () => {
 
   it('keeps pending-CI approvals in the local queue so GitHub cannot bypass reassessment', async () => {
     installDefaultGhMock({ pr: pullRequest({ statusCheckRollup: [{ status: 'IN_PROGRESS' }] }) });
+    const peer = { number: 99, headSha: 'c'.repeat(40) };
+    const forgeRead = execGhMock.getMockImplementation();
+    execGhMock.mockImplementation(async (...args) => {
+      if (args[0][0] === 'pr' && args[0][1] === 'diff') {
+        apps.set(APP.id, { ...APP, issueWatcherState: { approvedPullRequests: [peer] } });
+      }
+      return forgeRead(...args);
+    });
     const result = await processTaskOutput({ appId: APP.id, success: true, task: { metadata }, payload: {
       issueComments: [], pullRequests: [{ number: 7, headSha: 'a'.repeat(40), verdict: 'approve', summary: 'Reviewed.', findings: [], rebaseRequired: false, ciPolicy: 'required' }],
     } });
@@ -1056,6 +1105,7 @@ describe('processTaskOutput', () => {
     expect(mergePrMock).not.toHaveBeenCalled();
     expect(execGhMock.mock.calls.some(([args]) => args.includes('graphql'))).toBe(false);
     expect(apps.get(APP.id).issueWatcherState.approvedPullRequests).toEqual([
+      peer,
       expect.objectContaining({ number: 7, autoMergeEnabled: false }),
     ]);
   });
@@ -1273,6 +1323,26 @@ describe('processTaskOutput', () => {
       link: approval.url,
       metadata: { appId: APP.id, issueWatcherPrNumber: 7 },
     }));
+  });
+
+  it('serializes incomplete output aging and notifies once after the timeout is persisted', async () => {
+    const pending = { issueNumber: 12, commentId: 99, ticks: MAX_PENDING_ISSUE_COMMENT_TICKS - 2 };
+    apps.set(APP.id, { ...APP, issueWatcherState: { pendingIssueComments: [pending] } });
+    installDefaultGhMock();
+    const run = () => processTaskOutput({
+      appId: APP.id, success: true, payload: { issueComments: [], pullRequests: [] },
+      task: { metadata: { issueWatcher: { repoFullName: 'o/r', issueComments: [pending], pullRequests: [] } } },
+    });
+    let atTimeout;
+    addNotificationMock.mockImplementation(async () => {
+      atTimeout = apps.get(APP.id).issueWatcherState.pendingIssueComments;
+    });
+
+    await Promise.all([run(), run(), run()]);
+
+    expect(addNotificationMock).toHaveBeenCalledTimes(1);
+    expect(atTimeout).toEqual([]);
+    expect(apps.get(APP.id).issueWatcherState).not.toHaveProperty('approvedPullRequests');
   });
 
   it('ages out a repeatedly incomplete issue-comment decision and notifies', async () => {
