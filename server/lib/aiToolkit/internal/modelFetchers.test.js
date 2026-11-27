@@ -53,6 +53,7 @@ const SHIPPED_REFRESHABLE = [
   'claude-sglang', 'claude-sglang-tui',
   'splash', 'opencode-splash', 'opencode-splash-tui', 'claude-splash',
   'mkserve', 'opencode-mkserve', 'opencode-mkserve-tui',
+  'llama-server',
 ];
 const SHIPPED_NOT_REFRESHABLE = [
   'claude-code-tui-bedrock',

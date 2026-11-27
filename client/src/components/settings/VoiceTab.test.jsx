@@ -25,6 +25,11 @@ vi.mock('../../services/apiProviders', () => ({
   getProviders: vi.fn().mockResolvedValue({ providers: [] }),
   refreshProviderModels: vi.fn(),
 }));
+vi.mock('../../services/apiLocalLlm.js', () => ({
+  getConversationalGemmaSetupStatus: vi.fn().mockResolvedValue({ supported: true, llamaInstalled: false, ggufExists: false, running: false, phase: 'idle' }),
+  startConversationalGemmaSetup: vi.fn(),
+  cancelConversationalGemmaSetup: vi.fn(),
+}));
 vi.mock('../../services/voiceClient', () => ({ playWav: vi.fn(), webSpeechSupported: true }));
 vi.mock('../../services/browserLlm', () => ({ nanoAvailability: vi.fn().mockResolvedValue('available') }));
 vi.mock('../../services/voiceVisibility', () => ({

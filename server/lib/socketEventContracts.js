@@ -52,6 +52,7 @@ const loomRunSnapshot = (production) => Object.freeze({
 
 export const SOCKET_EVENT_CONTRACTS = Object.freeze({
   'voice:avatar:changed': { direction: 'server-to-client', summary: 'Invalidate the machine-local Voice Call avatar runtime status; no payload.' },
+  'voice:conversationalGemma:changed': { direction: 'server-to-client', summary: 'Invalidate the machine-local Conversational Gemma 4 31B llama.cpp setup status; no payload.' },
   'generated-preview:playback': input(generatedPreviewPlaybackSchema, 'Calibrate or control an advertised cooperative document preview; audio remains in the client.'),
   'generated-preview:playback-state': {
     direction: 'server-to-client',

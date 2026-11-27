@@ -1,6 +1,5 @@
 import { useState } from 'react';
 import { changeVoiceAvatar } from '../../services/apiVoiceAvatar';
-import { setAvatarMode, useAvatarMode } from './useAvatarMode';
 
 const button = 'satphone-key inline-flex min-h-11 items-center justify-center rounded-lg border px-3 text-xs font-mono font-semibold uppercase tracking-wide disabled:opacity-50';
 
@@ -18,7 +17,6 @@ function AvatarActions({ data, ask, terms, pending }) {
 }
 
 export default function AvatarRuntimeSettings({ data, error, updateData, refetch, compact = false, open, onToggleOpen }) {
-  const useGenerativeAvatar = useAvatarMode();
   const [localOpen, setLocalOpen] = useState(false);
   const showControls = typeof open === 'boolean' ? open : localOpen;
   const setShowControls = onToggleOpen || setLocalOpen;
@@ -42,15 +40,15 @@ export default function AvatarRuntimeSettings({ data, error, updateData, refetch
     }
   };
 
-  const running = data?.supported && data.phase === 'running' && !error;
+  const running = Boolean(data?.supported && data.phase === 'running' && !error);
   // When embedded with an external toggle (e.g. the Voice Call telemetry card's
   // settings icon) and AvatarForcing is already live, collapse completely until
   // the user opens avatar settings.
-  if (typeof open === 'boolean' && running && useGenerativeAvatar && !showControls) {
+  if (typeof open === 'boolean' && running && !showControls) {
     return null;
   }
 
-  const ledTone = running && useGenerativeAvatar
+  const ledTone = running
     ? 'bg-port-success shadow-[0_0_6px_rgb(var(--port-success)/0.85)]'
     : data?.phase === 'starting' || data?.phase === 'installing'
       ? 'bg-port-warning animate-pulse'
@@ -61,30 +59,22 @@ export default function AvatarRuntimeSettings({ data, error, updateData, refetch
       <div className="flex items-center gap-2 min-w-0">
         <span aria-hidden="true" className={`h-2 w-2 shrink-0 rounded-full ${ledTone}`} />
         <h3 className="font-mono text-xs font-semibold uppercase tracking-wider">
-          {running && useGenerativeAvatar ? 'AvatarForcing ready' : 'Avatar setup'}
+          {running ? 'AvatarForcing live' : 'Avatar setup'}
         </h3>
       </div>
-      {running && useGenerativeAvatar && <button type="button" className={button} aria-expanded={showControls}
+      {running && <button type="button" className={button} aria-expanded={showControls}
         onClick={() => setShowControls(!showControls)}>{showControls ? 'Hide avatar settings' : 'Avatar settings'}</button>}
     </div>
-    {(!running || !useGenerativeAvatar) && <p className="text-xs text-port-text-muted">Calls and Play sample still work with a still portrait.</p>}
+    {!running && <p className="text-xs text-port-text-muted">Calls and Play sample still work with a still portrait.</p>}
     {(error || !data) && <p role="status" className="text-xs">{error ? 'Could not load avatar status.' : 'Checking avatar runtime…'}</p>}
     {error && <button type="button" className={button} onClick={refetch}>Retry status</button>}
     {data && !data.supported && <p className="text-xs text-port-text-muted">This runtime needs an Apple Silicon host running macOS 26 or later.</p>}
-    {!error && data?.supported && (!running || showControls || !useGenerativeAvatar) && <>
+    {!error && data?.supported && (!running || showControls) && <>
       {!data.installed || data.updateAvailable ? <label className="flex items-start gap-2 text-xs leading-relaxed">
         <input type="checkbox" checked={terms} disabled={pending} onChange={event => setTerms(event.target.checked)} className="mt-0.5 shrink-0" />
         <span>I accept the <a href="https://github.com/johnrobinsn/avatarforcing-mlx/blob/d83df52b1d891cae7d12d68b247af7be6e6def07/NOTICE"
           target="_blank" rel="noreferrer" className="underline text-port-accent-text">checkpoint terms</a> (noncommercial; motion checkpoint has research-use restrictions). Model downloads use about 1.17 GB before conversion and Python dependencies.</span>
       </label> : null}
-      {data.installed && <label className="flex items-center gap-2 text-xs">
-        <input type="checkbox" checked={useGenerativeAvatar}
-          onChange={event => {
-            setShowControls(true);
-            setAvatarMode(event.target.checked);
-          }} />
-        Use generated avatar in this browser
-      </label>}
       <p role="status" className="font-mono text-xs text-port-text-muted">
         {data.detail || (data.phase === 'running' ? 'Running' : data.installed ? 'Stopped' : 'Not installed')}
       </p>

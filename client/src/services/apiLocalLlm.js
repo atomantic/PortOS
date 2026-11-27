@@ -45,6 +45,15 @@ export const getLocalLlmCatalog = (backend, q = '', { variants = false, silent }
 export const checkConversationalGemmaAccess = options =>
   request('/local-llm/conversational-gemma/access', { ...options, method: 'POST' });
 
+export const getConversationalGemmaSetupStatus = options =>
+  request('/local-llm/conversational-gemma/status', { signal: options?.signal, silent: true, hostControlOptional: true });
+
+export const startConversationalGemmaSetup = options =>
+  request('/local-llm/conversational-gemma/setup', { ...options, method: 'POST', body: '{}' });
+
+export const cancelConversationalGemmaSetup = options =>
+  request('/local-llm/conversational-gemma/cancel', { ...options, method: 'POST', body: '{}' });
+
 export const getModelAbuseGuardStatus = (options) =>
   request('/local-llm/security-guard/status', options);
 

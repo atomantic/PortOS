@@ -735,6 +735,13 @@ const TUPLES = [
     },
   },
   {
+    id: 'llama-server', harnessId: 'direct', method: 'api', service: { definitionId: 'llama', slug: 'llama-server', credentials: { apiKey: '' }, transports: { openai: { baseUrl: 'http://127.0.0.1:5568/v1' } } },
+    overrides: {
+      name: 'llama.cpp (local)', enabled: false, timeout: 300000, endpoint: 'http://127.0.0.1:5568/v1', apiKey: '',
+      llamaBacked: true, models: [], defaultModel: null, envVars: {},
+    },
+  },
+  {
     id: 'grok', harnessId: 'direct', method: 'api', service: { definitionId: 'xai', slug: 'grok', credentials: { apiKey: '' } },
     overrides: {
       name: 'xAI Grok', enabled: false,
@@ -793,7 +800,7 @@ export const PROVIDER_ORDER = [
   'codex', 'codex-tui', 'codex-ollama', 'codex-lmstudio',
   'claude-code-tui', 'claude-code-tui-bedrock',
   'antigravity-tui', 'antigravity-cli',
-  'cerebras', 'lmstudio', 'ollama', 'mtplx', 'mkserve', 'splash', 'slotstream',
+  'cerebras', 'lmstudio', 'ollama', 'mtplx', 'mkserve', 'splash', 'slotstream', 'llama-server',
   'grok', 'grok-cli', 'grok-tui', 'kimi-cli', 'kimi-tui', 'cursor-cli', 'cursor-tui',
 ];
 

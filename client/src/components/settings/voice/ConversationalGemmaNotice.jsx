@@ -1,19 +1,28 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router';
-import { ExternalLink, Sparkles } from 'lucide-react';
+import { ExternalLink, Play, Sparkles, Square } from 'lucide-react';
 import { CONVERSATIONAL_GEMMA, isConversationalGemma } from '../../../../../server/lib/voiceModelCatalog.js';
 import { PROVIDERS_PAGE_BREADCRUMB, PROVIDERS_PAGE_PATH } from '../../../../../server/lib/navManifest.js';
-import { checkConversationalGemmaAccess } from '../../../services/apiLocalLlm.js';
+import {
+  cancelConversationalGemmaSetup,
+  getConversationalGemmaSetupStatus,
+  startConversationalGemmaSetup,
+} from '../../../services/apiLocalLlm.js';
+import { useSocketResource } from '../../../hooks/useSocketResource.js';
+import BrailleSpinner from '../../BrailleSpinner.jsx';
 import HfTokenBanner from '../../imageGen/HfTokenBanner.jsx';
 
+const SETUP_EVENTS = ['voice:conversationalGemma:changed'];
+
 /**
- * State-aware Conversational Gemma 4 31B prerequisite & enablement helper.
+ * Direct one-click Conversational Gemma 4 31B (llama.cpp) enablement & setup card.
  *
- * - If the active provider already serves it: offers a one-click select (or confirms active).
- * - If another connected API provider serves it: offers a one-click provider + model switch.
- * - Otherwise: explains clearly why it is not in the dropdown and links directly to the
- *   exact PortOS setup screens (Local LLM Runtimes for llama.cpp GGUF, Providers for
- *   external OpenAI-compatible servers) plus an inline Hugging Face access check.
+ * - If active: confirms Conversational Gemma is active.
+ * - If already served by a connected provider: offers a single-click switch.
+ * - On Apple Silicon: offers a single-click "Set up / Start llama.cpp + Conversational Gemma"
+ *   button that installs llama.cpp, downloads/converts the Q8_0 GGUF (prompting inline for
+ *   the HF token/terms only if needed), launches llama-server, enables the llama.cpp API
+ *   provider, and selects Conversational Gemma as the Voice Brain automatically.
  */
 export default function ConversationalGemmaNotice({
   apiProviders = [],
@@ -21,13 +30,12 @@ export default function ConversationalGemmaNotice({
   selectedModelId,
   onSelectModel,
   onSwitchProviderAndModel,
-  onRefresh,
-  refreshing = false,
+  onSetupComplete,
   compact = false,
 }) {
-  const { id, name, url, license, localGgufPath } = CONVERSATIONAL_GEMMA;
-  const [accessStatus, setAccessStatus] = useState(null);
-  const [checking, setChecking] = useState(false);
+  const { id, name, url, license, llamaProviderId } = CONVERSATIONAL_GEMMA;
+  const [submitting, setSubmitting] = useState(false);
+  const [requestError, setRequestError] = useState('');
 
   const selectedProvider = apiProviders.find((p) => p.id === selectedProviderId);
   const servedOnCurrent = (selectedProvider?.models || []).find(isConversationalGemma);
@@ -37,15 +45,47 @@ export default function ConversationalGemmaNotice({
       .find((entry) => entry.modelId)
     : null;
 
-  const checkAccess = async () => {
-    setChecking(true);
-    setAccessStatus(null);
+  const needsLocalSetup = !servedOnCurrent && !alternateHost;
+  const { data: setup, updateData } = useSocketResource(getConversationalGemmaSetupStatus, {
+    events: SETUP_EVENTS,
+    enabled: needsLocalSetup,
+  });
+
+  const prevPhaseRef = useRef(setup?.phase);
+  useEffect(() => {
+    const prev = prevPhaseRef.current;
+    prevPhaseRef.current = setup?.phase;
+    if (prev && prev !== 'ready' && setup?.phase === 'ready') {
+      onSetupComplete?.({ provider: llamaProviderId, model: id });
+    }
+  }, [setup?.phase, onSetupComplete, llamaProviderId, id]);
+
+  const handleStartSetup = async () => {
+    if (submitting) return;
+    setSubmitting(true);
+    setRequestError('');
     try {
-      setAccessStatus((await checkConversationalGemmaAccess({ silent: true })).status);
-    } catch {
-      setAccessStatus('error');
+      const next = await startConversationalGemmaSetup({ silent: true });
+      updateData(next);
+      if (next?.phase === 'ready') {
+        onSetupComplete?.({ provider: llamaProviderId, model: id });
+      }
+    } catch (err) {
+      setRequestError(err?.message || 'Could not start Conversational Gemma setup.');
     } finally {
-      setChecking(false);
+      setSubmitting(false);
+    }
+  };
+
+  const handleCancelSetup = async () => {
+    setSubmitting(true);
+    setRequestError('');
+    try {
+      updateData(await cancelConversationalGemmaSetup({ silent: true }));
+    } catch (err) {
+      setRequestError(err?.message || 'Could not cancel setup.');
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -80,7 +120,7 @@ export default function ConversationalGemmaNotice({
     return (
       <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-port-accent/30 bg-port-accent/10 px-2.5 py-2 text-xs text-port-text">
         <span>
-          <strong>{name}</strong> is served by <strong>{alternateHost.provider.name || alternateHost.provider.id}</strong> (not the currently selected provider).
+          <strong>{name}</strong> is ready on <strong>{alternateHost.provider.name || alternateHost.provider.id}</strong>.
         </span>
         {onSwitchProviderAndModel && (
           <button
@@ -95,75 +135,95 @@ export default function ConversationalGemmaNotice({
     );
   }
 
+  const running = Boolean(setup?.running);
+  const canAutoSetup = setup ? setup.supported !== false : true;
+  const ggufReady = Boolean(setup?.ggufExists);
+  const accessStatus = setup?.accessStatus;
+  const showHfBanner = accessStatus === 'token-required' || accessStatus === 'terms-required';
+  const actionLabel = ggufReady
+    ? 'Start llama.cpp + Conversational Gemma'
+    : 'Use llama.cpp + Conversational Gemma 4 31B';
+
   return (
-    <details className={`rounded-lg border border-port-border bg-port-bg/60 text-xs text-port-text-muted ${compact ? 'px-2.5 py-1.5' : 'px-3 py-2'}`}>
-      <summary className="cursor-pointer py-1 font-medium text-port-text hover:text-port-accent-text">
-        How to install &amp; enable {name}
-      </summary>
-      <div className="mt-2 space-y-2 border-t border-port-border/60 pt-2 leading-relaxed">
-        <p>
-          <strong>{name}</strong> is not in this dropdown because none of your connected API providers currently serve{' '}
-          <code className="rounded bg-port-card px-1 py-0.5 text-[11px] text-port-text">{id}</code>.
-          Trelis publishes FP8 weights (CUDA) rather than a stock Ollama or LM Studio download.
-        </p>
-        <ol className="list-decimal space-y-1.5 pl-4">
-          <li>
-            <strong className="text-port-text">Apple Silicon (local llama.cpp):</strong> place a locally converted Q8_0 GGUF at{' '}
-            <code className="break-all rounded bg-port-card px-1 py-0.5 text-[11px] text-port-text">{localGgufPath}</code>, then start its preset in{' '}
-            <Link to="/models/llms-runtimes" className="font-medium text-port-accent-text underline">llama.cpp runtime</Link> (or review options in{' '}
-            <Link to="/models/llms" className="font-medium text-port-accent-text underline">Local LLMs</Link>).
-          </li>
-          <li>
-            <strong className="text-port-text">External OpenAI-compatible server:</strong> serve{' '}
-            <a href={url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-0.5 font-medium text-port-accent-text underline">
-              {name} <ExternalLink size={10} aria-hidden="true" />
-            </a>{' '}
-            ({license}) and register the endpoint under{' '}
-            <Link to={PROVIDERS_PAGE_PATH} className="font-medium text-port-accent-text underline">{PROVIDERS_PAGE_BREADCRUMB}</Link>.
-          </li>
-          <li>
-            Select that provider above and click <strong className="text-port-text">Refresh models</strong> so it appears in the model dropdown.
-          </li>
-        </ol>
-        <div className="flex flex-wrap items-center gap-2 pt-1">
-          <button
-            type="button"
-            disabled={checking}
-            onClick={checkAccess}
-            className="min-h-9 pointer-coarse:min-h-11 rounded-md border border-port-border bg-port-card px-2.5 py-1 text-xs font-medium text-port-text hover:border-port-accent disabled:opacity-50"
-          >
-            {checking ? 'Checking Hugging Face access…' : accessStatus ? 'Recheck HF access' : 'Check Hugging Face access'}
-          </button>
-          {onRefresh && (
+    <div className={`space-y-2 rounded-lg border border-port-border bg-port-bg/60 text-xs text-port-text-muted ${compact ? 'px-2.5 py-2' : 'px-3 py-2.5'}`}>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="min-w-0 space-y-0.5">
+          <p className="flex items-center gap-1.5 font-medium text-port-text">
+            <Sparkles size={12} aria-hidden="true" className="shrink-0 text-port-accent" />
+            <span>{name}</span>
+          </p>
+          <p className="text-[11px] leading-snug text-port-text-muted">
+            {running
+              ? (setup.detail || 'Setting up llama.cpp + Conversational Gemma 4 31B…')
+              : ggufReady
+                ? 'Local Q8_0 GGUF ready. Launch llama.cpp and switch Voice Brain automatically.'
+                : canAutoSetup
+                  ? 'One-click local Apple Silicon setup: installs llama.cpp, converts Q8_0 GGUF, starts the server, and selects it here.'
+                  : 'Connect an external OpenAI-compatible server hosting this checkpoint.'}
+          </p>
+        </div>
+
+        {canAutoSetup && (
+          running ? (
             <button
               type="button"
-              disabled={refreshing}
-              onClick={onRefresh}
-              className="min-h-9 pointer-coarse:min-h-11 rounded-md border border-port-border bg-port-card px-2.5 py-1 text-xs font-medium text-port-text hover:border-port-accent disabled:opacity-50"
+              disabled={submitting}
+              onClick={handleCancelSetup}
+              className="inline-flex min-h-9 pointer-coarse:min-h-11 shrink-0 items-center gap-1.5 rounded-md border border-port-error/50 bg-port-card px-2.5 py-1 text-xs font-medium text-port-error-text hover:border-port-error disabled:opacity-50"
             >
-              {refreshing ? 'Refreshing…' : 'Refresh models'}
+              <Square size={11} aria-hidden="true" />
+              Cancel
             </button>
-          )}
-        </div>
-        {accessStatus === 'ready' && (
-          <p role="status" className="text-port-success-text">
-            Hugging Face confirmed download access to the checkpoint.
-          </p>
-        )}
-        {accessStatus === 'terms-required' && (
-          <p role="status" className="text-port-warning-text">
-            Hugging Face denied access. Accept the model terms with the account that owns your read token and verify gated-repo access.
-          </p>
-        )}
-        {accessStatus === 'error' && (
-          <p role="alert" className="text-port-error-text">
-            Could not verify Hugging Face access right now. Try again shortly.
-          </p>
-        )}
-        {(accessStatus === 'token-required' || accessStatus === 'terms-required') && (
-          <HfTokenBanner modelLabel={name} licenseUrl={url} onSaved={checkAccess} />
+          ) : (
+            <button
+              type="button"
+              disabled={submitting}
+              onClick={handleStartSetup}
+              className="inline-flex min-h-9 pointer-coarse:min-h-11 max-w-full items-center gap-1.5 rounded-md border border-port-accent/60 bg-port-card px-2.5 py-1 text-left text-xs font-medium text-port-accent-text hover:border-port-accent disabled:opacity-50"
+            >
+              {submitting ? <BrailleSpinner /> : <Play size={11} aria-hidden="true" className="shrink-0" />}
+              <span className="break-words">{actionLabel}</span>
+            </button>
+          )
         )}
       </div>
-    </details>
+
+      {running && (
+        <div className="space-y-1">
+          <div className="h-1.5 w-full overflow-hidden rounded-full bg-port-border/60">
+            <div
+              className="h-full rounded-full bg-port-accent transition-all duration-300"
+              style={{ width: `${Math.max(6, Math.min(100, setup?.percent ?? 12))}%` }}
+            />
+          </div>
+          {setup?.percent != null && (
+            <p role="status" className="font-mono text-[10px] text-port-text-muted">
+              {setup.phase} · {setup.percent}%
+            </p>
+          )}
+        </div>
+      )}
+
+      {!running && (requestError || setup?.error) && (
+        <p role="alert" className="text-port-error-text">
+          {requestError || setup.error}
+        </p>
+      )}
+
+      {showHfBanner && (
+        <HfTokenBanner modelLabel={name} licenseUrl={url} onSaved={handleStartSetup} />
+      )}
+
+      {!canAutoSetup && (
+        <p className="text-[11px] leading-relaxed">
+          Serve{' '}
+          <a href={url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-0.5 font-medium text-port-accent-text underline">
+            {name} <ExternalLink size={10} aria-hidden="true" />
+          </a>{' '}
+          ({license}) and register it under{' '}
+          <Link to={PROVIDERS_PAGE_PATH} className="font-medium text-port-accent-text underline">{PROVIDERS_PAGE_BREADCRUMB}</Link>.
+        </p>
+      )}
+    </div>
   );
 }
