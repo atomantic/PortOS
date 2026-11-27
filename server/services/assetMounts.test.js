@@ -125,9 +125,13 @@ describe('the server-owned namespace terminators', () => {
   });
 
   // Same hole, worse symptom: a client asking for JSON got HTML and a 200.
-  it('404s a mistyped API path instead of answering with the SPA index', async () => {
-    for (const path of ['/api/does-not-exist', '/sdapi/v1/nope']) {
-      const res = await request(app).get(path);
+  it('returns a JSON 404 for mistyped and retired APIs instead of answering with the SPA index', async () => {
+    const responses = await Promise.all([
+      request(app).get('/api/does-not-exist'),
+      request(app).get('/SDAPI/v1/sd-models'),
+      request(app).post('/sdapi/v1/txt2img'),
+    ]);
+    for (const res of responses) {
       expect(res.status).toBe(404);
       expect(res.body).toMatchObject({ code: 'NOT_FOUND' });
     }

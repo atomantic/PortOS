@@ -313,12 +313,18 @@ describe('Settings routes — apiAccess slice', () => {
     expect(store.usageNativeAccountSelections).toBeUndefined();
   });
 
-  it('accepts a valid apiAccess patch and persists it', async () => {
+  it('accepts a valid apiAccess patch alongside retired SDAPI settings', async () => {
     const res = await request(buildApp())
       .put('/api/settings')
-      .send({ apiAccess: { voice: { exposed: true, requireAuth: false } } });
+      .send({ apiAccess: {
+        voice: { exposed: true, requireAuth: false },
+        sdapi: { exposed: true, requireAuth: false },
+      } });
     expect(res.status).toBe(200);
-    expect(res.body.apiAccess.voice.exposed).toBe(true);
+    expect(res.body.apiAccess).toEqual({
+      voice: { exposed: true, requireAuth: false },
+      sdapi: { exposed: true, requireAuth: false },
+    });
   });
 
   it('rejects a non-boolean exposed flag', async () => {

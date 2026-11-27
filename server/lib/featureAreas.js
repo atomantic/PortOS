@@ -257,7 +257,7 @@ export const FEATURE_AREAS = Object.freeze([
     id: 'media-gen', label: 'Media generation',
     navPathPrefixes: ['/media', '/video', '/html-pages', '/code-animation', '/sprites', '/3d'],
     codeGlobs: [
-      'server/routes/{image,media,video,htmlPages,htmlComposition,codeAnimation,sprites,threejs,loras,sdapi}*',
+      'server/routes/{image,media,video,htmlPages,htmlComposition,codeAnimation,sprites,threejs,loras}*',
       'server/lib/mediaModels/**',
       'server/lib/{image,media,video,threejs,sprite,html,lora,flux,runway,higgsfield,grok,fal,photoreal}*',
       'server/services/{image,media,video,htmlPages,codeAnimation,lora,sprite,threejs,runway,higgsfield,fal,grok}*',

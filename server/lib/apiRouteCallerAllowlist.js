@@ -15,7 +15,7 @@ export const ROUTE_CALLER_CLASSES = Object.freeze({
   peer: 'Called by another PortOS install over the federation or sync channel, never by this install\'s browser.',
   'companion-app': 'Documented in docs/COMPANION_APP_API.md for the native companion client.',
   'agent-facing': 'Named in an agent skill, prompt template or generated agent prompt that tells a spawned agent to call it.',
-  'external-client': 'Third-party tools that speak an established API (the A1111-compatible /sdapi surface), not PortOS clients.',
+  'external-client': 'Third-party clients of an externally callable API.',
   'oauth-callback': 'The redirect target of a third-party OAuth flow; the browser arrives here from the provider.',
   'operator-script': 'Invoked by first-party operator tooling with a call site checked by API route parity.',
   'operator-workflow': 'Required by a specific supported manual setup, recovery, or data-management workflow. Cite the workflow and why the operation is needed.',
@@ -106,12 +106,6 @@ export const UNCALLED_ROUTE_ALLOWLIST = Object.freeze({
   'external-client': Object.freeze([
     '/api/voice/public/engines',
     '/api/voice/public/voices',
-    '/sdapi/v1/options',
-    '/sdapi/v1/portos/video-models',
-    '/sdapi/v1/progress',
-    '/sdapi/v1/samplers',
-    '/sdapi/v1/sd-models',
-    '/sdapi/v1/txt2img',
   ]),
   'agent-facing': Object.freeze([
     // server/lib/apiOperationContracts.js: a public OpenAPI operation exposed to agents through the API tool resource.

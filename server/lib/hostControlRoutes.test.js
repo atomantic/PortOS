@@ -32,7 +32,7 @@ describe('isHostControlRoute (#16018)', () => {
   });
 
   it('leaves writes outside /api to their own routers', () => {
-    expect(isHostControlRoute('POST', '/sdapi/v1/txt2img')).toBe(false);
+    expect(isHostControlRoute('POST', '/outside-api/example')).toBe(false);
     expect(isHostControlRoute('POST', '/apix/example')).toBe(false);
   });
 

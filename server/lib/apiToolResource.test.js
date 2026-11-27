@@ -16,10 +16,6 @@ describe('buildToolResource', () => {
 
   it('publishes JSON Schema, not the 3.0.3 dialect, so the schemas work as provider tool definitions', () => {
     expect(resource.schemaDialect).toBe('https://json-schema.org/draft/2020-12/schema');
-    // A 3.0.3 `nullable: true` is not a JSON Schema keyword — converting here
-    // would DROP the null branch and make a legal `null` argument invalid.
-    expect(byName('image.generate').input_schema.properties.negative_prompt)
-      .toEqual({ anyOf: [{ type: 'string', maxLength: 8000 }, { type: 'null' }] });
   });
 
   it('includes exactly the operations carrying an x-portos-tool annotation', () => {
@@ -40,12 +36,9 @@ describe('buildToolResource', () => {
   it('binds each tool to its HTTP method and path', () => {
     expect(byName('voice.synthesize').binding)
       .toEqual({ protocol: 'http', method: 'POST', path: '/api/voice/public/synthesize' });
-    expect(byName('image.list-models').binding)
-      .toEqual({ protocol: 'http', method: 'GET', path: '/sdapi/v1/sd-models' });
   });
 
   it('derives a snake_case provider name from the dotted canonical name', () => {
-    expect(byName('image.list-models').providerName).toBe('image_list_models');
     expect(byName('voice.synthesize').providerName).toBe('voice_synthesize');
   });
 
@@ -64,28 +57,18 @@ describe('buildToolResource', () => {
     expect(input.required).toBeUndefined(); // the engine param is optional
   });
 
-  it('preserves an open body contract rather than closing it', () => {
-    // sdapiTxt2imgBodySchema is .passthrough() for A1111 compatibility.
-    expect(byName('image.generate').input_schema.additionalProperties).not.toBe(false);
-  });
-
   it('reports a non-JSON success payload by media type instead of claiming JSON', () => {
     expect(byName('voice.synthesize').output_schema)
       .toEqual({ type: 'string', format: 'binary', 'x-portos-media-type': 'audio/wav' });
   });
 
   it('uses the modeled JSON response schema when the contract has one', () => {
-    expect(byName('image.list-models').output_schema).toEqual({ type: 'array', items: { type: 'object' } });
-  });
-
-  it('falls back to an open object when no success payload is modeled', () => {
-    expect(byName('image.generate').output_schema).toEqual({ type: 'object', additionalProperties: true });
+    expect(byName('voice.list-voices').output_schema).toEqual({ type: 'object' });
   });
 
   it('publishes the error code a route actually throws, not one derived from the status', () => {
-    // errorHandler resolves `err.code || getErrorCode(status)`, and both write
-    // routes pass an explicit code — so a status-derived guess would publish
-    // BAD_REQUEST for a 400 that really reports VALIDATION_ERROR. One status can
+    // errorHandler resolves `err.code || getErrorCode(status)`. A status-derived
+    // guess would publish BAD_REQUEST for a 400 that reports VALIDATION_ERROR. One status can
     // carry several codes: a schema-valid request naming an unknown voice is a
     // 400 UNKNOWN_VOICE (see routes/voicePublic.test.js).
     expect(byName('voice.synthesize').failures).toEqual([
@@ -95,32 +78,13 @@ describe('buildToolResource', () => {
     ]);
   });
 
-  it('declares the router-wide exposure gate on every sdapi tool, not just the write one', () => {
-    // routes/sdapi.js gates the WHOLE router with `router.use(...)`, so a read
-    // tool returns 403 too when A1111 exposure is off. An agent that never saw
-    // that failure has no way to explain the refusal.
-    for (const name of ['image.list-models', 'image.list-samplers', 'image.get-options', 'image.get-progress']) {
-      expect(byName(name).failures).toEqual([{ status: 403, code: 'FORBIDDEN' }]);
-    }
-  });
-
-  it('emits one entry per code when a status carries several', () => {
-    expect(byName('image.generate').failures).toEqual([
-      { status: 400, code: 'VALIDATION_ERROR' },
-      { status: 403, code: 'FORBIDDEN' }, // undeclared: falls back to the status map
-      { status: 500, code: 'GEN_FAILED' },
-      { status: 500, code: 'GEN_OUTPUT_MISSING' },
-      { status: 504, code: 'GEN_TIMEOUT' },
-    ]);
-  });
-
   it('omits failures entirely for a tool that declares no error responses', () => {
     expect(byName('voice.list-voices').failures).toBeUndefined();
   });
 
   it('marks read tools idempotent and side-effecting tools not', () => {
-    expect(byName('image.list-models').policy).toMatchObject({ sideEffect: 'read', idempotent: true });
-    expect(byName('image.generate').policy).toMatchObject({ sideEffect: 'local-compute', idempotent: false, async: true });
+    expect(byName('voice.list-voices').policy).toMatchObject({ sideEffect: 'read', idempotent: true });
+    expect(byName('voice.synthesize').policy).toMatchObject({ sideEffect: 'local-compute', idempotent: false, async: false });
   });
 
   it('publishes the full error vocabulary from the shared status map', () => {

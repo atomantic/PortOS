@@ -41,8 +41,7 @@
     "vad": { "endOfSpeechMs": 700, "minUtteranceMs": 250 }
   },
   "apiAccess": {
-    "voice": { "exposed": false, "requireAuth": false },
-    "sdapi": { "exposed": false, "requireAuth": false }
+    "voice": { "exposed": false, "requireAuth": false }
   },
   "federation": {
     "mediaProvider": {

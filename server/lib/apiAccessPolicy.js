@@ -1,7 +1,7 @@
 /**
  *  Shared authentication-boundary metadata for HTTP API discovery and auth.
  *
- * Shared always-public path, gated non-`/api` prefix, and peer-credential federation surface
+ * Shared always-public paths and peer-credential federation surface
  * (`PEER_API_SURFACE`, `isPeerApiRequestAllowed`) policy consumed by `authGate` and API discovery.
  */
 
@@ -13,8 +13,6 @@ export const ALWAYS_PUBLIC_API_PATHS = Object.freeze([
   '/api/system/health',
   '/api/eidoverse/travel/guest',
 ]);
-
-export const GATED_NON_API_PREFIXES = Object.freeze(['/sdapi/']);
 
 const alwaysPublicPathSet = new Set(ALWAYS_PUBLIC_API_PATHS);
 

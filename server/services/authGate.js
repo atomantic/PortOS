@@ -6,7 +6,6 @@ import { browserRequestRefusal, isLocalConnection, isOriginlessCrossSiteBrowserR
 import { getSettings, settingsEvents } from './settings.js';
 import { isRegistryPublic } from '../lib/apiRegistry.js';
 import {
-  GATED_NON_API_PREFIXES,
   isAlwaysPublicApiPath,
   isPeerApiRequestAllowed,
   isPeerBasicBootstrapRequest,
@@ -124,16 +123,8 @@ const browserRefusalError = (code) => new ServerError(BROWSER_REFUSAL_MESSAGES[c
 
 const isPublicPath = (path) => {
   if (isAlwaysPublicApiPath(path)) return true;
-  // /api/* and /data/* are always gated. /sdapi/* (and any future non-/api
-  // API surface listed above) is also gated. Everything else is the static
-  // client bundle — index.html / hashed JS+CSS / fonts — which is safe to
-  // serve without a session: a sidecar can't do anything with it without a
-  // token to hit the JSON API, and the login page itself must be reachable.
-  if (path.startsWith('/api/') || path.startsWith('/data/')) return false;
-  for (const prefix of GATED_NON_API_PREFIXES) {
-    if (path.startsWith(prefix)) return false;
-  }
-  return true;
+  // Keep the client bundle and login page reachable without a session.
+  return !path.startsWith('/api/') && !path.startsWith('/data/');
 };
 
 // Read-only status probes a same-host monitor (cron, watchdog) may poll
@@ -204,7 +195,7 @@ export const authGate = async (req, res, next) => {
   if (isLoopbackStatusRequest(req, path)) return next();
   // Per-API public exemptions. When the user has marked an API exposed +
   // passwordless in Settings (`apiAccess.<id>`), re-open ONLY its declared
-  // public prefix (e.g. /api/voice/public/, /sdapi/). `isRegistryPublic`
+  // public prefix (e.g. /api/voice/public/). `isRegistryPublic`
   // matches only those prefixes, so config-mutation routes outside them
   // (/api/voice/config, etc.) stay gated. This sits AFTER the cross-origin
   // CSRF guard above (a public API is still not a CSRF bypass) and after the
