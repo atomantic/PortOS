@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { act, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 import LearningTab from './LearningTab';
@@ -88,15 +88,31 @@ describe('LearningTab — Requires Approval controls', () => {
     expect(api.getReviewerVerdictStats).not.toHaveBeenCalled();
   });
 
-  it('provides Mark all resolved button when multiple items require approval', async () => {
+  it('resets every low-confidence task type only after confirmation', async () => {
     const user = userEvent.setup();
+    let finishReset;
+    api.resetCosTaskTypeLearning.mockImplementationOnce(() => new Promise(resolve => { finishReset = resolve; }));
     renderTab();
 
     const markAllButton = await screen.findByRole('button', { name: 'Mark all resolved' });
-    expect(markAllButton).toBeInTheDocument();
-
+    expect(markAllButton).toHaveClass('pointer-coarse:min-h-11');
     await user.click(markAllButton);
-    expect(api.resetCosTaskTypeLearning).toHaveBeenCalledWith('internal-task');
-    expect(api.resetCosTaskTypeLearning).toHaveBeenCalledWith('self-improve:claim-issue');
+    const confirmation = screen.getByRole('group', { name: 'Re-enable auto-approval?' });
+    expect(api.resetCosTaskTypeLearning).not.toHaveBeenCalled();
+
+    await user.click(within(confirmation).getByRole('button', { name: 'Cancel' }));
+    expect(confirmation).not.toBeInTheDocument();
+    expect(api.resetCosTaskTypeLearning).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Mark all resolved' })).toHaveFocus();
+
+    await user.click(screen.getByRole('button', { name: 'Mark all resolved' }));
+    await user.click(screen.getByRole('button', { name: 'Reset and resolve all' }));
+    expect(screen.getByRole('button', { name: 'Resolving all…' })).toBeDisabled();
+    expect(api.resetCosTaskTypeLearning).toHaveBeenCalledExactlyOnceWith('internal-task');
+
+    await act(async () => finishReset({ reset: true }));
+    expect(api.resetCosTaskTypeLearning).toHaveBeenCalledTimes(2);
+    expect(api.resetCosTaskTypeLearning).toHaveBeenLastCalledWith('self-improve:claim-issue');
+    expect(screen.getByRole('button', { name: 'Mark all resolved' })).toBeEnabled();
   });
 });
