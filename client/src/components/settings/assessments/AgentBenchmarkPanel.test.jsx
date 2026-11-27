@@ -9,7 +9,7 @@ const { getMtplxServerStatus, runOpenCodeAgentBenchmark } = vi.hoisted(() => ({
 }));
 
 vi.mock('../../../services/apiLocalLlm.js', () => ({ getMtplxServerStatus, runOpenCodeAgentBenchmark }));
-vi.mock('../../../ui/Toast', () => ({ default: { success: vi.fn(), warning: vi.fn() } }));
+vi.mock('../../ui/Toast', () => ({ default: { success: vi.fn(), warning: vi.fn() } }));
 
 const renderPanel = () => render(<MemoryRouter><AgentBenchmarkPanel active /></MemoryRouter>);
 
