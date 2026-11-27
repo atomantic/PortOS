@@ -32,7 +32,7 @@
 
 import { createMediaJobImageHook } from './mediaJobImageHook.js';
 import { basename } from 'path';
-import { appendSceneTakes } from './musicVideo/projects.js';
+import { appendSceneTakes, selectSceneTake } from './musicVideo/projects.js';
 import { musicVideoEvents } from './musicVideo/events.js';
 import { recordSceneLastFailure } from './musicVideo/sceneFailure.js';
 import { alignPerformanceInstruction } from './musicVideo/takeAudioAlignment.js';
@@ -64,6 +64,20 @@ async function extendRecord(extend, videoHistoryId) {
   return { parentTakeId: extend.parentTakeId, offsetFrames: extendTakeInPointFrames({ deliveredSec: entry?.durationSec, extensionSec: extend.extensionSec }) };
 }
 
+// #19985: an approved draft upgraded by a queued upscale becomes the shot's clip, but only while the
+// director still uses the draft it was made from; a newer selection is kept and the take stays a candidate.
+async function selectOverSource(projectId, sceneId, attached, job) {
+  const source = job.params?.historyId;
+  const take = attached.appended.find((entry) => entry.kind === 'video');
+  if (job.params?.musicVideo?.selectOverSource !== true || typeof source !== 'string' || !take || attached.scene?.videoHistoryId !== source) return attached;
+  const scene = await selectSceneTake(projectId, sceneId, take.takeId, { expectedSelectedAssetId: source }).catch((err) => {
+    if (err?.code !== 'MUSIC_VIDEO_UNDO_CONFLICT') throw err;
+    console.log(`🎬 music-video upscale ${take.takeId} kept as a candidate: ${projectId.slice(0, 8)}/${sceneId} has a newer selection`);
+    return null;
+  });
+  return scene ? { ...attached, scene } : attached;
+}
+
 const hook = createMediaJobImageHook({
   label: 'music-video scene-video',
   initLog: '🎬 Music Video scene-video hook initialized',
@@ -93,7 +107,7 @@ const hook = createMediaJobImageHook({
   attach: async ({ projectId, sceneId, videoHistoryId, job }) => {
     const firstFrame = storyboardFirstFrameFile(job.result);
     const extend = await extendRecord(job.params?.musicVideoExtend, videoHistoryId);
-    return appendSceneTakes(projectId, sceneId, [
+    const attached = await appendSceneTakes(projectId, sceneId, [
     // A clip rendered from a storyboard panel files the first frame it was animated
     // from as a still take too (a new take fills only an empty slot).
     ...(firstFrame ? [{ kind: 'image', assetId: firstFrame, source: 'generated', provider: 'portos',
@@ -128,6 +142,7 @@ const hook = createMediaJobImageHook({
     // #16136: the shot card's Render draft / Render final.
     tier: job.params?.musicVideo?.tier ?? null,
   }]);
+    return selectOverSource(projectId, sceneId, attached, job);
   },
   onAttached: ({ projectId, sceneId, videoHistoryId }, { scene, appended }) => {
     const still = appended.find((take) => take.kind === 'image');

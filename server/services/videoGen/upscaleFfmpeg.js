@@ -86,6 +86,11 @@ export const padSourceForUpscale = async (sourcePath, outPath, {
  * at offset zero — the adapter is a spatial upscaler, so the timeline it was
  * handed is the timeline that comes back.
  *
+ * The frame bound is a `trim` inside the filter graph, not `-frames:v`: once
+ * an output stream reaches `-frames:v` ffmpeg finishes the whole file, which
+ * cut the stream-copied audio off at the last video frame and dropped the tail
+ * of every source whose audio outlasts its video (#19985).
+ *
  * `-map 1:a:0?` is optional-by-suffix: a source with no audio track yields a
  * silent output rather than an ffmpeg failure, which is the #6511 contract.
  *
@@ -110,17 +115,17 @@ export const finalizeUpscaleOutput = async (renderedPath, outPath, {
     args: [
       '-i', renderedPath,
       '-i', audioSourcePath,
-      '-filter_complex', `[0:v]${await withColorTag([`crop=${width}:${height}:0:0`, ...(squarePixels ? ['setsar=1'] : [])])}[v]`,
+      '-filter_complex', `[0:v]${await withColorTag([`trim=end_frame=${Math.round(frameCount)}`, `crop=${width}:${height}:0:0`, ...(squarePixels ? ['setsar=1'] : [])])}[v]`,
       '-map', '[v]',
       '-map', '1:a:0?',
       ...H264_ENCODE_ARGS,
       ...BT709_CONTAINER_ARGS,
       '-c:a', 'copy',
-      // The ONLY length bound. Never add `-shortest` (or `-t`): an AAC track
-      // routinely runs a few ms short of its video, and either would trim the
-      // video to match (#6514). The source's own container pairs these two
-      // lengths already, so the deliverable keeps both.
-      '-frames:v', String(Math.round(frameCount)),
+      // No output length bound: the `trim` above bounds the video. Never add
+      // `-shortest` (or `-t`): an AAC track routinely runs a few ms short of
+      // its video, and either would trim the video to match (#6514). The
+      // source's own container pairs these two lengths already, so the
+      // deliverable keeps both.
       '-movflags', '+faststart',
       '-y', outPath,
     ],

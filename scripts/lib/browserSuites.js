@@ -41,6 +41,7 @@ const BROWSER_SUITE_OWNERS = {
   'server/routes/autofixerUi.browser.test.js': 1,
   'server/services/musicVideo/overlayTextService.browser.test.js': 2,
   'server/services/codeAnimation/poster.realBrowser.test.js': 1,
+  'server/services/videoGen/realesrganUpscale.browser.test.js': 2,
 };
 export const BROWSER_SUITES = Object.keys(BROWSER_SUITE_OWNERS);
 export const FULL_BROWSER_SHARD_COUNT = 7;
@@ -86,6 +87,7 @@ const FOUR_SHARD_OWNERS = {
   'server/routes/autofixerUi.browser.test.js': 1,
   'server/services/musicVideo/overlayTextService.browser.test.js': 4,
   'server/services/codeAnimation/poster.realBrowser.test.js': 2,
+  'server/services/videoGen/realesrganUpscale.browser.test.js': 2,
 };
 
 // Seven-shard smoke and full share owners so a shard can restore its own memo.
@@ -130,6 +132,7 @@ const FULL_SHARD_OWNERS = {
   'server/routes/autofixerUi.browser.test.js': 3,
   'server/services/musicVideo/overlayTextService.browser.test.js': 5,
   'server/services/codeAnimation/poster.realBrowser.test.js': 4,
+  'server/services/videoGen/realesrganUpscale.browser.test.js': 1,
 };
 
 // Moving the serial GPU suite (82s on smoke run 45081031945) splits it from

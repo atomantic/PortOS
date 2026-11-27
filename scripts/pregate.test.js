@@ -240,6 +240,10 @@ describe('pregate hidden-content invocation', () => {
     scratch = template.scratch;
     git('config', 'core.hooksPath', join(scratch, 'empty-hooks'));
     git('config', 'core.excludesFile', join(scratch, 'empty-excludes'));
+    // Keep fixture commits as loose objects; Git 2.54+ auto-maintenance can repack
+    // the template during `beforeAll`, removing the loose blob that the corrupt-object test deletes.
+    git('config', 'maintenance.auto', 'false');
+    git('config', 'gc.auto', '0');
     // Copy the real builtin-only entrypoints so REPO_ROOT targets this fixture.
     // Docs-only changes select no test owners; full plans still have a native inventory.
     for (const path of [

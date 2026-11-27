@@ -138,13 +138,16 @@ describe('upscaleHistoryItem — method selection', () => {
 
   it('rejects an unknown method before reading the history file', async () => {
     const { loadHistory } = await import('./history.js');
-    await expect(upscaleHistoryItem(SOURCE_ID, { method: 'realesrgan' }))
+    await expect(upscaleHistoryItem(SOURCE_ID, { method: 'bogus' }))
       .rejects.toMatchObject({ status: 400, code: 'VALIDATION_ERROR' });
     expect(loadHistory).not.toHaveBeenCalled();
   });
 
   it('refuses to run the generative method inline — it belongs to the queue (#6511)', async () => {
     await expect(upscaleHistoryItem(SOURCE_ID, { method: 'ltx' }))
+      .rejects.toMatchObject({ status: 400, code: 'UPSCALE_METHOD_NOT_INLINE' });
+    // The local Real-ESRGAN lane is a queued GPU job too (#19985).
+    await expect(upscaleHistoryItem(SOURCE_ID, { method: 'realesrgan' }))
       .rejects.toMatchObject({ status: 400, code: 'UPSCALE_METHOD_NOT_INLINE' });
   });
 
@@ -351,7 +354,7 @@ describe('planUpscaleHistoryItem', () => {
   });
 
   it('rejects an unknown method and the same bad-id statuses as the action', async () => {
-    await expect(planUpscaleHistoryItem(SOURCE_ID, { method: 'realesrgan' }))
+    await expect(planUpscaleHistoryItem(SOURCE_ID, { method: 'bogus' }))
       .rejects.toMatchObject({ status: 400, code: 'VALIDATION_ERROR' });
     await expect(planUpscaleHistoryItem('not-a-uuid')).rejects.toMatchObject({ status: 400 });
     state.history = [];

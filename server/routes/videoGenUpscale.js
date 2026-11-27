@@ -1,4 +1,4 @@
-/** Plan and run local and Topaz video upscales. */
+/** Plan and run local (Lanczos, LTX, Real-ESRGAN) and cloud (fal SeedVR2, Topaz) video upscales. */
 
 import { Router } from 'express';
 import { asyncHandler, failValidation } from '../lib/errorHandler.js';
@@ -6,6 +6,9 @@ import { validateRequest } from '../lib/validateRequest.js';
 import { upscaleHistoryItem, planUpscaleHistoryItem } from '../services/videoGen/local.js';
 import { enqueueLtxUpscale } from '../services/videoGen/upscaleJob.js';
 import { enqueueFalSeedvr2Upscale } from '../services/videoGen/falUpscaleJob.js';
+import { enqueueRealesrganUpscale } from '../services/videoGen/realesrganUpscaleJob.js';
+import { streamRealesrganInstall } from '../services/videoGen/realesrganRuntime.js';
+import { openSseStream, onClientDisconnect } from '../lib/sseDownload.js';
 import { quoteTopaz } from '../services/videoGen/topazQuote.js';
 import { assertNoPendingTopaz, enqueueTopazUpscale, reconcileTopazStatus, recoverTopazResult } from '../services/videoGen/topazJob.js';
 import { historyIdSchema, topazJobParamsSchema, topazQuoteBodySchema, topazTokenBodySchema, upscaleMethodSchema } from '../lib/videoGenValidation.js';
@@ -42,6 +45,14 @@ router.post('/upscale/:id/topaz', asyncHandler(async (req, res) => {
   res.json({ ok: true, job: await enqueueTopazUpscale(parsed.data, body.token) });
 }));
 
+// The explicit Real-ESRGAN setup (#19985): the only request that downloads the
+// pinned release, unpacks it and checks every weight on this GPU. The plan
+// endpoint below reports readiness without ever reaching this.
+router.post('/upscale/realesrgan/install', asyncHandler(async (req, res) => {
+  const { send, safeEnd } = openSseStream(res);
+  await streamRealesrganInstall({ send, safeEnd, onDisconnect: (handler) => onClientDisconnect(req, res, handler) });
+}));
+
 // What the user must see BEFORE submitting (#6509): source geometry, the target
 // the method would produce, the padding the model grid needs, and whether this
 // machine can actually run the method. Read-only — it queues no job and pulls
@@ -71,6 +82,11 @@ router.post('/upscale/:id', asyncHandler(async (req, res) => {
   }
   if (body.data.method === 'fal-seedvr2') {
     res.json({ ok: true, job: await enqueueFalSeedvr2Upscale(parsed.data, body.data) });
+    return;
+  }
+  if (body.data.method === 'realesrgan') {
+    const { realesrganModel, musicVideoProjectId, sceneId } = body.data;
+    res.json({ ok: true, job: await enqueueRealesrganUpscale(parsed.data, { realesrganModel, musicVideoProjectId, sceneId }) });
     return;
   }
   const entry = await upscaleHistoryItem(parsed.data, body.data);

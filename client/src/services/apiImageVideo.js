@@ -351,10 +351,11 @@ export const extractLastFrame = (id, options = {}) => request(`/video-gen/last-f
 // spread so it can never collide with the HTTP `method: 'POST'` fetch config
 // below — an omitted `method` sends exactly the bare-POST request this
 // endpoint has always received, so existing mocks/tests keep matching.
-export const upscaleVideo = (id, { method, targetResolution, musicVideoProjectId, sceneId, ...options } = {}) => {
+export const upscaleVideo = (id, { method, targetResolution, realesrganModel, musicVideoProjectId, sceneId, ...options } = {}) => {
   const payload = {
     ...(method != null ? { method } : {}),
     ...(targetResolution != null ? { targetResolution } : {}),
+    ...(realesrganModel != null ? { realesrganModel } : {}),
     ...(musicVideoProjectId != null ? { musicVideoProjectId } : {}),
     ...(sceneId != null ? { sceneId } : {}),
   };
@@ -377,10 +378,13 @@ export const recoverTopazJob = (id, options = {}) => request(`/video-gen/upscale
 // required padding, and runtime/adapter readiness for `method`. Never queues a
 // job or triggers a download. `silent` by default — the picker owns its own
 // inline error state rather than a toast.
-export const getUpscalePlan = (id, method, options = {}) => request(
-  `/video-gen/upscale/${encodeURIComponent(id)}/plan?method=${encodeURIComponent(method)}`,
+export const getUpscalePlan = (id, method, { realesrganModel, ...options } = {}) => request(
+  `/video-gen/upscale/${encodeURIComponent(id)}/plan?method=${encodeURIComponent(method)}${realesrganModel ? `&realesrganModel=${encodeURIComponent(realesrganModel)}` : ''}`,
   { silent: true, ...options },
 );
+// POST SSE stream for the explicit Real-ESRGAN setup (#19985): downloads the
+// pinned release, verifies it and checks each weight on this GPU.
+export const realesrganInstallUrl = () => `${API_BASE}/video-gen/upscale/realesrgan/install`;
 // Live-progress URL for the generative upscale adapter's HF pull, for a small
 // inline "Download adapter" control in the upscale picker. `key` is
 // `plan.adapter.key` from getUpscalePlan — the same key the server's generic

@@ -21,7 +21,7 @@ import {
   MAX_VIDEO_REFERENCE_LABEL_LENGTH,
   PREVIEW_UPLOAD_FIELDS,
   UPSCALE_METHODS, DEFAULT_UPSCALE_METHOD,
-  FAL_SEEDVR2_TARGET_RESOLUTIONS,
+  FAL_SEEDVR2_TARGET_RESOLUTIONS, REALESRGAN_MODEL_IDS,
 } from './videoGenRequestFields.js';
 import { IC_LORA_MODE_VALUES, listIcLoraRemixModes } from './icLoraWeights.js';
 import { VIDEO_STREAMING_MODES } from './videoStreamingMode.js';
@@ -531,6 +531,7 @@ export const historyIdSchema = z.string().regex(
 export const upscaleMethodSchema = z.object({
   method: z.enum(UPSCALE_METHODS).default(DEFAULT_UPSCALE_METHOD),
   targetResolution: z.enum(FAL_SEEDVR2_TARGET_RESOLUTIONS).optional(),
+  realesrganModel: z.enum(REALESRGAN_MODEL_IDS).optional(),
   musicVideoProjectId: z.string().min(1).max(128).optional(),
   sceneId: z.string().min(1).max(128).optional(),
 });

@@ -5,13 +5,21 @@ import { finalTierCounts, sceneClipIsFinal, sceneFinalApproved, selectedVideoTak
 import { upgradeMusicVideoShots } from '../../services/apiMusicVideo.js';
 import { formatUsd } from '../../utils/formatters.js';
 import toast from '../ui/Toast';
+import RealesrganInstallButton from '../media/RealesrganInstallButton';
 
 const UPGRADE_METHODS = Object.freeze([
-  { id: 'upscale', label: 'Upscale the draft', help: 'Keeps the exact approved take and runs the 2x upscaler over it; the upscaled take is selected. No provider spend.' },
+  { id: 'upscale', label: 'Upscale the draft', help: 'Keeps the exact approved take and runs a 2x upscaler over it; the upscaled take is selected. No provider spend.' },
   { id: 'rerender', label: 'Re-render at final', help: "Renders a new final-resolution take from the same prompt and frames. Models have no seed to repeat, so it lands beside the draft unselected: compare them on the shot and pick it." },
 ]);
 
+// Upscalers an `upscale` upgrade can run (#19985); Real-ESRGAN is an opt-in local install.
+const UPSCALERS = Object.freeze([
+  { id: 'lanczos', label: 'Lanczos (fast, pixel-faithful)' },
+  { id: 'realesrgan', label: 'Real-ESRGAN (local GPU, adds detail)' },
+]);
+
 const SKIP_LABELS = Object.freeze({
+  'upscaler-not-ready': 'the upscaler is not installed',
   'no-clip': 'no clip selected',
   'already-final': 'already final',
   'not-approved': 'not approved',
@@ -27,6 +35,7 @@ function upgradePriceLabel(plan) {
 
 function resultLabel(result) {
   if (!result.ok) return result.error || SKIP_LABELS[result.status] || 'not upgraded';
+  if (result.queued) return 'Real-ESRGAN upscale queued; the final take is selected when it lands';
   return result.method === 'upscale' ? 'upscaled; the final take is selected' : 'final render queued; it lands beside the draft';
 }
 
@@ -39,6 +48,9 @@ export default function FinalUpgradePanel({ project, shotName, disabled = false,
   const ids = useId();
   const [open, setOpen] = useState(false);
   const [method, setMethod] = useState('upscale');
+  const [upscaleMethod, setUpscaleMethod] = useState('lanczos');
+  // Bumped after a Real-ESRGAN install so the dry run asks again.
+  const [installs, setInstalls] = useState(0);
   const [plan, setPlan] = useState(null);
   const [planError, setPlanError] = useState('');
   const [running, setRunning] = useState(false);
@@ -49,14 +61,15 @@ export default function FinalUpgradePanel({ project, shotName, disabled = false,
   const drafts = scenes.filter((scene) => selectedVideoTake(scene) && !sceneClipIsFinal(scene));
   const approved = drafts.filter(sceneFinalApproved);
   // The dry run answers these approvals under this method; any change to them asks again.
-  const planKey = JSON.stringify([method, approved.map((scene) => [scene.sceneId, scene.finalApproval?.takeId, scene.finalApproval?.revision]), project?.videoSettings]);
+  const planKey = JSON.stringify([method, method === 'upscale' ? upscaleMethod : null, installs, approved.map((scene) => [scene.sceneId, scene.finalApproval?.takeId, scene.finalApproval?.revision]), project?.videoSettings]);
+  const upgradeBody = method === 'upscale' ? { method, upscaleMethod } : { method };
 
   useEffect(() => {
     setPlan(null);
     setPlanError('');
     if (!open || !approved.length) return undefined;
     let active = true;
-    upgradeMusicVideoShots(project.id, { method, dryRun: true }, { silent: true })
+    upgradeMusicVideoShots(project.id, { ...upgradeBody, dryRun: true }, { silent: true })
       .then((next) => { if (active) setPlan(next); })
       .catch((err) => { if (active) setPlanError(err?.message || 'Could not price the upgrade'); });
     return () => { active = false; };
@@ -76,13 +89,14 @@ export default function FinalUpgradePanel({ project, shotName, disabled = false,
   const run = async () => {
     setRunning(true);
     setResults(null);
-    const outcome = await upgradeMusicVideoShots(project.id, { method }, { silent: true })
+    const outcome = await upgradeMusicVideoShots(project.id, upgradeBody, { silent: true })
       .catch((err) => { toast.error(err?.message || 'Could not upgrade the shots'); return null; });
     setRunning(false);
     if (!outcome) return;
     setResults(outcome.results || []);
     const done = (outcome.results || []).filter((result) => result.ok).length;
-    toast.success(`${method === 'upscale' ? 'Upscaled' : 'Queued final renders for'} ${done} of ${outcome.results?.length || 0} shots`);
+    const verb = method !== 'upscale' ? 'Queued final renders for' : upscaleMethod === 'realesrgan' ? 'Queued Real-ESRGAN upscales for' : 'Upscaled';
+    toast.success(`${verb} ${done} of ${outcome.results?.length || 0} shots`);
   };
   const name = (sceneId) => {
     const scene = scenes.find((entry) => entry.sceneId === sceneId);
@@ -135,7 +149,24 @@ export default function FinalUpgradePanel({ project, shotName, disabled = false,
               <span><span className="font-medium">{option.label}</span> <span className="text-port-text-muted">{option.help}</span></span>
             </label>
           ))}
+          {method === 'upscale' && (
+            <div className="flex min-w-0 flex-wrap items-center gap-2 pl-6">
+              <label htmlFor={`${ids}-upscaler`} className="text-port-text-muted">Upscaler</label>
+              <select id={`${ids}-upscaler`} value={upscaleMethod} onChange={(event) => { setUpscaleMethod(event.target.value); setResults(null); }}
+                className="min-h-[44px] rounded border border-port-border bg-port-bg p-1 pointer-fine:sm:min-h-0">
+                {UPSCALERS.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
+              </select>
+            </div>
+          )}
         </fieldset>
+        {method === 'upscale' && upscaleMethod === 'realesrgan' && plan?.upscalerReason && (
+          <p role="alert" className="flex min-w-0 flex-wrap items-center gap-2 text-port-warning">
+            <span>{plan.upscalerReason}</span>
+            {plan.upscalerSupported !== false && (
+              <RealesrganInstallButton installTarget={plan.upscalerInstallTarget} onInstalled={() => setInstalls((n) => n + 1)} />
+            )}
+          </p>
+        )}
         {!approved.length && <p className="text-port-text-muted">Tick at least one draft shot to upgrade it.</p>}
         {planError && <p role="alert" className="text-port-error">{planError}</p>}
         {plan && (
@@ -143,7 +174,7 @@ export default function FinalUpgradePanel({ project, shotName, disabled = false,
             {plan.shots.map((shot) => (
               <li key={shot.sceneId} className={shot.status === 'ready' ? '' : 'text-port-text-muted'}>
                 {name(shot.sceneId)}: {shot.status === 'ready'
-                  ? `${shot.method === 'upscale' ? 'upscale 2x' : `re-render at ${shot.resolution}`}${shot.costUsd == null ? ' · price unknown' : shot.costUsd ? ` · ${formatUsd(shot.costUsd)}` : ''}`
+                  ? `${shot.method === 'upscale' ? `upscale 2x${shot.upscaleMethod === 'realesrgan' ? ' with Real-ESRGAN' : ''}` : `re-render at ${shot.resolution}`}${shot.costUsd == null ? ' · price unknown' : shot.costUsd ? ` · ${formatUsd(shot.costUsd)}` : ''}`
                   : SKIP_LABELS[shot.status] || shot.status}
               </li>
             ))}

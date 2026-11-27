@@ -5,6 +5,7 @@ import { finalApprovalPatch } from '../../../../server/lib/musicVideo/musicVideo
 const upgradeMusicVideoShots = vi.fn();
 vi.mock('../../services/apiMusicVideo.js', () => ({ upgradeMusicVideoShots: (...args) => upgradeMusicVideoShots(...args) }));
 vi.mock('../ui/Toast');
+vi.mock('../media/RealesrganInstallButton', () => ({ default: () => <button type="button">Install Real-ESRGAN</button> }));
 
 const { default: FinalUpgradePanel } = await import('./FinalUpgradePanel.jsx');
 
@@ -39,7 +40,7 @@ it('prices each method with a dry run before the upgrade runs, then reports each
   expect(screen.getByTestId('final-upgrade-run').disabled).toBe(true);
   expect(screen.getByTestId('final-upgrade-run').textContent).toContain('pricing…');
   await waitFor(() => expect(screen.getByTestId('final-upgrade-run').textContent).toBe('Upgrade approved (1) · no provider cost'));
-  expect(upgradeMusicVideoShots).toHaveBeenLastCalledWith('p1', { method: 'upscale', dryRun: true }, { silent: true });
+  expect(upgradeMusicVideoShots).toHaveBeenLastCalledWith('p1', { method: 'upscale', upscaleMethod: 'lanczos', dryRun: true }, { silent: true });
 
   fireEvent.click(screen.getByLabelText(/Re-render at final/));
   await waitFor(() => expect(screen.getByTestId('final-upgrade-run').textContent).toBe('Upgrade approved (1) · $1.50'));
@@ -91,4 +92,39 @@ it('drops the plan when an approval stops matching, so a stale price is never of
   rerender(<FinalUpgradePanel project={{ id: 'p1', scenes: [{ ...approved, prompt: 'a new prompt' }] }} shotName={shotName} onApprove={vi.fn()} />);
   expect(screen.queryByTestId('final-upgrade-plan')).toBeNull();
   expect(screen.queryByTestId('final-upgrade-run')).toBeNull();
+});
+
+// #19985: an upscale upgrade can run the opt-in local Real-ESRGAN lane; the dry run reports its
+// readiness, offers the install in place, and a run reports queued shots rather than selected ones.
+it('plans and queues a Real-ESRGAN upscale, offering the install while it is missing', async () => {
+  let installed = false;
+  upgradeMusicVideoShots.mockImplementation(async (_id, body) => {
+    const ready = body.upscaleMethod !== 'realesrgan' || installed;
+    const plan = {
+      dryRun: true, method: 'upscale', upscaleMethod: body.upscaleMethod, totalCostUsd: 0,
+      upscalerReason: ready ? null : 'Real-ESRGAN (ncnn Vulkan) is not installed on this machine.',
+      shots: [ready
+        ? { sceneId: 's0', status: 'ready', method: 'upscale', upscaleMethod: body.upscaleMethod, costUsd: 0 }
+        : { sceneId: 's0', status: 'upscaler-not-ready', upscaleMethod: body.upscaleMethod }],
+    };
+    return body.dryRun ? plan : { ...plan, dryRun: false, results: [{ sceneId: 's0', ok: true, method: 'upscale', jobId: 'job-up', queued: true }] };
+  });
+  const project = { id: 'p1', videoSettings: {}, scenes: [approve(shot(0))] };
+  const view = render(<FinalUpgradePanel project={project} shotName={shotName} onApprove={vi.fn()} />);
+  openPanel();
+  await screen.findByTestId('final-upgrade-plan');
+  fireEvent.change(screen.getByLabelText('Upscaler'), { target: { value: 'realesrgan' } });
+  await waitFor(() => expect(upgradeMusicVideoShots).toHaveBeenLastCalledWith('p1', { method: 'upscale', upscaleMethod: 'realesrgan', dryRun: true }, { silent: true }));
+  expect(await screen.findByText(/not installed on this machine/)).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'Install Real-ESRGAN' })).toBeTruthy();
+  expect(screen.getByTestId('final-upgrade-plan').textContent).toContain('Shot 0: the upscaler is not installed');
+  expect(screen.getByTestId('final-upgrade-run').disabled).toBe(true);
+
+  installed = true;
+  view.rerender(<FinalUpgradePanel project={{ ...project, videoSettings: { refreshed: true } }} shotName={shotName} onApprove={vi.fn()} />);
+  await waitFor(() => expect(screen.getByTestId('final-upgrade-plan').textContent).toContain('Shot 0: upscale 2x with Real-ESRGAN'));
+  fireEvent.click(screen.getByTestId('final-upgrade-run'));
+  await screen.findByTestId('final-upgrade-results');
+  expect(upgradeMusicVideoShots).toHaveBeenLastCalledWith('p1', { method: 'upscale', upscaleMethod: 'realesrgan' }, { silent: true });
+  expect(screen.getByTestId('final-upgrade-results').textContent).toContain('Shot 0: Real-ESRGAN upscale queued; the final take is selected when it lands');
 });

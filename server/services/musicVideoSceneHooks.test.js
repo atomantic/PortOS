@@ -76,7 +76,7 @@ describe('music-video scene completion hooks → takes', () => {
       writeFileSync(join(TEST_DATA_ROOT, 'images', `${name}.png`), 'synthetic image');
     }
     mkdirSync(join(TEST_DATA_ROOT, 'videos'), { recursive: true });
-    const clips = ['clip-1', 'clip-2', 'clip-old', 'late-clip', 'clip-ok', 'clip-guided', 'clip-draft', 'clip-final', 'clip-plain'];
+    const clips = ['clip-1', 'clip-2', 'clip-old', 'late-clip', 'clip-ok', 'clip-guided', 'clip-draft', 'clip-final', 'clip-plain', 'clip-up', 'clip-up-late'];
     for (const id of clips) writeFileSync(join(TEST_DATA_ROOT, 'videos', `${id}.mp4`), 'synthetic clip');
     writeFileSync(join(TEST_DATA_ROOT, 'video-history.json'), JSON.stringify(clips.map(id => ({ id, filename: `${id}.mp4` }))));
     imageHook.__testing.reset();
@@ -252,6 +252,34 @@ describe('music-video scene completion hooks → takes', () => {
       ['video', 'clip-2', 'frame-a.png'],
     ]);
     expect(emitted[1]).toMatchObject({ event: 'scene-video', videoHistoryId: 'clip-1' });
+  });
+
+  // #19985: a queued upgrade upscale lands as a final take and becomes the clip only while the shot
+  // still uses the draft it upscaled; a director's newer pick is kept.
+  it('selects a queued upgrade upscale over its source draft, but never over a newer selection', async () => {
+    await projects.updateScene(project.id, scene.sceneId, { referenceImageId: 'frame-a.png' });
+    mediaJobEvents.emit('completed', videoJob(project.id, scene.sceneId, 'clip-1'));
+    mediaJobEvents.emit('completed', videoJob(project.id, scene.sceneId, 'clip-2'));
+    await waitFor(() => emitted.length === 2);
+    const upscale = (resultId, sourceId) => ({
+      kind: 'video-upscale', id: `job-${resultId}`,
+      params: { mode: 'realesrgan', historyId: sourceId, prompt: 'slow dolly (2× Real-ESRGAN)', musicVideo: { projectId: project.id, sceneId: scene.sceneId, tier: 'final', selectOverSource: true } },
+      result: { generationId: `job-${resultId}`, id: resultId },
+    });
+    mediaJobEvents.emit('completed', upscale('clip-up', 'clip-1'));
+    await waitFor(() => emitted.length === 3);
+    let stored = await sceneOf(project.id, scene.sceneId);
+    expect(stored.videoHistoryId).toBe('clip-up');
+    expect(stored.takes.find((t) => t.assetId === 'clip-up')).toMatchObject({ kind: 'video', tier: 'final', jobId: 'job-clip-up' });
+    expect(emitted[2]).toMatchObject({ event: 'scene-video', videoHistoryId: 'clip-up' });
+
+    const second = stored.takes.find((t) => t.assetId === 'clip-2');
+    await projects.selectSceneTake(project.id, scene.sceneId, second.takeId);
+    mediaJobEvents.emit('completed', upscale('clip-up-late', 'clip-1'));
+    await waitFor(() => emitted.length === 4);
+    stored = await sceneOf(project.id, scene.sceneId);
+    expect(stored.videoHistoryId).toBe('clip-2');
+    expect(stored.takes.find((t) => t.assetId === 'clip-up-late')).toMatchObject({ tier: 'final', status: 'candidate' });
   });
 
   it('records the tier a draft or final clip was rendered at (#16136), and none on an untiered clip', async () => {

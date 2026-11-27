@@ -31,6 +31,7 @@ const collectionOwned = job => ['deckCard', 'moodBoardPoster', 'storyboardPanelR
 const mediaRuntimeLoaders = {
   topazUpscale: () => import('./videoGen/topazJob.js'),
   falUpscale: () => import('./videoGen/falUpscaleJob.js'),
+  realesrganUpscale: () => import('./videoGen/realesrganUpscaleJob.js'),
   ltxUpscale: () => import('./videoGen/upscaleJob.js'),
   stitch: () => import('./videoGen/stitchJob.js'),
   vertical: () => import('./videoGen/verticalJob.js'),
