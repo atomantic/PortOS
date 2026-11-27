@@ -41,7 +41,7 @@ vi.mock('./auth.js', async () => {
     verifyPassword: async (password) => password === 'instance-password',
   };
 });
-vi.mock('./eidoverseTravel.js', () => ({ hasValidEidoverseGuestCookie: async () => false }));
+vi.mock('./eidoverseTravel.js', () => ({ getEidoverseGuestSession: async () => null }));
 
 const servers = [];
 const webSocketServers = [];

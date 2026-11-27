@@ -236,7 +236,7 @@ describe('registered-peer Eidoverse guest workflow over HTTP', () => {
   });
 });
 
-describe('federated guest renderer admission on a password-protected install', () => {
+describe('federated guest renderer admission', () => {
   const open = [];
   afterEach(() => {
     vi.useRealTimers();
@@ -245,8 +245,18 @@ describe('federated guest renderer admission on a password-protected install', (
 
   // The production mount order: authGate, then the Eidoverse proxy, then the API.
   const startHost = async () => {
-    const upstream = createServer((_req, res) => res.end('sequencer'));
-    open.push(new WebSocketServer({ server: upstream }), upstream);
+    const requests = [];
+    const upstream = createServer((req, res) => {
+      requests.push(req.url);
+      res.end('sequencer');
+    });
+    const frames = [];
+    const sequencer = new WebSocketServer({ server: upstream });
+    sequencer.on('connection', (ws) => ws.on('message', (data) => {
+      frames.push(JSON.parse(data.toString()));
+      ws.send(JSON.stringify({ type: 'received' }));
+    }));
+    open.push(sequencer, upstream);
     upstream.listen(0, '127.0.0.1');
     await once(upstream, 'listening');
     const proxy = { isActive: () => true, targetPort: upstream.address().port, getProtocol: () => 'http' };
@@ -262,7 +272,7 @@ describe('federated guest renderer admission on a password-protected install', (
     host.listen(0, '127.0.0.1');
     await once(host, 'listening');
     auth.enabled = true;
-    return { port: host.address().port, url: `http://127.0.0.1:${host.address().port}` };
+    return { port: host.address().port, url: `http://127.0.0.1:${host.address().port}`, requests, frames };
   };
   const admit = async (body = {}) => (await (await post('/visit', body)).json()).sessionId;
   const enter = async (url, ticket, headers = {}) => {
@@ -270,8 +280,8 @@ describe('federated guest renderer admission on a password-protected install', (
     return { status: response.status, setCookie: response.headers.get('set-cookie') };
   };
   const get = async (url, path, cookie) => (await fetch(`${url}${path}`, { headers: cookie ? { cookie } : {} })).status;
-  const openSocket = (port, cookie, headers = {}) => new Promise((settle, reject) => {
-    const client = new WebSocket(`ws://127.0.0.1:${port}/ws`, { headers: { cookie, ...headers } });
+  const openSocket = (port, cookie, headers = {}, path = '/ws') => new Promise((settle, reject) => {
+    const client = new WebSocket(`ws://127.0.0.1:${port}${path}`, { headers: { cookie, ...headers } });
     open.push(client);
     client.once('open', () => settle(client));
     client.once('unexpected-response', (_req, response) => { response.resume(); settle(response.statusCode); });
@@ -305,6 +315,56 @@ describe('federated guest renderer admission on a password-protected install', (
     await closed;
     expect(await get(url, '/eidoverse-host/main.js', cookie)).toBe(401);
     expect(await openSocket(port, cookie)).toBe(401);
+  });
+
+  it.each([true, false])('limits ticket HTTP access to renderer reads (password enabled: %s)', async (enabled) => {
+    const { url, requests } = await startHost();
+    auth.enabled = enabled;
+    const ticket = await admit();
+    const { setCookie } = await enter(url, ticket);
+    const headers = { cookie: setCookie.split(';')[0] };
+    expect((await fetch(`${url}/eidoverse-host/main.js`, { method: 'HEAD', headers })).status).toBe(200);
+    for (const [method, path] of [['POST', '/eidoverse-host/upload'], ['PUT', '/version'],
+      ['GET', '/eidoverse-host/auth'], ['HEAD', '/logout'], ['GET', '/seat-profile'], ['GET', '/perflog']]) {
+      expect((await fetch(`${url}${path}`, { method, headers })).status).toBe(403);
+    }
+    expect(requests).toEqual(['/main.js']);
+    const operatorHeaders = { ...headers, authorization: 'Bearer operator-session' };
+    expect((await fetch(`${url}/auth`, { headers: operatorHeaders })).status).toBe(200);
+    await receiveEidoverseLeave('origin-instance', { sessionId: ticket });
+  });
+
+  it('relays visitor traffic only after joining the assigned seat and checks each later join', async () => {
+    const { port, url, frames } = await startHost();
+    const ticket = await admit();
+    const { setCookie } = await enter(url, ticket);
+    const cookie = setCookie.split(';')[0];
+    const join = { type: 'join', world: 'example-world', id: 'guest-example', guest: true, replica: true };
+    expect(await openSocket(port, cookie, {}, '/eidoverse-host/auth')).toBe(403);
+    const socket = await openSocket(port, cookie, {}, '/eidoverse-host/ws');
+    const exchange = async (message) => {
+      const received = once(socket, 'message');
+      socket.send(JSON.stringify(message));
+      expect(JSON.parse((await received)[0].toString())).toEqual({ type: 'received' });
+    };
+    await exchange(join);
+    await exchange({ type: 'ping' });
+    expect(frames).toEqual([{ ...join, agent: false, avatar: 'eidoverse/assets/vrms/claude.vrm' }, { type: 'ping' }]);
+
+    const refused = async (visitor, message) => {
+      const closed = once(visitor, 'close');
+      visitor.send(message);
+      expect((await closed)[0]).toBe(1008);
+    };
+    await refused(socket, JSON.stringify({ ...join, id: 'another-example-visitor' }));
+    for (const message of [{ ...join, world: 'another-example-world' }, { ...join, agent: true },
+      { ...join, guest: false }, { type: 'ping' }]) {
+      await refused(await openSocket(port, cookie), JSON.stringify(message));
+    }
+    await refused(await openSocket(port, cookie), 'invalid json');
+    await refused(await openSocket(port, cookie), Buffer.from(JSON.stringify(join)));
+    expect(frames).toHaveLength(2);
+    await receiveEidoverseLeave('origin-instance', { sessionId: ticket });
   });
 
   it('refuses agent, unknown and forged tickets, and sets no cookie for them', async () => {

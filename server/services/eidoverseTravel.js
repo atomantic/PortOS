@@ -155,16 +155,16 @@ const isEnabledPeer = (peers, id) => peers.some((entry) => entry.id === id && en
 const guestTicket = (req) => parseCookie(req.headers?.cookie, EIDOVERSE_GUEST_COOKIE_NAME);
 
 /**
- * Does this request carry a live federated visitor's renderer ticket? Admits
+ * Resolve the visitor session behind this renderer ticket. Admits
  * only the Eidoverse proxy (authorizeEidoverseProxyRequest); authGate never
  * reads this cookie, so it opens no /api or /data route.
  */
-export async function hasValidEidoverseGuestCookie(req) {
+export async function getEidoverseGuestSession(req) {
   const ticket = guestTicket(req);
   const session = liveGuestSession(ticket);
-  if (!session || !isEnabledPeer(await getPeers(), session.peerId)) return false;
+  if (!session || !isEnabledPeer(await getPeers(), session.peerId)) return null;
   // The visit may have ended while the registry was being read.
-  return liveGuestSession(ticket) === session;
+  return liveGuestSession(ticket) === session ? session : null;
 }
 
 /** Tie an admitted renderer socket to its visit. False when the visit is already over. */
