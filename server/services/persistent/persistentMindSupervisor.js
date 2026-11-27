@@ -1,6 +1,3 @@
-import { normalizePersistentMindCapabilities } from '../../lib/persistent/persistentMindCapabilities.js';
-import { maintenance } from '../../lib/maintenanceAdmission.js';
-import { reconcileDeadOwnerReservations } from '../deadOwnerReservations.js';
 /**
  * Persistent CoS mind supervisor.
  *
@@ -11,79 +8,33 @@ import { reconcileDeadOwnerReservations } from '../deadOwnerReservations.js';
  * that adapter is registered, an explicitly started mind degrades visibly and
  * makes zero provider calls.
  */
-
-import { normalizePersistentMindMaintainer } from '../../lib/persistent/persistentMindMaintainer.js';
-import { canonicalStringify as maintainerCanonicalStringify } from '../../lib/objects.js';
+import { maintenance } from '../../lib/maintenanceAdmission.js';
+import { reconcileDeadOwnerReservations } from '../deadOwnerReservations.js';
 import { randomUUID } from 'crypto';
 import { getDomainMode } from '../../lib/domainAutonomy.js';
-import { isPersistentMindCallDenial } from '../../lib/persistent/persistentMindTrajectory.js';
 import {
   PERSISTENT_MIND_LIMITS,
-  holdPersistentMindWake,
-  isPersistentMindAttachmentId,
-  normalizePersistentMindMessageImage,
   nextPersistentMindWakeAt,
   normalizePersistentMindState,
-  persistentMindMessageFingerprint,
-  persistentMindMessageReceipt,
   persistentMindBackoffMs,
   persistentMindTurnIsStale,
-  persistentMindWakeConsumesAttempt,
-  requeuePersistentMindWake,
-  takeNextPersistentMindWake,
 } from '../../lib/persistent/persistentMind.js';
 import { isDaemonRunning, loadState, saveState, withStateLock } from '../cos/cosState.js';
-import {
-  attachmentFailure,
-  cleanupPersistentMindAttachments,
-  removePendingAttachmentMarker,
-  resolveMessageAttachments,
-} from './persistentMindAttachments.js';
+import { cleanupPersistentMindAttachments } from './persistentMindAttachments.js';
+import { cosEvents } from '../cos/cosEvents.js';
+import { schedule, cancel } from '../eventScheduler.js';
+import { appendMindEvent } from '../agent/agentRunEventLog.js';
+import { publicPersistentMindState } from '../../lib/persistent/persistentMindPublic.js';
+import { persistentMindWakeIntervalMs } from '../../lib/persistent/persistentMindProfile.js';
+import { isUsageLimitPauseReason } from '../../lib/persistent/persistentMindUsageLimit.js';
+import { admitPersistentMindMessage } from './persistentMindMessageIntake.js';
+import { createUsageLimitRecovery, turnHasLiveCall } from './persistentMindRecoveryProbes.js';
+import { createPersistentMindTurnRunner, quietSelfWake, releaseClaimedWake } from './persistentMindTurnRunner.js';
 
 export { createPersistentMindAttachment, deletePersistentMindAttachment } from './persistentMindAttachments.js';
-import { cosEvents, emitLog } from '../cos/cosEvents.js';
-import { schedule, cancel, getEvent } from '../eventScheduler.js';
-import { getDomainBudgetStatus, recordDomainUsage } from '../domainUsage.js';
-import { acquireLocalEndpointProviderSlot, localEndpointOfProvider, providerBaseUrl } from '../cos/cosLocalEndpointSlots.js';
-import { isOllamaBackedProvider } from '../../lib/aiToolkit/index.js';
-import { acquireCosActionReservation, acquireCosGlobalSlot } from '../cos/cosAdmissionReservations.js';
-import {
-  createPersistentMindCallBoundary,
-  persistentMindCapabilityGrantFingerprint,
-} from './persistentMindCallGuard.js';
-import { appendMindEvent } from '../agent/agentRunEventLog.js';
-import { resolvePersistentMindSelfThinkingRequest } from './persistentMindThinkingRequests.js';
-import { resolvePersistentMindProfile, resolvePersistentMindThinkingSession } from './persistentMindProfile.js';
-import { isUpdateInProgress } from '../updateChecker.js';
-import { publicPersistentMindState } from '../../lib/persistent/persistentMindPublic.js';
-import { normalizePersistentMindProfile, persistentMindWakeIntervalMs } from '../../lib/persistent/persistentMindProfile.js';
-import { getProviderById } from '../provider/providers.js';
-import {
-  findPersistentMindThinkingPreset,
-  normalizePersistentMindThinkingSelection,
-  samePersistentMindThinkingSelection,
-  PERSISTENT_MIND_THINKING_PRESET_LIMITS,
-} from '../../lib/persistent/persistentMindThinkingPresets.js';
-import {
-  imageCapabilityAllowsAttempt,
-  resolvePersistentMindImageCapability,
-} from './persistentMindImageCapability.js';
-import {
-  PROVIDER_USAGE_LIMIT_PAUSE_REASON,
-  isHardProviderUsageLimitError,
-  isUsageLimitPauseReason,
-  usageLimitProbeDelayMs,
-} from '../../lib/persistent/persistentMindUsageLimit.js';
-import {
-  contextBudgetPauseReasonFrom,
-  isContextBudgetFitnessError,
-} from '../../lib/persistent/persistentMindContextBudget.js';
-import { isProviderAvailable, markProviderUsageLimit } from '../provider/providerStatus.js';
-import { scrubSecretTokens } from '../../lib/secretText.js';
-
+export { PERSISTENT_MIND_USAGE_LIMIT_PROBE_EVENT_ID, persistentMindUsageLimitRetryAt } from './persistentMindRecoveryProbes.js';
 export const PERSISTENT_MIND_WAKE_EVENT_ID = 'cos-persistent-mind-wake';
 export const PERSISTENT_MIND_WATCHDOG_EVENT_ID = 'cos-persistent-mind-watchdog';
-export const PERSISTENT_MIND_USAGE_LIMIT_PROBE_EVENT_ID = 'cos-persistent-mind-usage-limit-probe';
 export const PERSISTENT_MIND_WATCHDOG_INTERVAL_MS = 30_000;
 // A watchdog tick that arrives this long after the previous one means this
 // process itself did not run in between (host sleep, VM suspend/snapshot, or a
@@ -91,75 +42,31 @@ export const PERSISTENT_MIND_WATCHDOG_INTERVAL_MS = 30_000;
 // so the heartbeat's age measures the pause rather than a dead turn.
 export const PERSISTENT_MIND_WATCHDOG_SUSPEND_GAP_MS = PERSISTENT_MIND_LIMITS.HEARTBEAT_STALE_WARNING_MS;
 
-let turnAdapter = null;
+const runtime = { adapter: null, controller: null, generation: 0, stopping: false };
 let activeRun = null;
-let activeAbortController = null;
-export const isPersistentMindTurnRunning = () => activeAbortController !== null;
-let runtimeGeneration = 0;
-let supervisorStopping = false;
-/** Zero-based attempt count for the in-flight usage-limit readiness probe. */
-let usageLimitProbeAttempt = 0;
+export const isPersistentMindTurnRunning = () => runtime.controller !== null;
+
 /** Wall time of the previous watchdog tick, to detect host suspend gaps. */
 let lastWatchdogCheckAt = null;
 /** Wall time this process was last seen resuming from such a gap. */
 let watchdogResumedAt = null;
-/**
- * Provider calls currently in flight, keyed by turn id. A stale heartbeat only
- * means the turn's pulse stopped; while a call is still open in THIS process
- * the thought may simply be long, so the watchdog consults this before it
- * interrupts. Empty after a process restart, so a turn orphaned by a restart
- * is still interrupted as before.
- */
-const inFlightCalls = new Map();
-const OLLAMA_LIVENESS_TIMEOUT_MS = 5_000;
 
-async function providerLivenessProbe(provider, model) {
-  if (!isOllamaBackedProvider(provider)) return { alive: true, reason: 'request open' };
-  const base = String(providerBaseUrl(provider) || '').replace(/\/+$/, '').replace(/\/v1$/, '');
-  if (!base) return { alive: true, reason: 'request open' };
-  const response = await fetch(`${base}/api/ps`, { signal: AbortSignal.timeout(OLLAMA_LIVENESS_TIMEOUT_MS) }).catch(() => null);
-  if (!response?.ok) return { alive: false, reason: 'Ollama is not responding' };
-  const data = await response.json().catch(() => null);
-  const models = Array.isArray(data?.models) ? data.models : [];
-  const loaded = models.some((m) => !model || m.name === model || m.model === model);
-  return loaded ? { alive: true, reason: 'model loaded' } : { alive: false, reason: `Ollama no longer has ${model || 'the model'} loaded` };
+const { resetUsageLimitProbe, scheduleUsageLimitProbe, checkPersistentMindUsageLimitRecovery } = createUsageLimitRecovery({
+  isStopping: () => runtime.stopping,
+  getPersistentMindState, mutateMindState, initialSelfWake, armWatchdog, scheduleNextWake, emitMindStatus,
+});
+export { checkPersistentMindUsageLimitRecovery };
+
+const { interruptActiveTurn, runOnePersistentMindTurn } = createPersistentMindTurnRunner({
+  runtime, getPersistentMindState, mutateMindState, emitMindStatus, scheduleUsageLimitProbe,
+  cancelWake: () => cancel(PERSISTENT_MIND_WAKE_EVENT_ID),
+});
+
+export function enqueuePersistentMindMessage(message) {
+  return admitPersistentMindMessage(message, {
+    mutateMindState, armWatchdog, scheduleNextWake, emitMindStatus, resetUsageLimitProbe,
+  });
 }
-
-
-function trackInFlightCall(turnId, provider, model, call) {
-  return async (meta, run) => {
-    const entry = { provider, model, startedAt: Date.now() };
-    const calls = inFlightCalls.get(turnId) || new Set();
-    calls.add(entry);
-    inFlightCalls.set(turnId, calls);
-    try {
-      return await call(meta, run);
-    } finally {
-      calls.delete(entry);
-      if (calls.size === 0) inFlightCalls.delete(turnId);
-    }
-  };
-}
-
-/**
- * Whether a stale-heartbeat turn still has a live provider call. Only a call
- * that is open in this process AND whose provider still answers counts.
- */
-async function turnHasLiveCall(turnId) {
-  const calls = inFlightCalls.get(turnId);
-  if (!calls?.size) return { alive: false, reason: 'no provider call in flight' };
-  for (const entry of calls) {
-    const result = await Promise.resolve(providerLivenessProbe(entry.provider, entry.model))
-      .catch((err) => ({ alive: false, reason: err?.message || 'liveness probe failed' }));
-    if (result?.alive) return { alive: true, reason: result.reason };
-    return { alive: false, reason: result?.reason || 'provider gone' };
-  }
-  return { alive: false, reason: 'no provider call in flight' };
-}
-
-const nowIso = () => new Date().toISOString();
-const errorMessage = (error) => String(error?.message || error || 'Persistent mind turn failed')
-  .slice(0, PERSISTENT_MIND_LIMITS.MAX_REASON_CHARS);
 
 async function mutateMindState(mutator) {
   return withStateLock(async () => {
@@ -178,66 +85,12 @@ async function mutateMindState(mutator) {
   });
 }
 
-const normalizeRequestedAttachmentIds = (images) => {
-  if (images === undefined) return [];
-  if (!Array.isArray(images) || images.length > PERSISTENT_MIND_LIMITS.MAX_MESSAGE_IMAGES) return null;
-  const ids = images.map((image) => {
-    const value = typeof image === 'string' ? image : image?.attachmentId;
-    return typeof value === 'string' ? value.trim() : null;
-  });
-  if (ids.some((id) => !id || !isPersistentMindAttachmentId(id))) return null;
-  if (new Set(ids).size !== ids.length) return null;
-  return ids;
-};
-
-const normalizeMessageText = (text) => (
-  typeof text === 'string' ? text.trim().slice(0, PERSISTENT_MIND_LIMITS.MAX_MESSAGE_CHARS) : ''
-);
-
-const imageIdsForMessage = (message) => (
-  Array.isArray(message?.images)
-    ? message.images.map((image) => image?.attachmentId).filter(isPersistentMindAttachmentId)
-    : []
-);
-
-const sameAttachmentIds = (left, right) => (
-  left.length === right.length && left.every((id, index) => id === right[index])
-);
-
-const findMessageById = (mind, messageId) => {
-  const queued = mind.queuedMessages.find((message) => message.id === messageId);
-  if (queued) return queued;
-  return mind.activeTurn?.wake.kind === 'message' && mind.activeTurn.wake.message.id === messageId
-    ? mind.activeTurn.wake.message
-    : null;
-};
-
-const claimedAttachmentsForMessage = (mind, messageId) => mind.pendingAttachments
-  .map((attachment, index) => ({ attachment, index }))
-  .filter(({ attachment }) => attachment.claimedBy === messageId)
-  .sort((left, right) => (
-    (left.attachment.claimIndex ?? Number.MAX_SAFE_INTEGER)
-      - (right.attachment.claimIndex ?? Number.MAX_SAFE_INTEGER)
-      || left.index - right.index
-  ))
-  .map(({ attachment }) => attachment);
-
-const messageFromAttachments = ({ id, text, createdAt, attachments, thinkingPresetId, thinkingPreset }) => ({
-  id,
-  text,
-  ...(attachments.length > 0 ? {
-    images: attachments.map(normalizePersistentMindMessageImage).filter(Boolean),
-  } : {}),
-  ...(thinkingPresetId ? { thinkingPresetId, thinkingPreset: thinkingPreset || null } : {}),
-  createdAt,
-});
-
 function emitMindStatus(state) {
   cosEvents.emit('persistent-mind:status', publicPersistentMindState(state));
 }
 
 function armWatchdog() {
-  if (supervisorStopping || !isDaemonRunning()) return;
+  if (runtime.stopping || !isDaemonRunning()) return;
   // A fresh interval has no prior tick; a gap spent disarmed is not a suspend.
   lastWatchdogCheckAt = null;
   schedule({
@@ -254,7 +107,7 @@ async function scheduleNextWake() {
   const root = await loadState();
   const state = normalizePersistentMindState(root.persistentMind);
   cancel(PERSISTENT_MIND_WAKE_EVENT_ID);
-  if (supervisorStopping || !isDaemonRunning() || root.paused || getDomainMode(root.config, 'cos') !== 'execute') return;
+  if (runtime.stopping || !isDaemonRunning() || root.paused || getDomainMode(root.config, 'cos') !== 'execute') return;
   const dueAt = nextPersistentMindWakeAt(state);
   if (dueAt == null || activeRun) return;
   schedule({
@@ -277,134 +130,8 @@ async function scheduleNextWake() {
   });
 }
 
-function cancelUsageLimitProbe() {
-  cancel(PERSISTENT_MIND_USAGE_LIMIT_PROBE_EVENT_ID);
-}
-
-/**
- * Lightweight readiness check for a usage-limit autopause.
- * Uses provider status + pinned profile resolve — never opens a mind turn.
- */
-async function probePinnedProviderAfterUsageLimit() {
-  const root = await loadState();
-  const providerId = root.config?.persistentMindProfile?.providerId;
-  if (typeof providerId === 'string' && providerId && !isProviderAvailable(providerId)) {
-    return { ok: false, reason: 'pinned-provider-unavailable' };
-  }
-  const resolved = await resolvePersistentMindProfile(root.config?.persistentMindProfile);
-  if (!resolved.ok) {
-    return { ok: false, reason: resolved.error || 'pinned-provider-unresolved' };
-  }
-  return { ok: true, providerId: resolved.provider?.id || providerId || null };
-}
-
-function scheduleUsageLimitProbe(attempt = 0) {
-  if (supervisorStopping || !isDaemonRunning()) return;
-  usageLimitProbeAttempt = Math.max(0, Number.isFinite(attempt) ? Math.floor(attempt) : 0);
-  cancelUsageLimitProbe();
-  const delayMs = usageLimitProbeDelayMs(usageLimitProbeAttempt);
-  schedule({
-    id: PERSISTENT_MIND_USAGE_LIMIT_PROBE_EVENT_ID,
-    type: 'once',
-    delayMs: Math.max(1, delayMs),
-    handler: async () => {
-      try {
-        await checkPersistentMindUsageLimitRecovery();
-      } catch (error) {
-        console.error(`❌ Persistent mind usage-limit probe failed: ${error.message}`);
-        const mind = await getPersistentMindState().catch(() => null);
-        if (mind && mind.status === 'paused' && isUsageLimitPauseReason(mind.pauseReason)) {
-          scheduleUsageLimitProbe(usageLimitProbeAttempt + 1);
-        }
-      }
-    },
-    metadata: {
-      description: 'Persistent CoS mind usage-limit readiness probe',
-      attempt: usageLimitProbeAttempt,
-    },
-  });
-}
-
-/**
- * When the next usage-limit readiness probe will run, or null when none is
- * pending. READ-ONLY — it reports the schedule, it does not set or change it.
- *
- * A usage-limit autopause deliberately clears `nextEligibleWakeAt` (see
- * `parkActiveTurn`: a hard quota gets no backoff gate and no failureCount
- * climb), so recovery is owned by this probe alone. Without this accessor the
- * page can say a quota block is retrying but never when — the one question the
- * user actually has while waiting one out.
- */
-export function persistentMindUsageLimitRetryAt() {
-  const event = getEvent(PERSISTENT_MIND_USAGE_LIMIT_PROBE_EVENT_ID);
-  // A fired one-shot nulls its own nextRunAt, but a PAUSED event keeps a future
-  // one it will never honour, and a probe scheduled before a clock jump can sit
-  // in the past. Both would advertise a retry that is not coming, which is worse
-  // than saying nothing: the whole point is to stop the user guessing.
-  if (!event?.active || !Number.isFinite(event.nextRunAt) || event.nextRunAt <= Date.now()) return null;
-  return new Date(event.nextRunAt).toISOString();
-}
-
-/**
- * If paused solely for a provider usage limit, probe readiness and auto-resume
- * when the pinned provider is usable again. Other pause reasons are ignored.
- */
-export async function checkPersistentMindUsageLimitRecovery() {
-  const mind = await getPersistentMindState();
-  if (mind.status !== 'paused' || !isUsageLimitPauseReason(mind.pauseReason)) {
-    cancelUsageLimitProbe();
-    usageLimitProbeAttempt = 0;
-    return { recovered: false, ignored: true };
-  }
-  if (supervisorStopping || !isDaemonRunning() || !mind.enabled || !mind.started) {
-    return { recovered: false, ignored: false, reason: 'supervisor-inactive' };
-  }
-
-  const probe = await probePinnedProviderAfterUsageLimit();
-  if (!probe.ok) {
-    scheduleUsageLimitProbe(usageLimitProbeAttempt + 1);
-    return { recovered: false, ignored: false, reason: probe.reason || 'still-limited' };
-  }
-
-  const result = await mutateMindState((current) => {
-    if (current.status !== 'paused' || !isUsageLimitPauseReason(current.pauseReason)) {
-      return { mind: current, value: { recovered: false } };
-    }
-    return {
-      mind: {
-        ...current,
-        status: 'waiting',
-        pauseReason: null,
-        lastError: null,
-        nextEligibleWakeAt: null,
-        selfWake: current.queuedMessages.length > 0 || current.selfWake
-          ? current.selfWake
-          : initialSelfWake('usage-limit-recovered'),
-      },
-      value: { recovered: true, mindId: current.mindId },
-    };
-  });
-
-  if (!result.value?.recovered) {
-    cancelUsageLimitProbe();
-    usageLimitProbeAttempt = 0;
-    return { recovered: false, ignored: true };
-  }
-
-  cancelUsageLimitProbe();
-  usageLimitProbeAttempt = 0;
-  armWatchdog();
-  await scheduleNextWake();
-  // Match resumePersistentMind: status emit + log only (no new trajectory kind).
-  emitMindStatus(result.state);
-  emitLog('info', 'Persistent mind auto-resumed after provider usage limit cleared', {
-    providerId: probe.providerId || null,
-  });
-  return { recovered: true, ignored: false };
-}
-
 function initialSelfWake(reason) {
-  const createdAt = nowIso();
+  const createdAt = new Date().toISOString();
   return {
     id: `wake-${randomUUID()}`,
     kind: 'self',
@@ -416,774 +143,11 @@ function initialSelfWake(reason) {
   };
 }
 
-const QUIET_SELF_WAKE_REASON = 'maximum quiet period elapsed';
-
-function quietSelfWake(turnId, quietPeriodMs = PERSISTENT_MIND_LIMITS.MAX_QUIET_MS, baseAt = Date.now()) {
-  return {
-    id: `wake-${randomUUID()}`,
-    kind: 'self',
-    scheduleKind: 'quiet',
-    reason: QUIET_SELF_WAKE_REASON,
-    sourceTurnId: turnId,
-    createdAt: nowIso(),
-    notBefore: new Date(baseAt + quietPeriodMs).toISOString(),
-  };
-}
-
-/**
- * Hand a claimed wake back to durable state when its turn is abandoned.
- *
- * An interrupted temporary thinking session is an uncertain consumed attempt:
- * the abort races whatever the provider already started, and no durable record
- * can say whether that call was billed. Every such wake is retired rather than
- * requeued, so resuming it stays an explicit user decision; an ordinary message
- * or self-wake keeps its free automatic retry.
- */
-const releaseClaimedWake = (mind, wake) => (
-  persistentMindWakeConsumesAttempt(wake)
-    ? holdPersistentMindWake(mind, wake)
-    : requeuePersistentMindWake(mind, wake)
-);
-
-async function interruptActiveTurn(reason, status, { retry = false, expectedTurnId = null } = {}) {
-  const result = await mutateMindState((mind) => {
-    if (expectedTurnId && mind.activeTurn?.id !== expectedTurnId) {
-      return { mind, value: false };
-    }
-    const interrupted = Boolean(mind.activeTurn);
-    let next = mind;
-    if (mind.activeTurn) next = releaseClaimedWake(next, mind.activeTurn.wake);
-    const failureCount = retry ? next.failureCount + 1 : next.failureCount;
-    return {
-      mind: {
-        ...next,
-        activeTurn: null,
-        status,
-        pauseReason: reason,
-        failureCount,
-        // A pause or global hold is not a wake failure: keep the real last
-        // error (OOM kill, canceled run, ...) visible next to the pause reason.
-        lastError: status === 'paused' || status === 'waiting' ? next.lastError : reason,
-        nextEligibleWakeAt: retry
-          ? new Date(Date.now() + persistentMindBackoffMs(failureCount)).toISOString()
-          : null,
-      },
-      value: { interrupted, turnId: mind.activeTurn?.id || null, mindId: mind.mindId },
-    };
-  });
-  if (result.value?.interrupted) {
-    runtimeGeneration += 1;
-    activeAbortController?.abort(reason);
-    await appendMindEvent({
-      kind: status === 'paused' ? 'mind.paused' : 'mind.failed',
-      mindId: result.value.mindId,
-      turnId: result.value.turnId,
-      eventId: `mind-${status}:${result.value.turnId}`,
-      data: { status, error: reason },
-    });
-  }
-  emitMindStatus(result.state);
-  return { state: result.state, interrupted: result.value?.interrupted === true };
-}
-
-/**
- * Return a claimed turn to the queue with a visible reason.
- *
- * `consumedAttempt` says the provider span had already opened, so a temporary
- * thinking session must not be replayed automatically. Every refusal decided
- * before that point normally requeues. A revoked or unverified selection is
- * retired too: changing a preset back later must not resurrect refused work.
- */
-async function parkActiveTurn(turnId, reason, status = 'waiting', { retryAt = null, consumedAttempt = false, retireWake = false } = {}) {
-  const paused = status === 'paused';
-  if (status === 'degraded') {
-    console.warn(`⚠️ Persistent mind turn degraded: ${scrubSecretTokens(String(reason)).slice(0, 300)}`);
-  }
-  const result = await mutateMindState((mind) => {
-    if (mind.activeTurn?.id !== turnId) return { mind, value: false };
-    // Transport/slot waits may retry; a revoked route or uncertain inference
-    // requires a fresh user submission.
-    const held = (consumedAttempt || retireWake || Boolean(mind.activeTurn.wake.thinkingRequest)) && persistentMindWakeConsumesAttempt(mind.activeTurn.wake);
-    const next = held
-      ? holdPersistentMindWake(mind, mind.activeTurn.wake)
-      : requeuePersistentMindWake(mind, mind.activeTurn.wake);
-    // A hard usage-limit autopause mirrors pausePersistentMind: no backoff gate
-    // and no failureCount climb. Auto-recovery probes (not ordinary wakes) clear
-    // only this pause reason when the pinned provider is usable again.
-    const failureCount = paused ? next.failureCount : next.failureCount + 1;
-    return {
-      mind: {
-        ...next,
-        activeTurn: null,
-        status,
-        pauseReason: reason,
-        failureCount,
-        lastError: reason,
-        nextEligibleWakeAt: paused
-          ? null
-          : (retryAt || new Date(Date.now() + persistentMindBackoffMs(failureCount)).toISOString()),
-      },
-      value: held,
-    };
-  });
-  if (paused) cancel(PERSISTENT_MIND_WAKE_EVENT_ID);
-  await appendMindEvent({
-    kind: paused ? 'mind.paused' : 'mind.failed',
-    mindId: result.state.mindId,
-    turnId,
-    eventId: `mind-${paused ? 'paused' : 'failed'}:${turnId}:${status}`,
-    data: { status, error: reason, retryAt: paused ? null : retryAt, consumedAttempt: consumedAttempt && result.value === true, requiresResubmission: result.value === true },
-  });
-  emitMindStatus(result.state);
-  return result.state;
-}
-
-async function claimNextTurn() {
-  const result = await mutateMindState((mind, root) => {
-    if (supervisorStopping || !isDaemonRunning()) return { mind, value: null };
-    if (!mind.enabled || !mind.started || mind.activeTurn || mind.status === 'paused') return { mind, value: null };
-    if (root.paused || getDomainMode(root.config, 'cos') !== 'execute') return { mind, value: null };
-    const selected = takeNextPersistentMindWake(mind);
-    if (!selected.wake) return { mind: selected.state, value: null };
-    if (selected.wake.kind === 'self' && selected.state.thinkingRequests.pending) {
-      selected.wake = { ...selected.wake, thinkingRequest: selected.state.thinkingRequests.pending };
-      selected.state.thinkingRequests = {
-        pending: null,
-        history: selected.state.thinkingRequests.history.map((entry) => entry.requestId === selected.wake.thinkingRequest.requestId
-          ? { ...entry, outcome: 'admitted', admittedAt: nowIso() } : entry),
-      };
-    }
-    const id = `mind-turn-${randomUUID()}`;
-    const startedAt = nowIso();
-    const activeTurn = {
-      id,
-      wake: selected.wake,
-      startedAt,
-      heartbeatAt: startedAt,
-      providerId: null,
-      model: null,
-      effort: null,
-    };
-    return {
-      mind: {
-        ...selected.state,
-        status: 'thinking',
-        pauseReason: null,
-        activeTurn,
-        nextEligibleWakeAt: null,
-      },
-      value: activeTurn,
-    };
-  });
-  if (result.value) {
-    await appendMindEvent({
-      kind: 'mind.wake',
-      mindId: result.state.mindId,
-      turnId: result.value.id,
-      eventId: `mind-wake:${result.value.id}`,
-      at: result.value.startedAt,
-      data: {
-        status: result.state.status,
-        wakeKind: result.value.wake.kind,
-        wakeId: result.value.wake.id || null,
-        messageId: result.value.wake.message?.id || null,
-        thinkingPresetId: result.value.wake.thinkingRequest?.selection.id || result.value.wake.message?.thinkingPresetId || null,
-        reason: result.value.wake.reason || null,
-      },
-    });
-    emitMindStatus(result.state);
-  }
-  return result.value;
-}
-
-async function turnCanContinue(turnId, generation, signal) {
-  if (supervisorStopping || !isDaemonRunning() || generation !== runtimeGeneration || signal.aborted) return false;
-  const state = await getPersistentMindState();
-  return !supervisorStopping
-    && isDaemonRunning()
-    && generation === runtimeGeneration
-    && !signal.aborted
-    && state.activeTurn?.id === turnId;
-}
-
-async function recordTurnProfile(turnId, prepared) {
-  const result = await mutateMindState((mind) => {
-    if (mind.activeTurn?.id !== turnId) return { mind };
-    return {
-      mind: {
-        ...mind,
-        activeTurn: {
-          ...mind.activeTurn,
-          providerId: prepared.provider?.id || null,
-          model: prepared.model || null,
-          effort: prepared.effort || null,
-        },
-      },
-      value: true,
-    };
-  });
-  if (result.value) emitMindStatus(result.state);
-}
-
-async function heartbeat(turnId, generation) {
-  if (generation !== runtimeGeneration) return false;
-  const result = await mutateMindState((mind) => {
-    if (mind.activeTurn?.id !== turnId) return { mind, value: false };
-    return {
-      mind: {
-        ...mind,
-        activeTurn: { ...mind.activeTurn, heartbeatAt: nowIso() },
-      },
-      value: true,
-    };
-  });
-  return result.value === true;
-}
-
-async function completeTurn(turnId, result, generation) {
-  if (generation !== runtimeGeneration) return;
-  const completedAt = nowIso();
-  const updated = await mutateMindState((mind, root) => {
-    if (mind.activeTurn?.id !== turnId) return { mind, value: false };
-    const messageId = mind.activeTurn.wake.kind === 'message'
-      ? mind.activeTurn.wake.message.id
-      : null;
-    const recentMessageIds = messageId
-      ? [...mind.recentMessageIds.filter((id) => id !== messageId), messageId]
-        .slice(-PERSISTENT_MIND_LIMITS.MAX_RECENT_MESSAGE_IDS)
-      : mind.recentMessageIds;
-    const recentMessageFingerprints = messageId
-      ? [...mind.recentMessageFingerprints.filter((entry) => entry.id !== messageId),
-          persistentMindMessageReceipt(mind.activeTurn.wake.message),
-        ].slice(-PERSISTENT_MIND_LIMITS.MAX_RECENT_MESSAGE_IDS)
-      : mind.recentMessageFingerprints;
-    const quietPeriodMs = persistentMindWakeIntervalMs(root.config?.persistentMindProfile);
-    const quietDeadline = Date.parse(completedAt) + quietPeriodMs;
-    const requestedAt = Date.parse(result?.selfWake?.notBefore);
-    const requestedWake = result?.selfWake && typeof result.selfWake === 'object'
-      ? {
-          id: `wake-${randomUUID()}`,
-          kind: 'self',
-          scheduleKind: 'requested',
-          reason: String(result.selfWake.reason || 'turn requested follow-up')
-            .slice(0, PERSISTENT_MIND_LIMITS.MAX_REASON_CHARS),
-          sourceTurnId: turnId,
-          createdAt: completedAt,
-          // A turn may request an earlier follow-up, but the saved cadence is
-          // the operator's maximum quiet period and therefore caps later asks.
-          notBefore: new Date(Math.min(
-            quietDeadline,
-            Number.isFinite(requestedAt) ? Math.max(Date.parse(completedAt), requestedAt) : Date.parse(completedAt),
-          )).toISOString(),
-        }
-      : quietSelfWake(turnId, quietPeriodMs, Date.parse(completedAt));
-    const hasQueuedMessages = mind.queuedMessages.length > 0;
-    return {
-      mind: {
-        ...mind,
-        activeTurn: null,
-        recentMessageIds,
-        recentMessageFingerprints,
-        selfWake: requestedWake,
-        lastCompletedTurnId: turnId,
-        lastCompletedAt: completedAt,
-        nextEligibleWakeAt: null,
-        failureCount: 0,
-        lastError: null,
-        status: hasQueuedMessages ? 'waiting' : 'idle',
-        pauseReason: null,
-      },
-      value: true,
-    };
-  });
-  if (!updated.value) return;
-  await appendMindEvent({
-    kind: 'mind.turn.completed',
-    mindId: updated.state.mindId,
-    turnId,
-    eventId: `mind-turn-completed:${turnId}`,
-    at: completedAt,
-    data: {
-      status: updated.state.status,
-      providerId: result?.providerId || null,
-      model: result?.model || null,
-      effort: result?.effort || null,
-      thinkingPresetId: result?.thinkingPresetId || null,
-      summaryText: typeof result?.summary === 'string' ? result.summary : null,
-    },
-  });
-  emitMindStatus(updated.state);
-}
-
-// Admission refusals have no active turn to park. Waiting preserves the last
-// error; only degraded admission records a new error, and only a failed budget
-// lookup increments the failure count.
-async function deferUnclaimedWake({ status, reason, backoffMs, bumpFailure = false, requireStarted = false }) {
-  const updated = await mutateMindState((mind) => {
-    if (requireStarted && !(mind.enabled && mind.started)) return { mind };
-    const failureCount = mind.failureCount + Number(bumpFailure);
-    return {
-      mind: {
-        ...mind,
-        status,
-        pauseReason: reason,
-        lastError: status === 'degraded' ? reason : mind.lastError,
-        failureCount,
-        nextEligibleWakeAt: new Date(Date.now() + (backoffMs ?? persistentMindBackoffMs(failureCount))).toISOString(),
-      },
-    };
-  });
-  emitMindStatus(updated.state);
-}
-
-function resolveTurnProfile({ selfThinkingRequest, thinkingPresetId, thinkingSelection, config }) {
-  if (selfThinkingRequest) return resolvePersistentMindSelfThinkingRequest({ request: selfThinkingRequest, config });
-  if (thinkingPresetId) return resolvePersistentMindThinkingSession({ presetId: thinkingPresetId, selection: thinkingSelection, config });
-  return resolvePersistentMindProfile(config?.persistentMindProfile);
-}
-
-async function runOnePersistentMindTurn() {
-  const permit = maintenance.tryAdmit('mind-turn', 'persistent-mind');
-  if (!permit) return;
-  try { return await permit.run(runAdmittedPersistentMindTurn); }
-  catch (err) { permit.markUnsettled(); throw err; }
-  finally { await permit.finish(); }
-}
-
-async function runAdmittedPersistentMindTurn() {
-  if (supervisorStopping || !isDaemonRunning()) return;
-  if (!turnAdapter) {
-    return deferUnclaimedWake({
-      status: 'degraded',
-      reason: 'Persistent mind provider is not configured',
-      backoffMs: PERSISTENT_MIND_LIMITS.BACKOFF_MAX_MS,
-      requireStarted: true,
-    });
-  }
-
-  const root = await loadState();
-  const mind = normalizePersistentMindState(root.persistentMind);
-  if (supervisorStopping || !isDaemonRunning()) return;
-  if (!mind.enabled || !mind.started || mind.status === 'paused') return;
-  if (root.paused || getDomainMode(root.config, 'cos') !== 'execute') return;
-
-  const runningAgentEntries = Object.values(root.agents || {}).filter((agent) => agent.status === 'running');
-  const maxConcurrentAgents = Number(root.config?.maxConcurrentAgents);
-  const admissionId = `persistent-mind:${randomUUID()}`;
-  const globalSlot = acquireCosGlobalSlot({
-    agents: root.agents,
-    limit: maxConcurrentAgents,
-    reservationId: admissionId,
-  });
-  if (!globalSlot.ok) {
-    return deferUnclaimedWake({
-      status: 'waiting',
-      reason: globalSlot.reason,
-      backoffMs: PERSISTENT_MIND_LIMITS.BACKOFF_BASE_MS,
-    });
-  }
-
-  let actionReservation = null;
-  try {
-    let budget;
-    try {
-      budget = await getDomainBudgetStatus('cos');
-    } catch (error) {
-      const message = `Persistent mind budget check failed: ${errorMessage(error)}`;
-      return await deferUnclaimedWake({ status: 'degraded', reason: message, bumpFailure: true });
-    }
-    if (!budget.withinBudget) {
-      return await deferUnclaimedWake({
-        status: 'waiting',
-        reason: `CoS ${budget.exceeded || 'daily'} budget exhausted`,
-        backoffMs: PERSISTENT_MIND_LIMITS.BACKOFF_MAX_MS,
-      });
-    }
-
-    const runningAutonomous = runningAgentEntries.filter(
-      (agent) => agent.metadata?.taskType && agent.metadata.taskType !== 'user'
-    ).length;
-    actionReservation = acquireCosActionReservation({
-      budget: budget.budget,
-      usage: budget.usage,
-      inFlight: runningAutonomous,
-      reservationId: admissionId,
-    });
-    if (!actionReservation.ok) {
-      return await deferUnclaimedWake({
-        status: 'waiting',
-        reason: actionReservation.reason,
-        backoffMs: PERSISTENT_MIND_LIMITS.BACKOFF_MAX_MS,
-      });
-    }
-
-    const turn = await claimNextTurn();
-    if (!turn) return;
-
-    await runClaimedPersistentMindTurn(turn, mind, globalSlot);
-  } finally {
-    actionReservation?.release?.();
-    globalSlot.release();
-  }
-}
-
-// The one place a failed turn is classified. `usageLimit`, `contextBudget` and
-// a call denial are mutually exclusive causes, and the park message, status,
-// retire/retry flags, usage-limit probe and log line all follow from which one
-// applies — so they are decided together here and the `catch` only acts on the
-// result.
-//
-// Only the home profile autopauses and probes for quota recovery. A temporary
-// profile belongs to its wake, which retires on quota exhaustion even when the
-// adapter encounters the limit during preparation.
-// Local context-budget / known-window-below-request failures are not
-// transient either: retrying the same wake only climbs failureCount, so they
-// autopause with an actionable reason until the operator raises the window or
-// shrinks mind context. Call denials carry their own status and disposition.
-function classifyPersistentMindTurnFailure(error, { signal, runStartedAt, profile }) {
-  const denied = isPersistentMindCallDenial(error);
-  const aborted = signal.aborted;
-  const detail = aborted
-    ? String(signal.reason || 'Persistent mind turn interrupted')
-    : errorMessage(error);
-  const nonDeniedFault = !denied && !aborted;
-  const usageLimit = nonDeniedFault && isHardProviderUsageLimitError(error);
-  const contextBudget = nonDeniedFault && !usageLimit && isContextBudgetFitnessError(error);
-  const held = denied && error.retryDisposition === 'hold' && error.requiresResubmission !== true;
-  const base = {
-    message: detail,
-    status: held ? 'paused' : ((denied && error.deniedStatus) || 'interrupted'),
-    consumedAttempt: runStartedAt != null,
-    retireWake: (denied && error.requiresResubmission === true) || (usageLimit && profile?.temporary === true),
-    retryAt: denied && error.retryDisposition === 'reset-wait' ? error.retryAt : null,
-    markUsageLimit: usageLimit,
-    logMessage: `Persistent mind turn ${denied ? 'refused a further provider call' : 'interrupted'}: ${detail}`,
-  };
-  if (usageLimit && profile?.ok && !profile.temporary) {
-    return {
-      ...base,
-      message: PROVIDER_USAGE_LIMIT_PAUSE_REASON,
-      status: 'paused',
-      logMessage: `Persistent mind autopaused on provider usage limit: ${detail}`,
-    };
-  }
-  if (contextBudget) {
-    return {
-      ...base,
-      message: contextBudgetPauseReasonFrom(error),
-      status: 'paused',
-      logMessage: `Persistent mind autopaused on local context budget: ${detail}`,
-    };
-  }
-  return base;
-}
-
-// A turn phase either continues (`ok: true`) or stops the turn: `park` names
-// the reason/status/options to park it under, and `aborted` means the turn was
-// superseded (pause, stop, restart) while the phase awaited, so the new owner's
-// state is left alone.
-const parkTurn = (reason, status, opts) => ({ ok: false, park: { reason, status, opts } });
-const TURN_ABORTED = Object.freeze({ ok: false, aborted: true });
-const parkRefusedProfile = (profile) => parkTurn(profile.error, 'degraded', { retireWake: profile.requiresResubmission === true });
-
-async function settleStoppedTurn(turnId, outcome) {
-  if (outcome.park) await parkActiveTurn(turnId, outcome.park.reason, outcome.park.status, outcome.park.opts);
-}
-
-// A message the user explicitly sent with another model resolves its saved
-// preset instead of the home profile. Only that one message carries it: the
-// next ordinary message and every scheduled wake read the unchanged default,
-// because the selection lives on the message rather than in config.
-function turnThinkingSelection(wake) {
-  const selfThinkingRequest = wake.thinkingRequest || null;
-  return {
-    selfThinkingRequest,
-    thinkingSelection: selfThinkingRequest?.selection || wake.message?.thinkingPreset || null,
-    thinkingPresetId: selfThinkingRequest?.selection.id || (wake.kind === 'message'
-      ? wake.message.thinkingPresetId || null
-      : null),
-  };
-}
-
-// The route is resolved before an adapter can run. This is a read-only
-// catalog/status check: no alternate provider, model pull, or generation is
-// allowed while deciding whether the pinned mind can wake. A preset that has
-// since been removed, retired, or narrowed is a refusal — never a silent
-// return to the default route.
-async function resolveTurnRoute({ turn, thinking, profile, signal, alive }) {
-  if (!profile.ok) return parkRefusedProfile(profile);
-  // Adapters receive the exact profile. They may prepare their text
-  // transport, but cannot substitute a fallback provider/model/effort.
-  const adapterPrepared = await turnAdapter.prepare({ wake: turn.wake, signal, profile });
-  if (!await alive()) return TURN_ABORTED;
-  if (!adapterPrepared?.ok || !adapterPrepared.provider) {
-    const prepareError = adapterPrepared?.error || 'Persistent mind provider is unavailable';
-    if (isContextBudgetFitnessError(prepareError)) return parkTurn(contextBudgetPauseReasonFrom(prepareError), 'paused');
-    return parkTurn(prepareError, 'degraded', { retryAt: adapterPrepared?.retryAt || null });
-  }
-  // Existing adapters only named their transport provider; missing model or
-  // effort now means "use the supplied profile", while an explicit value
-  // still must match exactly and cannot become a fallback route.
-  const prepared = {
-    ...adapterPrepared,
-    model: adapterPrepared.model ?? profile.model,
-    effort: adapterPrepared.effort ?? profile.effort,
-  };
-  if (prepared.provider.id !== profile.provider.id
-      || prepared.model !== profile.model
-      || prepared.effort !== profile.effort) {
-    return parkTurn('Persistent mind adapter did not honor the pinned provider profile', 'degraded');
-  }
-  return {
-    ok: true,
-    thinking,
-    profile,
-    prepared,
-    target: { providerId: prepared.provider.id, model: prepared.model || null, effort: prepared.effort || null },
-  };
-}
-
-// Admission owns the global/action reservations until the claimed turn's
-// provider work, error handling, and endpoint cleanup have all settled — with
-// one exception: once a LOCAL-model turn has secured its endpoint-scoped slot,
-// the generic global slot is released early. A local turn can run for
-// minutes, far longer than the spawn-setup window the global cap models, and
-// `acquireLocalEndpointProviderSlot` already serializes the real GPU
-// contention on its own. Holding the global slot for the whole generation
-// would otherwise starve unrelated cloud/CLI/TUI agent spawns (e.g. agy,
-// gemini) that never touch this endpoint but share the same
-// `maxConcurrentAgents` budget.
-//
-// `holdSlot` hands the endpoint slot's release to the driver the moment it is
-// acquired, so a later stop or throw in this phase still frees it.
-async function admitTurn({ turn, route, globalSlot, alive, holdSlot }) {
-  const { prepared, thinking } = route;
-  const images = turn.wake.message?.images;
-  if (turn.wake.kind === 'message' && Array.isArray(images) && images.length > 0) {
-    const imageCapability = await resolvePersistentMindImageCapability({
-      provider: prepared.provider,
-      model: prepared.model,
-    });
-    if (!imageCapabilityAllowsAttempt(imageCapability, prepared.provider)) return parkTurn(imageCapability.reason, 'degraded');
-  }
-  await recordTurnProfile(turn.id, prepared);
-  if (!await alive()) return TURN_ABORTED;
-
-  const slot = await acquireLocalEndpointProviderSlot(prepared.provider, (await loadState()).agents, turn.id);
-  if (!slot.ok) return parkTurn(slot.reason, 'waiting');
-  holdSlot(slot.release);
-  // Idempotent: the admitting `finally` still releases the global slot once
-  // the turn settles.
-  if (localEndpointOfProvider(prepared.provider)) globalSlot?.release();
-  if (!await alive()) return TURN_ABORTED;
-  // Preparation and slot admission may wait. A preset revoked during those
-  // waits must be refused before even a context-summary call can begin.
-  const config = (await loadState()).config;
-  if (thinking.thinkingPresetId) {
-    const admissionProfile = await resolveTurnProfile({ ...thinking, config });
-    if (!await alive()) return TURN_ABORTED;
-    if (!admissionProfile.ok) return parkRefusedProfile(admissionProfile);
-  }
-  return { ok: true, config };
-}
-
-// The turn keeps the ONE global slot, action reservation and endpoint slot it
-// was admitted with; the boundary acquires nothing further. What it does is
-// re-check — before the summary call, before the turn call, and before every
-// tool round — that the route, authorization, lifecycle, grants and remaining
-// budget still permit one more provider call, and account each attempt
-// (failures included) against the domain ledger.
-function openTurnCallBoundary({ mindId, turnId, route, config, signal }) {
-  const { prepared, profile, target, thinking } = route;
-  return createPersistentMindCallBoundary({
-    mindId,
-    turnId,
-    route: {
-      providerId: target.providerId,
-      providerType: prepared.provider.type || null,
-      model: target.model,
-      effort: target.effort,
-      thinkingPresetId: thinking.thinkingPresetId,
-      thinkingPresetLabel: profile.presetLabel || null,
-      temporary: profile.temporary === true,
-    },
-    thinkingPresetId: thinking.thinkingPresetId,
-    // The ACCEPTED preset snapshot the message carries (#6283) — never the
-    // mutable preset id, which the user can repoint mid-turn.
-    thinkingSelection: thinking.thinkingSelection,
-    selfThinkingRequest: thinking.selfThinkingRequest,
-    capabilityFingerprint: persistentMindCapabilityGrantFingerprint(config?.persistentMindCapabilities),
-    maintainerFingerprint: maintainerCanonicalStringify(normalizePersistentMindMaintainer(config?.persistentMindMaintainer)),
-    signal,
-  });
-}
-
-async function runAdmittedTurn({ turn, mindId, route, callBoundary, generation, signal, alive }) {
-  const { prepared, target } = route;
-  const { thinkingPresetId } = route.thinking;
-  // Every provider call this turn makes — summary, journal, turn — carries
-  // the same pinned route and per-call boundary.
-  const providerCall = () => ({
-    provider: prepared.provider,
-    model: target.model,
-    effort: target.effort,
-    signal,
-    heartbeat: () => heartbeat(turn.id, generation),
-    callBoundary: trackInFlightCall(turn.id, prepared.provider, target.model, callBoundary.call),
-  });
-  // Context/memory orchestration is only needed once admission succeeds.
-  const { preparePersistentMindContext, readPersistentMindReflection, recordPersistentMindRecallAccess } = await import('./persistentMindContext.js');
-  const reflection = await readPersistentMindReflection({ enabled: normalizePersistentMindCapabilities((await loadState()).config?.persistentMindCapabilities).manageMind });
-  const context = await preparePersistentMindContext({
-    mindId,
-    identity: prepared.identity ?? turnAdapter.identity ?? 'One supervised persistent Chief of Staff mind.',
-    instructions: prepared.instructions || '',
-    memories: Array.isArray(prepared.memories) ? prepared.memories : [],
-    memoryRecall: prepared.memoryRecall,
-    reflection,
-    // A local window's adapter bounds the recalled context so the wake
-    // prompt leaves room for its tool rounds; absent means the default cap.
-    ...(Number.isInteger(prepared.contextMaxChars) && prepared.contextMaxChars > 0 ? { maxChars: prepared.contextMaxChars } : {}),
-    providerId: target.providerId,
-    model: target.model,
-    summarize: typeof turnAdapter.summarize === 'function'
-      ? (input) => turnAdapter.summarize({ ...input, ...providerCall() })
-      : null,
-    // The journal introduces no second provider path.
-    extractJournal: typeof turnAdapter.extractJournal === 'function'
-      ? (input) => turnAdapter.extractJournal({ ...input, ...providerCall() })
-      : null,
-  });
-  if (!await alive()) return;
-  await appendMindEvent({
-    kind: 'mind.model.request',
-    mindId,
-    turnId: turn.id,
-    eventId: `mind-model-request:${turn.id}`,
-    data: {
-      ...target,
-      thinkingPresetId,
-      contextChars: context.chars,
-      contextSummaryState: context.summaryState,
-      memoryReflectionState: context.reflection?.state || 'disabled',
-      memoryRecallState: context.memoryRecall?.state || 'none',
-      memoryRecallIds: context.memoryRecall?.includedIds || [],
-      memoryRecallOmittedIds: context.memoryRecall?.omittedIds || [],
-    },
-  });
-  if (!await alive()) return;
-
-  const result = await turnAdapter.run({
-    turnId: turn.id,
-    wake: turn.wake,
-    ...providerCall(),
-    context,
-    recordCapabilityEvent: ({ kind, id, data } = {}) => {
-      const eventKind = kind === 'result' ? 'mind.capability.result' : 'mind.capability.request';
-      const capabilityId = typeof id === 'string' && id ? id : randomUUID();
-      return appendMindEvent({
-        kind: eventKind,
-        mindId,
-        turnId: turn.id,
-        eventId: `mind-capability:${turn.id}:${capabilityId}:${kind === 'result' ? 'result' : 'request'}`,
-        data: { capabilityId, ...(data && typeof data === 'object' ? data : {}) },
-      });
-    },
-  });
-  await recordPersistentMindRecallAccess(context.memoryRecall?.includedIds);
-  for (const event of Array.isArray(result?.events) ? result.events : []) {
-    await appendMindEvent({
-      kind: event.kind,
-      mindId,
-      turnId: turn.id,
-      eventId: `mind-${event.id}`,
-      data: event.data,
-    });
-  }
-  await appendMindEvent({
-    kind: 'mind.model.result',
-    mindId,
-    turnId: turn.id,
-    eventId: `mind-model-result:${turn.id}`,
-    data: {
-      ...target,
-      thinkingPresetId,
-      summaryText: typeof result?.summary === 'string' ? result.summary : null,
-      responseChars: typeof result?.output === 'string' ? result.output.length : null,
-      success: true,
-    },
-  });
-  await completeTurn(turn.id, { ...result, ...target, thinkingPresetId }, generation);
-}
-
-// Each phase re-checks `alive()` after every wait that precedes its next step,
-// so a turn paused, stopped or restarted mid-phase never starts that step; the
-// adapter run itself is cancelled through `controller.signal`.
-async function runClaimedPersistentMindTurn(turn, mind, globalSlot) {
-  const generation = runtimeGeneration;
-  const controller = new AbortController();
-  activeAbortController = controller;
-  const alive = () => turnCanContinue(turn.id, generation, controller.signal);
-  let release = () => {};
-  let runStartedAt = null;
-  let callBoundary = null;
-  let profile = null;
-  try {
-    const thinking = turnThinkingSelection(turn.wake);
-    profile = await resolveTurnProfile({ ...thinking, config: (await loadState()).config });
-    const route = await resolveTurnRoute({ turn, thinking, profile, signal: controller.signal, alive });
-    if (!route.ok) return await settleStoppedTurn(turn.id, route);
-    const admission = await admitTurn({ turn, route, globalSlot, alive, holdSlot: (fn) => { release = fn; } });
-    if (!admission.ok) return await settleStoppedTurn(turn.id, admission);
-    // The span opens BEFORE context preparation, so a local adapter cannot
-    // bypass endpoint capacity merely because its first inference happens
-    // while context is assembled.
-    runStartedAt = Date.now();
-    callBoundary = openTurnCallBoundary({
-      mindId: mind.mindId, turnId: turn.id, route, config: admission.config, signal: controller.signal,
-    });
-    await runAdmittedTurn({
-      turn, mindId: mind.mindId, route, callBoundary, generation, signal: controller.signal, alive,
-    });
-  } catch (error) {
-    if (generation === runtimeGeneration) {
-      const failure = classifyPersistentMindTurnFailure(error, { signal: controller.signal, runStartedAt, profile });
-      await parkActiveTurn(turn.id, failure.message, failure.status, {
-        consumedAttempt: failure.consumedAttempt,
-        retireWake: failure.retireWake,
-        retryAt: failure.retryAt,
-      });
-      if (failure.markUsageLimit) {
-        const providerId = profile?.provider?.id;
-        if (typeof providerId === 'string' && providerId) {
-          await markProviderUsageLimit(providerId, { message: errorMessage(error) }).catch((markError) => {
-            console.error(`❌ Failed to mark provider usage limit for mind probe: ${markError.message}`);
-          });
-        }
-        if (failure.status === 'paused') scheduleUsageLimitProbe(0);
-      }
-      emitLog('warn', failure.logMessage, { turnId: turn.id });
-    }
-  } finally {
-    release();
-    // The boundary accounts every provider call it admitted, so the turn adds
-    // nothing on top — that would double-count the span it already recorded.
-    // A turn that opened the span and never reached a provider still costs one
-    // action, or a turn that always aborts just before its first call would
-    // retry against the budget for free.
-    if (runStartedAt != null && (callBoundary?.accountedCalls() ?? 0) === 0) {
-      await recordDomainUsage('cos', { actions: 1, ms: Date.now() - runStartedAt }).catch((error) => {
-        console.error(`❌ Failed to record persistent mind usage: ${error.message}`);
-      });
-    }
-  }
-}
-
 export async function registerPersistentMindTurnAdapter(adapter) {
   if (!adapter || typeof adapter.prepare !== 'function' || typeof adapter.run !== 'function') {
     throw new Error('Persistent mind adapter requires prepare() and run()');
   }
-  turnAdapter = adapter;
+  runtime.adapter = adapter;
   await mutateMindState((mind) => ({
     mind: mind.lastError === 'Persistent mind provider is not configured'
       ? { ...mind, status: mind.started ? 'waiting' : mind.status, pauseReason: null, lastError: null, nextEligibleWakeAt: null }
@@ -1193,7 +157,7 @@ export async function registerPersistentMindTurnAdapter(adapter) {
 }
 
 export function unregisterPersistentMindTurnAdapter() {
-  turnAdapter = null;
+  runtime.adapter = null;
 }
 
 export async function getPersistentMindState() {
@@ -1285,8 +249,7 @@ export async function wakePersistentMind() {
       value: { success: true, alreadyRunning: false },
     };
   });
-  cancelUsageLimitProbe();
-  usageLimitProbeAttempt = 0;
+  resetUsageLimitProbe();
   armWatchdog();
   await scheduleNextWake();
   emitMindStatus(result.state);
@@ -1305,8 +268,7 @@ export async function pausePersistentMind(reason = 'Paused by user') {
   }
   cancel(PERSISTENT_MIND_WAKE_EVENT_ID);
   // Explicit / non-usage pauses must never auto-resume via the usage-limit probe.
-  cancelUsageLimitProbe();
-  usageLimitProbeAttempt = 0;
+  resetUsageLimitProbe();
   return { success: true, state };
 }
 
@@ -1328,8 +290,7 @@ export async function resumePersistentMind() {
     };
   });
   if (result.value.success) {
-    cancelUsageLimitProbe();
-    usageLimitProbeAttempt = 0;
+    resetUsageLimitProbe();
     armWatchdog();
     await scheduleNextWake();
   }
@@ -1338,12 +299,11 @@ export async function resumePersistentMind() {
 }
 
 export async function stopPersistentMind({ waitForTurn = false } = {}) {
-  runtimeGeneration += 1;
-  activeAbortController?.abort('Persistent mind stopped');
+  runtime.generation += 1;
+  runtime.controller?.abort('Persistent mind stopped');
   cancel(PERSISTENT_MIND_WAKE_EVENT_ID);
   cancel(PERSISTENT_MIND_WATCHDOG_EVENT_ID);
-  cancelUsageLimitProbe();
-  usageLimitProbeAttempt = 0;
+  resetUsageLimitProbe();
   const result = await mutateMindState((mind) => {
     const wasStarted = mind.started;
     const interruptedTurnId = mind.activeTurn?.id || null;
@@ -1379,287 +339,12 @@ export async function stopPersistentMind({ waitForTurn = false } = {}) {
   return { success: true };
 }
 
-async function probeMessageImageProfile(profile) {
-  if (!profile) return null;
-  const { providerId, model } = profile;
-  const provider = providerId ? await getProviderById(providerId) : null;
-  const capability = await resolvePersistentMindImageCapability({ provider, model });
-  return { providerId, model, allowed: imageCapabilityAllowsAttempt(capability, provider), reason: capability.reason };
-}
-
-export async function enqueuePersistentMindMessage({
-  id = randomUUID(),
-  text,
-  images,
-  thinkingPresetId,
-  thinkingPreset,
-  createdAt = nowIso(),
-} = {}) {
-  const messageId = typeof id === 'string' ? id.trim().slice(0, 200) : '';
-  const messageText = normalizeMessageText(text);
-  const attachmentIds = normalizeRequestedAttachmentIds(images);
-  const presetId = typeof thinkingPresetId === 'string'
-    ? thinkingPresetId.trim().slice(0, PERSISTENT_MIND_THINKING_PRESET_LIMITS.ID_MAX)
-    : '';
-  if (!messageId || attachmentIds === null || (!messageText && attachmentIds.length === 0)) {
-    return attachmentFailure('Message id and text or at least one image are required', { code: 'VALIDATION_ERROR' });
-  }
-  const submittedSelection = normalizePersistentMindThinkingSelection(thinkingPreset);
-  if (thinkingPreset !== undefined && (!submittedSelection || submittedSelection.id !== presetId)) {
-    return attachmentFailure('A temporary selection must include the exact preset, provider, model and effort', { code: 'VALIDATION_ERROR' });
-  }
-  const messageCreatedAt = typeof createdAt === 'string' && Number.isFinite(Date.parse(createdAt))
-    ? new Date(createdAt).toISOString()
-    : nowIso();
-  await cleanupPersistentMindAttachments();
-  const currentPreset = (config) => presetId
-    ? findPersistentMindThinkingPreset(config?.persistentMindThinkingPresets, presetId)
-    : null;
-  let imageProfile = null;
-  if (attachmentIds.length > 0 && !isUpdateInProgress()) {
-    const snapshot = await loadState();
-    const mind = normalizePersistentMindState(snapshot.persistentMind);
-    if (!findMessageById(mind, messageId) && !mind.recentMessageIds.includes(messageId)) {
-      imageProfile = presetId
-        ? currentPreset(snapshot.config)
-        : normalizePersistentMindProfile(snapshot.config?.persistentMindProfile);
-      if (submittedSelection && !samePersistentMindThinkingSelection(submittedSelection, imageProfile)) imageProfile = null;
-    }
-  }
-  const admitMessage = (imageCheck) => mutateMindState(async (mind, root) => {
-    if (attachmentIds.length > 0 && isUpdateInProgress()) {
-      return {
-        mind,
-        value: attachmentFailure('Persistent Mind image admission is paused during a PortOS update', {
-          code: 'UPDATE_IN_PROGRESS',
-          status: 409,
-        }),
-      };
-    }
-    const existingMessage = findMessageById(mind, messageId);
-    const claimedRecords = claimedAttachmentsForMessage(mind, messageId);
-    const duplicate = Boolean(existingMessage) || mind.recentMessageIds.includes(messageId);
-    const recentReceipt = mind.recentMessageFingerprints.find((entry) => entry.id === messageId);
-    const acceptedSelection = existingMessage?.thinkingPreset || recentReceipt?.thinkingPreset || null;
-    const requestedFingerprint = persistentMindMessageFingerprint({
-      text: messageText,
-      images: attachmentIds,
-      thinkingPresetId: presetId,
-      thinkingPreset: submittedSelection || acceptedSelection,
-    });
-    const recentFingerprint = recentReceipt?.fingerprint;
-    const existingImageIds = existingMessage
-      ? imageIdsForMessage(existingMessage)
-      : claimedRecords.map((attachment) => attachment.attachmentId);
-    if (duplicate) {
-      if (!existingMessage && !recentFingerprint) {
-        return {
-          mind,
-          value: attachmentFailure('This completed message predates retry verification; send it again with a new message id', {
-            code: 'IDEMPOTENCY_CONFLICT',
-            status: 409,
-          }),
-        };
-      }
-      if (!existingMessage && recentFingerprint && recentFingerprint !== requestedFingerprint) {
-        return {
-          mind,
-          value: attachmentFailure('A retry must use the same Persistent Mind message content', {
-            code: 'IDEMPOTENCY_CONFLICT',
-            status: 409,
-          }),
-        };
-      }
-      if (existingMessage && existingMessage.text !== messageText) {
-        return {
-          mind,
-          value: attachmentFailure('A retry must use the same Persistent Mind message text', {
-            code: 'IDEMPOTENCY_CONFLICT',
-            status: 409,
-          }),
-        };
-      }
-      if (existingMessage && (existingMessage.thinkingPresetId || '') !== presetId) {
-        return {
-          mind,
-          value: attachmentFailure('A retry must use the same Persistent Mind thinking preset', {
-            code: 'IDEMPOTENCY_CONFLICT',
-            status: 409,
-          }),
-        };
-      }
-      if (existingMessage && submittedSelection
-          && !samePersistentMindThinkingSelection(submittedSelection, acceptedSelection)) {
-        return {
-          mind,
-          value: attachmentFailure('A retry must use the same accepted thinking route', {
-            code: 'IDEMPOTENCY_CONFLICT',
-            status: 409,
-          }),
-        };
-      }
-      if (!sameAttachmentIds(existingImageIds, attachmentIds)) {
-        return {
-          mind,
-          value: attachmentFailure('A retry must use the same Persistent Mind image references', {
-            code: 'IDEMPOTENCY_CONFLICT',
-            status: 409,
-          }),
-        };
-      }
-      const resolved = await resolveMessageAttachments(mind, attachmentIds, messageId);
-      if (resolved.error) return { mind, value: resolved.error };
-      return {
-        mind,
-        value: {
-          success: true,
-          duplicate: true,
-          messageId,
-          acceptedMessage: existingMessage || messageFromAttachments({
-            id: messageId,
-            text: messageText,
-            createdAt: messageCreatedAt,
-            attachments: resolved.attachments,
-            thinkingPresetId: presetId,
-            thinkingPreset: acceptedSelection,
-          }),
-        },
-      };
-    }
-    // Resolve new admissions inside the same state update that accepts them.
-    // Matching retries above use their receipt, even if the preset was revoked.
-    const selection = currentPreset(root.config);
-    if (presetId && !selection) {
-      return { mind, value: attachmentFailure('The temporary thinking preset is unavailable', {
-        code: 'THINKING_PRESET_UNAVAILABLE', status: 422,
-      }) };
-    }
-    if (submittedSelection && !samePersistentMindThinkingSelection(submittedSelection, selection)) {
-      return { mind, value: attachmentFailure('The displayed preset changed; select its current route before sending', {
-        code: 'THINKING_PRESET_CHANGED', status: 409,
-      }) };
-    }
-    if (attachmentIds.length > 0) {
-      const profile = selection || normalizePersistentMindProfile(root.config?.persistentMindProfile);
-      if (!imageCheck || imageCheck.providerId !== profile.providerId || imageCheck.model !== profile.model) {
-        return { mind, value: { retryImageProfile: profile } };
-      }
-      if (!imageCheck.allowed) {
-        return { mind, value: attachmentFailure(imageCheck.reason, { code: 'IMAGE_CAPABILITY_UNSUPPORTED', status: 422 }) };
-      }
-    }
-    if (claimedRecords.length > 0 && !sameAttachmentIds(
-      claimedRecords.map((attachment) => attachment.attachmentId),
-      attachmentIds,
-    )) {
-      return {
-        mind,
-        value: attachmentFailure('A retry must use the same Persistent Mind image references', {
-          code: 'IDEMPOTENCY_CONFLICT',
-          status: 409,
-        }),
-      };
-    }
-    const resolved = await resolveMessageAttachments(mind, attachmentIds, messageId);
-    if (resolved.error) return { mind, value: resolved.error };
-    const acceptedMessageCount = mind.queuedMessages.length
-      + (mind.activeTurn?.wake.kind === 'message' ? 1 : 0);
-    if (acceptedMessageCount >= PERSISTENT_MIND_LIMITS.MAX_QUEUED_MESSAGES) {
-      return { mind, value: attachmentFailure('Persistent mind message queue is full', { code: 'QUEUE_FULL', status: 409 }) };
-    }
-    // Once the state mutation below records the claim, the attachment is a
-    // durable conversation asset. Removing the pending marker first is safe:
-    // if this process stops before saveState, the still-unclaimed state record
-    // continues to protect the valid file from cleanup.
-    for (const attachment of resolved.attachments) {
-      await removePendingAttachmentMarker(attachment.attachmentId);
-    }
-    const claimedAt = nowIso();
-    const requestedIds = new Set(attachmentIds);
-    const pendingAttachments = mind.pendingAttachments.map((attachment) => {
-      if (!requestedIds.has(attachment.attachmentId)) return attachment;
-      return {
-        ...attachment,
-        claimedBy: messageId,
-        claimedAt,
-        claimIndex: attachmentIds.indexOf(attachment.attachmentId),
-        expiresAt: null,
-      };
-    });
-    const message = messageFromAttachments({
-      id: messageId,
-      text: messageText,
-      createdAt: messageCreatedAt,
-      attachments: resolved.attachments,
-      thinkingPresetId: presetId,
-      thinkingPreset: selection,
-    });
-    return {
-      mind: {
-        ...mind,
-        pendingAttachments,
-        queuedMessages: [...mind.queuedMessages, message],
-        // Sending a new message is explicit consent to start/resume. Keep an
-        // in-flight turn intact; FIFO admission picks this message up next.
-        enabled: true,
-        started: true,
-        status: mind.activeTurn ? mind.status : 'waiting',
-        pauseReason: null,
-        nextEligibleWakeAt: null,
-      },
-      value: { success: true, duplicate: false, messageId, acceptedMessage: message },
-    };
-  });
-  let result = await admitMessage(await probeMessageImageProfile(imageProfile));
-  if (result.value.retryImageProfile) {
-    result = await admitMessage(await probeMessageImageProfile(result.value.retryImageProfile));
-    if (result.value.retryImageProfile) {
-      return attachmentFailure('The image route changed during admission; retry this message', {
-        code: 'IMAGE_PROFILE_CHANGED', status: 409,
-      });
-    }
-  }
-  if (result.value.success) {
-    // Retry the stable event id even when the mutable queue already saw this
-    // message. The ledger deduplicates a healthy first append; if the first
-    // append was dropped, the caller's idempotent retry repairs the trajectory.
-    const acceptedMessage = result.value.acceptedMessage;
-    await appendMindEvent({
-      kind: 'mind.message.accepted',
-      mindId: result.state.mindId,
-      eventId: `mind-message:${messageId}`,
-      at: acceptedMessage.createdAt,
-      data: {
-        messageId,
-        displayText: acceptedMessage.text,
-        textChars: acceptedMessage.text.length,
-        thinkingPresetId: acceptedMessage.thinkingPresetId || null,
-        thinkingPreset: acceptedMessage.thinkingPreset || null,
-        imageCount: Array.isArray(acceptedMessage.images) ? acceptedMessage.images.length : 0,
-        images: Array.isArray(acceptedMessage.images)
-          ? acceptedMessage.images.map(normalizePersistentMindMessageImage).filter(Boolean)
-          : [],
-      },
-    });
-  }
-  if (result.value.success && !result.value.duplicate) {
-    cancelUsageLimitProbe();
-    usageLimitProbeAttempt = 0;
-    armWatchdog();
-  }
-  if (result.value.success && result.state.started) await scheduleNextWake();
-  emitMindStatus(result.state);
-  const publicResult = { ...result.value };
-  delete publicResult.acceptedMessage;
-  return publicResult;
-}
-
 export async function drainPersistentMind({ rearm = true } = {}) {
   if (activeRun) return activeRun;
   const run = runOnePersistentMindTurn();
   activeRun = run.finally(async () => {
     activeRun = null;
-    activeAbortController = null;
+    runtime.controller = null;
     if (rearm) await scheduleNextWake();
   });
   return activeRun;
@@ -1701,7 +386,7 @@ export async function checkPersistentMindWatchdog(now = Date.now()) {
 }
 
 export async function initializePersistentMindSupervisor() {
-  supervisorStopping = false;
+  runtime.stopping = false;
   await cleanupPersistentMindAttachments();
   const recovered = await mutateMindState((mind, root) => {
     if (!mind.enabled || !mind.started) return { mind };
@@ -1774,30 +459,28 @@ export async function handlePersistentMindGlobalResume() {
 }
 
 export async function shutdownPersistentMindSupervisor() {
-  supervisorStopping = true;
-  runtimeGeneration += 1;
-  activeAbortController?.abort('Chief of Staff daemon stopped');
+  runtime.stopping = true;
+  runtime.generation += 1;
+  runtime.controller?.abort('Chief of Staff daemon stopped');
   cancel(PERSISTENT_MIND_WAKE_EVENT_ID);
   cancel(PERSISTENT_MIND_WATCHDOG_EVENT_ID);
-  cancelUsageLimitProbe();
-  usageLimitProbeAttempt = 0;
+  resetUsageLimitProbe();
   const state = await getPersistentMindState();
   if (!state.activeTurn) return state;
   return (await interruptActiveTurn('Chief of Staff daemon stopped', 'interrupted', { retry: true })).state;
 }
 
 export function __resetPersistentMindSupervisorForTests() {
-  turnAdapter = null;
+  runtime.adapter = null;
   activeRun = null;
-  activeAbortController = null;
-  runtimeGeneration = 0;
-  supervisorStopping = false;
-  usageLimitProbeAttempt = 0;
+  runtime.controller = null;
+  runtime.generation = 0;
+  runtime.stopping = false;
   lastWatchdogCheckAt = null;
   watchdogResumedAt = null;
   cancel(PERSISTENT_MIND_WAKE_EVENT_ID);
   cancel(PERSISTENT_MIND_WATCHDOG_EVENT_ID);
-  cancel(PERSISTENT_MIND_USAGE_LIMIT_PROBE_EVENT_ID);
+  resetUsageLimitProbe();
 }
 
 export const recheckPersistentMindSchedule = () => scheduleNextWake();
