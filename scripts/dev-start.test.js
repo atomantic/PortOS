@@ -7,12 +7,22 @@ import { DEV_PM2_APPS, runDev } from './dev-start.js';
 import { listPm2Processes } from './pm2-start.js';
 
 vi.mock('child_process', () => ({ execFileSync: vi.fn(), spawn: vi.fn() }));
+vi.mock('module', () => ({
+  createRequire: () => ({
+    resolve(specifier) {
+      if (specifier === 'pm2/package.json') return pm2Manifest;
+      throw new Error(`Unexpected package resolution: ${specifier}`);
+    }
+  })
+}));
 vi.mock('./pm2-start.js', async (importOriginal) => ({
   ...await importOriginal(),
   listPm2Processes: vi.fn()
 }));
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
+const pm2Manifest = join(root, 'fixture', 'pm2', 'package.json');
+const pm2Path = join(dirname(pm2Manifest), 'bin', 'pm2');
 const foreignRoot = join(root, 'data', 'cos', 'worktrees', 'fixture');
 const cos = 'portos-cos';
 const ui = 'portos-ui';
@@ -39,12 +49,15 @@ function beginDev(flags = []) {
   const signals = new EventEmitter();
   const child = new EventEmitter();
   child.kill = vi.fn();
-  const { promise: ready, resolve } = Promise.withResolvers();
+  const { promise: spawned, resolve } = Promise.withResolvers();
   spawn.mockImplementation(() => {
     resolve();
     return child;
   });
   const done = runDev(flags, signals);
+  const ready = Promise.race([spawned, done.then(() => {
+    throw new Error('Dev startup finished before spawning PM2 logs');
+  })]);
   return { ready, done, signals, child };
 }
 
@@ -67,7 +80,7 @@ describe('development PM2 startup', () => {
     await expect(done).resolves.toBe(0);
     expect(commands()).toEqual([...startupScripts, ...deletes([...registered, oldDashboard]), ecosystemStart(services)]);
     expect(execFileSync.mock.invocationCallOrder[2]).toBeLessThan(listPm2Processes.mock.invocationCallOrder[0]);
-    expect(spawn).toHaveBeenCalledWith(process.execPath, [expect.stringMatching(/[\\/]pm2$/), 'logs'],
+    expect(spawn).toHaveBeenCalledWith(process.execPath, [pm2Path, 'logs'],
       expect.objectContaining({ cwd: root, windowsHide: true }));
   });
 
@@ -131,12 +144,19 @@ describe('development PM2 startup', () => {
     expect(spawn).not.toHaveBeenCalled();
   });
 
+  it('reports a startup failure before waiting for the log tail', async () => {
+    listPm2Processes.mockRejectedValueOnce(new Error('inventory unavailable'));
+    const { ready } = beginDev();
+    await expect(ready).rejects.toThrow('could not inspect PM2 (inventory unavailable)');
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
   it.each([['SIGINT', 130], ['SIGTERM', 143]])('forwards %s and waits for the log tail to close', async (signal, code) => {
     listPm2Processes.mockResolvedValueOnce([]).mockResolvedValueOnce(inventory(0));
     const { child, signals, ready, done } = beginDev();
     const exited = vi.fn();
-    const finished = done.then(exited);
     await ready;
+    const finished = done.then(exited);
     signals.emit(signal);
     expect(child.kill).toHaveBeenCalledExactlyOnceWith(signal);
     await Promise.resolve();
