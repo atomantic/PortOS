@@ -16,12 +16,12 @@
  * Protocol (postMessage; every message carries `source: CODE_FRAME_SOURCE`,
  * shared by both frame documents):
  *   panel → frame  { type: 'play', code } · { type: 'stop' }
- *                  { type: 'record', code, seconds }
+ *                  { type: 'record', code, seconds, recordingId }
  *   frame → panel  { type: 'ready' }
  *                  { type: 'state', state: 'playing' | 'stopped' | 'recording' | 'blocked' }
  *                  { type: 'error', message }
  *                  { type: 'progress', seconds }       while recording
- *                  { type: 'recorded', wav, durationSec }  wav: a transferred ArrayBuffer
+ *                  { type: 'recorded', wav, durationSec, recordingId }  wav: a transferred ArrayBuffer
  *
  * Recording taps the frame's audio graph. Before either bundle loads, the
  * frame wraps `AudioNode.prototype.connect` so every connection into an
@@ -238,7 +238,7 @@ const FRAME_CONTROLLER = `
     return { buffer, peak };
   };
 
-  const record = (code, seconds) => whenAudible(async () => {
+  const record = (code, seconds, recordingId) => whenAudible(async () => {
     stopRecording();
     lib.hush();
     const ctx = lib.getAudioContext();
@@ -261,7 +261,7 @@ const FRAME_CONTROLLER = `
       const { buffer, peak } = encodeWav(done);
       if (peak < 0.0005) { fail('The code played only silence, so there is nothing to save.'); setState('stopped'); return; }
       show('Recorded');
-      post({ type: 'recorded', wav: buffer, durationSec: done.frames / ctx.sampleRate }, [buffer]);
+      post({ type: 'recorded', wav: buffer, durationSec: done.frames / ctx.sampleRate, recordingId }, [buffer]);
       setState('stopped');
     }, 250);
   });
@@ -273,7 +273,7 @@ const FRAME_CONTROLLER = `
     const code = typeof msg.code === 'string' ? msg.code : '';
     if (!code.trim()) { fail('There is no code to run.'); return; }
     if (msg.type === 'play') play(code).catch(fail);
-    else if (msg.type === 'record') record(code, Math.max(1, Math.min(600, Number(msg.seconds) || 30))).catch(fail);
+    else if (msg.type === 'record') record(code, Math.max(1, Math.min(600, Number(msg.seconds) || 30)), msg.recordingId).catch(fail);
   });
 
   ready.then(() => { show('Ready'); post({ type: 'ready' }); }, fail);
@@ -459,7 +459,7 @@ const TONE_FRAME_CONTROLLER = `
     return { buffer, peak };
   };
 
-  const record = (code, seconds) => whenAudible(async () => {
+  const record = (code, seconds, recordingId) => whenAudible(async () => {
     stopRecording();
     resetTransport();
     const ctx = Tone.getContext().rawContext;
@@ -482,7 +482,7 @@ const TONE_FRAME_CONTROLLER = `
       const { buffer, peak } = encodeWav(done);
       if (peak < 0.0005) { fail('The code played only silence, so there is nothing to save.'); setState('stopped'); return; }
       show('Recorded');
-      post({ type: 'recorded', wav: buffer, durationSec: done.frames / ctx.sampleRate }, [buffer]);
+      post({ type: 'recorded', wav: buffer, durationSec: done.frames / ctx.sampleRate, recordingId }, [buffer]);
       setState('stopped');
     }, 250);
   });
@@ -494,7 +494,7 @@ const TONE_FRAME_CONTROLLER = `
     const code = typeof msg.code === 'string' ? msg.code : '';
     if (!code.trim()) { fail('There is no code to run.'); return; }
     if (msg.type === 'play') play(code).catch(fail);
-    else if (msg.type === 'record') record(code, Math.max(1, Math.min(600, Number(msg.seconds) || 30))).catch(fail);
+    else if (msg.type === 'record') record(code, Math.max(1, Math.min(600, Number(msg.seconds) || 30)), msg.recordingId).catch(fail);
   });
 
   show('Ready');
