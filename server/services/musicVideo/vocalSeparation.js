@@ -97,7 +97,7 @@ export function cancelVocalSeparation(jobId) {
   const job = separationJobs.get(jobId);
   if (!job) return false;
   if (job.settled) return CANCEL_ALREADY_TERMINAL;
-  job.cancelRequested = true;
+  job.abort.abort(canceledRun());
   return true;
 }
 
@@ -108,7 +108,7 @@ const canceledRun = () => Object.assign(new Error('cancelled'), { canceled: true
  * `reused: true` when a separation for this project is already running).
  * Throws before a job exists when the project or its audio is missing.
  */
-export async function startVocalSeparation(projectId, { deps = {}, onProgress = null, isCancelled = () => false } = {}) {
+export async function startVocalSeparation(projectId, { deps = {}, onProgress = null, isCancelled } = {}) {
   const d = {
     getProject,
     attachVocalStem: async (...args) => (await import('./vocalStem.js')).attachVocalStem(...args),
@@ -128,7 +128,7 @@ export async function startVocalSeparation(projectId, { deps = {}, onProgress = 
   const raced = getActiveVocalSeparationJobId(projectId);
   if (raced) return { jobId: raced, reused: true };
   const jobId = randomUUID();
-  const job = { id: jobId, clients: [], settled: false, cancelRequested: false, observers: new Set(onProgress ? [onProgress] : []) };
+  const job = { id: jobId, clients: [], settled: false, abort: new AbortController(), observers: new Set(onProgress ? [onProgress] : []) };
   separationJobs.set(jobId, job);
   activeByProject.set(projectId, jobId);
   console.log(`🎙️ Vocal separation ${shortId(jobId)} started for ${projectId}`);
@@ -141,10 +141,13 @@ export async function startVocalSeparation(projectId, { deps = {}, onProgress = 
         try { observer(frame); } catch (err) { console.error(`❌ Vocal separation progress observer failed: ${err.message}`); }
       }
     };
-    const checkCancel = () => { if (job.cancelRequested || isCancelled()) throw canceledRun(); };
+    const { signal } = job.abort;
+    const checkCancel = () => { if (signal.aborted || isCancelled?.()) throw canceledRun(); };
     try {
       progress({ stage: 'preparing' });
-      const python = await ensureDemucsRuntime({ onProgress: progress, run: d.run, resolveBasePython: d.resolveBasePython });
+      const python = await ensureDemucsRuntime({
+        onProgress: progress, run: d.run, resolveBasePython: d.resolveBasePython, signal, isCancelled,
+      });
       checkCancel();
       outDir = await mkdtemp(join(tmpdir(), 'portos-demucs-'));
       const separate = (device) => {
@@ -160,10 +163,12 @@ export async function startVocalSeparation(projectId, { deps = {}, onProgress = 
           timeoutMs: SEPARATE_TIMEOUT_MS,
           splitRe: /[\r\n]+/,
           env: { ...process.env, PYTORCH_ENABLE_MPS_FALLBACK: '1' },
-          isCancelled: () => job.cancelRequested || isCancelled(),
+          signal,
+          isCancelled,
         });
       };
       const device = _pickDemucsDevice({ cudaAvailable: await d.cudaAvailable() });
+      checkCancel();
       let result = await separate(device);
       checkCancel();
       if (!result.success && device !== 'cpu') {
@@ -180,15 +185,17 @@ export async function startVocalSeparation(projectId, { deps = {}, onProgress = 
       if (!current || audioSourceKey(current) !== audioSourceKey(project)) {
         throw new ServerError('The project\'s song changed while the vocals were separating. Run Separate vocals again.', { status: 409, code: 'MUSIC_VIDEO_AUDIO_CHANGED' });
       }
+      checkCancel();
       progress({ stage: 'attaching', percent: 100 });
       const updated = await d.attachVocalStem(projectId, { tempPath: vocals, originalName: stemName(project), sourcePath: audioPath });
       console.log(`✅ Vocal separation ${shortId(jobId)} attached ${updated?.vocalStemFilename} to ${projectId}`);
       broadcastSse(job, { type: 'complete', project: updated });
       return { project: updated };
     } catch (err) {
-      if (err?.canceled || job.cancelRequested) {
+      if (err?.canceled || err?.name === 'AbortError' || signal.aborted) {
         console.log(`🛑 Vocal separation ${shortId(jobId)} cancelled`);
         broadcastSse(job, { type: 'canceled' });
+        return { error: canceledRun() };
       } else {
         console.error(`❌ Vocal separation ${shortId(jobId)} failed: ${err?.message || err}`);
         broadcastSse(job, { type: 'error', error: err?.message || String(err), ...(err?.code ? { code: err.code } : {}) });
