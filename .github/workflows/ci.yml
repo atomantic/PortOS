@@ -732,6 +732,7 @@ jobs:
         env:
           PORTOS_TEST_MEMO_DIR: ${{ runner.temp }}/portos-test-memo
           PORTOS_CI_DIAGNOSTICS_DIR: ${{ runner.temp }}/portos-ci-diagnostics
+          PORTOS_CI_OBSERVE_VITEST: 1
           # Outside the launcher's disposable temp root; recoverable after exit.
           CI_TEST_MODE: ${{ fromJSON(needs.impact.outputs.plan).windows_mode }}
           CI_TEST_FILES: ${{ toJSON(fromJSON(needs.impact.outputs.plan).windows_files) }}

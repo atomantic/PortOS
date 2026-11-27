@@ -137,6 +137,7 @@ export const WINDOWS_RISK_RULES = [
 // one shared process helper must not pull all its application consumers onto
 // Windows. Full, scheduled and release plans retain this same native set.
 export const WINDOWS_CONTRACT_TESTS = [
+  'scripts/ci-test-diagnostics.test.js',
   'scripts/update-headless-recovery.test.js',
   'scripts/update-submodules.test.js',
   // Launch, prompt transport, executable discovery and environment/cwd safety.
