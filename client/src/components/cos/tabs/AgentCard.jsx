@@ -227,7 +227,7 @@ function GoalFidelityFollowUp({ followUp }) {
   );
 }
 
-export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, onRelaunch, completed, paused = false, liveOutput, durations, onFeedbackChange, remote, peerName, initiallyExpanded = false }) {
+export default function AgentCard({ agent, providers, onPause, onKill, onDelete, onResume, onRelaunch, completed, paused = false, liveOutput, durations, onFeedbackChange, remote, peerName, initiallyExpanded = false }) {
   // Every surface of this card that renders the agent's own prose resolves a
   // bare `#7640` against the run's tracker through the one resolver.
   const linkifyIssues = useMemo(() => agentIssueLinkifier(agent), [agent]);
@@ -297,7 +297,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
           </div>
         )}
 
-        <AgentConfigurationBadges agent={agent} />
+        <AgentConfigurationBadges agent={agent} providers={providers} />
         <AgentLiveActivity inactive={inactive} output={output} />
         <AgentCardBtw agent={agent} inactive={inactive} remote={remote} />
 

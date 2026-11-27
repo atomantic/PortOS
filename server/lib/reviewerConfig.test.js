@@ -13,7 +13,6 @@ import {
   MODEL_CAPABLE_CLI_REVIEWERS,
   APPLY_CAPABLE_REVIEWERS,
   isApplyCapableReviewer,
-  MODEL_SELECTABLE_REVIEWERS,
   NON_REVIEWER_VENDORS,
   pairReviewerModelsAndEfforts,
   reviewerModelsFromDefaults,
@@ -31,7 +30,6 @@ import {
   buildReviewerPinNote,
   buildReviewersCsv,
   resolveProviderReviewerSlug,
-  BRACKET_MODEL_REVIEWERS,
   claimSafeReviewers,
   prioritizeToolFreeReviewers,
   resolveReviewerConfig,
@@ -41,14 +39,11 @@ import {
   reviewerModelFlag,
   splitSlashdoReviewerTokens,
   PORTOS_ONLY_REVIEWERS,
-  DEFAULT_REVIEWERS,
-  REVIEW_STOP_MODES,
   REVIEWER_OVERRIDE_KEYS,
   REVIEWER_LIST_OVERRIDE_KEYS,
   hasReviewerOverride,
   DEFAULT_REVIEW_STOP_MODE,
   MAX_REVIEW_USERNAMES,
-  MAX_REVIEWER_MAX_ROUNDS,
   normalizeReviewUsernames,
   hasRequiredReviewer,
   isOptionalReviewer,
@@ -429,133 +424,25 @@ describe('per-reviewer reasoning effort (reviewerEfforts)', () => {
   });
 });
 
-// The picker's Effort cell is driven by a CLIENT mirror of these ladders. A level
-// offered there but rejected here would show the user a pin that silently never
-// persists (and the reverse would hide a tier their CLI accepts), so the mirror is
-// pinned rather than trusted to a "keep in sync" comment.
-describe('client mirror of the reviewer vocabulary', () => {
-  it('matches server reviewerEffortLevels for every reviewer', async () => {
-    // The dependency-free leaf, NOT `components/cos/constants.js` (which re-exports
-    // these but also imports `lucide-react` — absent from the server workspace, so
-    // importing it here fails CI with ERR_MODULE_NOT_FOUND).
-    const client = await import('../../client/src/lib/reviewerPins.js');
-    expect([...client.EFFORT_SELECTABLE_REVIEWERS].sort()).toEqual([...EFFORT_SELECTABLE_REVIEWERS].sort());
-    expect(client.LOCAL_LLM_EFFORT_LEVELS).toEqual(LOCAL_LLM_EFFORT_LEVELS);
-    for (const reviewer of REVIEWER_VALUES) {
-      expect(client.reviewerEffortLevels(reviewer) ?? null).toEqual(reviewerEffortLevels(reviewer) ?? null);
-    }
-    for (const model of ['gpt-5.6', 'gpt-5.6-sol', 'gpt-6-astra', 'gpt-6', 'gpt-5.5', 'o3']) {
-      expect(client.reviewerEffortLevels('codex', model)).toEqual(reviewerEffortLevels('codex', model));
-    }
-    // Alias parity too — the picker keys rows off stored slugs.
-    expect(client.reviewerEffortLevels('gemini')).toEqual(reviewerEffortLevels('gemini'));
-  });
-
-  // Same failure mode one column over: a reviewer the picker offers a Model cell
-  // for but the server drops the pin from (or vice versa — a CLI whose `--model`
-  // the UI hides). The two rosters drove `antigravity` out of sync until #3728.
-  it('matches the server model-pin rosters', async () => {
-    const client = await import('../../client/src/lib/reviewerPins.js');
-    expect([...client.MODEL_CAPABLE_CLI_REVIEWERS].sort()).toEqual([...MODEL_CAPABLE_CLI_REVIEWERS].sort());
-    expect([...client.MODEL_SELECTABLE_REVIEWERS].sort()).toEqual([...MODEL_SELECTABLE_REVIEWERS].sort());
-    expect([...client.BRACKET_MODEL_REVIEWERS].sort()).toEqual([...BRACKET_MODEL_REVIEWERS].sort());
-    expect([...client.PORTOS_ONLY_REVIEWERS].sort()).toEqual([...PORTOS_ONLY_REVIEWERS].sort());
-  });
-
-  // The picker gates its reviewer-applies toggle on this, and `buildReviewWithArgs`
-  // gates the emitted flag on it. Drift shows the toggle for a reviewer whose
-  // editing pass slashdo would force back to review-only, or hides it from the one
-  // reviewer the flag reaches.
-  it('matches the server apply-capable roster', async () => {
-    const client = await import('../../client/src/lib/reviewerPins.js');
-    expect([...client.APPLY_CAPABLE_REVIEWERS].sort()).toEqual([...APPLY_CAPABLE_REVIEWERS].sort());
-    // Aliases and casing included: REVIEWER_VALUES alone is all-canonical, so it
-    // would pass even if one side resolved aliases and the other did not.
-    const probes = [...REVIEWER_VALUES, ...Object.keys(REVIEWER_ALIASES), 'CODEX', ' codex ', '', null];
-    for (const slug of probes) {
-      expect(client.isApplyCapableReviewer(slug), String(slug)).toBe(isApplyCapableReviewer(slug));
-    }
-    expect(isApplyCapableReviewer('CODEX')).toBe(true);
+describe('reviewer vocabulary', () => {
+  it('recognizes apply-capable reviewers regardless of casing and spacing', () => {
+    expect(isApplyCapableReviewer(' CODEX ')).toBe(true);
     expect(isApplyCapableReviewer('antigravity')).toBe(false);
-    // Every apply-capable slug is a reviewer the picker can actually offer.
     for (const slug of APPLY_CAPABLE_REVIEWERS) expect(REVIEWER_VALUES).toContain(slug);
   });
 
-  // The roster itself. A reviewer added on one side only is the `antigravity`
-  // drift of #3728: the picker offers a reviewer the server's enum rejects (the
-  // save 400s), or the server gains one the user can never select.
-  it('matches the server reviewer roster', async () => {
-    const client = await import('../../client/src/lib/reviewerPins.js');
-    expect([...client.REVIEWER_VALUES].sort()).toEqual([...REVIEWER_VALUES].sort());
-    for (const token of ['provider:example-gpu', 'provider:custom-1', 'provider:', 'provider:foo,claude', 'provider:foo~opt', 'provider:foo[model]', 'provider:UPPER', 'claude']) {
-      expect(client.isProviderReviewer(token)).toBe(isProviderReviewer(token));
+  it('recognizes provider ids while rejecting slashdo token delimiters', () => {
+    expect(isProviderReviewer('provider:example-gpu')).toBe(true);
+    for (const token of ['provider:', 'provider:foo,claude', 'provider:foo~opt', 'provider:foo[model]', 'provider:UPPER', 'claude']) {
+      expect(isProviderReviewer(token)).toBe(false);
     }
   });
 
-  // Aliases resolve slugs already stored on tasks (`gemini`, `cursor-agent`). One
-  // dropped client-side turns a saved reviewer into a row the picker can't render.
-  it('matches the server reviewer aliases', async () => {
-    const client = await import('../../client/src/lib/reviewerPins.js');
-    expect(client.REVIEWER_ALIASES).toEqual(REVIEWER_ALIASES);
-  });
-
-  // Defaults and caps. A cap the input offers above the server's ceiling is
-  // silently dropped on save, which reads to the user as the field not working.
-  it('matches the server defaults and caps', async () => {
-    const client = await import('../../client/src/lib/reviewerPins.js');
-    expect(client.DEFAULT_REVIEWER).toBe(DEFAULT_REVIEWER);
-    expect(client.DEFAULT_REVIEWERS).toEqual(DEFAULT_REVIEWERS);
-    expect(client.MAX_REVIEWER_MAX_ROUNDS).toBe(MAX_REVIEWER_MAX_ROUNDS);
-    expect(client.MAX_REVIEW_USERNAMES).toBe(MAX_REVIEW_USERNAMES);
-  });
-
-  // The override roster decides two things that must agree: the picker's "Use
-  // system Code Review Defaults" reset (client) removes exactly these keys, and
-  // the claim-reviewer lookup (server) calls a task an override when any is
-  // present. A key on one side only means the reset leaves a pin behind while
-  // the lookup keeps reporting `task-override` for a task the user just cleared.
-  it('matches the server reviewer-override key rosters and predicate', async () => {
-    const client = await import('../../client/src/lib/reviewerPins.js');
-    expect(client.REVIEWER_OVERRIDE_KEYS).toEqual([...REVIEWER_OVERRIDE_KEYS]);
-    expect(client.REVIEWER_LIST_OVERRIDE_KEYS).toEqual([...REVIEWER_LIST_OVERRIDE_KEYS]);
-    // The predicate too, not just the roster: "presence, not truthiness" is the
-    // half that is easy to get wrong, and a client copy that used `||` would
-    // silently disagree about whether an explicitly-cleared pin is an override.
-    for (const metadata of [
-      { reviewers: ['codex'] }, { optionalReviewers: [] }, { reviewerModels: {} },
-      { reviewStopMode: 'on-clean' }, { reviewerApplies: true }, { claimFlow: true }, null, [],
-    ]) {
-      expect(client.hasReviewerOverride(metadata)).toBe(hasReviewerOverride(metadata));
-    }
-  });
-
-  // Stop modes: the client rows carry UI copy, but their `value`s are the enum
-  // the save is validated against. An extra row 400s the whole task update.
-  it('matches the server review stop modes', async () => {
-    const client = await import('../../client/src/lib/reviewerPins.js');
-    expect(client.REVIEW_STOP_MODES.map(m => m.value)).toEqual([...REVIEW_STOP_MODES]);
-    expect(client.DEFAULT_REVIEW_STOP_MODE).toBe(DEFAULT_REVIEW_STOP_MODE);
-  });
-
-  // The username pattern and cap are two independent facts, and neither side's
-  // own tests can see a divergence — only running the same inputs through both
-  // normalizers can. The 25 valid entries exercise the cap, the rest the pattern.
-  it('normalizes review usernames identically to the server', async () => {
-    const client = await import('../../client/src/lib/reviewerPins.js');
-    const cases = [
-      ['@octocat'],
-      ['org/team'],
-      ['bad name'],
-      ['-lead'],
-      ['octocat', 'OCTOCAT', '@octocat'],
-      ['a'.repeat(40)],
-      ['', '   ', null, 42, undefined],
-      Array.from({ length: 25 }, (_, i) => `reviewer-${i}`),
-    ];
-    for (const input of cases) {
-      expect(client.normalizeReviewUsernames(input)).toEqual(normalizeReviewUsernames(input));
-    }
-    expect(client.normalizeReviewUsernames('not-an-array')).toEqual(normalizeReviewUsernames('not-an-array'));
+  it('normalizes usernames in first-occurrence order and caps the list', () => {
+    const names = Array.from({ length: MAX_REVIEW_USERNAMES }, (_, i) => `reviewer-${i}`);
+    expect(normalizeReviewUsernames([' @Octocat ', 'octocat', 'org/team', 'bad name', '-lead', null, ...names]))
+      .toEqual(['Octocat', 'org/team', ...names.slice(0, -2)]);
+    expect(normalizeReviewUsernames('octocat')).toEqual([]);
   });
 });
 
@@ -898,12 +785,6 @@ describe('model-gated reviewer effort levels', () => {
     expect(reviewerEffortArgs('codex', 'minimal', 'gpt-6-astra')).toEqual([]);
     // But normal effort works
     expect(reviewerEffortArgs('codex', 'high', 'gpt-6-astra')).toContain('model_reasoning_effort=high');
-  });
-
-  it('mirrors the model-gated ladder client-side', async () => {
-    const client = await import('../../client/src/lib/reviewerPins.js');
-    expect(client.reviewerEffortLevels('codex')).toContain('minimal');
-    expect(client.reviewerEffortLevels('codex', 'gpt-6-astra')).not.toContain('minimal');
   });
 });
 

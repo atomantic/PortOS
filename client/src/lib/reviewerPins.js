@@ -1,66 +1,43 @@
 /**
- * Client mirror of the reviewer vocabulary: `REVIEWER_VALUES`, aliases, defaults,
- * `normalizeReviewers`, and `resolveTaskOptionalReviewers`.
+ * Reviewer pin controls and shared reviewer vocabulary for the CoS UI.
  */
 
 import {
-  CLAUDE_EFFORT_LEVELS,
-  CODEX_EFFORT_LEVELS,
-  CURSOR_EFFORT_LEVELS,
-  GROK_EFFORT_LEVELS
-} from '../utils/providers';
-import { codexEffortLevelsForModel, effortLevelsForProvider, antigravityModelEffortLevels } from '../../../server/lib/provider/providerModels.js';
+  normalizeReviewUsernames,
+  REVIEWER_MODEL_FORBIDDEN_RE,
+  REVIEW_STOP_MODES as REVIEW_STOP_MODE_VALUES,
+} from '../../../server/lib/reviewerVocabulary.js';
 
-/**
- * Client mirrors of the reviewer vocabulary in `server/lib/reviewerConfig.js` —
- * the roster itself, its aliases and defaults, the review-username pattern and
- * cap, the max-rounds ceiling, the stop-mode list, and the per-reviewer PIN
- * vocabularies (which reviewers can carry a model or an effort pin, and which
- * values each one accepts).
- *
- * **Why these live in a leaf module rather than in `components/cos/constants.js`.**
- * The server suite pins this mirror against the server's own derived ladders (see
- * the `client mirror of the reviewer vocabulary` test in
- * `server/lib/reviewerConfig.test.js`) — a level offered here but rejected there
- * would show the user a pin that silently never persists, and the reverse would
- * hide a tier their CLI accepts. That test runs in the SERVER workspace, which has
- * no client dependencies installed, so anything it imports must not reach for one.
- * `components/cos/constants.js` imports `lucide-react` for its tab/state icons, so
- * importing the mirror from there fails CI with `Cannot find package
- * 'lucide-react'` even though the icons have nothing to do with reviewer pins.
- * Keeping the mirror in a dependency-free leaf lets the drift gate import it.
- *
- * `constants.js` re-exports every name here, so existing client imports are
- * unaffected.
- */
-
-// CLI reviewers whose binary takes a model id. Mirror of
-// MODEL_CAPABLE_CLI_REVIEWERS (`antigravity` runs `agy --model <id>`, `grok` runs
-// `grok --model <id>`, Cursor runs `cursor-agent --model <id>`, and `opencode`
-// runs `opencode run -m <provider/model>` — the server owns which flag spells it,
-// see `reviewerModelFlag`). This roster is deliberately wider than
-// EFFORT_SELECTABLE_REVIEWERS below: `grok`/`opencode`/`kimi` take a model but no
-// pickable effort, and Cursor takes both while carrying its effort INSIDE the
-// model id rather than as a separate flag.
-export const MODEL_CAPABLE_CLI_REVIEWERS = ['codex', 'claude', 'antigravity', 'grok', 'cursor', 'pi', 'opencode', 'kilo', 'kimi'];
-
-// The local-LLM backends, which take both a model and an effort.
-export const LOCAL_LLM_REVIEWERS = ['lmstudio', 'ollama', 'mtplx'];
-
-// Every reviewer whose model the user can pick per row in ReviewerPicker — the
-// model-capable CLIs plus the local-LLM backends. Mirror of
-// MODEL_SELECTABLE_REVIEWERS; keep in sync so the picker only offers a Model cell
-// where the server would keep the pin. `copilot` and `@username` take no model.
-export const MODEL_SELECTABLE_REVIEWERS = [...MODEL_CAPABLE_CLI_REVIEWERS, ...LOCAL_LLM_REVIEWERS];
-
-// Upper bound on a pinned reviewer model id. Mirror of MAX_REVIEWER_MODEL_LENGTH —
-// a longer id is dropped server-side, so the input must not accept one.
-export const MAX_REVIEWER_MODEL_LENGTH = 200;
-
-// Reasoning-effort ladder for the local-LLM reviewers — the OpenAI-compatible
-// `reasoning_effort` tier names both LM Studio and Ollama accept. Mirror of
-// LOCAL_LLM_EFFORT_LEVELS.
-export const LOCAL_LLM_EFFORT_LEVELS = Object.freeze(['low', 'medium', 'high']);
+export {
+  APPLY_CAPABLE_REVIEWERS,
+  BRACKET_MODEL_REVIEWERS,
+  DEFAULT_REVIEWER,
+  DEFAULT_REVIEWERS,
+  DEFAULT_REVIEW_STOP_MODE,
+  EFFORT_SELECTABLE_REVIEWERS,
+  LOCAL_LLM_EFFORT_LEVELS,
+  LOCAL_LLM_REVIEWERS,
+  MAX_REVIEWER_MAX_ROUNDS,
+  MAX_REVIEWER_MODEL_LENGTH,
+  MAX_REVIEW_USERNAMES,
+  MODEL_CAPABLE_CLI_REVIEWERS,
+  MODEL_SELECTABLE_REVIEWERS,
+  PORTOS_ONLY_REVIEWERS,
+  REVIEWER_ALIASES,
+  REVIEWER_EFFORT_LEVELS,
+  REVIEWER_LIST_OVERRIDE_KEYS,
+  REVIEWER_OVERRIDE_KEYS,
+  REVIEWER_VALUES,
+  cleanReviewUsername,
+  hasReviewerOverride,
+  isApplyCapableReviewer,
+  isProviderReviewer,
+  normalizeReviewUsernames,
+  normalizeReviewerSlug,
+  normalizeReviewers,
+  resolveProviderReviewerSlug,
+  reviewerEffortLevels,
+} from '../../../server/lib/reviewerVocabulary.js';
 
 // Which goal-fidelity verdicts fire the follow-up actions (file an issue /
 // queue a fix). Mirror of GOAL_FIDELITY_FOLLOW_UP_TRIGGERS in
@@ -69,198 +46,18 @@ export const LOCAL_LLM_EFFORT_LEVELS = Object.freeze(['low', 'medium', 'high']);
 export const GOAL_FIDELITY_FOLLOW_UP_TRIGGERS = Object.freeze(['rethink', 'any-finding']);
 export const DEFAULT_GOAL_FIDELITY_FOLLOW_UP_TRIGGER = 'rethink';
 
-// The effort ladder each reviewer offers, or absent when it has no effort control
-// (`copilot` is a GitHub review, and an
-// `@username` reviewer is a person). A ladder means the level is PICKABLE, not
-// that the CLI takes an `--effort` flag — `cursor` accepts one only as a
-// parameter of its model id, which the server folds in when it builds the
-// invocation. The CLI ladders come from the same
-// providers.js constants the server derives its own from, so the picker can only
-// offer a level the reviewer's binary actually accepts (`agy` really does reject
-// `--effort max`).
-export const REVIEWER_EFFORT_LEVELS = Object.freeze({
-  claude: CLAUDE_EFFORT_LEVELS,
-  codex: CODEX_EFFORT_LEVELS,
-  antigravity: effortLevelsForProvider({ harnessId: 'antigravity' }),
-  cursor: CURSOR_EFFORT_LEVELS,
-  pi: ['low', 'medium', 'high', 'xhigh', 'max'],
-  grok: GROK_EFFORT_LEVELS,
-  lmstudio: LOCAL_LLM_EFFORT_LEVELS,
-  ollama: LOCAL_LLM_EFFORT_LEVELS,
-  mtplx: LOCAL_LLM_EFFORT_LEVELS,
-});
-
-// Every reviewer whose effort the user can pick per row in ReviewerPicker.
-// Mirror of EFFORT_SELECTABLE_REVIEWERS.
-export const EFFORT_SELECTABLE_REVIEWERS = Object.freeze(Object.keys(REVIEWER_EFFORT_LEVELS));
-
-// Reviewer slug aliases. `gemini` is the historical name for the Antigravity CLI,
-// `cursor-agent` the binary name for `cursor`. Mirror of REVIEWER_ALIASES in
-// `server/lib/reviewerConfig.js` — a legacy slug the client stops resolving turns
-// a stored reviewer into a row the picker can no longer show.
-export const REVIEWER_ALIASES = { gemini: 'antigravity', 'cursor-agent': 'cursor' };
-
-// The canonical slug for a reviewer token: lower-cased, trimmed, aliases resolved.
-// `''` for a non-string. `@username` tokens ride through as-is (they're no
-// reviewer slug, so no lookup keyed on this can match one). Exported because any
-// caller that keys behavior on "is this the Antigravity reviewer?" must resolve
-// the `gemini` alias the same way the ladder lookup below does.
-export const normalizeReviewerSlug = (reviewer) => {
-  if (typeof reviewer !== 'string') return '';
-  const slug = reviewer.trim().toLowerCase();
-  return REVIEWER_ALIASES[slug] || slug;
-};
-
-// The ladder for one reviewer token, or `null` when it takes no effort. Accepts
-// the `gemini` alias and `@username` tokens (both → null for the latter).
-// For `codex` reviewers, the ladder is gated on the pinned model. Pass the model
-// id to get the server-owned tier set for that model; omit it to get the default
-// static ladder.
-export const reviewerEffortLevels = (reviewer, model = null, catalog = []) => {
-  const slug = normalizeReviewerSlug(reviewer);
-  if (!slug) return null;
-
-  const base = REVIEWER_EFFORT_LEVELS[slug] || null;
-
-  // For codex, use the server's model-gated ladder so the picker and CLI stay
-  // aligned as supported model families change.
-  if (slug === 'antigravity') return antigravityModelEffortLevels(model, catalog) ?? base;
-  if (slug === 'codex' && model && base) {
-    return codexEffortLevelsForModel(model);
-  }
-
-  return base;
-};
-
-// Characters that are STRUCTURAL in slashdo's emitted `--review-with` token and
-// have no escape inside the `[<model>]` selector, so the server drops an id
-// containing one (mirror of REVIEWER_MODEL_FORBIDDEN_RE). Stripped as the user
-// types rather than silently accepted, so the field can't display a pin the server
-// would refuse to store. A space is deliberately legal — `agy[Gemini 3.5 Flash
-// (High)]` is a valid entry.
-const REVIEWER_MODEL_FORBIDDEN_RE = /[[\],\r\n\t]/g;
-
-// Strip the structural characters from a typed model id. Trimming is left to the
-// caller: an id being typed may legitimately have a trailing space mid-entry.
+// Strip slashdo token delimiters as the user types, while preserving spaces in model ids.
+const reviewerModelDelimiters = new RegExp(REVIEWER_MODEL_FORBIDDEN_RE, 'g');
 export const sanitizeReviewerModelInput = (raw) =>
-  typeof raw === 'string' ? raw.replace(REVIEWER_MODEL_FORBIDDEN_RE, '') : '';
+  typeof raw === 'string' ? raw.replace(reviewerModelDelimiters, '') : '';
 
-// =============================================================================
-// REVIEWER ROSTER, DEFAULTS, AND CAPS
-//
-// Every constant below mirrors `server/lib/reviewerConfig.js` and is pinned by
-// the `client mirror of the reviewer vocabulary` drift test in
-// `server/lib/reviewerConfig.test.js`. They live in this leaf rather than in
-// `components/cos/constants.js` for the same reason as the pin vocabularies
-// above: that module imports `lucide-react`, so the server suite cannot import
-// it, and anything left there is guarded by a comment instead of a test.
-// =============================================================================
+const REVIEW_STOP_MODE_COPY = {
+  all: { label: 'Run all', description: 'Run every reviewer in order before merging (default)' },
+  'on-findings': { label: 'Stop on first fix', description: 'Stop after the first reviewer that landed a fix' },
+  'on-clean': { label: 'Stop on first clean', description: 'Stop after the first reviewer that reports zero findings' },
+};
 
-// The reviewer roster, and the client's SOURCE OF TRUTH for it: `REVIEWER_OPTIONS`
-// in `components/cos/constants.js` is derived from this list, so the picker can
-// never offer a slug the server's enum would reject. Mirror of REVIEWER_VALUES —
-// a reviewer listed here but unknown to the server leaves the user configuring a
-// review-loop reviewer that never runs; the reverse hides one their install has.
-export const REVIEWER_VALUES = ['copilot', 'claude', 'antigravity', 'codex', 'grok', 'cursor', 'pi', 'opencode', 'kilo', 'kimi', 'lmstudio', 'ollama', 'mtplx'];
-
-// The reviewer identity used for Copilot-specific handling. An empty default
-// reviewer list keeps code review opt-in on a fresh install.
-export const DEFAULT_REVIEWER = 'copilot';
-export const DEFAULT_REVIEWERS = [];
-
-// Reviewers `--reviewer-applies` reaches. slashdo's loop forces every other
-// local CLI back to review-only and reverts what it wrote, and the flag is
-// meaningless for the cloud (`copilot`, `@login`) and non-agentic (`ollama`)
-// paths — so the picker offers the toggle only for these, rather than inviting a
-// user to grant agy/grok/cursor write access that gets reverted.
-// Mirror of `APPLY_CAPABLE_REVIEWERS` in server/lib/reviewerConfig.js.
-export const APPLY_CAPABLE_REVIEWERS = Object.freeze(['codex']);
-export const isApplyCapableReviewer = (slug) => APPLY_CAPABLE_REVIEWERS.includes(normalizeReviewerSlug(slug));
-
-// Arbitrary GitHub reviewer usernames (e.g. `@CodeReviewbot`) requested as PR
-// reviewers to gate merging, appended to slashdo's `--review-with` after the
-// keyed reviewers. Mirror of `normalizeReviewUsernames` + MAX_REVIEW_USERNAMES —
-// the picker has to reject exactly the tokens the server drops, or the user sees
-// a saved reviewer that never persisted. Stored WITHOUT the leading `@` (added
-// back only for display / the flag string).
-export const MAX_REVIEW_USERNAMES = 20;
-const REVIEW_USERNAME_RE = /^[A-Za-z0-9_](?:[A-Za-z0-9._-]{0,254})(?:\/[A-Za-z0-9._-]{1,100})?$/;
-
-// Validate a single raw username entry (strip `@`, trim). Returns the clean
-// token or null if it isn't a shell-safe GitHub/GitLab username/team slug.
-export function cleanReviewUsername(raw) {
-  if (typeof raw !== 'string') return null;
-  const trimmed = raw.trim().replace(/^@+/, '');
-  return trimmed && REVIEW_USERNAME_RE.test(trimmed) ? trimmed : null;
-}
-
-// Normalize a raw list: drop invalid tokens, case-insensitively dedupe while
-// preserving order, cap at MAX_REVIEW_USERNAMES. Returns clean usernames sans `@`.
-export function normalizeReviewUsernames(list) {
-  if (!Array.isArray(list)) return [];
-  const seen = new Set();
-  const out = [];
-  for (const raw of list) {
-    const clean = cleanReviewUsername(raw);
-    if (!clean) continue;
-    const key = clean.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(clean);
-    if (out.length >= MAX_REVIEW_USERNAMES) break;
-  }
-  return out;
-}
-
-// Upper bound on a per-reviewer `~max=<n>` round cap. Mirror of
-// MAX_REVIEWER_MAX_ROUNDS — a value above it is dropped server-side, so the input
-// must not offer one. `0` is valid and means "loop until clean" (slashdo's
-// unlimited mode, bounded by its own guardrail); blank/absent means "no cap
-// requested" and keeps slashdo's built-in default.
-export const MAX_REVIEWER_MAX_ROUNDS = 10;
-
-// Stop-mode for the multi-reviewer loop (slashdo `--review-stop-on-*`). The
-// `value`s mirror REVIEW_STOP_MODES; the labels/descriptions are UI copy. A mode
-// the UI offers but the server's enum rejects 400s on save.
-export const REVIEW_STOP_MODES = [
-  { value: 'all', label: 'Run all', description: 'Run every reviewer in order before merging (default)' },
-  { value: 'on-findings', label: 'Stop on first fix', description: 'Stop after the first reviewer that landed a fix' },
-  { value: 'on-clean', label: 'Stop on first clean', description: 'Stop after the first reviewer that reports zero findings' }
-];
-export const DEFAULT_REVIEW_STOP_MODE = 'all';
-
-// The task-metadata keys that together form a task-local reviewer override —
-// mirror of REVIEWER_OVERRIDE_KEYS. Everything the picker writes, and so
-// everything its "Use system Code Review Defaults" reset has to remove. A key
-// missing here leaves that reset visible after it has already removed everything
-// it knows about, and leaves the removed key silently pinning a reviewer the
-// user thinks they just cleared.
-export const REVIEWER_OVERRIDE_KEYS = Object.freeze([
-  'reviewer',
-  'reviewers',
-  'usernames',
-  'optionalReviewers',
-  'reviewerMaxRounds',
-  'reviewerModels',
-  'reviewerEfforts',
-  'reviewStopMode',
-  'reviewerApplies',
-]);
-
-// The subset that can actually change the resolved reviewer LIST — mirror of
-// REVIEWER_LIST_OVERRIDE_KEYS. The two run flags are excluded: a claim flow has
-// no slashdo flag string to put them in, so neither changes which reviewers run.
-export const REVIEWER_LIST_OVERRIDE_KEYS = Object.freeze(
-  REVIEWER_OVERRIDE_KEYS.filter((key) => key !== 'reviewStopMode' && key !== 'reviewerApplies')
-);
-
-// Mirror of hasReviewerOverride. Key PRESENCE, not truthiness — an explicitly
-// empty `optionalReviewers: []` is a real override, so `||`-style checks report
-// the wrong answer.
-export function hasReviewerOverride(metadata) {
-  return !!metadata && typeof metadata === 'object' && !Array.isArray(metadata)
-    && REVIEWER_LIST_OVERRIDE_KEYS.some((key) => key in metadata);
-}
+export const REVIEW_STOP_MODES = REVIEW_STOP_MODE_VALUES.map(value => ({ value, ...REVIEW_STOP_MODE_COPY[value] }));
 
 // Display mirror of the server's resolveOptionalReviewers + taskPinnedReviewerTokens:
 // a task's `optionalReviewers` decides only the reviewers the task itself pins;
@@ -276,73 +73,4 @@ export function resolveTaskOptionalReviewers(metadata, defaultOptional) {
   const pinned = new Set([...pinnedList, ...pinnedUsers].map(key));
   const ownKeys = new Set(own.map(key));
   return [...own, ...defaults.filter((token) => !pinned.has(key(token)) && !ownKeys.has(key(token)))];
-}
-
-// Resolve task metadata to an ordered, deduped reviewer list (mirror of the
-// server's normalizeReviewers): prefers `reviewers`, falls back to the legacy
-// single `reviewer`, defaults to DEFAULT_REVIEWERS.
-export function normalizeReviewers(meta) {
-  const raw = meta && typeof meta === 'object' && !Array.isArray(meta) ? meta : {};
-  const source = Array.isArray(raw.reviewers)
-    ? raw.reviewers
-    : (typeof raw.reviewer === 'string' && raw.reviewer ? [raw.reviewer] : []);
-  const seen = new Set();
-  const out = [];
-  for (const r of source) {
-    const normalized = REVIEWER_ALIASES[r] || r;
-    if (REVIEWER_VALUES.includes(normalized) && !seen.has(normalized)) { seen.add(normalized); out.push(normalized); }
-  }
-  return out.length ? out : [...DEFAULT_REVIEWERS];
-}
-
-// Stable provider-backed reviewer identity; mirror of the server vocabulary.
-export const isProviderReviewer = (value) => typeof value === 'string' && /^provider:[a-z0-9][a-z0-9-]{0,79}$/.test(value);
-
-// Reviewers PortOS serves itself with no slashdo counterpart.
-export const PORTOS_ONLY_REVIEWERS = ['lmstudio', 'mtplx', 'kilo', 'kimi'];
-
-// Reviewers whose slashdo --review-with entry accepts a [<model>] bracket.
-export const BRACKET_MODEL_REVIEWERS = MODEL_SELECTABLE_REVIEWERS.filter(r => !PORTOS_ONLY_REVIEWERS.includes(r));
-
-/**
- * Resolve a provider record (or provider ID) to a canonical reviewer slug
- * (e.g. 'codex', 'claude', 'antigravity', etc.).
- *
- * @param {object|string} provider
- * @param {string} [providerId]
- * @returns {string|null}
- */
-export function resolveProviderReviewerSlug(provider, providerId = null) {
-  if (provider && typeof provider === 'object') {
-    const candidates = [
-      provider.harnessId && provider.harnessId !== 'direct' ? provider.harnessId : null,
-      provider.command === 'agy' ? 'antigravity' : provider.command === 'cursor-agent' ? 'cursor' : provider.command,
-      provider.executionSourceProviderId && !provider.executionSourceProviderId.startsWith('selection-')
-        ? provider.executionSourceProviderId.replace(/-(cli|tui)$/, '')
-        : null,
-      provider.id ? provider.id.replace(/-(cli|tui)$/, '') : null,
-      provider.id
-    ].filter(Boolean);
-
-    for (const raw of candidates) {
-      if (typeof raw !== 'string') continue;
-      const normalized = REVIEWER_ALIASES[raw.toLowerCase()] || raw.toLowerCase();
-      if (REVIEWER_VALUES.includes(normalized)) {
-        return normalized;
-      }
-    }
-  }
-
-  const rawId = typeof provider === 'string' ? provider : (providerId || (provider?.id ?? null));
-  if (typeof rawId === 'string' && rawId) {
-    const stripped = rawId.replace(/^provider:/, '').replace(/-(cli|tui)$/, '').toLowerCase();
-    const normalized = REVIEWER_ALIASES[stripped] || stripped;
-    if (REVIEWER_VALUES.includes(normalized)) return normalized;
-    for (const v of REVIEWER_VALUES) {
-      if (stripped === v || stripped.startsWith(`${v}-`) || stripped.endsWith(`-${v}`)) {
-        return v;
-      }
-    }
-  }
-  return null;
 }
