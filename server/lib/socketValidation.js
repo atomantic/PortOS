@@ -139,6 +139,8 @@ export const appDeploySchema = z.object({
   flags: z.array(appDeployFlagSchema).max(20, 'no more than 20 flags are allowed').default([])
 });
 
+export const appDeployCancelSchema = appDeploySchema.pick({ appId: true });
+
 // =============================================================================
 // VALIDATION HELPER
 // =============================================================================

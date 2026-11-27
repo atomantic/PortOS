@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events';
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, onTestFinished } from 'vitest';
 import { DEPLOY_FLAGS as sharedDeployFlags } from '../lib/appDeployFlags.js';
 
 const mockSpawn = vi.hoisted(() => vi.fn());
@@ -8,7 +8,8 @@ vi.mock('../lib/childProcess.js', async (importOriginal) => ({
   spawn: mockSpawn,
 }));
 
-import { DEPLOY_FLAGS, deployApp, runDeployFlow } from './appDeployer.js';
+import { DEPLOY_FLAGS, cancelDeploy, deployApp, isDeploying, runDeployFlow } from './appDeployer.js';
+import { IS_WIN32, MAX_OUTPUT_BYTES } from '../lib/bufferedSpawn.js';
 import { maintenance } from '../lib/maintenanceAdmission.js';
 
 describe('deployApp environment', () => {
@@ -44,6 +45,56 @@ describe('deployApp environment', () => {
     expect(env.PORTOS_DEPLOY_PROBE).toBe('kept');
     expect(env.FORCE_COLOR).toBe('0');
     vi.unstubAllEnvs();
+  });
+});
+
+describe.skipIf(IS_WIN32)('deployApp teardown', () => {
+  it.each([
+    { action: 'times out', reason: 'Deploy timed out', advance: 600_000 },
+    { action: 'is cancelled', reason: 'Deploy cancelled', advance: 0 },
+  ])('releases the deploy when it $action even with stalled pipes', async ({ reason, advance }) => {
+    vi.useFakeTimers();
+    const groupSignal = vi.spyOn(process, 'kill').mockReturnValue(true);
+    onTestFinished(() => {
+      groupSignal.mockRestore();
+      vi.useRealTimers();
+    });
+
+    const app = { id: 'example-app', repoPath: '/repo/example-app' };
+    const child = new EventEmitter();
+    Object.assign(child, { pid: 1234, stdout: new EventEmitter(), stderr: new EventEmitter() });
+    mockSpawn.mockReturnValueOnce(child);
+    const emit = vi.fn();
+    const pending = deployApp(app, ['--ios'], emit);
+    expect(mockSpawn).toHaveBeenLastCalledWith(expect.any(String), ['deploy.sh', '--ios'],
+      expect.objectContaining({ detached: true }));
+    child.stdout.emit('data', `discard${'a'.repeat(MAX_OUTPUT_BYTES)}`);
+    expect(isDeploying(app.repoPath)).toBe(true);
+    expect(cancelDeploy('other-app')).toBe(false);
+    if (advance) await vi.advanceTimersByTimeAsync(advance);
+    else {
+      expect(cancelDeploy(app.id)).toBe(true);
+      expect(cancelDeploy(app.id)).toBe(false);
+    }
+    expect(groupSignal).toHaveBeenCalledWith(-child.pid, 'SIGTERM');
+    expect(isDeploying(app.repoPath)).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    await expect(pending).resolves.toEqual({ success: false, code: -1 });
+    expect(groupSignal).toHaveBeenCalledWith(-child.pid, 'SIGKILL');
+    expect(emit).toHaveBeenCalledWith('output', { stream: 'stdout', text: 'a'.repeat(MAX_OUTPUT_BYTES) });
+    expect(emit).toHaveBeenCalledWith('status', { phase: 'complete', success: false, code: -1, message: reason });
+    expect(isDeploying(app.repoPath)).toBe(false);
+    expect(cancelDeploy(app.id)).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+
+    const nextChild = new EventEmitter();
+    mockSpawn.mockReturnValueOnce(nextChild);
+    const retry = deployApp(app, [], emit);
+    child.emit('close', null);
+    expect(isDeploying(app.repoPath)).toBe(true);
+    nextChild.emit('close', 0);
+    await expect(retry).resolves.toEqual({ success: true, code: 0 });
   });
 });
 

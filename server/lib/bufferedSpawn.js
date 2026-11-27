@@ -9,6 +9,7 @@ import { resolveWindowsExecutable, prepareWindowsSafeSpawn, resolveCmdShimLaunch
 // Keep the host's public API while sharing the toolkit's self-contained leaf.
 export { resolveWindowsExecutable, prepareWindowsSafeSpawn, resolveCmdShimLaunch };
 import { withSpawnCwdEnv } from './spawnCwd.js';
+import { trackDetachedGroup } from './detachedProcessGroups.js';
 
 /** Shared buffered-spawn + kill-tree core for appBuilder (structured result) and appUpdater (throwing adapter). */
 
@@ -175,16 +176,29 @@ export function terminateWithEscalation(child, { graceMs = 5000, label = 'child 
   killProcessTree(child, 'SIGTERM', { processGroup }, isWin32);
   if (isWin32) return () => {};
   const timer = setTimeout(() => {
-    if (child.exitCode !== null || child.signalCode !== null) return;
-    console.warn(`⚠️ ${label} ignored SIGTERM for ${graceMs}ms — escalating to SIGKILL`);
     try {
-      killProcessTree(child, 'SIGKILL', { processGroup }, isWin32);
+      if (processGroup && child.pid && typeof child.requestWindowsAgentStop !== 'function') {
+        // The group can outlive its leader. Address only the group to avoid
+        // falling back to a pid that may have been reused after the leader exited.
+        process.kill(-child.pid, 'SIGKILL');
+      } else {
+        if (child.exitCode !== null || child.signalCode !== null) return;
+        killProcessTree(child, 'SIGKILL', { processGroup }, isWin32);
+      }
+      console.warn(`⚠️ ${label} ignored SIGTERM for ${graceMs}ms — escalating to SIGKILL`);
     } catch (err) {
-      console.error(`❌ ${label} SIGKILL escalation failed: ${err.message}`);
+      if (err.code !== 'ESRCH') console.error(`❌ ${label} SIGKILL escalation failed: ${err.message}`);
     }
   }, graceMs);
   timer.unref?.();
   return () => clearTimeout(timer);
+}
+
+// A closed leader and drained pipes do not prove the whole group is gone.
+function hasProcessGroup(pid) {
+  if (!pid) return false;
+  try { return process.kill(-pid, 0); }
+  catch (err) { return err.code !== 'ESRCH'; }
 }
 
 /**
@@ -199,58 +213,101 @@ export function terminateWithEscalation(child, { graceMs = 5000, label = 'child 
  * @param {object} options
  * @param {string} [options.cwd]
  * @param {NodeJS.ProcessEnv} [options.env] - complete child environment
- * @param {number} [options.timeoutMs] - kill + resolve as timed-out after this
- * @param {number} [options.killGraceMs=8000] - SIGTERM grace period before fire-and-forget SIGKILL cleanup
+ * @param {number} [options.timeoutMs] - begin teardown after this; group runs settle by the end of the grace period
+ * @param {number} [options.killGraceMs=8000] - SIGTERM grace period before SIGKILL
  * @param {boolean} [options.shell] - defaults to `needsShell(cmd)`
+ * @param {boolean} [options.processGroup] - isolate and stop the POSIX group; on Windows use taskkill
+ * @param {AbortSignal} [options.signal] - request cancellation; returns aborted: true
+ * @param {(chunk: Buffer, stream: string) => void} [options.onOutput] - observe raw output chunks
  * @returns {Promise<object>} structured result (never rejects)
  */
-export function bufferedSpawn(cmd, args, { cwd, env = process.env, timeoutMs, killGraceMs = 8000, shell } = {}) {
+export function bufferedSpawn(cmd, args, {
+  cwd, env = process.env, timeoutMs, killGraceMs = 8000, shell, processGroup = false, signal, onOutput,
+} = {}) {
+  const aborted = { success: false, code: -1, signal: null, timedOut: false, aborted: true };
+  if (signal?.aborted) return Promise.resolve({ ...aborted, stdout: '', stderr: '' });
   return new Promise((resolve) => {
-    const child = spawn(cmd, args, {
+    const detached = processGroup && !IS_WIN32;
+    const child = trackDetachedGroup(spawn(cmd, args, {
       cwd,
       // Pin PWD to the spawn cwd (see withSpawnCwdEnv); unchanged copy of env when no cwd.
       env: withSpawnCwdEnv(env, cwd),
       shell: shell === undefined ? needsShell(cmd) : shell,
-    });
+      ...(processGroup && { detached, stdio: ['ignore', 'pipe', 'pipe'] }),
+    }), detached);
     let stdout = '';
     let stderr = '';
     let settled = false;
+    let stopped;
+    let stopTimer;
+    let cancelEscalation;
+    let liveError;
 
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      clearTimeout(stopTimer);
+      signal?.removeEventListener('abort', abort);
+      if (stopped && processGroup) {
+        child.stdout?.destroy?.();
+        child.stderr?.destroy?.();
+      }
+      resolve({ stdout, stderr, ...result });
+    };
+
+    const stop = (result) => {
+      if (settled || stopped) return;
+      stopped = result;
+      clearTimeout(timer);
+      try {
+        cancelEscalation = terminateWithEscalation(child, { graceMs: killGraceMs, label: cmd, processGroup: detached });
+      } catch (err) {
+        console.error(`❌ ${cmd} termination failed: ${err.message}`);
+      }
+      if (processGroup && child.pid && (IS_WIN32 || hasProcessGroup(child.pid))) {
+        // Keep the operation reserved during teardown, then settle even if
+        // an inherited pipe is still open.
+        stopTimer = setTimeout(() => finish(result), killGraceMs);
+      } else {
+        finish(result);
+      }
+    };
+    const abort = () => stop(aborted);
     const timer = timeoutMs
-      ? setTimeout(() => {
-          if (!settled) {
-            settled = true;
-            // Fire-and-forget: the escalation timer is unref'd, so no cancel is held.
-            terminateWithEscalation(child, { graceMs: killGraceMs, label: cmd });
-            resolve({ success: false, code: -1, signal: null, stdout, stderr, timedOut: true });
-          }
-        }, timeoutMs)
+      ? setTimeout(() => stop({ success: false, code: -1, signal: null, timedOut: true }), timeoutMs)
       : null;
 
-    const clear = () => { if (timer) clearTimeout(timer); };
-
-    child.stdout.on('data', (d) => {
-      stdout += d;
-      if (stdout.length > MAX_OUTPUT_BYTES) stdout = stdout.slice(-MAX_OUTPUT_BYTES);
-    });
-    child.stderr.on('data', (d) => {
-      stderr += d;
-      if (stderr.length > MAX_OUTPUT_BYTES) stderr = stderr.slice(-MAX_OUTPUT_BYTES);
-    });
-    child.on('close', (code, signal) => {
-      if (!settled) {
-        settled = true;
-        clear();
-        resolve({ success: code === 0, code, signal, stdout, stderr, timedOut: false });
+    const collect = (stream, chunk) => {
+      if (settled) return;
+      const text = chunk.toString();
+      if (stream === 'stdout') stdout = (stdout + text).slice(-MAX_OUTPUT_BYTES);
+      else stderr = (stderr + text).slice(-MAX_OUTPUT_BYTES);
+      try { onOutput?.(chunk, stream); }
+      catch (err) { console.error(`❌ ${cmd} output hook failed: ${err.message}`); }
+    };
+    child.stdout?.on('data', (chunk) => collect('stdout', chunk));
+    child.stderr?.on('data', (chunk) => collect('stderr', chunk));
+    child.on('close', (code, exitSignal) => {
+      if (stopped) {
+        if (!detached || !hasProcessGroup(child.pid)) {
+          if (detached) cancelEscalation?.();
+          finish(stopped);
+        }
+        return;
       }
+      if (liveError) return finish(liveError);
+      finish({ success: code === 0, code, signal: exitSignal, timedOut: false });
     });
-    child.on('error', (err) => {
-      if (!settled) {
-        settled = true;
-        clear();
-        resolve({ success: false, code: -1, signal: null, stdout, stderr, timedOut: false, error: err });
-      }
+    child.on('error', (error) => {
+      if (stopped) return;
+      const result = { success: false, code: -1, signal: null, timedOut: false, error };
+      // A live process can emit an error when a kill fails; keep its deadline.
+      if (processGroup && child.pid) liveError = result;
+      else finish(result);
     });
+    signal?.addEventListener('abort', abort, { once: true });
+    if (signal?.aborted) abort();
   });
 }
 
@@ -269,6 +326,7 @@ export async function bufferedSpawnOrThrow(cmd, args, options = {}) {
   const { timeoutLabel = cmd, ...spawnOpts } = options;
   const result = await bufferedSpawn(cmd, args, spawnOpts);
   if (result.error) throw result.error;
+  if (result.aborted) throw new Error(`${timeoutLabel} cancelled`);
   if (result.timedOut) {
     throw new Error(`${timeoutLabel} timed out after ${(spawnOpts.timeoutMs ?? 0) / 1000}s`);
   }

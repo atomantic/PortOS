@@ -10,7 +10,8 @@ import { readdir, stat } from 'fs/promises'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { existsSync } from 'fs'
-import { spawn } from '../../lib/childProcess.js'
+import { bufferedSpawn } from '../../lib/bufferedSpawn.js'
+import { createLineReader } from '../../lib/streamLines.js'
 import { DAY, PATHS, rmGuarded } from '../../lib/fileUtils.js'
 import { checkAndPrompt as autobiographyCheckAndPrompt } from '../autobiography.js'
 import { runGoalCheckIn } from '../goalCheckIn.js'
@@ -48,47 +49,58 @@ async function githubNotificationsCheck() {
   return { summary, accounts: results.length }
 }
 
+const MOLTWORLD_GRACE_MINUTES = 5
+// Node clamps a timer above 2^31 - 1 milliseconds to 1ms.
+const MOLTWORLD_MAX_MINUTES = Math.floor(2_147_483_647 / 60_000) - MOLTWORLD_GRACE_MINUTES
+const MOLTWORLD_OUTPUT_LINE_LIMIT = 10_000
+
 /**
  * Run the moltworld-explore.mjs script as a child process (no AI agent needed).
  * Returns a summary object when the script exits.
  */
 async function runMoltworldExploration() {
   const scriptPath = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'scripts', 'moltworld-explore.mjs')
-  const durationMinutes = process.env.MOLTWORLD_DURATION_MINUTES || '30'
+  const requestedMinutes = Number.parseInt(process.env.MOLTWORLD_DURATION_MINUTES, 10)
+  const durationMinutes = requestedMinutes > 0 ? Math.min(requestedMinutes, MOLTWORLD_MAX_MINUTES) : 30
 
   // Lazy: agentApiAuth pulls in the session/auth stack, which this registry must not load at import time.
-  const { resolveAgentApiEnv } = await import('../agent/agentApiAuth.js');
-  const apiEnv = await resolveAgentApiEnv();
+  const { resolveAgentApiEnv } = await import('../agent/agentApiAuth.js')
+  const apiEnv = await resolveAgentApiEnv()
 
-  return new Promise((resolve, reject) => {
-    const child = spawn('node', [scriptPath, durationMinutes], {
-      stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env, ...apiEnv },
-    })
-
-    const output = []
-    child.stdout.on('data', (chunk) => {
-      const line = chunk.toString().trim()
-      if (line) {
-        output.push(line)
-        console.log(`🌍 ${line}`)
+  let lines = 0
+  let loggedLines = 0
+  const readOutput = (stream, rawLine) => {
+    const line = rawLine.trim()
+    if (!line || loggedLines >= MOLTWORLD_OUTPUT_LINE_LIMIT) return
+    loggedLines++
+    if (stream === 'stdout') {
+      lines++
+      console.log(`🌍 ${line}`)
+    } else {
+      console.error(`🌍 ${line}`)
+    }
+    if (loggedLines === MOLTWORLD_OUTPUT_LINE_LIMIT) console.log('🌍 Moltworld output limit reached')
+  }
+  const stdout = createLineReader((line) => readOutput('stdout', line))
+  const stderr = createLineReader((line) => readOutput('stderr', line))
+  const result = await bufferedSpawn(process.execPath, [scriptPath, String(durationMinutes)], {
+    env: { ...process.env, ...apiEnv },
+    timeoutMs: (durationMinutes + MOLTWORLD_GRACE_MINUTES) * 60_000,
+    processGroup: true,
+    onOutput: (chunk, stream) => {
+      if (loggedLines < MOLTWORLD_OUTPUT_LINE_LIMIT) {
+        const reader = stream === 'stdout' ? stdout : stderr
+        reader.push(chunk)
       }
-    })
-    child.stderr.on('data', (chunk) => {
-      const line = chunk.toString().trim()
-      if (line) console.error(`🌍 ${line}`)
-    })
-
-    child.on('close', (code) => {
-      if (code === 0) {
-        resolve({ success: true, lines: output.length })
-      } else {
-        reject(new Error(`moltworld-explore.mjs exited with code ${code}`))
-      }
-    })
-
-    child.on('error', (err) => reject(err))
+    },
   })
+  stdout.flush()
+  stderr.flush()
+
+  if (result.timedOut) throw new Error('moltworld-explore.mjs timed out')
+  if (result.error) throw result.error
+  if (!result.success) throw new Error(`moltworld-explore.mjs exited with code ${result.code}`)
+  return { success: true, lines }
 }
 
 /**
