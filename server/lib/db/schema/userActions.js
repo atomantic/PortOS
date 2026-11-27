@@ -26,6 +26,7 @@ export const userActionsDdl = [
     )`,
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_user_action_dedupe ON user_action_events (type, dedupe_key)`,
     `CREATE INDEX IF NOT EXISTS idx_user_action_happened ON user_action_events (happened_at DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_user_action_happened_id ON user_action_events (happened_at DESC, id DESC)`,
     `CREATE INDEX IF NOT EXISTS idx_user_action_type_time ON user_action_events (type, happened_at DESC)`,
     `CREATE INDEX IF NOT EXISTS idx_user_action_actor_time ON user_action_events (actor, happened_at DESC)`,
 ];

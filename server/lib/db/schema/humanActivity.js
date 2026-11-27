@@ -32,4 +32,7 @@ export const humanActivityDdl = [
     // CREATE INDEX CONCURRENTLY cannot run in a transaction block.
     `CREATE INDEX IF NOT EXISTS idx_human_activity_source_happened ON human_activity_events (source, happened_at DESC)`,
     `CREATE INDEX IF NOT EXISTS idx_human_activity_source_kind_happened ON human_activity_events (source, kind, happened_at DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_human_activity_happened_id ON human_activity_events (happened_at DESC, id DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_human_activity_participants ON human_activity_events USING gin (participants jsonb_path_ops)`,
+    `CREATE INDEX IF NOT EXISTS idx_human_activity_account_happened ON human_activity_events (account_id, happened_at DESC) WHERE account_id IS NOT NULL`,
 ];

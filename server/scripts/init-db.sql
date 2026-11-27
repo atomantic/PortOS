@@ -327,6 +327,12 @@ CREATE INDEX IF NOT EXISTS idx_human_activity_source_happened ON human_activity_
 
 CREATE INDEX IF NOT EXISTS idx_human_activity_source_kind_happened ON human_activity_events (source, kind, happened_at DESC);
 
+CREATE INDEX IF NOT EXISTS idx_human_activity_happened_id ON human_activity_events (happened_at DESC, id DESC);
+
+CREATE INDEX IF NOT EXISTS idx_human_activity_participants ON human_activity_events USING gin (participants jsonb_path_ops);
+
+CREATE INDEX IF NOT EXISTS idx_human_activity_account_happened ON human_activity_events (account_id, happened_at DESC) WHERE account_id IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS post_runs (
     id TEXT PRIMARY KEY,
     mode TEXT NOT NULL CHECK (mode IN ('benchmark', 'test', 'training')),
@@ -420,6 +426,8 @@ CREATE TABLE IF NOT EXISTS user_action_events (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_user_action_dedupe ON user_action_events (type, dedupe_key);
 
 CREATE INDEX IF NOT EXISTS idx_user_action_happened ON user_action_events (happened_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_user_action_happened_id ON user_action_events (happened_at DESC, id DESC);
 
 CREATE INDEX IF NOT EXISTS idx_user_action_type_time ON user_action_events (type, happened_at DESC);
 
@@ -1609,6 +1617,12 @@ ALTER TABLE media_assets ALTER COLUMN provenance_refs SET NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_media_assets_provenance_refs ON media_assets USING gin (provenance_refs) WHERE kind = 'image';
 
 CREATE INDEX IF NOT EXISTS idx_media_assets_kind_created ON media_assets (kind, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_media_assets_visible_images_created ON media_assets (created_at DESC, media_key ASC) WHERE kind = 'image' AND NOT is_hidden;
+
+CREATE INDEX IF NOT EXISTS idx_media_assets_visible_image_facets ON media_assets (universe_id, universe_name, entry_category, entry_kind) WHERE kind = 'image' AND NOT is_hidden;
+
+CREATE INDEX IF NOT EXISTS idx_media_assets_kind_ref ON media_assets (kind, ref);
 
 CREATE TABLE IF NOT EXISTS code_animation_jobs (
       id TEXT PRIMARY KEY,
