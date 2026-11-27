@@ -55,7 +55,6 @@ import { createPortOSPromptsRoutes } from './routes/prompts.js';
 import { startNativeUsageRefresh } from './services/nativeUsageHistory.js';
 
 const providerFallbackRoutes = createLazyRouter(() => import('./routes/providerFallbacks.js'));
-const alertsRoutes = createLazyRouter(() => import('./routes/alerts.js'));
 const systemCapabilitiesRoutes = createLazyRouter(() => import('./routes/systemCapabilities.js'));
 const systemResourcesRoutes = createLazyRouter(() => import('./routes/systemResources.js'));
 const capabilitiesRoutes = createLazyRouter(() => import('./routes/capabilities.js'));
@@ -353,7 +352,6 @@ app.use('/remote-desktop', remoteDesktopViewerRoutes);
 
 // API Routes
 app.use('/api/auth', authRoutes);
-app.use('/api/alerts', alertsRoutes);
 app.use('/api/avatar', avatarRoutes);
 app.use('/api/system', systemActivityRoutes);
 app.use('/api/system', systemHealthRoutes);

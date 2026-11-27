@@ -34,23 +34,18 @@ vi.mock('./tribeOutreach.js', () => ({ findUnansweredTribeThreads: vi.fn(async (
 vi.mock('../lib/memoryStats.js', () => ({
   getMemoryStats: vi.fn(async () => mock.memory)
 }));
-vi.mock('./portosProductMetrics.js', () => ({
-  getProductEngagement: vi.fn(async () => ({ actions: [] }))
-}));
-
 vi.mock('os', () => ({ default: { loadavg: () => [100], cpus: () => [{}] } }));
 
-import { resolveHealthAlert } from './proactiveAlertSources.js';
+import { generateNonProductAlerts, resolveHealthAlert } from './proactiveAlertSources.js';
 import { getPerformanceSummary } from './taskLearning.js';
 import { getUsage } from './usage.js';
-import { generateAlerts } from './proactiveAlerts.js';
 
 const processAlerts = async () => {
-  const { alerts } = await generateAlerts();
+  const alerts = await generateNonProductAlerts();
   return alerts.filter(a => a.type === 'process_error');
 };
 
-describe('proactiveAlerts — desktop (GUI) process exemption (#2991)', () => {
+describe('proactive alert sources — desktop (GUI) process exemption (#2991)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mock.processes = [];
@@ -125,7 +120,7 @@ describe('proactiveAlerts — desktop (GUI) process exemption (#2991)', () => {
 
   it('reports missing process identity as unavailable rather than inventing a key', async () => {
     mock.processes = [{ name: 'web', status: 'errored' }];
-    await expect(generateAlerts()).rejects.toThrow('Alert resource identity is unavailable');
+    await expect(generateNonProductAlerts()).rejects.toThrow('Alert resource identity is unavailable');
   });
 
   it('alerts normally when the registry read fails (exempts nothing)', async () => {
@@ -137,7 +132,7 @@ describe('proactiveAlerts — desktop (GUI) process exemption (#2991)', () => {
   });
 });
 
-describe('proactiveAlerts — current task performance', () => {
+describe('proactive alert sources — current task performance', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mock.processes = [];
@@ -156,7 +151,7 @@ describe('proactiveAlerts — current task performance', () => {
     };
     mock.performance = { needsAttention: [stale], skipped: [stale] };
 
-    const { alerts } = await generateAlerts();
+    const alerts = await generateNonProductAlerts();
     expect(alerts.filter(a => a.type === 'success_drop' || a.type === 'learning_health')).toEqual([]);
   });
 
@@ -170,7 +165,7 @@ describe('proactiveAlerts — current task performance', () => {
     };
     mock.performance = { needsAttention: [active], skipped: [active] };
 
-    const { alerts } = await generateAlerts();
+    const alerts = await generateNonProductAlerts();
     expect(alerts.find(a => a.type === 'success_drop')).toMatchObject({
       severity: 'medium',
       detail: '20% success across the last 5 runs. Review run outcomes for blockers; this history does not pause scheduling.'
@@ -196,13 +191,13 @@ describe('proactiveAlerts — current task performance', () => {
     };
     mock.performance = { needsAttention: [task1, task2], skipped: [task1, task2] };
 
-    const { alerts } = await generateAlerts();
+    const alerts = await generateNonProductAlerts();
     expect(alerts.filter(a => a.type === 'success_drop').map(a => a.metadata.taskType)).toEqual(['internal-task', 'self-improve:claim-issue']);
     expect(alerts.some(a => a.type === 'learning_health')).toBe(false);
   });
 });
 
-describe('proactiveAlerts — resource identities', () => {
+describe('proactive alert sources — resource identities', () => {
   it('keys goals and resource conditions independently of their presentation', async () => {
     mock.processes = [];
     mock.performance = { needsAttention: [], skipped: [] };
@@ -211,21 +206,21 @@ describe('proactiveAlerts — resource identities', () => {
       { id: 'example%3Aone', title: 'Same title', status: 'active', createdAt: '2020-01-01' }
     ];
     mock.memory = { used: 90, total: 100 };
-    const first = await generateAlerts();
-    expect(first.alerts.map(a => a.id).sort()).toEqual([
+    const first = await generateNonProductAlerts();
+    expect(first.map(a => a.id).sort()).toEqual([
       'goal_stall:example%253Aone', 'goal_stall:example%3Aone'
     ]);
     mock.goals.reverse();
     mock.goals[0].title = 'Renamed goal';
     mock.memory = { used: 99, total: 100 };
-    const next = await generateAlerts();
-    expect(next.alerts.map(a => a.id).sort()).toEqual(first.alerts.map(a => a.id).sort());
-    expect(next.alerts.some(a => a.type === 'system_resource')).toBe(false);
+    const next = await generateNonProductAlerts();
+    expect(next.map(a => a.id).sort()).toEqual(first.map(a => a.id).sort());
+    expect(next.some(a => a.type === 'system_resource')).toBe(false);
   });
 });
 
 
-describe('proactiveAlerts — activity is not spending evidence', () => {
+describe('proactive alert sources — activity is not spending evidence', () => {
   it('does not turn a busy day into a cost warning', async () => {
     const dailyActivity = {};
     for (let offset = 0; offset < 5; offset++) {
@@ -237,7 +232,7 @@ describe('proactiveAlerts — activity is not spending evidence', () => {
       };
     }
     getUsage.mockReturnValue({ dailyActivity });
-    const { alerts } = await generateAlerts();
+    const alerts = await generateNonProductAlerts();
     expect(alerts.filter(alert => alert.type === 'cost_spike')).toEqual([]);
   });
 });
@@ -265,8 +260,8 @@ describe('health alert resolution', () => {
   it('passes the correction time into both run-based alert detectors', async () => {
     mock.performance = { needsAttention: [{ taskType: 'example:task', rateSource: 'windowed', successRate: 3, windowedCompleted: 30 }], skipped: [] };
     await resolveHealthAlert('success_drop:example%3Atask');
-    const regenerated = await generateAlerts();
-    expect(regenerated.alerts.find(alert => alert.id === 'success_drop:example%3Atask').occurrence)
+    const regenerated = await generateNonProductAlerts();
+    expect(regenerated.find(alert => alert.id === 'success_drop:example%3Atask').occurrence)
       .toBe(mock.resolutions[0].occurrence);
     expect(getPerformanceSummary).toHaveBeenLastCalledWith({
       sinceByTaskType: { 'example:task': mock.resolutions[0].occurrence }, since: null,
@@ -277,7 +272,7 @@ describe('health alert resolution', () => {
     mock.goals = [{ id: 'example', title: 'Example goal', status: 'active', createdAt: '2020-01-01' }];
     await resolveHealthAlert('goal_stall:example');
     mock.goals[0].title = 'Renamed goal';
-    const { alerts } = await generateAlerts();
+    const alerts = await generateNonProductAlerts();
     expect(alerts.some(alert => alert.type === 'goal_stall')).toBe(false);
     expect(await resolveHealthAlert('goal_stall:missing')).toBeNull();
   });

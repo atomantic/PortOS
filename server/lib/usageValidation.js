@@ -50,16 +50,6 @@ export const providerUsageQuerySchema = z.object({
 }).refine((q) => q.scope !== 'peers' || !['1', 'true'].includes(q.refresh),
   { message: 'peers scope only reads saved quota observations' });
 
-/** Body for POST /api/usage/messages — token counts persist forever, so
- * reject non-integer/negative garbage instead of coercing it into counters. */
-export const usageMessagesSchema = z.object({
-  providerId: z.string().min(1),
-  model: z.string().nullish(),
-  messageCount: z.number().int().nonnegative(),
-  tokenCount: z.number().int().nonnegative().optional().default(0),
-  inputTokenCount: z.number().int().nonnegative().optional().default(0)
-});
-
 /**
  * What the user pays monthly for each provider family's quota plan, keyed by
  * family id. Used by BOTH write paths — `PUT /api/usage/subscriptions` (wrapped

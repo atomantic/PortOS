@@ -89,8 +89,7 @@ vi.mock('./provider/providers.js', () => ({
 }));
 
 vi.mock('./usage.js', () => ({
-  recordSession: vi.fn(),
-  recordMessages: vi.fn()
+  recordSession: vi.fn()
 }));
 
 vi.mock('./provider/providerStatus.js', () => ({

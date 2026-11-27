@@ -927,11 +927,9 @@ function applySessionCounts(providerId, providerName, rawModel, day, at) {
  * model, and current day.
  *
  * `extra` carries the prompt-cache tiers and provenance a transcript-reconciled
- * run supplies (`recordRunUsage`). It is optional and defaults to "no cache
- * tokens, estimated" so every existing caller — and the
- * `POST /api/usage/messages` route — keeps its current behavior.
+ * run supplies (`recordRunUsage`).
  */
-function applyMessageUsage(providerId, rawModel, messageCount, outputTokens = 0, inputTokens = 0, extra = {}, at) {
+function applyMessageUsage(providerId, rawModel, messageCount, outputTokens, inputTokens, extra, at) {
   const provider = normalizeProvider(providerId);
   const model = usageModelKey(rawModel);
   const cacheReadTokens = Math.max(0, extra?.cacheReadTokens || 0);
@@ -1007,13 +1005,6 @@ function applyMessageUsage(providerId, rawModel, messageCount, outputTokens = 0,
   if (model) bumpDayBucket(modelDayBucket(providerDay, model));
 }
 
-async function recordMessagesDraft(providerId, model, messageCount, outputTokens = 0, inputTokens = 0, extra = {}) {
-  if (!usageData) await loadUsageDraft();
-  await refreshDayKeyTimezone();
-  applyMessageUsage(providerId, model, messageCount, outputTokens, inputTokens, extra);
-  await saveUsage();
-}
-
 /**
  * Record one completed AI run from a reconciled usage record — the shape
  * `services/usageReconciler.reconcileRunUsage` returns, carrying either the
@@ -1021,9 +1012,7 @@ async function recordMessagesDraft(providerId, model, messageCount, outputTokens
  *
  * This is the preferred entry point for run-completion hooks: it keeps the
  * cache tiers and the `measured`/`estimate` provenance together, so a row in
- * the cost report can say whether it was measured. `recordMessages` remains the
- * primitive (and the API route's path) for callers with nothing but a token
- * count.
+ * the cost report can say whether it was measured.
  *
  * Accepts a single record OR an array of them — a run whose session switched
  * models mid-flight yields one record per model, so each is priced at its own
@@ -1460,10 +1449,6 @@ export async function applyHistoricalUsageCorrections(...args) {
 
 export async function recordSession(providerId, providerName, rawModel) {
   return queueRunWrite(recordSessionDraft, [providerId, providerName, rawModel, new Date()]);
-}
-
-export async function recordMessages(...args) {
-  return mutateUsage(recordMessagesDraft, args);
 }
 
 export async function recordRunUsage(record, options) {

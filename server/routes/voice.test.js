@@ -62,13 +62,6 @@ vi.mock('../services/voice/fineTuning.js', () => ({
 vi.mock('../services/voice/piper-voices.js', () => ({
   findPiperVoice: vi.fn(),
 }));
-vi.mock('../services/voice/proactiveSpeech.js', async () => {
-  const actual = await vi.importActual('../services/voice/proactiveSpeech.js');
-  return {
-    ...actual,
-    speakProactive: vi.fn(),
-  };
-});
 vi.mock('../services/voice/facetimeBridge.js', () => ({
   checkSetup: vi.fn(),
   probe: vi.fn(),
@@ -93,7 +86,6 @@ const profileBenchmarks = await import('../services/voice/profileBenchmarks.js')
 const fineTuning = await import('../services/voice/fineTuning.js');
 const { ServerError } = await import('../lib/errorHandler.js');
 const piperVoices = await import('../services/voice/piper-voices.js');
-const proactiveSpeech = await import('../services/voice/proactiveSpeech.js');
 const facetimeBridge = await import('../services/voice/facetimeBridge.js');
 const { default: voiceRoutes } = await import('./voice.js');
 const { errorEvents } = await import('../lib/errorHandler.js');
@@ -115,11 +107,7 @@ const buildApp = ({ io = recordingOperatorIo(() => {}) } = {}) => {
   // /config reconciles (#13055); hostControlVoiceConfig.test.js covers the rest.
   app.use((req, _res, next) => { req.portosAuthContext = { enabled: false }; next(); });
   app.use(express.json());
-  // /speak fails fast when io is missing (a 500 misconfiguration error
-  // rather than a 200 { ok:false, reason:'no-io' } that monitoring would
-  // miss). Attach a stub io by default; pass io:null to exercise the
-  // misconfiguration branch.
-  if (io) app.set('io', io);
+  app.set('io', io);
   app.use('/api/voice', voiceRoutes);
   return app;
 };
@@ -579,77 +567,6 @@ describe('Voice Routes', () => {
         .post('/api/voice/test')
         .send({ text: 'hello', voice: 'whatever', engine: 'piper' });
       expect(res.status).toBe(500);
-    });
-  });
-
-  describe('POST /api/voice/speak', () => {
-    it('rejects empty text via the Zod schema', async () => {
-      const res = await request(buildApp()).post('/api/voice/speak').send({ text: '' });
-      expect(res.status).toBe(400);
-      expect(res.body.code).toBe('VALIDATION_ERROR');
-      expect(proactiveSpeech.speakProactive).not.toHaveBeenCalled();
-    });
-
-    // Regression: schema trims before .min(1) so whitespace-only payloads
-    // fail at the HTTP boundary with a 400, not at the downstream
-    // speakProactive empty-text branch with a 200 {ok:false}.
-    it.each(['   ', '\t', '\n', '   \t  \n  '])('rejects whitespace-only text "%s"', async (text) => {
-      const res = await request(buildApp()).post('/api/voice/speak').send({ text });
-      expect(res.status).toBe(400);
-      expect(res.body.code).toBe('VALIDATION_ERROR');
-      expect(proactiveSpeech.speakProactive).not.toHaveBeenCalled();
-    });
-
-    it('rejects invalid priority enum', async () => {
-      const res = await request(buildApp())
-        .post('/api/voice/speak')
-        .send({ text: 'hi', priority: 'urgent' });
-      expect(res.status).toBe(400);
-      expect(res.body.code).toBe('VALIDATION_ERROR');
-    });
-
-    it('forwards text + priority to speakProactive and returns its result', async () => {
-      proactiveSpeech.speakProactive.mockResolvedValue({ ok: true, latencyMs: 18 });
-      const res = await request(buildApp())
-        .post('/api/voice/speak')
-        .send({ text: 'Heads up — meeting in five.', priority: 'high', source: 'cos' });
-      expect(res.status).toBe(200);
-      expect(proactiveSpeech.speakProactive).toHaveBeenCalledTimes(1);
-      expect(proactiveSpeech.speakProactive.mock.calls[0][0]).toMatchObject({ text: 'Heads up — meeting in five.', priority: 'high', source: 'cos' });
-    });
-
-    it('propagates suppression results (ok:false) without throwing', async () => {
-      proactiveSpeech.speakProactive.mockResolvedValue({ ok: false, reason: 'quiet-hours' });
-      const res = await request(buildApp()).post('/api/voice/speak').send({ text: 'late night ping' });
-      expect(res.status).toBe(200);
-      expect(res.body).toEqual({ ok: false, reason: 'quiet-hours' });
-    });
-
-    // Misconfiguration must surface as a real HTTP error so monitoring
-    // sees it — a 200 ok:false here would silently mask a Socket.IO that
-    // never attached.
-    it('returns 500 VOICE_IO_UNAVAILABLE when io is not configured', async () => {
-      proactiveSpeech.speakProactive.mockResolvedValue({ ok: true, latencyMs: 1 });
-      const res = await request(buildApp({ io: null }))
-        .post('/api/voice/speak')
-        .send({ text: 'hi' });
-      expect(res.status).toBe(500);
-      expect(res.body.code).toBe('VOICE_IO_UNAVAILABLE');
-      expect(proactiveSpeech.speakProactive).not.toHaveBeenCalled();
-    });
-
-    // Empty / whitespace-only source must NOT override speakProactive's
-    // default of 'cos'. The schema transforms it to undefined so the
-    // default kicks in.
-    it.each(['', '   ', '\t'])('drops empty/whitespace source "%s" so default applies', async (source) => {
-      proactiveSpeech.speakProactive.mockResolvedValue({ ok: true });
-      const res = await request(buildApp())
-        .post('/api/voice/speak')
-        .send({ text: 'hi', source });
-      expect(res.status).toBe(200);
-      expect(proactiveSpeech.speakProactive).toHaveBeenCalledTimes(1);
-      const [args] = proactiveSpeech.speakProactive.mock.calls[0];
-      expect(args.source).toBeUndefined();
     });
   });
 

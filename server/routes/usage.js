@@ -19,7 +19,7 @@ import {
   startHistoricalUsageBackfill
 } from '../services/usageBackfill.js';
 import {
-  usageQuerySchema, usageMessagesSchema, providerUsageQuerySchema, subscriptionsUpdateSchema,
+  usageQuerySchema, providerUsageQuerySchema, subscriptionsUpdateSchema,
   subscriptionEnabledSchema, usageFleetBillingSchema, usageRollingCostQuerySchema, usageTipParamsSchema
 } from '../lib/usageValidation.js';
 
@@ -199,13 +199,6 @@ router.get('/backfill', asyncHandler(async (req, res) => {
 
 router.post('/backfill', asyncHandler(async (req, res) => {
   res.status(202).json(await startHistoricalUsageBackfill());
-}));
-
-// POST /api/usage/messages - Record messages
-router.post('/messages', asyncHandler(async (req, res) => {
-  const { providerId, model, messageCount, tokenCount, inputTokenCount } = validateRequest(usageMessagesSchema, req.body);
-  await usage.recordMessages(providerId, model, messageCount, tokenCount, inputTokenCount);
-  res.json({ success: true });
 }));
 
 // DELETE /api/usage - Reset usage data

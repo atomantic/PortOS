@@ -11,7 +11,6 @@ import { readText, REPO_ROOT as ROOT, workingTreeFiles } from '../../../../scrip
 
 /** Mounted route modules no test imports yet, each with why it can wait. */
 const UNTESTED_ALLOWLIST = new Map([
-  ['server/routes/alerts.js', 'read-only pass-through over proactiveAlerts, which its own suite covers'],
   ['server/routes/autoFixMetrics.js', 'read-only pass-through over autoFixMetrics, which its own suite covers'],
   ['server/routes/iterm.js', 'read-only capability probe over itermBridge, which its own suite covers'],
   ['server/routes/runs.js', 'returns the toolkit runs router unchanged; the toolkit route suite owns the contract'],

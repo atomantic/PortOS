@@ -11,7 +11,7 @@ const { makeProxy, cleanup } = mockPathsDataRoot({ prefix: 'portos-usage-commit-
 vi.mock('../lib/fileUtils.js', async () => makeProxy(await vi.importActual('../lib/fileUtils.js')));
 const { PATHS } = await import('../lib/fileUtils.js');
 const {
-  USAGE_FILE, getUsage, loadUsage, resetUsage, recordSession, recordMessages, recordRunUsage, addDatedUsageBatch, flushPendingUsageWrites,
+  USAGE_FILE, getUsage, loadUsage, resetUsage, recordSession, recordRunUsage, addDatedUsageBatch, flushPendingUsageWrites,
   applyHistoricalUsageCorrections, getReconciledUsageRunIds, getRecentCodexUsageClaims, buildUsageDigest
 } = await import('./usage.js');
 const { __resetUsageClaims, mergeUsageClaims, recordCompletedRunUsage, snapshotUsageClaims } = await import('./usageReconciler.js');
@@ -119,10 +119,14 @@ describe('durable usage batches', () => {
   });
 
   it('drains a later usage write before reporting an earlier batch failure', async () => {
+    const firstWriteStarted = Promise.withResolvers();
+    const failFirstWrite = Promise.withResolvers();
     const writeStarted = Promise.withResolvers();
     const release = Promise.withResolvers();
     const failure = Object.assign(new Error('synthetic usage write failure'), { code: 'EIO' });
-    failNextLedgerRename(() => {
+    failNextLedgerRename(async () => {
+      firstWriteStarted.resolve();
+      await failFirstWrite.promise;
       rename.mockImplementation(async (from, to) => {
         if (to === USAGE_FILE) {
           writeStarted.resolve();
@@ -130,12 +134,15 @@ describe('durable usage batches', () => {
         }
         return actualRename(from, to);
       });
-      return Promise.reject(failure);
+      throw failure;
     });
     const first = recordSession('codex-cli', 'Codex', run.model).catch((error) => error);
-    const later = recordMessages('codex-cli', run.model, 1, 7);
+    // Queue the completion after the first batch has closed so it owns a separate save.
+    await firstWriteStarted.promise;
+    const later = recordRunUsage({ providerId: 'codex-cli', model: run.model, tokensOut: 7 });
     let flushSettled = false;
     const flushed = flushPendingUsageWrites().catch((error) => error).finally(() => { flushSettled = true; });
+    failFirstWrite.resolve();
     try {
       await writeStarted.promise;
       expect(await first).toBe(failure);
