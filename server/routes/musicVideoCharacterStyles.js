@@ -3,7 +3,10 @@ import { join } from 'path';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import { PATHS, pathExists } from '../lib/fileUtils.js';
-import { musicVideoCharacterStyleParamsSchema, musicVideoCharacterStyleReferenceSchema } from '../lib/musicVideo/musicVideoRouteValidation.js';
+import {
+  musicVideoCharacterStyleParamsSchema,
+  musicVideoCharacterStyleReferenceSchema,
+} from '../lib/musicVideo/routeValidation/misc.js';
 import {
   listCharacterStyles, setCharacterStyleReferenceImage,
 } from '../services/musicVideo/characterStyles.js';

@@ -5,8 +5,13 @@
  */
 
 import { assertCancelResult } from '../lib/cancelResponse.js';
-import { musicVideoExcerptRequestSchema } from '../lib/musicVideo/musicVideoValidation.js';
-import { musicVideoDcpRequestSchema, musicVideoSocialCutsQuerySchema, musicVideoExcerptNoteSchema, musicVideoExcerptNoteUpdateSchema } from '../lib/musicVideo/musicVideoRouteValidation.js';
+import {
+  musicVideoDcpRequestSchema,
+  musicVideoExcerptNoteSchema,
+  musicVideoExcerptNoteUpdateSchema,
+  musicVideoExcerptRequestSchema,
+  musicVideoSocialCutsQuerySchema,
+} from '../lib/musicVideo/routeValidation/delivery.js';
 import { inspectDcpReadiness } from '../services/musicVideo/dcpPreflight.js';
 import { startDcp, attachDcp, cancelDcp, dcpArtifactPaths } from '../services/musicVideo/dcp.js';
 import { Router } from 'express';

@@ -4,8 +4,20 @@
  * against the remaining routes is unchanged.
  */
 
-import { musicVideoCastSetsUseImageSchema, musicVideoCastSetsImageEditSchema, musicVideoCastSetsImageEditDecisionSchema, musicVideoShotReferenceRepairSchema, musicVideoCastAndSetsStartSchema, musicVideoCastAndSetsDirectionTextEditSchema, musicVideoCastAndSetsFeedbackSchema, musicVideoCastAndSetsFeedbackPlanSchema, musicVideoCastAndSetsFeedbackRenderSchema, musicVideoCastAndSetsImageNoteRemovalSchema, musicVideoCastAndSetsRegenerateSchema } from '../lib/musicVideo/musicVideoRouteValidation.js';
-import { musicVideoCastAndSetsDirectionEditSchema } from '../lib/musicVideo/musicVideoValidation.js';
+import {
+  musicVideoCastAndSetsDirectionEditSchema,
+  musicVideoCastAndSetsDirectionTextEditSchema,
+  musicVideoCastAndSetsFeedbackPlanSchema,
+  musicVideoCastAndSetsFeedbackRenderSchema,
+  musicVideoCastAndSetsFeedbackSchema,
+  musicVideoCastAndSetsImageNoteRemovalSchema,
+  musicVideoCastAndSetsRegenerateSchema,
+  musicVideoCastAndSetsStartSchema,
+  musicVideoCastSetsImageEditDecisionSchema,
+  musicVideoCastSetsImageEditSchema,
+  musicVideoCastSetsUseImageSchema,
+  musicVideoShotReferenceRepairSchema,
+} from '../lib/musicVideo/routeValidation/castAndSets.js';
 import { Router } from 'express';
 import { requireProductionReviewer } from '../services/musicVideo/productionReviewService.js';
 import { asyncHandler } from '../lib/errorHandler.js';

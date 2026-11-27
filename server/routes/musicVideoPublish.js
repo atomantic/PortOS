@@ -10,7 +10,29 @@ import { assertCancelResult } from '../lib/cancelResponse.js';
 import { requireProductionReviewer } from '../services/musicVideo/productionReviewService.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
-import { musicVideoPublishKitBuildSchema, musicVideoPublishCopyPatchSchema, musicVideoPublishCopyDraftSchema, musicVideoPromotionPlanSchema, musicVideoPublishFrameSchema, musicVideoCoverArtComposeSchema, musicVideoYoutubeThumbnailComposeSchema, musicVideoYoutubeThumbnailPaintSchema, musicVideoYoutubeThumbnailPaintPreviewSchema, musicVideoCoverArtGenerateSchema, musicVideoCoverDesignSaveSchema, musicVideoArtistStyleSaveSchema, musicVideoArtistStyleDeleteSchema, musicVideoCoverArtDesignSchema, musicVideoPublishTargetSchema, musicVideoPublishPrepareSchema, musicVideoPublishPlatformsPatchSchema, musicVideoPublishPostSchema, musicVideoPublishCrossLinksSchema, musicVideoCrossLinkTargetSchema, musicVideoCrossLinkEditSchema } from '../lib/musicVideo/musicVideoRouteValidation.js';
+import {
+  musicVideoArtistStyleDeleteSchema,
+  musicVideoArtistStyleSaveSchema,
+  musicVideoCoverArtComposeSchema,
+  musicVideoCoverArtDesignSchema,
+  musicVideoCoverArtGenerateSchema,
+  musicVideoCoverDesignSaveSchema,
+  musicVideoCrossLinkEditSchema,
+  musicVideoCrossLinkTargetSchema,
+  musicVideoPromotionPlanSchema,
+  musicVideoPublishCopyDraftSchema,
+  musicVideoPublishCopyPatchSchema,
+  musicVideoPublishCrossLinksSchema,
+  musicVideoPublishFrameSchema,
+  musicVideoPublishKitBuildSchema,
+  musicVideoPublishPlatformsPatchSchema,
+  musicVideoPublishPostSchema,
+  musicVideoPublishPrepareSchema,
+  musicVideoPublishTargetSchema,
+  musicVideoYoutubeThumbnailComposeSchema,
+  musicVideoYoutubeThumbnailPaintPreviewSchema,
+  musicVideoYoutubeThumbnailPaintSchema,
+} from '../lib/musicVideo/routeValidation/publish.js';
 import { uploadSingle } from '../lib/multipart.js';
 import { requireProject } from '../services/musicVideo/requireProject.js';
 import { startPublishKitBuild, getPublishKitCropPreview, attachPublishKitSseClient, cancelPublishKitBuild, draftPublishKitCopy, updatePublishKitCopy, finalRenderFile, capturePublishKitFrame } from '../services/musicVideo/publishKit.js';

@@ -5,8 +5,8 @@
  * Holds what services, lib validators and the project/scene record shape
  * import: the `musicVideoProject` input schemas, the cached audio-analysis
  * shape (services/musicVideo/audioAnalysis.js) and shared enums. Request
- * bodies that only a route validates live in musicVideoRouteValidation.js,
- * which imports from here, never the reverse (#16826).
+ * bodies that only a route validates live under routeValidation/. Those domain
+ * modules import from here, never the reverse (#16826).
  */
 
 import { CLIP_SOUND_FADE_RANGE, CLIP_SOUND_MUSIC_RANGE, CLIP_SOUND_VOLUME_RANGE } from './musicVideoClipSound.js';

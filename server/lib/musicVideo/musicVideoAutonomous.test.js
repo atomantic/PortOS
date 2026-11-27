@@ -13,7 +13,7 @@ import {
   sunoSongIdsFromHrefs,
 } from './musicVideoAutonomous.js';
 import { sanitizeTaskMetadata } from '../cos/cosTaskMetadata.js';
-import { musicVideoAutonomousResumeSchema, musicVideoAutonomousStartSchema } from './musicVideoRouteValidation.js';
+import { musicVideoAutonomousResumeSchema, musicVideoAutonomousStartSchema } from './routeValidation/runs.js';
 
 describe('normalizeAutonomousBrief', () => {
   it('defaults to the free local tools, no checkpoints, no budget — nothing metered unless opted in', () => {

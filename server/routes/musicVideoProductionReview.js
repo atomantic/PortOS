@@ -5,8 +5,20 @@
  */
 
 import { Router } from 'express';
-import { musicVideoProductionDraftSchema } from '../lib/musicVideo/musicVideoValidation.js';
-import { musicVideoProductionApprovalSchema, musicVideoProductionProofSchema, musicVideoProductionImportSchema, musicVideoProductionFeedbackSchema, musicVideoProductionFeedbackResolutionSchema, musicVideoLyricAnchorSyncSchema, musicVideoProductionReviseSchema, musicVideoProductionRevertSchema, musicVideoDocumentShotsSchema, musicVideoAlignmentReviewSchema, musicVideoCastAndSetsStartSchema } from '../lib/musicVideo/musicVideoRouteValidation.js';
+import {
+  musicVideoAlignmentReviewSchema,
+  musicVideoCastAndSetsStartSchema,
+  musicVideoDocumentShotsSchema,
+  musicVideoLyricAnchorSyncSchema,
+  musicVideoProductionApprovalSchema,
+  musicVideoProductionDraftSchema,
+  musicVideoProductionFeedbackResolutionSchema,
+  musicVideoProductionFeedbackSchema,
+  musicVideoProductionImportSchema,
+  musicVideoProductionProofSchema,
+  musicVideoProductionRevertSchema,
+  musicVideoProductionReviseSchema,
+} from '../lib/musicVideo/routeValidation/productionReview.js';
 import { getProductionReview, getProductionReadiness, saveProductionDraft, prepareProductionReview, approveProductionReview, renderProductionProof, requireProductionReviewer, importProductionPlanning, bindProductionShot, addProductionFeedback, closeProductionFeedback, syncLyricAnchors, removeStaleStoryboardRows, reviseProductionFromFeedback, revertProductionInput, importDocumentShots, reverifyProductionAlignment } from '../services/musicVideo/productionReviewService.js';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';

@@ -315,6 +315,15 @@ describe('CI-selection cuts stay cut (#12285)', () => {
     }
   });
 
+  it('keeps Music Video route validation domains independent (#19757)', () => {
+    const dir = 'lib/musicVideo/routeValidation';
+    const domains = productionModulesIn(dir).filter(entry => entry !== `${dir}/shared.js`);
+    expect(domains).toContain(`${dir}/project.js`);
+    for (const entry of [...domains, `${dir}/shared.js`]) {
+      expect(importTargets(entry).filter(target => domains.includes(target)), entry).toEqual([]);
+    }
+  });
+
   it('keeps every media queue module off domain runtimes, helpers, and terminal hooks (#17499, #18217)', () => {
     const entries = productionModulesIn('services/mediaJobQueue');
     expect(entries).toContain('services/mediaJobQueue/execution.js');

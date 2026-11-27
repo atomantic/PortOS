@@ -3,7 +3,7 @@ import { createRequire } from 'node:module';
 import { runInNewContext } from 'node:vm';
 import { creditsOutroPrefill, creditsOutroSeconds, drawCreditsOutro, normalizeCreditsOutro } from './musicVideoCreditsOutro.js';
 import { endingParts, endingPartAt, endingSeconds } from './musicVideoEnding.js';
-import { musicVideoProjectUpdateSchema } from './musicVideoRouteValidation.js';
+import { musicVideoProjectUpdateSchema } from './routeValidation/project.js';
 
 describe('credits ending', () => {
   it('keeps every line as typed, drops empty ones and clamps its length', () => {

@@ -2,7 +2,17 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
-import { musicVideoCameoCreateSchema, musicVideoCameoLinkSchema, musicVideoCameoReferenceRemoveSchema, musicVideoCameoReferencesAddSchema, musicVideoCameoStillFromShotSchema, musicVideoCameoUnlinkSchema, musicVideoCameoUpdateSchema, musicVideoCameoVariantCreateSchema, musicVideoCameoVariantUpdateSchema } from '../lib/musicVideo/musicVideoRouteValidation.js';
+import {
+  musicVideoCameoCreateSchema,
+  musicVideoCameoLinkSchema,
+  musicVideoCameoReferenceRemoveSchema,
+  musicVideoCameoReferencesAddSchema,
+  musicVideoCameoStillFromShotSchema,
+  musicVideoCameoUnlinkSchema,
+  musicVideoCameoUpdateSchema,
+  musicVideoCameoVariantCreateSchema,
+  musicVideoCameoVariantUpdateSchema,
+} from '../lib/musicVideo/routeValidation/cameos.js';
 import { MUSIC_VIDEO_CAMEO_ID_PATTERN, MUSIC_VIDEO_CAMEO_VARIANT_ID_PATTERN } from '../lib/musicVideo/musicVideoCameos.js';
 import {
   addCameoReferences, addCameoVariant, createCameos, deleteCameo, deleteCameoVariant, linkCameoShots,

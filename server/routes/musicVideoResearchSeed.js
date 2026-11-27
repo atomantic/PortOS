@@ -4,7 +4,7 @@ import { emptyQuerySchema } from '../lib/queryValidation.js';
 import { cancelOperationSchema } from '../lib/sharedSchemas.js';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
-import { musicVideoResearchSeedSchema } from '../lib/musicVideo/musicVideoRouteValidation.js';
+import { musicVideoResearchSeedSchema } from '../lib/musicVideo/routeValidation/misc.js';
 import { cancelResearch, listActiveResearch, startCameoResearch, startSceneResearch } from '../services/musicVideo/researchSeed.js';
 
 const router = Router();
