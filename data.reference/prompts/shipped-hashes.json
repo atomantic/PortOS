@@ -73,8 +73,9 @@
     "retired": []
   },
   "stages/app-detection.md": {
-    "current": "92106f78da3e9aaf576cba15ff7fc236",
-    "retired": []
+    "retired": [
+      "92106f78da3e9aaf576cba15ff7fc236"
+    ]
   },
   "stages/brain-classifier.md": {
     "current": "c7124974a5eebf5305be60ff73d8555a",
@@ -133,7 +134,6 @@
     ]
   },
   "stages/cos-agent-briefing.md": {
-    "current": "a01c81d3a7f4ac0ca9e8d5137735c0e3",
     "retired": [
       "181b26838e526427173e4dccfc884d01",
       "3e1ca7f7b14b799f89a193c568003624",
@@ -141,20 +141,24 @@
       "9bcd3a0167dd4aed7cfff7f404494dfb",
       "af73fd50d6f29d561772474c12346e53",
       "d761133753da290a0c02eca1c87709e4",
-      "dccb392a43cbd3dac900fee12c31619a"
+      "dccb392a43cbd3dac900fee12c31619a",
+      "a01c81d3a7f4ac0ca9e8d5137735c0e3"
     ]
   },
   "stages/cos-evaluate.md": {
-    "current": "ba04e0ade2c46941ca57a38a1fc3ffb3",
-    "retired": []
+    "retired": [
+      "ba04e0ade2c46941ca57a38a1fc3ffb3"
+    ]
   },
   "stages/cos-report-summary.md": {
-    "current": "9f3adf0017b09b3728667b432299be77",
-    "retired": []
+    "retired": [
+      "9f3adf0017b09b3728667b432299be77"
+    ]
   },
   "stages/cos-self-improvement.md": {
-    "current": "bbbeb214f02bff107cb22db3cb47ed5a",
-    "retired": []
+    "retired": [
+      "bbbeb214f02bff107cb22db3cb47ed5a"
+    ]
   },
   "stages/cos-task-enhance.md": {
     "current": "6519494a7bf87822cb7b38215e28dd9d",

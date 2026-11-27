@@ -2,10 +2,10 @@
  * Prompt-stage protection (#3314, #3335): the stages PortOS features call by name, split into CURATED badging and DERIVED deletion protection.
  *
  * CURATED: `SYSTEM_STAGE_USAGE` (`key -> usedBy[]` feature-name copy), `SYSTEM_STAGE_KEYS`, `isSystemStage(key)`, `systemStageUsedBy(key)`: what `GET /api/prompts` ships and the Prompt Manager badges/filters;
- * adding a row is a per-stage product decision (the CoS / Brain / Memory / app-detection set; ~100 of 127 shipped stages are literal-key resolved too, and badging all would make the SYSTEM badge and "System only" filter meaningless).
+ * adding a row is a per-stage product decision (the Brain / Memory set; ~100 of shipped stages are literal-key resolved too, and badging all would make the SYSTEM badge and "System only" filter meaningless).
  * DERIVED: `STAGE_CALL_SITES` / `stageReferencedBy(key)` from the generated `promptStageCallSites.generated.json` (every stage key a `server/` source references; `scripts/generate-prompt-stage-call-sites.js`), unioned with the curated set into
  * `isProtectedStage(key)` / `PROTECTED_STAGE_KEYS`, which the `DELETE /api/prompts/:stage` force-guard and `canDelete` consult, so `pipeline-series-concept-judge` is undeletable without `?force=true` yet unbadged. Deleting a literal-key stage
- * (`getStage('cos-evaluate')`, `runStage('brain-classifier')`) silently breaks its feature. The key list ships from `GET /api/prompts` so the client mirror in `client/src/lib/promptStageGroups.js` (which drifted, #3284) has nothing to guess.
+ * (`getStage('catalog-extract')`, `runStage('brain-classifier')`) silently breaks its feature. The key list ships from `GET /api/prompts` so the client mirror in `client/src/lib/promptStageGroups.js` (which drifted, #3284) has nothing to guess.
  * Data + predicates, no toolkit dependency; the only read is the generated manifest, loaded once at module init.
  */
 
@@ -13,15 +13,11 @@ import { readFileSync } from 'node:fs';
 
 /** `stageKey -> human-readable feature names that call it`: surfaced as `usedBy` by `GET /api/prompts/:stage/usage` in the delete-confirm dialog, so they read as UI copy. */
 export const SYSTEM_STAGE_USAGE = Object.freeze({
-  'cos-evaluate': Object.freeze(['CoS task evaluation']),
-  'cos-report-summary': Object.freeze(['CoS daily reports']),
-  'cos-self-improvement': Object.freeze(['CoS self-improvement tasks']),
   'cos-task-enhance': Object.freeze(['CoS task prompt enhancement']),
   'brain-classifier': Object.freeze(['Brain thought classification']),
   'brain-daily-digest': Object.freeze(['Brain daily digest generation']),
   'brain-weekly-review': Object.freeze(['Brain weekly review generation']),
   'memory-evaluate': Object.freeze(['Memory extraction from agent output']),
-  'app-detection': Object.freeze(['Project directory analysis']),
 });
 
 /** Derived, never restated — the DELETE guard and the API response both read this. */
