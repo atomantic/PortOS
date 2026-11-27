@@ -184,6 +184,26 @@ describe('trusted CI test-memo cache reuse', () => {
     }
   });
 
+  it('disables only the browser memo for explicitly requested cold dispatches', () => {
+    expect(ciYml).toMatch(/\n {6}browser_timing:\n[^\n]+\n {8}type: choice\n {8}default: ordinary\n {8}options:\n {10}- ordinary\n {10}- cold-smoke\n {10}- cold-full\n {2}workflow_call:/);
+    const browser = jobs.browser;
+    const manualSmoke = "github.event_name == 'workflow_dispatch' && inputs.browser_timing == 'cold-smoke'";
+    const prSmoke = "github.event_name == 'pull_request' && github.base_ref != 'release' && inputs.full != true";
+    expect(browser).toContain(`PORTOS_BROWSER_TEST_PROFILE: \${{ (${manualSmoke} && 'smoke') || (${prSmoke} && 'smoke' || 'full') }}`);
+    const coldDispatch = `github.event_name == 'workflow_dispatch' && contains(fromJSON('["cold-smoke","cold-full"]'), inputs.browser_timing)`;
+    expect(browser).toContain(`PORTOS_TEST_MEMO: \${{ ${coldDispatch} && 'off' || '' }}`);
+    const concurrency = ciYml.match(/^ {2}group: (.+)$/m)?.[1];
+    expect(concurrency).toBe(`ci-\${{ github.workflow }}-\${{ github.event.pull_request.number || (github.event_name == 'schedule' && 'schedule') || github.ref }}\${{ ${coldDispatch} && format(':{0}', inputs.browser_timing) || '' }}`);
+    for (const name of ['Select browser memo donors', 'Restore the test memo', 'Save the test memo']) {
+      expect(step(browser, name)).toContain("env.PORTOS_TEST_MEMO != 'off'");
+    }
+    expect(jobs['full-gate']).toContain(`&& !(${manualSmoke})`);
+    for (const [id, job] of Object.entries(jobs)) {
+      if (id === 'browser' || id === 'full-gate') continue;
+      expect(job).not.toContain('inputs.browser_timing');
+    }
+  });
+
   it('keeps the database consumer on its unsharded restore and save path', () => {
     const job = jobs.database;
     const invocation = step(job, 'Restore the test memo');

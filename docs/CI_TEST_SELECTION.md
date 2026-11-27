@@ -15,6 +15,13 @@ to account for fidelity-only work. Each broad smoke runner restores its own
 full-run memo partition and only the additional partitions of selected suites
 whose full owner differs. Suites with no matching memo verdict still run.
 
+For a hosted timing sample, dispatch `CI` with `browser_timing=cold-smoke` or
+`browser_timing=cold-full` on the revision under test. These modes run all
+seven browser shards without reading or writing the browser test memo.
+Compare the **Run cross-workspace browser suites** step across the shards.
+Dependency and transform caches stay enabled. A cold smoke run cannot
+produce a Full CI Gate because it excludes browser fidelity tests.
+
 The four-runner layout spreads the expensive memo misses from hosted run
 45642241181. That run's fastest runner skipped its only suite, while the
 slowest ran template parity, production review and animatic capture. A cold
