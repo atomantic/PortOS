@@ -1,7 +1,6 @@
 import { Link } from 'react-router';
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { CheckCircle2, Circle, Download, ExternalLink, RefreshCw, ShieldCheck } from 'lucide-react';
-import toast from '../ui/Toast';
+import { useCallback, useEffect, useState } from 'react';
+import { Download, ExternalLink, RefreshCw, ShieldCheck } from 'lucide-react';
 import BrailleSpinner from '../BrailleSpinner';
 import PromptGuardHfAccessNotice from '../imageGen/PromptGuardHfAccessNotice.jsx';
 import { useHfTokenStatus } from '../../hooks/useHfTokenStatus';
@@ -11,10 +10,12 @@ import {
   installModelAbuseGuard,
   scanModelAbuseContent,
 } from '../../services/apiLocalLlm.js';
-import socket from '../../services/socket';
+import InstallStageList from './InstallStageList';
+import useModelInstall from './useModelInstall';
 import UntrustedContentPolicyPanel from './UntrustedContentPolicyPanel.jsx';
 import { formatCount } from '../../utils/formatters';
 
+const INSTALLING_MESSAGE = 'Installing the dedicated guard…';
 const MANUAL_SCAN_MAX_CHARS = 2_000_000;
 
 const FALLBACK_STAGES = [
@@ -42,11 +43,6 @@ export default function ModelAbuseGuardPanel() {
   const [scanError, setScanError] = useState('');
   const [scanning, setScanning] = useState(false);
   const [statusError, setStatusError] = useState(false);
-  const [installing, setInstalling] = useState(false);
-  const [progressMsg, setProgressMsg] = useState('');
-  const [installError, setInstallError] = useState('');
-  const [installingStage, setInstallingStage] = useState(null);
-  const progressTimer = useRef(null);
   const { present: tokenPresent, source: tokenSource, refresh: refreshToken } = useHfTokenStatus();
 
   const loadGuardStatus = useCallback(() => (
@@ -60,51 +56,15 @@ export default function ModelAbuseGuardPanel() {
 
   useEffect(() => { loadGuardStatus(); }, [loadGuardStatus]);
 
-  useEffect(() => {
-    const handleProgress = (data) => {
-      if (data?.scope !== 'security-guard') return;
-      clearTimeout(progressTimer.current);
-      if (data?.stage) setInstallingStage(data.stage);
-      setProgressMsg(data?.message || '');
-      if (data?.event === 'complete') {
-        setInstalling(false);
-        setInstallingStage(null);
-        progressTimer.current = setTimeout(() => setProgressMsg(''), 3000);
-        loadGuardStatus();
-      }
-      if (data?.event === 'error') {
-        setInstalling(false);
-        setInstallError(data.message || 'Installation failed. Refresh status for diagnostics.');
-        loadGuardStatus();
-      }
-    };
-    socket.on('localLlm:progress', handleProgress);
-    return () => {
-      socket.off('localLlm:progress', handleProgress);
-      clearTimeout(progressTimer.current);
-    };
-  }, [loadGuardStatus]);
-
-  const installGuard = () => {
-    setInstallError('');
-    setInstallingStage(null);
-    setInstalling(true);
-    setProgressMsg('Installing the dedicated guard…');
-    return installModelAbuseGuard({ silent: true })
-      .then((result) => {
-        if (result?.ready === true) toast.success('Model-abuse guard installed and ready');
-        return loadGuardStatus();
-      })
-      .catch((error) => { setInstallError(error.message || 'Installation failed.'); return loadGuardStatus(); })
-      .finally(() => {
-        setInstalling(false);
-        setInstallingStage(null);
-      });
-  };
-
-  const cancelGuard = () => cancelModelAbuseGuardInstall({ silent: true })
-    .then(loadGuardStatus)
-    .catch(() => null);
+  const { installing, installingStage, progressMsg, installError, install, cancel } = useModelInstall({
+    scope: 'security-guard',
+    installRequest: installModelAbuseGuard,
+    cancelRequest: cancelModelAbuseGuardInstall,
+    reloadStatus: loadGuardStatus,
+    installingMessage: INSTALLING_MESSAGE,
+    successMessage: 'Model-abuse guard installed and ready',
+    cancelFailureMessage: 'Could not cancel the model-abuse guard installation',
+  });
 
   const scanContent = async (event) => {
     event.preventDefault();
@@ -125,7 +85,6 @@ export default function ModelAbuseGuardPanel() {
     if (stage.id !== 'huggingface-token' || tokenPresent === null) return stage;
     return { ...stage, ready: tokenPresent === true };
   });
-  const currentStageId = installingStage || (installing ? stages.find((stage) => !stage.ready)?.id : null);
   const overallReady = guardStatus?.ready === true;
   const contributionBlocked = guardStatus?.contributionAssessment?.ready === false;
   const incomplete = guardStatus?.setupState === 'incomplete' || (!overallReady && (guardStatus?.modelCached || guardStatus?.venvReady));
@@ -189,48 +148,15 @@ export default function ModelAbuseGuardPanel() {
             onSaved={() => { refreshToken(); loadGuardStatus(); }}
           />
         </details>
-        <ol className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 list-none p-0" aria-label="Abuse guard setup stages">
-          {stages.map((stage) => {
-            const current = installing && currentStageId === stage.id;
-            const waiting = installing && !stage.ready && currentStageId && currentStageId !== stage.id;
-            return (
-              <li
-                key={stage.id}
-                data-testid={`abuse-guard-stage-${stage.id}`}
-                data-ready={stage.ready ? 'true' : 'false'}
-                className="flex items-start gap-2 rounded-lg border border-port-border/70 bg-port-bg/40 px-3 py-2"
-              >
-                <span className="mt-0.5 shrink-0" aria-hidden="true">
-                  {stage.ready ? (
-                    <CheckCircle2 size={14} className="text-port-success" />
-                  ) : current ? (
-                    <BrailleSpinner />
-                  ) : (
-                    <Circle size={14} className={waiting ? 'text-gray-600' : 'text-port-warning'} />
-                  )}
-                </span>
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <p className="text-xs font-medium text-white">{stage.label}</p>
-                    <span className={`text-[11px] ${stage.ready ? 'text-port-success' : current ? 'text-gray-300' : 'text-gray-500'}`}>
-                      {stage.ready ? 'Ready' : current ? 'Installing…' : waiting ? 'Waiting' : 'Not ready'}
-                    </span>
-                  </div>
-                  <details className="mt-1 text-xs text-gray-400">
-                    <summary className="cursor-pointer hover:text-port-accent">Details</summary>
-                    <p className="mt-1 leading-relaxed">{stage.description}</p>
-                  </details>
-                  {stage.id === 'python' && !stage.ready && (
-                    <a href="https://www.python.org/downloads/" target="_blank" rel="noopener noreferrer" className="text-xs text-port-accent hover:underline">Install Python, then refresh status</a>
-                  )}
-                  {current && progressMsg && (
-                    <p className="text-[11px] text-gray-400 mt-1">{progressMsg}</p>
-                  )}
-                </div>
-              </li>
-            );
-          })}
-        </ol>
+        <InstallStageList
+          stages={stages}
+          installing={installing}
+          installingStage={installingStage}
+          progressMsg={progressMsg}
+          testIdPrefix="abuse-guard-stage"
+          gridClass="grid-cols-1 sm:grid-cols-2 lg:grid-cols-3"
+          ariaLabel="Abuse guard setup stages"
+        />
         <div className="flex items-center gap-2 flex-wrap text-[11px] text-gray-500">
           <span>{guardStatus?.name || 'Llama Prompt Guard 2 86M'}</span>
           <span>·</span>
@@ -252,10 +178,10 @@ export default function ModelAbuseGuardPanel() {
             <span className="text-xs text-port-success">Installed from the pinned model revision.</span>
           ) : installing ? (
             <>
-              <span className="flex items-center gap-1.5 text-xs text-gray-300"><BrailleSpinner /> Installing the dedicated guard…</span>
+              <span className="flex items-center gap-1.5 text-xs text-gray-300"><BrailleSpinner /> {INSTALLING_MESSAGE}</span>
               <button
                 type="button"
-                onClick={cancelGuard}
+                onClick={cancel}
                 className="px-2.5 py-1 text-xs bg-port-border hover:bg-port-border/70 text-gray-300 rounded"
               >
                 Cancel
@@ -264,7 +190,7 @@ export default function ModelAbuseGuardPanel() {
           ) : (
             <button
               type="button"
-              onClick={installGuard}
+              onClick={install}
               disabled={!guardStatus || tokenPresent !== true || guardStatus.pythonAvailable !== true}
               className="px-2.5 py-1 text-xs bg-port-accent/20 hover:bg-port-accent/30 text-port-accent rounded disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
             >

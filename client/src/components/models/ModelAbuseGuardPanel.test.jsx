@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render as renderView, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
@@ -18,7 +18,6 @@ vi.mock('../../services/apiImageVideo.js', () => ({
 vi.mock('../../services/socket', () => ({
   default: { on: vi.fn(), off: vi.fn() },
 }));
-vi.mock('../ui/Toast');
 
 import {
   cancelModelAbuseGuardInstall,
@@ -28,6 +27,7 @@ import {
 } from '../../services/apiLocalLlm.js';
 import { getHfTokenStatus } from '../../services/apiImageVideo.js';
 import socket from '../../services/socket';
+import toast, { Toaster } from '../ui/Toast';
 import ModelAbuseGuardPanel from './ModelAbuseGuardPanel';
 
 const STAGES = [
@@ -56,8 +56,10 @@ beforeEach(() => {
   cancelModelAbuseGuardInstall.mockResolvedValue({ cancelled: true });
 });
 
+afterEach(() => { act(() => toast.dismiss()); });
+
 const renderPanel = async () => {
-  render(<ModelAbuseGuardPanel />);
+  render(<><ModelAbuseGuardPanel /><Toaster /></>);
   const heading = await screen.findByRole('heading', { name: 'Model-abuse guard' });
   expect(heading).toBeInTheDocument();
   expect(screen.getByRole('tabpanel')).toHaveAttribute('aria-labelledby', heading.id);
@@ -138,6 +140,21 @@ describe('ModelAbuseGuardPanel', () => {
     expect(screen.getByTestId('abuse-guard-stage-model')).toHaveAttribute('data-ready', 'false');
     expect(screen.queryByText('Recommended for Security Scan')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Install model-abuse guard' })).toBeInTheDocument();
+  });
+
+  it('shows a failed cancellation while the installation is still running', async () => {
+    let finishInstall;
+    installModelAbuseGuard.mockReturnValue(new Promise((resolve) => { finishInstall = resolve; }));
+    cancelModelAbuseGuardInstall.mockRejectedValueOnce(new Error('Could not reach the installer'));
+    await renderPanel();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Install model-abuse guard' }));
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Cancel' })); });
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not reach the installer');
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeEnabled();
+
+    await act(async () => { finishInstall({ ok: true, ready: true }); });
   });
 
   it('marks the live install stage from security-guard progress events', async () => {
