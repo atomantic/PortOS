@@ -42,7 +42,7 @@ import {
   promoteCheckpoint,
 } from '../services/voice/fineTuning.js';
 import { findPiperVoice } from '../services/voice/piper-voices.js';
-import { speakProactive, HHMM_RE, MAX_PROACTIVE_TEXT_LEN } from '../services/voice/proactiveSpeech.js';
+import { HHMM_RE, MAX_PROACTIVE_TEXT_LEN } from '../services/voice/proactiveSpeech.js';
 import { voicePiperFetchBodySchema } from '../lib/voiceValidation.js';
 
 const router = Router();
@@ -538,34 +538,6 @@ router.post('/test', asyncHandler(async (req, res) => {
   res.setHeader('Content-Type', 'audio/wav');
   res.setHeader('X-TTS-Latency-Ms', String(latencyMs));
   res.send(wav);
-}));
-
-const speakBodySchema = z.object({
-  text: z.string().trim().min(1).max(MAX_VOICE_TEXT_LEN),
-  priority: z.enum(['low', 'normal', 'high']).optional(),
-  source: z.string().max(64).optional()
-    .transform((s) => {
-      const t = (s ?? '').trim();
-      return t === '' ? undefined : t;
-    }),
-});
-router.post('/speak', asyncHandler(async (req, res) => {
-  const parsed = speakBodySchema.safeParse(req.body || {});
-  if (!parsed.success) {
-    throw new ServerError(
-      `Invalid speak payload: ${parsed.error.issues.map((i) => `${i.path.join('.')} ${i.message}`).join('; ')}`,
-      { status: 400, code: 'VALIDATION_ERROR' },
-    );
-  }
-  const io = req.app.get('io');
-  if (!io) {
-    throw new ServerError(
-      'voice subsystem misconfigured: io not attached',
-      { status: 500, code: 'VOICE_IO_UNAVAILABLE' },
-    );
-  }
-  const result = await speakProactive({ io, ...parsed.data });
-  res.json(result);
 }));
 
 const whisperActionSchema = z.object({

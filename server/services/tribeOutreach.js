@@ -2,7 +2,7 @@
  * Tribe Outreach (#2158)
  *
  * Timeline-aware outreach for Tribe relationships — the follow-on to the
- * cadence-only nudges in `proactiveAlerts.js`. Two layers, deliberately split so
+ * cadence-only nudges in `proactiveAlertSources.js`. Two layers, deliberately split so
  * the AI-provider policy holds (no cold-bootstrap LLM calls):
  *
  *   1. Detection (NO LLM) — `findUnansweredTribeThreads()` scans the human-activity

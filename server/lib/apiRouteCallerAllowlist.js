@@ -114,7 +114,6 @@ export const UNCALLED_ROUTE_ALLOWLIST = Object.freeze({
     '/sdapi/v1/txt2img',
   ]),
   'agent-facing': Object.freeze([
-    '/api/alerts',
     // server/lib/apiOperationContracts.js: a public OpenAPI operation exposed to agents through the API tool resource.
     '/api/apps/:id/logs',
     '/api/auth/logout',
@@ -248,8 +247,6 @@ export const UNCALLED_ROUTE_ALLOWLIST = Object.freeze({
     '/api/music/supercollider/renders/:jobId/audio',
     // docs/features/openclaw-operator-chat.md documents the non-streaming API.
     'POST /api/openclaw/sessions/:id/messages',
-    '/api/usage/messages',
-    '/api/voice/speak',
   ]),
   'legacy-client-compat': Object.freeze([
     // Universe pickers in older client builds request full records (before #17115).

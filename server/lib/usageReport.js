@@ -186,7 +186,7 @@ function foldUsageBucket(ctx, bucket, classes, period) {
 function representedCounters(ctx) {
   return [...ctx.agg.values()].reduce((sum, provider) => ({
     // `totalTokens.input` counts every billable input tier (see
-    // recordMessages), so the represented side must include the cache tiers
+    // applyMessageUsage in usage.js), so the represented side must include the cache tiers
     // too — otherwise a measured run's cache reads look unaccounted-for and
     // get re-added as a legacy residual, double-billing them.
     input: sum.input + provider.tokensIn + provider.cacheReadTokens + provider.cacheWriteTokens,
