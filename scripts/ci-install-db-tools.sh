@@ -9,7 +9,7 @@
 # official archive and the download resumes (finished .debs stay cached) until
 # APT_TOTAL_BUDGET_SECONDS. Repository signing is untouched — only the mirror
 # URI changes, so apt still verifies every Release file against its keyring.
-# A complete verified browser cache can provision FFmpeg without modifying dpkg's state.
+# A complete verified cache can provision the tools without modifying dpkg's state.
 # Other installs run from the local archive directory with --no-download.
 #
 # APT_ROOT exists only so the contract test can run this against a fake tree.
@@ -24,10 +24,12 @@ OFFICIAL_ARCHIVE='https://archive.ubuntu.com/ubuntu/'
 # The runner's Azure mirror, by URL or through its mirror list.
 RUNNER_MIRROR='(mirror\+file:/etc/apt/apt-mirrors\.txt|https?://[a-z0-9.-]+\.archive\.ubuntu\.com/ubuntu/?)'
 PACKAGES=(ffmpeg)
+TOOLS=(ffmpeg ffprobe)
 case "$INCLUDE_POSTGRES" in
   true)
     : "${PG_MAJOR:?PG_MAJOR must name the PostgreSQL service major}"
     PACKAGES=("postgresql-client-${PG_MAJOR}" ffmpeg)
+    TOOLS+=(psql pg_dump pg_restore pg_isready)
     ;;
   false) ;;
   *) echo "INCLUDE_POSTGRES must be true or false" >&2; exit 1 ;;
@@ -50,8 +52,8 @@ shopt -u nullglob
 APT_SOURCE_OPTS=(-o "Dir::Etc::sourceparts=${APT_SOURCEPARTS_DIR}")
 APT_OPTS+=("${APT_SOURCE_OPTS[@]}")
 ARCHIVES="${ROOT}/var/cache/apt/archives"
-BROWSER_RUNTIME=''
-BROWSER_READY=false
+PRIVATE_RUNTIME=''
+PRIVATE_READY=false
 
 fail() {
   echo "::error title=CI tool installation failed::$1 No test ran; this is an installation failure, not a test failure." >&2
@@ -66,14 +68,13 @@ bounded() {
   timeout --kill-after=10 "$remaining" "$@"
 }
 
-# Browser suites need the two executables and their libraries. A private runtime
-# avoids dpkg's serial unpack/configure cycle and scopes the library path to
-# these tools so Chrome, Node and other programs still use the runner's libraries.
-prepare_browser_runtime() {
-  local tool multiarch libdir library_path
+# A private runtime avoids dpkg's serial unpack/configure cycle and scopes the
+# library path to the wrappers so other programs still use the runner's libraries.
+prepare_private_runtime() {
+  local tool multiarch libdir library_path executable version_flag
   multiarch=$(dpkg-architecture -qDEB_HOST_MULTIARCH) || return
-  BROWSER_RUNTIME=$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/portos-ffmpeg.XXXXXXXX") || return
-  mkdir "$BROWSER_RUNTIME/packages" "$BROWSER_RUNTIME/payload" "$BROWSER_RUNTIME/bin" || return
+  PRIVATE_RUNTIME=$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/portos-ci-tools.XXXXXXXX") || return
+  mkdir "$PRIVATE_RUNTIME/packages" "$PRIVATE_RUNTIME/payload" "$PRIVATE_RUNTIME/bin" || return
   # Batch archives per shell, keeping each archive in a separate tree for assembly.
   # shellcheck disable=SC2016 # The extractor shell expands its own arguments.
   printf '%s\0' "$@" | xargs -0 -P 4 -n 20 bash -ec '
@@ -82,19 +83,30 @@ prepare_browser_runtime() {
     for archive; do
       dpkg-deb --extract "$archive" "$destination/${archive##*/}"
     done
-  ' _ "$BROWSER_RUNTIME/packages" || return
-  cp -al -- "$BROWSER_RUNTIME/packages/"*/. "$BROWSER_RUNTIME/payload/" || return
-  libdir="$BROWSER_RUNTIME/payload/usr/lib/$multiarch"
+  ' _ "$PRIVATE_RUNTIME/packages" || return
+  cp -al -- "$PRIVATE_RUNTIME/packages/"*/. "$PRIVATE_RUNTIME/payload/" || return
+  libdir="$PRIVATE_RUNTIME/payload/usr/lib/$multiarch"
   # Ubuntu's libpulse0 places libpulsecommon in a separate loader directory.
-  library_path="$libdir:$libdir/pulseaudio:$BROWSER_RUNTIME/payload/lib/$multiarch"
-  for tool in ffmpeg ffprobe; do
+  library_path="$libdir:$libdir/pulseaudio:$PRIVATE_RUNTIME/payload/lib/$multiarch"
+  for tool in "${TOOLS[@]}"; do
+    case "$tool" in
+      ffmpeg|ffprobe)
+        executable="$PRIVATE_RUNTIME/payload/usr/bin/$tool"
+        version_flag=-version
+        ;;
+      *)
+        # Use the service-major client directly, without postgresql-common's pg_wrapper.
+        executable="$PRIVATE_RUNTIME/payload/usr/lib/postgresql/${PG_MAJOR}/bin/$tool"
+        version_flag=--version
+        ;;
+    esac
     printf '#!/bin/bash\nexport LD_LIBRARY_PATH=%q\nexec %q "$@"\n' \
-      "$library_path" "$BROWSER_RUNTIME/payload/usr/bin/$tool" > "$BROWSER_RUNTIME/bin/$tool" || return
-    chmod +x "$BROWSER_RUNTIME/bin/$tool" || return
-    "$BROWSER_RUNTIME/bin/$tool" -version >/dev/null || return
+      "$library_path" "$executable" > "$PRIVATE_RUNTIME/bin/$tool" || return
+    chmod +x "$PRIVATE_RUNTIME/bin/$tool" || return
+    "$PRIVATE_RUNTIME/bin/$tool" "$version_flag" >/dev/null || return
   done
-  printf '%s\n' "$BROWSER_RUNTIME/bin" >> "$GITHUB_PATH" || return
-  BROWSER_READY=true
+  printf '%s\n' "$PRIVATE_RUNTIME/bin" >> "$GITHUB_PATH" || return
+  PRIVATE_READY=true
 }
 
 # apt accepts an existing archive by size alone. Only import restored downloads
@@ -130,17 +142,17 @@ restore_archives() {
     esac
   done < <(cd "$APT_PACKAGE_CACHE" && printf '%s\n' "${checksums[@]}" | LC_ALL=C sha256sum --check 2>/dev/null)
   (( ${#verified[@]} > 0 )) || return 0
-  if [[ "$INCLUDE_POSTGRES" == false && -n "${GITHUB_PATH:-}" ]] &&
+  if [[ -n "${GITHUB_PATH:-}" ]] &&
     (( ${#verified[@]} == expected )); then
     local started=$SECONDS
-    if prepare_browser_runtime "${verified[@]}"; then
-      echo "⏱ Verified FFmpeg runtime prepared in $((SECONDS - started))s"
+    if prepare_private_runtime "${verified[@]}"; then
+      echo "⏱ Verified private CI tool runtime prepared in $((SECONDS - started))s"
       return 0
     fi
-    if [[ -n "$BROWSER_RUNTIME" ]]; then
-      rm -rf -- "$BROWSER_RUNTIME"
+    if [[ -n "$PRIVATE_RUNTIME" ]]; then
+      rm -rf -- "$PRIVATE_RUNTIME"
     fi
-    echo '♻️ Private FFmpeg runtime unavailable; installing through APT'
+    echo '♻️ Private CI tool runtime unavailable; installing through APT'
   fi
   sudo install -d "$ARCHIVES" &&
     sudo install -m 644 -t "$ARCHIVES" -- "${verified[@]}"
@@ -152,7 +164,7 @@ download_by() {
   echo "⏱ APT indexes refreshed in $((SECONDS - started))s"
   started=$SECONDS
   restore_archives "$1" || return
-  [[ "$BROWSER_READY" == false ]] || return 0
+  [[ "$PRIVATE_READY" == false ]] || return 0
   bounded "$1" sudo apt-get "${APT_OPTS[@]}" "${APT_INSTALL_OPTS[@]}" --download-only "${PACKAGES[@]}" || return
   echo "⏱ APT archives ready in $((SECONDS - started))s"
 }
@@ -181,8 +193,8 @@ if ! download_by "$PRIMARY_BUDGET"; then
     fail "Packages did not download from the runner mirror or ${OFFICIAL_ARCHIVE} within ${TOTAL_BUDGET}s."
 fi
 
-if [[ "$BROWSER_READY" == true ]]; then
-  echo "✅ Prepared ffmpeg and ffprobe in ${SECONDS}s"
+if [[ "$PRIVATE_READY" == true ]]; then
+  echo "✅ Prepared ${TOOLS[*]} in ${SECONDS}s"
   exit 0
 fi
 
