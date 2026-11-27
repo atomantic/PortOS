@@ -291,4 +291,41 @@ describe.skipIf(!chrome)('Voice Call console in Chrome', () => {
       await page.close();
     }
   });
+
+  it('launches floating sat-phone handset in bottom-left, persists compact toggle across reload, and navigates to /voice/call', async () => {
+    const page = await fixture.browser.newPage({ viewport: { width: 1200, height: 820 }, reducedMotion: 'reduce' });
+    try {
+      await stubApi(page, true);
+      await page.addInitScript(() => {
+        localStorage.setItem('portos.voice.hidden', '0');
+      });
+      await page.goto(`${fixture.origin}voice-console-test?home`);
+      const widget = page.getByRole('complementary', { name: 'Voice assistant' });
+      await widget.waitFor();
+      await widget.getByRole('img', { name: 'Radio operator portrait' }).waitFor();
+
+      // Verify bottom-left placement on the left half of the viewport
+      const box = await widget.boundingBox();
+      expect(box.x).toBeLessThan(350);
+      expect(box.x + box.width).toBeLessThan(700);
+      expect(box.y + box.height).toBeLessThanOrEqual(820);
+
+      // Toggle to compact bar and confirm persistence across reload
+      await widget.getByRole('button', { name: 'Switch to compact voice bar' }).click();
+      expect(await widget.getByRole('img', { name: 'Radio operator portrait' }).count()).toBe(0);
+      await widget.getByRole('button', { name: 'Show transceiver handset' }).waitFor();
+
+      await page.reload();
+      await widget.waitFor();
+      expect(await widget.getByRole('img', { name: 'Radio operator portrait' }).count()).toBe(0);
+      await widget.getByRole('button', { name: 'Show transceiver handset' }).click();
+      await widget.getByRole('img', { name: 'Radio operator portrait' }).waitFor();
+
+      // Navigate to the full-page Voice Call station directly from the handset
+      await widget.getByRole('link', { name: 'Open full-page Voice Call' }).click();
+      await page.getByRole('region', { name: 'PortOS call console' }).waitFor();
+    } finally {
+      await page.close();
+    }
+  });
 });

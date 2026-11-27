@@ -1,50 +1,57 @@
 import { useState } from 'react';
-import { AudioLines, Mic, MicOff, PhoneOff, Play, ScanFace, Send, Square } from 'lucide-react';
+import { Play, Radio, Send, Trash2 } from 'lucide-react';
 import AvatarRuntimeSettings from './AvatarRuntimeSettings';
-import VoiceCallGenerativePortrait from './VoiceCallGenerativePortrait';
+import SatPhoneHandset from './SatPhoneHandset';
 import { useAvatarRuntime } from './useAvatarRuntime';
 import { useAvatarMode } from './useAvatarMode';
 import { safeReadStorage, safeWriteStorage } from '../../lib/safeStorage';
 
 const DISPLAY_KEY = 'portos.voice.callDisplay';
-const control = 'inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-port-border bg-port-bg px-3 py-2 text-sm font-semibold hover:border-port-accent disabled:opacity-50';
-const STATUS = {
-  idle: 'Standby',
-  listening: 'Listening',
-  handsfree: 'Mic open',
-  capturing: 'Listening',
-  thinking: 'Thinking',
-  speaking: 'Speaking',
-};
 
-function TransmissionLog({ history, scrollRef }) {
+function StationTelemetry({ voiceLabel, canChangeMicMode, handsFree, volume, muted, avatar, runningAvatar }) {
+  const captureMode = !canChangeMicMode ? 'Web Speech' : handsFree ? 'Hands-free (VOX)' : 'Push-to-talk';
+  const avatarStatus = !avatar ? 'Audio only' : runningAvatar ? 'AvatarForcing live' : 'Still portrait';
+
   return (
-    <section className="min-w-0 rounded-xl border border-port-border bg-port-bg px-4 py-3">
-      <h2 className="font-mono text-xs font-semibold uppercase tracking-widest text-port-text-muted">Transmission log</h2>
-      <div ref={scrollRef} className="mt-2 max-h-52 overflow-y-auto">
-        <div role="log" aria-label="Transmission log" className="space-y-2 break-words text-sm">
-          {history.length === 0 && <p className="text-port-text-muted">Your conversation will appear here.</p>}
-          {history.map((turn, i) => (
-            <p key={i}><span className="mr-2 font-mono text-xs uppercase text-port-text-muted">{turn.role === 'user' ? 'You' : 'Agent'}</span>{turn.text}</p>
-          ))}
-        </div>
+    <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+      <div className="rounded-xl border border-port-border bg-port-card px-3 py-2.5 min-w-0">
+        <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-port-text-muted">Voice profile</p>
+        <p className="mt-0.5 truncate font-mono text-xs font-semibold text-port-text" title={voiceLabel || 'Saved settings'}>
+          {voiceLabel || 'Saved settings'}
+        </p>
       </div>
-    </section>
+      <div className="rounded-xl border border-port-border bg-port-card px-3 py-2.5 min-w-0">
+        <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-port-text-muted">Audio link</p>
+        <p className="mt-0.5 truncate font-mono text-xs font-semibold text-port-text" title={`${captureMode} · ${muted ? 'Muted' : `${Math.round(volume * 100)}%`}`}>
+          {captureMode} · {muted ? 'Muted' : `${Math.round(volume * 100)}%`}
+        </p>
+      </div>
+      <div className="rounded-xl border border-port-border bg-port-card px-3 py-2.5 min-w-0">
+        <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-port-text-muted">Video feed</p>
+        <p className="mt-0.5 flex items-center gap-1.5 font-mono text-xs font-semibold text-port-text">
+          <span
+            aria-hidden="true"
+            className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+              runningAvatar ? 'bg-port-accent shadow-[0_0_6px_rgb(var(--port-accent))]' : avatar ? 'bg-port-success' : 'bg-port-text-muted'
+            }`}
+          />
+          <span className="truncate" title={avatarStatus}>{avatarStatus}</span>
+        </p>
+      </div>
+    </div>
   );
 }
 
 export default function VoiceCallConsole({
   stage, history, scrollRef, interimTranscript, capturing, handsFree, canChangeMicMode,
-  draft, onDraft, onSend, onMic, onMode, onInterrupt, onEnd, onSample, voiceLabel,
+  hotkey, draft, onDraft, onSend, onMic, onMode, onInterrupt, onEnd, onSample, onClear,
+  voiceLabel, volume = 0.85, muted = false, onVolumeChange, onToggleMute,
+  sfxEnabled = true, onToggleSfx, signalLevel = 0, visionEnabled = false, onToggleVision,
 }) {
   const [avatar, setAvatar] = useState(() => safeReadStorage(DISPLAY_KEY) !== 'audio');
   const generativeAvatar = useAvatarMode();
   const { data, error, updateData, refetch } = useAvatarRuntime(avatar);
   const runningAvatar = generativeAvatar && !error && data?.supported && data.phase === 'running';
-  const caption = interimTranscript || history.at(-1)?.text;
-  const openMic = handsFree || !canChangeMicMode;
-  const micText = capturing ? (openMic ? 'Close mic' : 'Send voice') : (openMic ? 'Open mic' : 'Talk');
-  const MicIcon = capturing ? MicOff : Mic;
 
   const toggleAvatar = () => {
     safeWriteStorage(DISPLAY_KEY, avatar ? 'audio' : 'avatar');
@@ -52,66 +59,175 @@ export default function VoiceCallConsole({
   };
 
   return (
-    <section data-voice-widget aria-label="PortOS call console"
-      className="space-y-3 rounded-2xl border border-port-border bg-port-card p-3 text-port-text shadow-xl sm:p-4">
-      <header className="flex flex-wrap items-center justify-between gap-2">
-        <p className="font-mono text-xs font-bold uppercase tracking-widest">PortOS<span className="ml-2 font-normal text-port-text-muted">Transceiver</span></p>
-        <p role="status" className="flex items-center gap-2 rounded-full border border-port-border px-2.5 py-1 font-mono text-xs">
-          <span aria-hidden="true" className={`h-1.5 w-1.5 rounded-full ${stage === 'idle' ? 'bg-port-text-muted' : 'bg-port-success'}`} />
-          {STATUS[stage] || STATUS.idle}
-        </p>
-      </header>
-
-      {avatar && <AvatarRuntimeSettings data={data} error={error} updateData={updateData} refetch={refetch} />}
-
-      <div className="relative isolate grid min-h-52 grid-rows-[minmax(9rem,1fr)_auto] overflow-hidden rounded-xl border border-port-border bg-port-bg p-3 sm:min-h-64">
-        <div aria-hidden="true" className="pointer-events-none absolute inset-0 -z-10 bg-[repeating-linear-gradient(transparent_0px,transparent_3px,currentColor_4px)] text-port-accent opacity-[0.08]" />
-        <div className="min-w-0 place-self-center">
-          {avatar
-            ? <VoiceCallGenerativePortrait key={runningAvatar ? 'animated' : 'still'} running={runningAvatar} />
-            : <AudioLines aria-hidden="true" size={64} className="text-port-accent" />}
-        </div>
-        <p aria-hidden="true" className="line-clamp-2 min-h-12 break-words rounded-md border-l-2 border-port-accent bg-port-card px-3 py-2 text-sm">
-          {caption || 'Ready when you are.'}
-        </p>
+    <section
+      data-voice-widget
+      aria-label="PortOS call console"
+      className="grid grid-cols-1 gap-5 lg:grid-cols-[minmax(20rem,23.5rem)_minmax(0,1fr)] lg:items-start"
+    >
+      {/* Left column: Hero Video-Enabled Satellite Phone Handset */}
+      <div className="mx-auto w-full max-w-[23.5rem] lg:mx-0">
+        <SatPhoneHandset
+          variant="page"
+          stage={stage}
+          history={history}
+          scrollRef={scrollRef}
+          interimTranscript={interimTranscript}
+          capturing={capturing}
+          handsFree={handsFree}
+          canChangeMicMode={canChangeMicMode}
+          hotkey={hotkey}
+          draft={draft}
+          onDraft={onDraft}
+          onSend={onSend}
+          onMic={onMic}
+          onMode={onMode}
+          onInterrupt={onInterrupt}
+          onEnd={onEnd}
+          onSample={onSample}
+          onClear={onClear}
+          voiceLabel={voiceLabel}
+          avatar={avatar}
+          onToggleAvatar={toggleAvatar}
+          avatarData={data}
+          avatarError={error}
+          onUpdateAvatarData={updateData}
+          onRefetchAvatar={refetch}
+          runningAvatar={runningAvatar}
+          volume={volume}
+          muted={muted}
+          onVolumeChange={onVolumeChange}
+          onToggleMute={onToggleMute}
+          sfxEnabled={sfxEnabled}
+          onToggleSfx={onToggleSfx}
+          signalLevel={signalLevel}
+          visionEnabled={visionEnabled}
+          onToggleVision={onToggleVision}
+        />
       </div>
 
-      <div className="flex flex-wrap items-center gap-2 font-mono text-xs text-port-text-muted">
-        <span className="min-w-0 max-w-full break-words">Voice: {voiceLabel || 'Use saved settings'}</span>
-        <button type="button" onClick={toggleAvatar} aria-pressed={avatar} className={`ml-auto ${control}`}>
-          <ScanFace size={16} aria-hidden="true" /> Avatar <span aria-hidden="true">{avatar ? 'on' : 'off'}</span>
-        </button>
-      </div>
+      {/* Right column: Tactical Station Bay (Telemetry + Avatar Engine + Transmission Log & Composer) */}
+      <div className="flex min-w-0 flex-col gap-4">
+        <StationTelemetry
+          voiceLabel={voiceLabel}
+          canChangeMicMode={canChangeMicMode}
+          handsFree={handsFree}
+          volume={volume}
+          muted={muted}
+          avatar={avatar}
+          runningAvatar={runningAvatar}
+        />
 
-      <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
-        <button type="button" onClick={onMic} aria-pressed={capturing}
-          className={`${control} border-port-accent/50 text-port-accent`}>
-          <MicIcon size={16} aria-hidden="true" /> {micText}
-        </button>
-        {canChangeMicMode && (
-          <button type="button" className={control} onClick={onMode} aria-pressed={handsFree}>
-            Hands-free
-          </button>
+        {avatar && (
+          <AvatarRuntimeSettings
+            data={data}
+            error={error}
+            updateData={updateData}
+            refetch={refetch}
+          />
         )}
-        <button type="button" className={control} onClick={onSample} disabled={stage !== 'idle'}>
-          <Play size={15} aria-hidden="true" /> Play sample
-        </button>
-        {stage === 'speaking' && (
-          <button type="button" className={control} onClick={onInterrupt}>
-            <Square size={14} aria-hidden="true" /> Interrupt
-          </button>
-        )}
-        <button type="button" className={`${control} text-port-error sm:ml-auto`} onClick={onEnd} disabled={stage === 'idle'}>
-          <PhoneOff size={16} aria-hidden="true" /> End
-        </button>
+
+        {/* Dedicated full-height Transmission Log & Message Composer */}
+        <section className="flex min-w-0 flex-col gap-3 rounded-2xl border border-port-border bg-port-card p-3.5 text-port-text sm:p-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2 min-w-0">
+              <Radio size={15} aria-hidden="true" className="shrink-0 text-port-accent" />
+              <h2 className="font-mono text-xs font-semibold uppercase tracking-[0.14em] text-port-text">
+                Transmission log
+              </h2>
+              {history.length > 0 && (
+                <span className="rounded border border-port-border bg-port-bg px-1.5 py-0.5 font-mono text-[10px] text-port-text-muted">
+                  {history.length}
+                </span>
+              )}
+            </div>
+
+            <div className="flex flex-wrap items-center gap-1.5">
+              <button
+                type="button"
+                onClick={onSample}
+                disabled={stage !== 'idle'}
+                className="satphone-key inline-flex min-h-11 items-center gap-1.5 rounded-lg border px-3 font-mono text-xs font-semibold uppercase tracking-wider disabled:opacity-45"
+              >
+                <Play size={13} aria-hidden="true" />
+                Play sample
+              </button>
+              {history.length > 0 && onClear && (
+                <button
+                  type="button"
+                  onClick={onClear}
+                  title="Clear transmission log"
+                  aria-label="Clear transmission log"
+                  className="satphone-key inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg border px-2.5 text-port-text-muted hover:text-port-error-text"
+                >
+                  <Trash2 size={14} aria-hidden="true" />
+                </button>
+              )}
+            </div>
+          </div>
+
+          <div
+            ref={scrollRef}
+            className="satphone-log-well min-h-48 max-h-96 overflow-y-auto rounded-xl border p-3.5"
+          >
+            <div
+              role="log"
+              aria-live="polite"
+              aria-label="Transmission log"
+              className="space-y-2.5 break-words font-mono text-xs leading-relaxed sm:text-sm"
+            >
+              {history.length === 0 && !interimTranscript && (
+                <p className="opacity-65">
+                  Channel quiet. Press the TALK paddle on the handset, run Play sample, or transmit a message below.
+                </p>
+              )}
+              {history.map((turn, i) => (
+                <p key={i} className={turn.role === 'user' ? 'opacity-80' : ''}>
+                  <span
+                    className={`mr-2 inline-block rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider ${
+                      turn.role === 'user'
+                        ? 'bg-port-accent-2/15 text-port-accent-2-text'
+                        : 'bg-port-accent/15 text-port-accent-text'
+                    }`}
+                  >
+                    {turn.role === 'user' ? 'You' : 'Agent'}
+                  </span>
+                  {turn.text}
+                </p>
+              ))}
+            </div>
+            {interimTranscript && (
+              <p aria-hidden="true" className="mt-2 font-mono text-xs italic opacity-70">
+                <span className="mr-2 rounded bg-port-accent-2/15 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-port-accent-2-text">
+                  You…
+                </span>
+                {interimTranscript}
+              </p>
+            )}
+          </div>
+
+          <form
+            className="flex min-w-0 flex-wrap gap-2 sm:flex-nowrap"
+            onSubmit={(event) => { event.preventDefault(); onSend(); }}
+          >
+            <input
+              type="text"
+              aria-label="Message to the voice assistant"
+              value={draft}
+              onChange={(event) => onDraft(event.target.value)}
+              placeholder="Transmit a message…"
+              className="min-h-11 min-w-0 flex-1 rounded-xl border border-port-border bg-port-bg px-3.5 font-mono text-sm text-port-text placeholder:text-port-text-muted focus:border-port-accent focus:outline-none"
+            />
+            <button
+              type="submit"
+              disabled={!draft.trim()}
+              className="satphone-key inline-flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-xl border px-4 font-mono text-xs font-semibold uppercase tracking-wider text-port-accent-text disabled:opacity-45"
+            >
+              <Send size={14} aria-hidden="true" />
+              Send
+            </button>
+          </form>
+        </section>
       </div>
-      <form className="flex min-w-0 gap-2" onSubmit={(event) => { event.preventDefault(); onSend(); }}>
-        <input type="text" aria-label="Message to the voice assistant" value={draft}
-          onChange={(event) => onDraft(event.target.value)} placeholder="Type a message…"
-          className="min-w-0 flex-1 rounded-lg border border-port-border bg-port-bg px-3 text-sm focus:border-port-accent" />
-        <button type="submit" disabled={!draft.trim()} className={control}><Send size={15} aria-hidden="true" /> Send</button>
-      </form>
-      <TransmissionLog history={history} scrollRef={scrollRef} />
     </section>
   );
 }
