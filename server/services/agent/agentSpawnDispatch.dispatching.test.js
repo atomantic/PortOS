@@ -56,6 +56,8 @@ vi.mock('./agentCliSpawning.js', () => ({
   getClaudeSettingsEnv: async () => ({}),
   spawnDirectly: vi.fn(async () => 'agent-x'),
 }));
+const groupCodexIssueClaim = vi.hoisted(() => vi.fn(async () => ({ status: 'grouped' })));
+vi.mock('../codexAppServer.js', () => ({ groupCodexIssueClaim }));
 const updateClaimOwnership = vi.hoisted(() => vi.fn(async ({ branch }) => ({ bound: true, branch })));
 vi.mock('../cos/cosClaimOwnership.js', () => ({ updateClaimOwnership }));
 const markAppIssueClaimed = vi.hoisted(() => vi.fn(async () => undefined));
@@ -199,6 +201,19 @@ describe('dispatchAgentRun with a server-provisioned claim checkout (#15517)', (
     expect(markAppIssueClaimed.mock.invocationCallOrder[0]).toBeLessThan(spawnDirectly.mock.invocationCallOrder[0]);
     expect(spawnDirectly).toHaveBeenCalledWith(expect.objectContaining({ workspacePath: claimCheckout.worktreePath }));
     expect(context.spawnClaimCheckout).toBe(claimCheckout);
+  });
+
+  it('groups a Codex claim under the app without moving the agent outside its worktree', async () => {
+    f.prep = { ...f.prep, resolvedAppName: 'Example App' };
+    const context = newContext();
+    expect(await dispatchAgentRun(context)).toBe(context.agentId);
+    await vi.dynamicImportSettled();
+    expect(spawnDirectly).toHaveBeenCalledWith(expect.objectContaining({ workspacePath: claimCheckout.worktreePath }));
+    expect(groupCodexIssueClaim).toHaveBeenCalledExactlyOnceWith({
+      repoPath: claimCheckout.repoPath, workspacePath: claimCheckout.worktreePath,
+      appName: 'Example App', sourceKind: 'exec', startedAt: expect.any(Number),
+    });
+    expect(spawnDirectly.mock.invocationCallOrder[0]).toBeLessThan(groupCodexIssueClaim.mock.invocationCallOrder[0]);
   });
 
   it('blocks without launching when the run cannot bind its checkout', async () => {
