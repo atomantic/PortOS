@@ -17,8 +17,7 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router';
-import { Sparkles, Plus, Search, FileInput, Loader2, RefreshCw, Wand2, X, LayoutGrid, Library, FolderPlus, Download, Settings as SettingsIcon } from 'lucide-react';
-import BrailleSpinner from '../components/BrailleSpinner';
+import { Sparkles, Plus, Search, FileInput, Loader2, RefreshCw, X, LayoutGrid, Library, Download, Settings as SettingsIcon } from 'lucide-react';
 import Drawer from '../components/Drawer';
 import PageHeader from '../components/PageHeader';
 import EmptyState from '../components/EmptyState';
@@ -37,13 +36,12 @@ import {
   getCatalogExportUrl,
 } from '../services/apiCatalog';
 import { listUniverseNames } from '../services/apiUniverseBuilder';
-import { listPipelineSeriesNames } from '../services/apiPipeline';
-import useClickOutside from '../hooks/useClickOutside';
-import useEscapeKey from '../hooks/useEscapeKey';
 import useListResource from '../hooks/useListResource';
 import ListLoadError from '../components/ui/ListLoadError';
 import CatalogCard from '../components/catalog/CatalogCard';
-import CatalogAlbum from '../components/catalog/CatalogAlbum';
+import CatalogAlbumsView from '../components/catalog/CatalogAlbumsView';
+import CatalogCreateForm from '../components/catalog/CatalogCreateForm';
+import CatalogSelectionBar from '../components/catalog/CatalogSelectionBar';
 import { CatalogTypesTab } from '../components/settings/CatalogTypesTab';
 import { catalogReferenceRole } from '../lib/catalogTypes';
 import { CATALOG_NAV_TABS } from '../lib/creativeLibraries';
@@ -63,15 +61,7 @@ import { formatCount } from '../utils/formatters';
 // fixed `limit: 200` silently truncated installs with more ingredients.
 const PAGE_SIZE = 60;
 
-// Remix targets — destinations the user can hand a multi-selected set of
-// ingredients off to. Today there's only Story Builder; the array shape keeps a
-// second target a one-line addition. The handoff state is intentionally generic
-// (`remix.ingredientIds`), NOT story-builder-specific, so a new destination just
-// reads the same key. Each target's `to` is the route to navigate to.
-const REMIX_TARGETS = [
-  { id: 'story-builder', label: 'Story Builder', to: '/story-builder' },
-  { id: 'creative-director', label: 'Creative Director', to: '/creative-director' },
-];
+const fetchPlaceUniverses = () => listUniverseNames({ silent: true });
 
 export default function Catalog() {
   const navigate = useNavigate();
@@ -136,36 +126,8 @@ export default function Catalog() {
   const [selectedIds, setSelectedIds] = useState(() => new Set());
   const [selectedItems, setSelectedItems] = useState(() => new Map());
   const [activePopover, setActivePopover] = useState(null);
-  const remixTriggerRef = useRef(null);
-  const ownerTriggerRef = useRef(null);
-  const membershipTriggerRef = useRef(null);
-  const popoverRef = useRef(null);
-  const remixMenuOpen = activePopover === 'remix';
-  const ownerMenuOpen = activePopover === 'owner';
-  const membershipMenuOpen = activePopover === 'membership';
-  const addMenuOpen = ownerMenuOpen || membershipMenuOpen;
-  const popoverOpen = selectedIds.size > 0 && activePopover !== null;
-  const togglePopover = (id) => setActivePopover((open) => open === id ? null : id);
-  const dismissPopover = () => {
-    const trigger = remixMenuOpen ? remixTriggerRef : ownerMenuOpen ? ownerTriggerRef : membershipTriggerRef;
-    setActivePopover(null);
-    trigger.current?.focus();
-  };
-
-  // A click fires after the pointer's default focus change.
-  useClickOutside([remixTriggerRef, ownerTriggerRef, membershipTriggerRef, popoverRef], popoverOpen, dismissPopover, { event: 'click' });
-  useEscapeKey(popoverOpen, dismissPopover);
   const [showForm, setShowForm] = useState(false);
-  const fetchPlaceUniverses = useCallback(() => listUniverseNames({ silent: true }), []);
-  const placeUniversesResource = useListResource(fetchPlaceUniverses, { enabled: addMenuOpen || showForm });
-  const fetchPlaceSeries = useCallback(() => listPipelineSeriesNames({ silent: true }), []);
-  const placeSeriesResource = useListResource(fetchPlaceSeries, { enabled: membershipMenuOpen });
-  const placeTargets = useMemo(() => ({
-    universes: placeUniversesResource.items.map((u) => ({ refKind: 'universe', refId: u.id, label: u.name || '(untitled universe)' })),
-    series: placeSeriesResource.items.map((s) => ({ refKind: 'series', refId: s.id, label: s.name || '(untitled series)' })),
-  }), [placeUniversesResource.items, placeSeriesResource.items]);
-  const placeTargetsLoading = placeUniversesResource.state === 'loading' || membershipMenuOpen && placeSeriesResource.state === 'loading';
-
+  const placeUniversesResource = useListResource(fetchPlaceUniverses, { enabled: showForm || activePopover === 'owner' || activePopover === 'membership' });
   // Inline create form.
   const [form, setForm] = useState({ type: 'character', name: '', content: '', universeId: '' });
   const [creating, setCreating] = useState(false);
@@ -281,7 +243,11 @@ export default function Catalog() {
     setLoadingMore(true);
     fetchListPage(items.length).then((list) => {
       if (generation !== pageGeneration.current) return;
-      setItems((prev) => [...prev, ...list]);
+      setItems((prev) => {
+        // A create during this offset read may have shifted the returned page.
+        const loadedIds = new Set(prev.map((item) => item.id));
+        return [...prev, ...list.filter((item) => !loadedIds.has(item.id))];
+      });
       setHasMore(list.length === PAGE_SIZE);
     }).catch((error) => {
       if (generation !== pageGeneration.current) return;
@@ -334,7 +300,10 @@ export default function Catalog() {
   const handleCreate = async (e) => {
     e.preventDefault();
     const name = form.name.trim();
-    if (!name || !form.universeId) return;
+    const owner = placeUniversesResource.items.find((universe) => universe.id === form.universeId);
+    if (creating || !name || !owner) return;
+    const universeId = owner.id;
+    const generation = pageGeneration.current;
     const content = form.content.trim();
     const payload = {};
     if (content) {
@@ -346,7 +315,7 @@ export default function Catalog() {
       name,
       payload,
       tags: [],
-      universeId: form.universeId,
+      universeId,
     }, { silent: true }).catch((err) => {
       toast.error(err?.message || 'Failed to create ingredient');
       return null;
@@ -355,18 +324,23 @@ export default function Catalog() {
     if (!created) return;
     toast.success(`Created ${form.type} "${name}"`);
     closeForm();
-    // Only prepend optimistically if the new row would actually pass the
-    // current filter — otherwise it appears in a filtered view it doesn't
-    // match and lingers until the next refetch. A freshly-created ingredient is
-    // unlinked, so it never belongs in a universe/series-filtered grid.
+    // The create endpoint commits the universe membership with the ingredient.
+    // Its response contains the ingredient fields, so use the submitted owner.
+    const matchesUniverse = !selectedUniverse || universeId === selectedUniverse;
     const matchesType = !selectedType || created.type === selectedType;
-    const matchesSearch = !q || (created.name || '').toLowerCase().includes(q.toLowerCase());
-    // The create form always posts tags: [], so an active tag filter can never
-    // match a fresh row — gate on it too, else the grid shows a non-matching card.
     const matchesTag = !selectedTag || (created.tags || []).includes(selectedTag);
-    const refFiltered = !!(selectedUniverse || selectedSeries);
-    if (view === 'grid' && matchesType && matchesSearch && matchesTag && !refFiltered) {
-      setItems((prev) => [created, ...prev]);
+    if (generation !== pageGeneration.current) {
+      // The list query changed during the request. Reload against its current filters.
+      loadFirstPage();
+    } else if (view === 'grid' && matchesUniverse && matchesType && matchesTag && !selectedSeries && !selectedScrap) {
+      if (q || loading || listError) {
+        // Search uses server-side full-text matching and ranking. A pending
+        // first-page read could also overwrite a local prepend.
+        loadFirstPage();
+      } else {
+        const card = { ...created, owningUniverse: { id: universeId, name: owner.name || '(untitled universe)' } };
+        setItems((prev) => [card, ...prev.filter((item) => item.id !== card.id)]);
+      }
     }
     loadStats();
     loadFacets();
@@ -474,6 +448,11 @@ export default function Catalog() {
     }
   };
 
+  const openForm = () => {
+    setForm((previous) => ({ ...previous, universeId: selectedUniverse }));
+    setShowForm(true);
+  };
+
   // Single reset path used by Cancel + toolbar toggle + post-submit.
   const closeForm = () => {
     setForm((f) => ({ type: f.type, name: '', content: '', universeId: '' }));
@@ -514,31 +493,25 @@ export default function Catalog() {
   // raw → placed loop without leaving the page.
   const handleAddToRef = async (refKind, refId, label) => {
     const list = [...selectedItems.values()];
+    const settingOwner = activePopover === 'owner';
     setActivePopover(null);
     if (list.length === 0) return;
     let ok = 0;
     let fail = 0;
     let failureReason = '';
     await Promise.all(list.map((ing) =>
-      (ownerMenuOpen ? setCatalogUniverseOwner(ing.id, refId, { silent: true })
+      (settingOwner ? setCatalogUniverseOwner(ing.id, refId, { silent: true })
         : linkCatalogIngredient(ing.id, { refKind, refId, role: catalogReferenceRole(ing.type, refKind) }, { silent: true }))
         .then(() => { ok += 1; dropSelection(ing.id); })
         .catch((error) => { fail += 1; failureReason ||= error.message; }),
     ));
-    if (ok > 0) toast.success(ownerMenuOpen ? `Set ${label} as owner of ${ok} primitive${ok === 1 ? '' : 's'}` : `Added ${ok} ingredient${ok === 1 ? '' : 's'} to ${label}`);
+    if (ok > 0) toast.success(settingOwner ? `Set ${label} as owner of ${ok} primitive${ok === 1 ? '' : 's'}` : `Added ${ok} ingredient${ok === 1 ? '' : 's'} to ${label}`);
     if (fail > 0) toast.error(`Could not update ${fail} primitive${fail === 1 ? '' : 's'}: ${failureReason}`);
     loadFacets();
     setDataVersion((v) => v + 1);
     // Placed items may no longer match a universe/series/unlinked-filtered grid.
     loadFirstPage();
   };
-
-  // Bulk-place targets are the FULL set of live universes/series — NOT the
-  // facet arrays, which only list refs that already have catalog links. A
-  // freshly-created (still empty) universe/series must be a valid destination.
-  // The resources enable while the menu is open and retain independent retries.
-  const noPlaceTargets = placeUniversesResource.state === 'ready' && placeTargets.universes.length === 0
-    && (ownerMenuOpen || placeSeriesResource.state === 'ready' && placeTargets.series.length === 0);
 
   // Stable so the grid's per-card render (up to PAGE_SIZE cards) doesn't
   // allocate a fresh arrow per card every render.
@@ -565,78 +538,6 @@ export default function Catalog() {
     >
       <CatalogTypesTab />
     </Drawer>
-  );
-
-  const placementPopover = addMenuOpen && (
-    // The bar is pinned to the bottom of the viewport and the menu
-    // opens upward, so cap it against the viewport rather than a
-    // fixed 18rem — in landscape that would run off the top.
-    // Same non-menu call as the Remix list above (#7265): a named
-    // group of plain buttons, reachable by Tab — no arrow-key
-    // roving focus is implemented here.
-    <div
-      ref={popoverRef}
-      role="group"
-      aria-label={ownerMenuOpen ? 'Set owning universe' : 'Add to universe or series'}
-      className="absolute bottom-full mb-2 left-0 right-0 sm:left-auto sm:min-w-[220px] max-h-[60vh] sm:max-h-72 overflow-y-auto bg-port-card border border-port-border rounded-lg shadow-lg"
-    >
-      {placeTargetsLoading && placeTargets.universes.length === 0 && (!membershipMenuOpen || placeTargets.series.length === 0) ? (
-        <p className="px-3 py-2 text-sm"><BrailleSpinner text="Loading…" /></p>
-      ) : noPlaceTargets ? (
-        <p className="px-3 py-2 text-sm text-gray-500">{ownerMenuOpen ? 'No universes yet.' : 'No universes or series yet.'}</p>
-      ) : (
-        <>
-          {placeUniversesResource.state === 'error' ? (
-            <ListLoadError what="universes" error={placeUniversesResource.error} onRetry={placeUniversesResource.retry} className="m-2" />
-          ) : null}
-          {membershipMenuOpen && placeSeriesResource.state === 'error' ? (
-            <ListLoadError what="series" error={placeSeriesResource.error} onRetry={placeSeriesResource.retry} className="m-2" />
-          ) : null}
-          {placeUniversesResource.state === 'loading' && placeTargets.universes.length === 0 ? (
-            <p className="px-3 py-2 text-sm text-gray-500">Loading universes…</p>
-          ) : null}
-          {membershipMenuOpen && placeSeriesResource.state === 'loading' && placeTargets.series.length === 0 ? (
-            <p className="px-3 py-2 text-sm text-gray-500">Loading series…</p>
-          ) : null}
-          {placeUniversesResource.state === 'ready' && placeTargets.universes.length === 0 ? (
-            <p className="px-3 py-2 text-sm text-gray-500">No universes yet.</p>
-          ) : null}
-          {placeTargets.universes.length > 0 && (
-            <>
-              <p className="px-3 pt-2 pb-1 text-[10px] uppercase tracking-wider text-gray-500">Universes</p>
-              {placeTargets.universes.map((t) => (
-                <button
-                  key={`u-${t.refId}`}
-                  type="button"
-                  onClick={() => handleAddToRef(t.refKind, t.refId, t.label)}
-                  className="w-full text-left px-3 py-2 text-sm text-gray-200 hover:bg-port-bg hover:text-white"
-                >
-                  {t.label}
-                </button>
-              ))}
-            </>
-          )}
-          {membershipMenuOpen && placeTargets.series.length > 0 && (
-            <>
-              <p className="px-3 pt-2 pb-1 text-[10px] uppercase tracking-wider text-gray-500">Series</p>
-              {placeTargets.series.map((t) => (
-                <button
-                  key={`s-${t.refId}`}
-                  type="button"
-                  onClick={() => handleAddToRef(t.refKind, t.refId, t.label)}
-                  className="w-full text-left px-3 py-2 text-sm text-gray-200 hover:bg-port-bg hover:text-white"
-                >
-                  {t.label}
-                </button>
-              ))}
-            </>
-          )}
-          {membershipMenuOpen && placeSeriesResource.state === 'ready' && placeTargets.series.length === 0 ? (
-            <p className="px-3 py-2 text-sm text-gray-500">No series yet.</p>
-          ) : null}
-        </>
-      )}
-    </div>
   );
 
   return (
@@ -741,7 +642,7 @@ export default function Catalog() {
           </Link>
           <button
             type="button"
-            onClick={() => (showForm ? closeForm() : setShowForm(true))}
+            onClick={showForm ? closeForm : openForm}
             className="inline-flex flex-1 sm:flex-none items-center justify-center gap-2 px-3 py-2 min-h-[40px] rounded-lg bg-port-accent hover:bg-port-accent/90 text-white text-sm font-medium"
           >
             <Plus size={16} className="shrink-0" aria-hidden="true" />
@@ -876,91 +777,23 @@ export default function Catalog() {
       </div>
 
       {showForm && (
-        <form onSubmit={handleCreate} className="mb-6 p-4 bg-port-card border border-port-border rounded-lg space-y-3">
-          <div className="max-w-sm">
-            <label htmlFor="catalog-new-universe" className="block text-xs uppercase tracking-wider text-gray-500 mb-1">Owning universe &amp; style</label>
-            <select id="catalog-new-universe" required value={form.universeId} onChange={(event) => setForm((previous) => ({ ...previous, universeId: event.target.value }))}
-              className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm">
-              <option value="">Choose a universe…</option>
-              {placeTargets.universes.map((target) => <option key={target.refId} value={target.refId}>{target.label}</option>)}
-            </select>
-            {placeUniversesResource.state === 'error' && <ListLoadError what="owning universes" error={placeUniversesResource.error} onRetry={placeUniversesResource.retry} />}
-            {placeUniversesResource.state === 'ready' && placeTargets.universes.length === 0 && <Link to="/universes/new" className="text-xs text-port-accent hover:underline">Create a universe</Link>}
-          </div>
-          <button type="button" onClick={() => { cancelQMirror(); navigate('/catalog/ingest?mode=babble'); }}
-            className="text-sm text-port-accent hover:underline">
-            Babble and Prune — turn a brainstorm into multiple entries
-          </button>
-          <div className="grid grid-cols-1 sm:grid-cols-[180px_1fr] gap-3">
-            <div>
-              <label htmlFor="catalog-new-type" className="block text-xs uppercase tracking-wider text-gray-500 mb-1">
-                Type
-              </label>
-              <select
-                id="catalog-new-type"
-                value={form.type}
-                onChange={(e) => setForm((f) => ({ ...f, type: e.target.value }))}
-                className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm"
-              >
-                {TYPES.map((t) => (
-                  <option key={t.id} value={t.id}>{t.label}</option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label htmlFor="catalog-new-name" className="block text-xs uppercase tracking-wider text-gray-500 mb-1">
-                Name
-              </label>
-              <input
-                id="catalog-new-name"
-                type="text"
-                value={form.name}
-                onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-                placeholder="e.g. Echo Saint"
-                maxLength={200}
-                autoFocus
-                className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm"
-              />
-            </div>
-          </div>
-          <div>
-            <label htmlFor="catalog-new-content" className="block text-xs uppercase tracking-wider text-gray-500 mb-1">
-              {getType(form.type)?.primaryContentLabel || 'Description'}
-              <span className="normal-case text-gray-500"> (optional)</span>
-            </label>
-            <textarea
-              id="catalog-new-content"
-              rows={4}
-              value={form.content}
-              onChange={(e) => setForm((f) => ({ ...f, content: e.target.value }))}
-              placeholder="Capture the idea here — you can flesh it out in the editor."
-              className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm focus:outline-none focus:border-port-accent"
-            />
-          </div>
-          <div className="flex justify-end gap-2">
-            <button
-              type="button"
-              onClick={closeForm}
-              className="px-3 py-2 min-h-[40px] rounded-lg text-gray-400 hover:text-white text-sm"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={creating || !form.name.trim() || !form.universeId}
-              className="inline-flex items-center justify-center gap-2 px-4 py-2 min-h-[40px] rounded-lg bg-port-accent text-white text-sm font-medium disabled:opacity-50"
-            >
-              {creating ? <Loader2 size={14} className="animate-spin" /> : null}
-              Create
-            </button>
-          </div>
-        </form>
+        <CatalogCreateForm
+          form={form}
+          setForm={setForm}
+          types={TYPES}
+          getType={getType}
+          universesResource={placeUniversesResource}
+          creating={creating}
+          onCreate={handleCreate}
+          onCancel={closeForm}
+          onBabble={cancelQMirror}
+        />
       )}
 
       {view === 'albums' ? !facets && facetsError ? (
         <ListLoadError what="catalog albums" error={facetsError} onRetry={loadFacets} />
       ) : (
-        <AlbumsView
+        <CatalogAlbumsView
           // Remount on a mutation OR any filter change so the lazy album loads
           // re-run against fresh data and honor the active filters.
           key={`${dataVersion}|${selectedType}|${selectedTag}|${q}|${selectedUniverse}|${selectedSeries}`}
@@ -970,6 +803,7 @@ export default function Catalog() {
           selectedSeries={selectedSeries}
           cardProps={cardProps}
           onConfirmDelete={albumDelete}
+          pageSize={PAGE_SIZE}
         />
       ) : loading ? (
         <PageSkeleton header="none" label="Loading catalog" cards={3} sidebar={false} layout="grid" gridColsClass="sm:grid-cols-2 lg:grid-cols-3" />
@@ -1026,200 +860,18 @@ export default function Catalog() {
         </>
       )}
 
-      {/* Selection action bar. Stacks on a phone: count line, then three
-          equal-width actions whose labels shorten under `sm` (see the header
-          comment for the aria-label contract). `sm:backdrop-blur` — the fill is
-          already 95% opaque, so on a phone the blur buys nothing visible while
-          making the compositor re-sample the area behind the bar on every scroll
-          frame over a 60-card grid. */}
       {selectedIds.size > 0 && (
-        <div className="sticky bottom-0 left-0 right-0 mt-4 -mx-4 px-4 py-3 bg-port-card/95 sm:backdrop-blur border-t border-port-border flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-3 z-20">
-          <span className="text-sm text-white font-medium">
-            {selectedIds.size} selected
-          </span>
-          {/* The row is the positioning context under `sm` (the per-button
-              wrappers only become `relative` at `sm`), so a menu spans the whole
-              bar on a phone instead of hanging off a ~90px button and running
-              past the viewport edge. Anything that gives an element between the
-              menu and this row a containing block — `relative`, `transform`,
-              `filter`, `contain` — silently re-anchors the menus. */}
-          <div className="relative flex flex-wrap items-center gap-2">
-            <div className="flex-1 sm:relative sm:flex-none">
-              <button
-                type="button"
-                ref={remixTriggerRef}
-                onClick={() => togglePopover('remix')}
-                aria-expanded={remixMenuOpen}
-                aria-label="Remix into…"
-                className="inline-flex w-full sm:w-auto items-center justify-center gap-2 px-3 py-2 min-h-[40px] rounded-lg bg-port-accent hover:bg-port-accent/90 text-white text-sm font-medium"
-              >
-                <Wand2 size={16} className="shrink-0" aria-hidden="true" />
-                <span className="truncate">Remix<span className="hidden sm:inline"> into…</span></span>
-              </button>
-              {remixMenuOpen && (
-                // A plain list of actions, NOT role="menu" — that role would
-                // promise ArrowUp/ArrowDown roving focus this popover doesn't
-                // implement (#7265). The <ul>/<li>/<button> markup already
-                // conveys "a list of actions"; aria-expanded on the trigger
-                // carries the disclosure.
-                <ul
-                  ref={popoverRef}
-                  aria-label="Remix targets"
-                  className="absolute bottom-full mb-2 left-0 right-0 sm:left-auto sm:min-w-[180px] bg-port-card border border-port-border rounded-lg shadow-lg overflow-hidden"
-                >
-                  {REMIX_TARGETS.map((t) => (
-                    <li key={t.id}>
-                      <button
-                        type="button"
-                        onClick={() => handleRemix(t)}
-                        className="w-full text-left px-3 py-2 text-sm text-gray-200 hover:bg-port-bg hover:text-white"
-                      >
-                        {t.label}
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-            <div className="sm:relative">
-              <button
-                type="button"
-                ref={ownerTriggerRef}
-                onClick={() => togglePopover('owner')}
-                aria-expanded={ownerMenuOpen}
-                className="min-h-[40px] px-3 py-2 text-xs rounded border border-port-border text-port-accent hover:bg-port-bg"
-              >
-                Set owning universe…
-              </button>
-              {ownerMenuOpen && placementPopover}
-            </div>
-            <div className="flex-1 sm:relative sm:flex-none">
-              <button
-                type="button"
-                ref={membershipTriggerRef}
-                onClick={() => togglePopover('membership')}
-                aria-expanded={membershipMenuOpen}
-                aria-label="Add to universe/series…"
-                title="Place the selected ingredients into a universe or series"
-                className="inline-flex w-full sm:w-auto items-center justify-center gap-2 px-3 py-2 min-h-[40px] rounded-lg border border-port-border bg-port-card hover:bg-port-bg text-white text-sm font-medium disabled:opacity-50"
-              >
-                <FolderPlus size={16} className="shrink-0" aria-hidden="true" />
-                <span className="truncate">Add<span className="hidden sm:inline"> to universe/series…</span></span>
-              </button>
-              {membershipMenuOpen && placementPopover}
-            </div>
-            <button
-              type="button"
-              onClick={clearSelection}
-              className="inline-flex flex-1 sm:flex-none items-center justify-center gap-1 px-3 py-2 min-h-[40px] rounded-lg border border-port-border text-gray-300 hover:text-white text-sm"
-            >
-              <X size={16} className="shrink-0" aria-hidden="true" />
-              Clear
-            </button>
-          </div>
-        </div>
-      )}
-      </div>
-    </div>
-  );
-}
-
-// Albums grouped view (decision #1: flat universe albums + Raw + Orphaned).
-// Album headers show counts from /facets up front; each album lazy-loads its
-// cards the first time it is expanded and paginates with Load more. Mounted
-// under a `key={dataVersion}` so a mutation remounts it and the lazy loads
-// re-run against fresh data. A universe album rolls up its series' members
-// server-side (decision #1), so a series-only ingredient still has a home here.
-function AlbumsView({ facets, filters = {}, selectedUniverse = '', selectedSeries = '', cardProps, onConfirmDelete }) {
-  if (!facets) {
-    return <PageSkeleton header="none" label="Loading albums" cards={3} sidebar={false} />;
-  }
-  const { universes = [], series = [], unlinkedCount = 0, orphanedCount = 0 } = facets;
-  const albumProps = { ...cardProps, onConfirmDelete, pageSize: PAGE_SIZE };
-  // One page fetcher per album view — paginated so albums never reintroduce the
-  // old silent cap. `extra` carries the album selector (unlinked / orphaned / a
-  // universe ref); the active type/tag/q filters compose with it so album cards
-  // stay consistent with the visible filter state.
-  const pageLoader = (extra) => (offset) =>
-    listCatalogIngredients({ ...filters, ...extra, limit: PAGE_SIZE, offset, silent: true })
-      .then((d) => (Array.isArray(d?.items) ? d.items : []));
-
-  // A selected universe/series scopes the Albums view to that one album (the
-  // grid's ref filter, surfaced as a single open album) so the dropdowns drive
-  // albums the same way they drive the grid. Series wins over universe (more
-  // specific), mirroring the grid's buildListParams.
-  if (selectedSeries) {
-    const ser = series.find((s) => s.refId === selectedSeries);
-    return (
-      <div className="space-y-3">
-        <CatalogAlbum
-          title={ser?.name || 'Series'}
-          subtitle="filtered to the selected series"
-          count={ser?.count ?? 0}
-          defaultExpanded
-          loadPage={pageLoader({ refKind: 'series', refId: selectedSeries })}
-          {...albumProps}
-        />
-      </div>
-    );
-  }
-  if (selectedUniverse) {
-    const uni = universes.find((u) => u.refId === selectedUniverse);
-    return (
-      <div className="space-y-3">
-        <CatalogAlbum
-          title={uni?.name || 'Universe'}
-          subtitle="filtered to the selected universe"
-          count={uni?.count ?? 0}
-          defaultExpanded
-          loadPage={pageLoader({ refKind: 'universe', refId: selectedUniverse })}
-          {...albumProps}
-        />
-      </div>
-    );
-  }
-
-  const noAlbums = universes.length === 0 && unlinkedCount === 0 && orphanedCount === 0;
-  if (noAlbums) {
-    return (
-      <EmptyState
-        icon={Library}
-        message="No albums yet — ingest or create ingredients to get started."
-        actionLabel="Ingest"
-        actionTo="/catalog/ingest"
-      />
-    );
-  }
-  return (
-    <div className="space-y-3">
-      {unlinkedCount > 0 && (
-        <CatalogAlbum
-          title="Unsorted / Raw"
-          subtitle="not yet placed in a universe or series"
-          count={unlinkedCount}
-          defaultExpanded
-          loadPage={pageLoader({ unlinked: true })}
-          {...albumProps}
+        <CatalogSelectionBar
+          count={selectedIds.size}
+          activePopover={activePopover}
+          onPopoverChange={setActivePopover}
+          universesResource={placeUniversesResource}
+          onRemix={handleRemix}
+          onPlace={handleAddToRef}
+          onClear={clearSelection}
         />
       )}
-      {universes.map((u) => (
-        <CatalogAlbum
-          key={u.refId}
-          title={u.name}
-          count={u.count}
-          loadPage={pageLoader({ refKind: 'universe', refId: u.refId })}
-          {...albumProps}
-        />
-      ))}
-      {orphanedCount > 0 && (
-        <CatalogAlbum
-          title="Orphaned"
-          subtitle="linked to a deleted universe/series — re-home these"
-          count={orphanedCount}
-          loadPage={pageLoader({ orphaned: true })}
-          {...albumProps}
-        />
-      )}
+      </div>
     </div>
   );
 }
