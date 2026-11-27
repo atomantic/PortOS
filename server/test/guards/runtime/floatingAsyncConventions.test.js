@@ -142,7 +142,14 @@ function createFloatingAsyncScanner(readSource = readText, onParsed = () => {}) 
     // Named static imports require both keywords and a binding list.
     if (!src.includes('import') || !src.includes('from') || !src.includes('{')) return false;
     const values = relativeLiteralValues(src);
-    return values === null || values.some((value) => asyncExportsOf(resolve(dir, value)).size > 0);
+    if (values === null) return true;
+    // Without escapes, a named import must spell the async export in the
+    // source. Leave aliases and escaped identifiers or strings to Babel.
+    const hasEscape = src.includes('\\');
+    return values.some((value) => {
+      const exported = asyncExportsOf(resolve(dir, value));
+      return exported.size > 0 && (hasEscape || exported.values().some((name) => src.includes(name)));
+    });
   };
   const findCalls = ({ local, imports, program, src }, dir) => {
     const importedAsync = new Map();
@@ -274,13 +281,15 @@ function check() { run(); run(); }`;
 
   it('checks named imports against the async exports of a mixed module', () => {
     const caller = join(SERVER_ROOT, 'floating-async-caller.js');
-    const check = (imports) => createFloatingAsyncScanner((file) => (
+    const check = (callerSource) => createFloatingAsyncScanner((file) => (
       file === caller
-        ? `${imports}\nsync();\nrun();`
+        ? callerSource
         : 'export function sync() {} export async function run() {}'
     )).findInFile(caller);
-    expect(check("import { sync } from './services/history.js';")).toEqual([]);
-    expect(check("import { sync, run } from './services/history.js';")).toEqual(['line 3: run()']);
+    expect(check("import { sync } from './services/history.js';\nsync();\nrun();")).toEqual([]);
+    expect(check("import { sync, run } from './services/history.js';\nsync();\nrun();")).toEqual(['line 3: run()']);
+    // Even though the target exports run, this caller cannot import it.
+    expect(check("import { sync } from './services/history.js';\nfunction (")).toEqual([]);
   });
 
   it('reuses one file summary across import spellings and the whole-tree visit', () => {
@@ -341,7 +350,9 @@ function check() { run(); run(); }`;
     // An escape could spell the specifier, so the caller is parsed rather than judged by its text.
     expect(scanFile(String.raw`import { logAction as log } from '\x2e/services/history.js';` + '\nlog();')).toEqual(['line 2: log()']);
     expect(scanFile(String.raw`import { logAction as log } from '.\/services/history.js';` + '\nlog();')).toEqual(['line 2: log()']);
+    expect(scanFile(String.raw`import { log\u0041ction as log } from './services/history.js';` + '\nlog();')).toEqual(['line 2: log()']);
     // Unparsable on purpose: a skipped caller is never handed to Babel.
     expect(scanFile("import { getAllowedCommands } from './services/commands.js';\nfunction (")).toEqual([]);
+    expect(scanFile("import { logAction as log } from './missing-module.js';\nfunction (")).toEqual([]);
   });
 });
