@@ -64,3 +64,19 @@ export const wrDraftPath = (workId, draftId) => {
   if (!DRAFT_ID_RE.test(draftId)) throw badRequest('Invalid draft id');
   return join(wrWorkDir(workId), 'drafts', `${draftId}.md`);
 };
+
+export const WORK_SUMMARY_FIELDS = [
+  'id', 'folderId', 'title', 'kind', 'status', 'activeDraftVersionId',
+  'pipelineSeriesId', 'pipelineIssueId', 'createdAt', 'updatedAt',
+];
+
+export function summarizeWork(work, draftCount, wordCount) {
+  const drafts = work.drafts || [];
+  return {
+    ...Object.fromEntries(WORK_SUMMARY_FIELDS.map(key => [key, work[key]])),
+    pipelineSeriesId: work.pipelineSeriesId || null,
+    pipelineIssueId: work.pipelineIssueId || null,
+    draftCount: draftCount ?? drafts.length,
+    wordCount: wordCount ?? drafts.find(draft => draft.id === work.activeDraftVersionId)?.wordCount ?? 0,
+  };
+}

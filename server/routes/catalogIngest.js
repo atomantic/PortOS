@@ -224,6 +224,9 @@ router.post('/bulk-import', asyncHandler(async (req, res) => {
   const seeds = entries.map((e) => ingredientEmbedSeed(e));
   const embeds = await embedBatch(seeds);
 
+  const ingredientIds = [...new Set(entries.map(entry => entry.id).filter(Boolean))];
+  const scrapIds = [...new Set(entries.flatMap(entry =>
+    (entry.scraps || []).filter(scrap => scrap.id && scrap.rawText.trim()).map(scrap => scrap.id)))];
   let scrapsCreated = 0;
   const created = await withTransaction(async (client) => {
     // Serialize retries even when their explicit ingredient/scrap IDs do not
@@ -235,25 +238,41 @@ router.post('/bulk-import', asyncHandler(async (req, res) => {
       const { rows } = await client.query('SELECT id FROM universes WHERE id = $1 AND deleted = false FOR SHARE', [defaults.universeRef]);
       if (!rows.length) throw new ServerError('Owning universe not found', { status: 404 });
     }
+    const ingredients = new Map();
+    const mergedIds = new Set();
+    const scraps = new Map();
+    if (ingredientIds.length) {
+      const { rows } = await client.query(
+        'SELECT id, type, deleted FROM catalog_ingredients WHERE id = ANY($1::text[]) ORDER BY id FOR UPDATE',
+        [ingredientIds],
+      );
+      for (const row of rows) ingredients.set(row.id, row);
+      // Read receipts after locking the ingredient rows so a merge that just
+      // committed is visible to the new statement's snapshot.
+      const merges = await client.query(
+        'SELECT source_id FROM catalog_ingredient_merges WHERE source_id = ANY($1::text[]) AND restored_at IS NULL',
+        [rows.map(row => row.id)],
+      );
+      for (const row of merges.rows) mergedIds.add(row.source_id);
+    }
+    if (scrapIds.length) {
+      const { rows } = await client.query(
+        `SELECT id, deleted, raw_text AS "rawText", title, source_kind AS "sourceKind", metadata
+         FROM catalog_scraps WHERE id = ANY($1::text[]) ORDER BY id FOR UPDATE`,
+        [scrapIds],
+      );
+      for (const row of rows) scraps.set(row.id, row);
+    }
     const out = [];
+    const refLinks = [];
     for (let i = 0; i < entries.length; i++) {
       const entry = entries[i];
       const e = embeds[i];
-      const existing = entry.id
-        ? (await client.query('SELECT type, deleted FROM catalog_ingredients WHERE id = $1 FOR UPDATE', [entry.id])).rows[0]
-        : null;
-      if (existing) {
-        // Local merge and recovery lock the ingredient too. Read the receipt
-        // after acquiring that lock so a merge that just committed is visible.
-        const activeMerge = await client.query(
-          'SELECT 1 FROM catalog_ingredient_merges WHERE source_id = $1 AND restored_at IS NULL',
-          [entry.id],
-        );
-        if (activeMerge.rowCount) {
-          throw new ServerError('Imported ingredient ID is merged into another record; recover the merge or import the canonical ID', {
-            status: 409, code: 'CATALOG_MERGE_CONFLICT',
-          });
-        }
+      const existing = ingredients.get(entry.id);
+      if (mergedIds.has(entry.id)) {
+        throw new ServerError('Imported ingredient ID is merged into another record; recover the merge or import the canonical ID', {
+          status: 409, code: 'CATALOG_MERGE_CONFLICT',
+        });
       }
       if (existing && (existing.deleted || existing.type !== entry.type)) {
         throw new ServerError('Imported ingredient ID is deleted or has a different type', { status: 409 });
@@ -270,6 +289,7 @@ router.post('/bulk-import', asyncHandler(async (req, res) => {
       const ing = existing
         ? await catalogDB.updateIngredient(entry.id, values, { client })
         : await catalogDB.createIngredient(values, { client });
+      if (!existing && entry.id) ingredients.set(entry.id, { type: ing.type, deleted: false });
       if (!existing && defaults.universeRef) await catalogDB.linkIngredientToRef(ing.id, 'universe', defaults.universeRef, 'owner', { client });
       for (const media of entry.media || []) {
         await catalogDB.attachMedia(ing.id, media.mediaKey, media.kind, { ...media, client });
@@ -287,13 +307,7 @@ router.post('/bulk-import', asyncHandler(async (req, res) => {
         // A portable bundle's old owner is evidence, not a destination choice.
         // Fresh explicit ownership was written above; existing owners survive.
         const role = target.refKind === 'universe' && importedRole === 'owner' ? 'imported-owner' : importedRole;
-        await client.query(
-          `INSERT INTO catalog_ingredient_refs (ingredient_id, ref_kind, ref_id, role)
-           VALUES ($1, $2, $3, $4)
-           ON CONFLICT (ingredient_id, ref_kind, ref_id, role) DO UPDATE
-             SET deleted = false, deleted_at = NULL`,
-          [ing.id, target.refKind, target.refId, role],
-        );
+        refLinks.push({ ingredientId: ing.id, refKind: target.refKind, refId: target.refId, role });
       }
       // Preserve shared scrap identity. ID-less additions to an identified
       // ingredient deduplicate by text/source, so retrying an edited bundle
@@ -302,10 +316,11 @@ router.post('/bulk-import', asyncHandler(async (req, res) => {
         if (!s.rawText.trim()) continue;
         const sourceKind = s.sourceKind || 'import';
         const existingScrap = s.id
-          ? (await client.query('SELECT id, deleted, raw_text, title, source_kind, metadata FROM catalog_scraps WHERE id = $1 FOR UPDATE', [s.id])).rows[0]
+          ? scraps.get(s.id)
           : entry.id
             ? (await client.query(
-              `SELECT s.id, s.deleted, s.raw_text, s.title, s.source_kind, s.metadata FROM catalog_scraps s
+              `SELECT s.id, s.deleted, s.raw_text AS "rawText", s.title, s.source_kind AS "sourceKind", s.metadata
+               FROM catalog_scraps s
                JOIN catalog_ingredient_sources src ON src.scrap_id = s.id
                WHERE src.ingredient_id = $1 AND s.raw_text = $2
                  AND s.source_kind = $3 AND s.deleted = false LIMIT 1`,
@@ -318,9 +333,9 @@ router.post('/bulk-import', asyncHandler(async (req, res) => {
         // Scraps can be shared by several ingredients: importing one slice
         // must neither overwrite their provenance nor silently ignore edits.
         if (existingScrap && (
-          existingScrap.raw_text !== s.rawText
+          existingScrap.rawText !== s.rawText
           || (s.title !== undefined && existingScrap.title !== s.title)
-          || (s.sourceKind !== undefined && existingScrap.source_kind !== s.sourceKind)
+          || (s.sourceKind !== undefined && existingScrap.sourceKind !== s.sourceKind)
           || (s.metadata !== undefined && !isDeepStrictEqual(existingScrap.metadata, s.metadata))
         )) {
           throw new ServerError('Imported scrap ID has different content; use a new scrap ID for edited provenance', { status: 409 });
@@ -330,9 +345,25 @@ router.post('/bulk-import', asyncHandler(async (req, res) => {
           metadata: s.metadata || { importedVia: 'bulk-import', format },
         }, { client });
         await catalogDB.linkIngredientToSource(ing.id, scrap.id, null, { client, preserveExisting: true });
-        if (!existingScrap) scrapsCreated++;
+        if (!existingScrap) {
+          if (s.id) scraps.set(s.id, scrap);
+          scrapsCreated++;
+        }
       }
       out.push({ id: ing.id, type: ing.type, name: ing.name });
+    }
+    if (refLinks.length) {
+      // A bundle may repeat an explicit ID. PostgreSQL allows each conflict
+      // key to be affected only once per INSERT.
+      await client.query(
+        `INSERT INTO catalog_ingredient_refs (ingredient_id, ref_kind, ref_id, role)
+         SELECT DISTINCT ingredient_id, ref_kind, ref_id, role
+         FROM unnest($1::text[], $2::text[], $3::text[], $4::text[]) AS links(ingredient_id, ref_kind, ref_id, role)
+         ON CONFLICT (ingredient_id, ref_kind, ref_id, role) DO UPDATE
+           SET deleted = false, deleted_at = NULL`,
+        [refLinks.map(link => link.ingredientId), refLinks.map(link => link.refKind),
+          refLinks.map(link => link.refId), refLinks.map(link => link.role)],
+      );
     }
     return out;
   });

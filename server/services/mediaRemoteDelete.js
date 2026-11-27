@@ -238,20 +238,17 @@ const commandFailed = (peer, kind, detail) => new ServerError(`${peerLabel(peer)
   status: 502, code: 'MEDIA_DELETE_FAILED',
 });
 
-// cancelPendingDelete bumps a row's generation; an attempt or drain that sees
-// it change stops before re-queuing or re-flagging the row.
-const cancelGenerations = new Map();
-const generationOf = (kind, key) => cancelGenerations.get(`${kind}:${key}`) ?? 0;
+// Keep a generation only while a delete can still observe it. Both cleanup
+// modes share the generation, and a cancel with no active attempt retains nothing.
+const activeDeleteGenerations = new Map();
 
 // Last drain attempt per peer registry id, so an online owner that keeps
 // failing is retried from `peers:updated` at most once per RETRY_INTERVAL_MS.
 const RETRY_INTERVAL_MS = 60_000;
 const lastAttemptAt = new Map();
 
-async function deleteAnywhere(kind, key, opts) {
+async function deleteAnywhere(kind, key, opts, cancelled) {
   const media = MEDIA[kind];
-  const generation = generationOf(kind, key);
-  const cancelled = () => generationOf(kind, key) !== generation;
   let row = await media.getRow(key);
   let hostedOnly = false;
   if (!row) {
@@ -422,9 +419,18 @@ export function deleteMediaAnywhere(kind, key, { forgetInMusicVideos = true } = 
   if (!MEDIA[kind]?.validKey(key)) return Promise.reject(unknownMedia());
   // Keyed by the cleanup mode too: a pool batch holds the project mutation
   // boundary and must not join a delete whose cleanup waits on that boundary.
-  const id = `${kind}:${key}:${forgetInMusicVideos}`;
+  const mediaId = `${kind}:${key}`;
+  const id = `${mediaId}:${forgetInMusicVideos}`;
   if (inFlight.has(id)) return inFlight.get(id);
-  const run = deleteAnywhere(kind, key, { forgetInMusicVideos }).finally(() => inFlight.delete(id));
+  const state = activeDeleteGenerations.get(mediaId) ?? { generation: 0, attempts: 0 };
+  state.attempts++;
+  activeDeleteGenerations.set(mediaId, state);
+  const generation = state.generation;
+  const run = deleteAnywhere(kind, key, { forgetInMusicVideos }, () => state.generation !== generation)
+    .finally(() => {
+      inFlight.delete(id);
+      if (--state.attempts === 0) activeDeleteGenerations.delete(mediaId);
+    });
   inFlight.set(id, run);
   return run;
 }
@@ -438,7 +444,8 @@ export async function listQueuedImageDeletes() {
 /** Withdraw a queued delete and clear the row's pending flag. Resolves `{ ok, cancelled }`. */
 export async function cancelPendingDelete(kind, key) {
   if (!MEDIA[kind]?.validKey(key)) throw unknownMedia();
-  cancelGenerations.set(`${kind}:${key}`, generationOf(kind, key) + 1);
+  const active = activeDeleteGenerations.get(`${kind}:${key}`);
+  if (active) active.generation++;
   const dequeued = await dropEntriesFor(kind, key);
   const row = await MEDIA[kind].getRow(key);
   if (!row && !(await hostedImageEntry(kind, key))) throw new ServerError('Not found', { status: 404, code: 'NOT_FOUND' });

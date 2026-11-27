@@ -855,6 +855,8 @@ CREATE INDEX IF NOT EXISTS idx_catalog_tags_parent ON catalog_tags (parent_id);
 
 CREATE INDEX IF NOT EXISTS idx_catalog_tags_sync_seq ON catalog_tags (sync_sequence);
 
+CREATE INDEX IF NOT EXISTS idx_catalog_tags_created ON catalog_tags (created_at DESC);
+
 CREATE TABLE IF NOT EXISTS catalog_ingredient_merges (
       id TEXT PRIMARY KEY,
       source_id TEXT NOT NULL REFERENCES catalog_ingredients(id),
@@ -1425,6 +1427,8 @@ ALTER TABLE creative_director_projects
       ADD COLUMN IF NOT EXISTS page_status TEXT GENERATED ALWAYS AS (data->>'status') STORED;
 
 CREATE INDEX IF NOT EXISTS idx_creative_director_projects_live_created ON creative_director_projects (created_at ASC) WHERE deleted = FALSE;
+
+CREATE INDEX IF NOT EXISTS idx_creative_director_projects_live_commission_created ON creative_director_projects ((data->>'commissionId'), created_at ASC) WHERE deleted = FALSE;
 
 CREATE TABLE IF NOT EXISTS threejs_models (
       id TEXT PRIMARY KEY,

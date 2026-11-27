@@ -42,7 +42,7 @@ import {
 } from './syncLogic.js';
 import {
   WORK_ID_RE, wrRoot, wrFoldersFile, wrExercisesFile, wrWorksDir, wrManifestPath,
-  queueWorkWrite, queueFolderWrite, queueExerciseWrite,
+  queueWorkWrite, queueFolderWrite, queueExerciseWrite, summarizeWork,
 } from './_shared.js';
 
 // --- File backend (escape hatch / tests): the legacy on-disk JSON format ---
@@ -241,8 +241,12 @@ function makeFileBackend() {
     listOrderedWorkIds: async () => (await loadLiveManifests())
       .sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || '') || a.id.localeCompare(b.id))
       .map(work => work.id),
-    readWorksPage: async (ids) => (await Promise.all(ids.map(id => loadManifest(id).catch(() => null))))
-      .filter(work => work && !work.deleted),
+    listWorkSummaries: async (ids) => {
+      const works = ids
+        ? (await Promise.all(ids.map(id => loadManifest(id).catch(() => null)))).filter(work => work && !work.deleted)
+        : await loadLiveManifests();
+      return works.map(work => summarizeWork(work));
+    },
     // No cheap count on the file layout — `deleted` lives inside each manifest,
     // so the live set can only be known by reading them. Counting the shared
     // live-set reader makes agreement with listWorks structural rather than a
@@ -353,7 +357,7 @@ export function writersRoomStore() {
     listWorkIds: async (opts) => (await getBackend()).listWorkIds(opts),
     listWorks: async (opts) => (await getBackend()).listWorks(opts),
     listOrderedWorkIds: async () => (await getBackend()).listOrderedWorkIds(),
-    readWorksPage: async (ids) => (await getBackend()).readWorksPage(ids),
+    listWorkSummaries: async (ids) => (await getBackend()).listWorkSummaries(ids),
     countWorks: async () => (await getBackend()).countWorks(),
     writeWork: async (manifest) => (await getBackend()).writeWork(manifest),
     deleteWork: async (id) => (await getBackend()).deleteWork(id),
