@@ -1,34 +1,34 @@
-# Release v2.130.0 - Crafted Peregrine
+# Release v2.131.0 - Upscaled Nightingale
 
-Released: 2026-11-26
+Released: 2026-11-27
 
 ## Highlights
 
-- **Owned Charts, 3D Scenes & Drag-and-Drop**: Replaced third-party charting, 3D helper, and drag-and-drop libraries with built-in accessible SVG charts, Three.js scene helpers, and native drag-and-drop interactions.
-- **Music Video Mastering & Studio Polish**: Master publishing kits for web loudness, preview custom vertical crops, loop and render selected ranges in the editor, add editable credit blocks to endings, and search shot reference galleries by type.
-- **Stronger Privacy & Host-Control Boundaries**: Gated realtime voice mutations, log subscriptions, runtime probes, and private data reads behind host control, cleared local Spotify data on disconnect, and scrubbed revoked vault facts from raw recordings and operational logs.
-- **Accessibility & Chief of Staff Controls**: Added full keyboard and screen-reader support across Chief of Staff panels and Goals lists, preserved focus through inline confirmations, and surfaced pull request remediation scope in Chief of Staff.
-- **Data Integrity & Performance**: Serialized Tribe imports, transacted Beeper participant edits, batched Catalog image and scrap updates, and preserved local OAuth credentials and operation locks across backups and restores.
+- **Video & Shot Upscaling**: Upscale generated videos and Music Video shots using the new opt-in local Real-ESRGAN lane or the fal.ai SeedVR2 1080p cloud upscaler.
+- **Browser Voice Call & Lip Sync**: Start voice calls directly from a dedicated browser call console and the mobile top bar, with optional local AvatarForcing lip sync and Conversational Gemma voice support.
+- **Music Video & Storyboard Editing**: Undo and redo Music Video board edits, cancel in-flight storyboard panel generation batches and Photoreal renders, and preview snapshot treatments cleanly.
+- **Local X Drafts, Legacy PDF & Digest Catch-Up**: Manage the full local X draft lifecycle, export Legacy archives to PDF with live progress, and configure Activity Digest catch-up settings in Brain.
+- **Stronger Host-Control & Storage Safety**: Enforced host-control admission for remote desktop, vault reads, and process streams; tightened owner-only permissions on personal and credential stores; and reconciled live caches after backup restores.
 
 ## Added
 
-- **Music Video Studio**: Added web-loudness mastering for Music Video publishing kits, custom vertical kit crop previews, range looping and rendering in the Music Video Editor, editable credit blocks and styling for video endings, and type-based search in shot reference galleries.
-- **Chief of Staff & Diagnostics**: Exposed pull request remediation scope in Chief of Staff, surfaced GitHub workflow access blocks clearly, and captured suite hook failures in test diagnostics.
+- **Video & Music Video Upscaling**: Added an opt-in local Real-ESRGAN video upscale lane, fal.ai SeedVR2 1080p cloud video upscaling, and a Music Video shot upscale workflow that inherits project attribution.
+- **Voice Studio & Calls**: Added a browser Voice Call console, added Voice Call quick access to the mobile top bar, added optional local AvatarForcing lip sync, and cataloged Trelis Conversational Gemma with gated download access checks.
+- **Creative Studio Controls**: Added a board edit undo stack and UI controls in Music Video, batch cancellation for Storyboards panel generation, and active Photoreal render cancellation in Catalog.
+- **Brain, Models, Legacy & Social**: Completed the local X draft lifecycle, exposed Activity Digest catch-up settings in Brain, added PDF export options with progress tracking in Legacy Export, and added Inkling and cached MTPLX agent checks in Models.
 
 ## Changed
 
-- **Built-In UI Infrastructure**: Replaced Recharts, Drei, and third-party drag-and-drop packages with owned accessible SVG charts, Three.js scene helpers, and native drag-and-drop interactions, while updating icon and router dependencies.
-- **Accessibility Across Core Views**: Improved keyboard navigation, focus preservation on inline confirmations, and screen-reader labels across Chief of Staff views (memory graph, schedule timeline, run controls, task templates, learning, and digest), Goals panels, and route titles.
-- **Media, Catalog & Runtime Performance**: Batched Catalog scrap commits, scoped Catalog image filing to changed ingredients, compacted Media Gallery images after pagination, kept Models Performance focused on available runtimes, and allowed directors to omit catalog subjects from a shot.
-- **Configurable Memory & Providers**: Made the memory extraction classifier configurable, computed reflection fading at read time, and shared CLI provider primitives while aligning provider migrations with shipped defaults.
+- **Music Video & Previews**: Applied restrained default template effects for new Music Video projects, displayed snapshot treatments in native previews, and updated the icon library.
+- **API & List Bounding**: Bounded Chief of Staff and media list responses, projected FableLoom story summaries in PostgreSQL, avoided loading large media records for list metadata, and batched Tribe touchpoint writes.
+- **UI & Accessibility**: Consolidated Persistent Mind workspace controls and learning analytics in Chief of Staff, unified image generation provider controls, added bulk confirmation prompts for app automation toggles and media/AI cleanups, and improved accessibility across Rapid Reader, Walk workflows, and Cognitive Drills.
 
 ## Fixed
 
-- **Security & Privacy**: Enforced host control for realtime voice mutations, log subscriptions, runtime probes, and private data reads; secured Spotify local data and cleared it on disconnect; purged blocked Signal handles and queried the live encrypted database in memory; and redacted revoked vault facts from Digital Twin logs and pending Chief of Staff recordings.
-- **Music Video & FableLoom**: Preserved Music Video edits during reloads, coalesced clip timing saves, aligned final previews to the encoded song, prevented omitted cast alternates from appearing in prompts, and stabilized FableLoom storyboard approvals, episode outline refreshes, and scene transition recovery.
-- **Messaging, Sync & Backups**: Guarded Beeper attachment writes against concurrent updates, transacted Tribe participant link edits, serialized Tribe contact enrichment and imports, preserved local OAuth credentials and machine-local HTTPS material during backups and restores, and propagated memory hard purges across federated peers.
-- **Chief of Staff, Voice & Local Runtimes**: Made daemon control transitions idempotent, retired replaced audit schedules, finished voice turns after synthesis failures, reported local checkpoint download failures, and verified pinned vLLM and Laya-MLX artifacts before provisioning.
+- **Security & Privacy**: Enforced browser and host-control admission for Remote Desktop, gated host vault reads and process streams behind host control, revoked hosted FableLoom sessions with PortOS auth, bound Eidoverse renderer access to the visitor seat, protected personal and provider recovery stores with owner-only permissions, and scrubbed deleted subject addresses.
+- **Voice & Media Stability**: Removed Voice's default completion cap, prevented capture transcription races, serialized voice profile promotion and model provisioning, preserved EXIF orientation on image uploads, preserved opening preview frames across seeks, and surfaced FFmpeg and upscale failures cleanly.
+- **Backups, Sync & Chief of Staff**: Reconciled live JSON, prompt, timer, and Digital Twin caches after backup restores; locked snapshot actions during database restores; preserved active CoS workers during dev startup; reconciled agent schedule timers during live restore; protected MortalLoom history during bidirectional edits; and made failed run, Pipeline, and Sharing loads retryable.
 
 ## Full Changelog
 
-**Full Diff**: https://github.com/atomantic/PortOS/compare/v2.129.0...v2.130.0
+**Full Diff**: https://github.com/atomantic/PortOS/compare/v2.130.0...v2.131.0
