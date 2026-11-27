@@ -64,6 +64,7 @@ describe('every cwd-passing spawn pins PWD', () => {
     ['services/appBuilder.js', 'bufferedSpawn'],
     ['services/appDeployer.js', 'bufferedSpawn'],
     ['services/databaseMaintenanceCutover.js', 'bufferedSpawn'],
+    ['services/film/describeRun.js', 'bufferedSpawn'],
     ['services/repoCloner.js', 'bufferedSpawn'],
   ]);
 

@@ -17,13 +17,11 @@ import { requireTrustedLocalBlender, runBlenderDriverScript } from '../blenderWo
 import { blenderRendersDir, blenderSongFile, blenderSrcDir, blenderWorkspaceDir } from './workspace.js';
 import { BLENDER_NEEDS_TRUSTED_LOCAL } from './state.js';
 import { parseBlenderDriverLine } from './protocol.js';
+import { DESCRIBE_LIMITS, RENDER_LIMITS } from './limits.js';
 
 const PY_DIR = fileURLToPath(new URL('./py/', import.meta.url));
 const DRIVER = 'portos_blender_driver.py';
 const KIT = 'portos_film';
-const GIB = 1024 ** 3;
-const RENDER_LIMITS = Object.freeze({ wallSeconds: 6 * 60 * 60, memoryBytes: 32 * GIB, diskBytes: 16 * GIB, maxFiles: 200_000 });
-const DESCRIBE_LIMITS = Object.freeze({ wallSeconds: 5 * 60, memoryBytes: 8 * GIB, diskBytes: GIB, maxFiles: 10_000 });
 const MANIFEST_MAX_BYTES = 4 * 1024 * 1024;
 
 /** The checked Blender tool for a film job; 409 when it is not ready or not Trusted local. */
