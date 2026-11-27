@@ -148,8 +148,20 @@ describe('buildInternalOpenApiSpec', () => {
     }));
     expect(appLogs.parameters).toContainEqual(expect.objectContaining({
       name: 'lines', in: 'query', required: false,
+      schema: expect.objectContaining({ minimum: 1, maximum: 5000 }),
     }));
-    expect(appLogs.responses[400]['x-portos-error-codes']).toEqual(['MISSING_PROCESS', 'INVALID_PROCESS_NAME']);
+    expect(appLogs.responses[400]['x-portos-error-codes']).toEqual(['MISSING_PROCESS', 'INVALID_PROCESS_NAME', 'VALIDATION_ERROR']);
+  });
+
+  it('documents the review queue query from its route schema', () => {
+    const spec = buildInternalOpenApiSpec({}, {});
+    const reviewQueue = spec.paths['/api/review/queue'].get;
+    expect(reviewQueue.parameters).toContainEqual(expect.objectContaining({
+      name: 'view', in: 'query', required: false,
+      schema: expect.objectContaining({
+        enum: ['today', 'all', 'waiting', 'someday', 'history', 'snoozed'],
+      }),
+    }));
   });
 
   it('documents refusal responses on the voice synthesize endpoint', () => {
