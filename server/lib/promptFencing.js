@@ -48,3 +48,8 @@ export function fenceBlock(label, text, maxChars) {
 
 // A `<portos-…>` tag pair delimits untrusted text (an issue body, a title) in a prompt; text containing the closing tag would end the block early and present the rest as prompt-level instructions (even a forged copy of a following user-authored block). Breaking the `<` keeps the text readable and the delimiter intact.
 export const neutralizePromptTags = (text) => String(text ?? '').replace(/<(?=\/?portos-)/gi, '&lt;');
+
+/** Choose a Markdown fence longer than every backtick run while preserving the payload verbatim. */
+export function adaptiveFence(content) {
+  return '`'.repeat(Math.max(3, ...(content.match(/`+/g) || ['']).map((run) => run.length + 1)));
+}

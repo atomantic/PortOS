@@ -6,7 +6,7 @@
  * WAS met — the detector was wrong**.
  *
  * The misjudgement is structural (the reviewer sees ONLY the objective and the diff, see
- * `services/codeReview.js#GOAL_FIDELITY_SYSTEM_PROMPT`), so it recurs on every run of the same
+ * `services/goalFidelityReview.js#GOAL_FIDELITY_SYSTEM_PROMPT`), so it recurs on every run of the same
  * shape, and the overturned finding is the only evidence naming the missing piece. It therefore
  * queues a task against PortOS's OWN repo to close the gap.
  *
@@ -83,9 +83,9 @@ export const GOAL_FIDELITY_REVIEW_SURFACES = Object.freeze({
     describe: 'the DIFF block — the run-window diff assembled by `evaluateGoalFidelity` in `server/services/agent/agentGoalFidelity.js`, capped at `MAX_FIDELITY_DIFF_CHARS`, which on a retry shares that cap with the change and commit messages an earlier attempt provably merged (`services/goalFidelityPriorDelivery.js`)',
   }),
   rubric: Object.freeze({
-    file: 'server/services/codeReview.js',
+    file: 'server/services/goalFidelityReview.js',
     symbol: 'GOAL_FIDELITY_SYSTEM_PROMPT',
-    describe: 'the RUBRIC it judges them with — `GOAL_FIDELITY_SYSTEM_PROMPT` in `server/services/codeReview.js`',
+    describe: 'the RUBRIC it judges them with — `GOAL_FIDELITY_SYSTEM_PROMPT` in `server/services/goalFidelityReview.js`',
   }),
 });
 
