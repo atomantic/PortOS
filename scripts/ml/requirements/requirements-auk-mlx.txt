@@ -19,6 +19,8 @@ torchaudio>=2.11
 torchvision>=0.28
 transformers>=5.10
 qwen-omni-utils>=0.0.9
+# PyAV 18.1.0 was yanked for an audio decoding defect. Keep the Python 3.11 branch on 18.1.1 (#20251).
+av==18.1.1 ; python_version < "3.12"
 omegaconf>=2.3.0
 torchdiffeq
 x_transformers>=1.31.14
