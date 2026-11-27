@@ -7,6 +7,7 @@
  * Each one leaves `scoreHypotheses` returning correct numbers.
  */
 
+import { EventEmitter } from 'node:events';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const spawn = vi.fn();
@@ -33,16 +34,19 @@ const MODEL_FILE = '/hf/snapshots/abc/qwen3.5-4b-nli/config.json';
 
 /** A spawned child that never exits on its own, like a healthy sidecar. */
 function fakeChild() {
-  const listeners = new Map();
-  return {
+  return Object.assign(new EventEmitter(), {
     exitCode: null,
+    signalCode: null,
     killed: false,
     stdout: { resume: vi.fn() },
     stderr: { resume: vi.fn() },
-    on(event, handler) { listeners.set(event, handler); return this; },
-    kill(signal) { this.killed = true; this.exitCode = 0; listeners.get('close')?.(0, signal); },
-    emitClose(code) { this.exitCode = code; listeners.get('close')?.(code); },
-  };
+    kill: vi.fn(function (signal) {
+      this.killed = true;
+      this.signalCode = signal;
+      this.emit('close', null, signal);
+    }),
+    emitClose(code) { this.exitCode = code; this.emit('close', code); },
+  });
 }
 
 /** An installed, cached, ready host. */
@@ -161,6 +165,58 @@ describe('scoreHypotheses', () => {
     resolveFiles([MODEL_FILE]);
     expect(await pending).toEqual({ ok: false, code: 'jev-start-failed' });
     expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it('does not spawn for pending or new scores once host shutdown starts', async () => {
+    const { markHostShuttingDown, resetHostShutdownFlagForTests } = await import('../lib/hostShutdown.js');
+    makeInstalled();
+    const files = Promise.withResolvers();
+    findCachedRepoFiles.mockReturnValueOnce(files.promise);
+    const input = { premise: 'p', hypotheses: ['a', 'b'] };
+    const pending = jev.scoreHypotheses(input);
+    markHostShuttingDown();
+    try {
+      await expect(jev.scoreHypotheses(input)).resolves.toEqual({ ok: false, code: 'jev-start-failed' });
+      files.resolve([MODEL_FILE]);
+      await expect(pending).resolves.toEqual({ ok: false, code: 'jev-start-failed' });
+      expect(spawn).not.toHaveBeenCalled();
+    } finally {
+      resetHostShutdownFlagForTests();
+    }
+  });
+
+  it.each(['starting', 'resident'])('escalates a %s sidecar that ignores SIGTERM', async (state) => {
+    makeInstalled();
+    const child = fakeChild();
+    child.kill.mockImplementation(() => { child.killed = true; });
+    spawn.mockReturnValue(child);
+    const health = Promise.withResolvers();
+    vi.stubGlobal('fetch', vi.fn()
+      .mockReturnValueOnce(health.promise)
+      .mockResolvedValue(scoreOk([])));
+    const request = jev.scoreHypotheses({ premise: 'p', hypotheses: ['a', 'b'] });
+    await vi.advanceTimersByTimeAsync(0);
+    if (state === 'resident') {
+      health.resolve(healthOk);
+      await request;
+      expect(jev.isJevSidecarRunning()).toBe(true);
+    }
+
+    expect(jev.stopJevSidecar()).toBe(true);
+    expect(jev.isJevSidecarRunning()).toBe(false);
+    const drained = vi.fn();
+    const stopping = jev.drainJevSidecarStops().then(drained);
+    await vi.advanceTimersByTimeAsync(999);
+    expect(child.kill.mock.calls).toEqual([['SIGTERM']]);
+    expect(drained).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    await stopping;
+    expect(child.kill.mock.calls).toEqual([['SIGTERM'], ['SIGKILL']]);
+
+    if (state === 'starting') {
+      health.resolve(healthOk);
+      await expect(request).resolves.toEqual({ ok: false, code: 'jev-start-failed' });
+    }
   });
 
   it.each(['stop', 'exit'])('rejects successful health received after child %s', async (action) => {

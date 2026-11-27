@@ -95,7 +95,9 @@ import * as automationScheduler from './automationScheduler.js';
 import * as agentActionExecutor from './agent/agentActionExecutor.js';
 import * as telegram from './telegram.js';
 import * as telegramBridge from './telegramBridge.js';
-import { getSettings as getInitSettings } from './settings.js';
+import { getSettings as getInitSettings, flushSettingsLedger } from './settings.js';
+import { drainJevSidecarStops, stopJevSidecar } from './jev.js';
+import mediaService from './mediaService.js';
 import { readUserTypes as readUserTypeSlice } from './catalogUserTypes/store.js';
 import { getVoiceConfig } from './voice/config.js';
 import { reconcile as reconcileVoice } from './voice/bootstrap.js';
@@ -1124,12 +1126,12 @@ const GRACEFUL_SHUTDOWN_TIMEOUT_MS = 10000;
 
 // How long an already-accepted ordinary API request may keep running after the
 // signal (#8323). Measured from the signal, so it overlaps the teardown steps
-// before the HTTP close rather than adding to them: the drain (5s) + HTTP close
-// grace (1s) + peer sync stop (1s) + DB pool grace (2.5s) stays under the ceiling above.
+// before the HTTP close rather than adding to them. Afterward, peer sync and
+// ledger flushes overlap to leave time for closing the DB pool.
 const HTTP_DRAIN_WINDOW_MS = 5000;
 
 // Bound on stopping peer sync and settling its in-flight pushes before the DB
-// pool closes; drain + HTTP close + this + DB pool grace stay under the ceiling.
+// pool closes.
 const PEER_SYNC_STOP_GRACE_MS = 1000;
 
 // A shutdown at or above this logs one numbers-only line naming where the time
@@ -1246,6 +1248,13 @@ export const registerShutdownHandlers = ({ io, httpServer, localHttpServer }, {
     stopAutomaticUpdateReservationRecovery();
     stopHostedSessionSweep();
     stopBeeperSocket();
+    // Send SIGTERM before closing HTTP and let escalation overlap the drain.
+    await Promise.all([
+      Promise.resolve().then(stopJevSidecar)
+        .catch((err) => logBootstrapFailure('❌ JEV sidecar shutdown failed', err)),
+      Promise.resolve().then(() => mediaService.stopAll())
+        .catch((err) => logBootstrapFailure('❌ Media capture shutdown failed', err)),
+    ]);
     await import('./tailcatPeer.js').then(({ stopAllForwards }) => stopAllForwards())
       .catch((err) => logBootstrapFailure('❌ Tailcat forward shutdown failed', err));
     await import('./tailcatServe.js').then(({ stopServeProcess }) => stopServeProcess())
@@ -1324,6 +1333,11 @@ export const registerShutdownHandlers = ({ io, httpServer, localHttpServer }, {
       closeServer(localHttpServer, 'Local HTTP mirror')
     ]);
 
+    // A request finishing during the drain may have queued a detached settings
+    // ledger write. Keep its DB connection available while the write settles.
+    const settingsLedgerFlushed = withGrace('Settings ledger', 2000, ({ finish, finishWithError }) =>
+      flushSettingsLedger().then(() => finish(), (err) => finishWithError('⚠️ Settings ledger flush failed', err)));
+
     // An IdeaLoom vault export still inside its 5s debounce would otherwise be
     // lost. A local file write, so it overlaps the DB close below inside that
     // close's budget rather than adding to the shutdown ceiling; no request can
@@ -1367,6 +1381,7 @@ export const registerShutdownHandlers = ({ io, httpServer, localHttpServer }, {
     await catalogFilingFlushed;
     await usageBackfillStopped;
     await flushPendingUsageWrites().catch(err => logBootstrapFailure('❌ Usage ledger flush failed', err));
+    await settingsLedgerFlushed;
     timing.mark('dbPool');
     const { close } = await import('../lib/db.js');
     if (typeof close === 'function') {
@@ -1383,6 +1398,8 @@ export const registerShutdownHandlers = ({ io, httpServer, localHttpServer }, {
     await markerWritten;
     await mediaQueueFlushed;
     await ideaLoomFlushed;
+    // process.exit() would otherwise skip any pending escalation timer.
+    await Promise.all([drainJevSidecarStops(), mediaService.drainCaptureStops()]);
     clearTimeout(forceExitTimer);
     reportIfSlow();
     hostProcess.exit(0);

@@ -58,6 +58,10 @@ const { asyncNoop, noop, steps, providerCalls, collectionStore } = vi.hoisted(()
       writeMarker: vi.fn(asyncNoop),
       stopTailcatForwards: vi.fn(asyncNoop),
       stopModelHost: vi.fn(asyncNoop),
+      stopJevSidecar: vi.fn(),
+      drainJevSidecarStops: vi.fn(asyncNoop),
+      stopMediaCapture: vi.fn(),
+      drainMediaCaptureStops: vi.fn(asyncNoop),
       signalDetachedGroups: vi.fn(),
       quiesceMedia: vi.fn(),
       quiesceScheduled: vi.fn(),
@@ -69,6 +73,7 @@ const { asyncNoop, noop, steps, providerCalls, collectionStore } = vi.hoisted(()
       drainPeerSync: vi.fn(asyncNoop),
       shutdownSharing: vi.fn(),
       flushUsage: vi.fn(asyncNoop),
+      flushSettingsLedger: vi.fn(asyncNoop),
       stopUsageBackfill: vi.fn(asyncNoop),
       closeDb: vi.fn(asyncNoop),
     },
@@ -157,7 +162,13 @@ vi.mock('./codeAnimation/execution.js', () => ({ rearmCodeAnimationExecution: as
 vi.mock('./automationScheduler.js', () => ({ init: asyncNoop }));
 vi.mock('./agent/agentActionExecutor.js', () => ({ init: noop }));
 vi.mock('./eventScheduler.js', () => ({ quiesce: steps.quiesceScheduled, drain: steps.drainScheduled }));
-vi.mock('./settings.js', () => ({ getSettings: async () => ({}) }));
+vi.mock('./settings.js', () => ({ getSettings: async () => ({}), flushSettingsLedger: steps.flushSettingsLedger }));
+vi.mock('./jev.js', () => ({
+  stopJevSidecar: steps.stopJevSidecar, drainJevSidecarStops: steps.drainJevSidecarStops,
+}));
+vi.mock('./mediaService.js', () => ({
+  default: { stopAll: steps.stopMediaCapture, drainCaptureStops: steps.drainMediaCaptureStops },
+}));
 vi.mock('./catalogUserTypes/store.js', () => ({ readUserTypes: async () => [] }));
 vi.mock('./telegram.js', () => ({ init: asyncNoop }));
 vi.mock('./telegramBridge.js', () => ({ init: asyncNoop }));
@@ -635,6 +646,43 @@ describe('signal-driven shutdown', () => {
     expect(console.error).toHaveBeenCalledExactlyOnceWith(
       '⚠️ Error closing HTTP server: fixture close failed', expect.stringContaining('Error: fixture close failed'),
     );
+    expect(exit).toHaveBeenCalledExactlyOnceWith(0);
+  });
+
+  it('signals owned capture and sidecar children before HTTP teardown and waits for escalation before exit', async () => {
+    const sidecar = hold(steps.drainJevSidecarStops);
+    const capture = hold(steps.drainMediaCaptureStops);
+    const { signal, exit, io, httpServer } = registerTestShutdown();
+    const stopping = signal();
+
+    await Promise.all([sidecar.entered, capture.entered]);
+    expect(steps.stopJevSidecar).toHaveBeenCalledBefore(io.close);
+    expect(steps.stopMediaCapture).toHaveBeenCalledBefore(httpServer.closeAllConnections);
+    expect(steps.closeDb).toHaveBeenCalledOnce();
+    expect(exit).not.toHaveBeenCalled();
+    sidecar.release();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(exit).not.toHaveBeenCalled();
+    capture.release();
+    await stopping;
+    expect(exit).toHaveBeenCalledExactlyOnceWith(0);
+  });
+
+  it.each(['flushed', 'timed out'])('keeps the DB open until the settings ledger has %s', async (outcome) => {
+    const settings = hold(steps.flushSettingsLedger);
+    const { signal, exit, httpServer, localHttpServer } = registerTestShutdown();
+    const stopping = signal();
+
+    await settings.entered;
+    expect(httpServer.closeAllConnections).toHaveBeenCalledBefore(steps.flushSettingsLedger);
+    expect(localHttpServer.closeAllConnections).toHaveBeenCalledBefore(steps.flushSettingsLedger);
+    await vi.advanceTimersByTimeAsync(1999);
+    expect(steps.closeDb).not.toHaveBeenCalled();
+    if (outcome === 'flushed') settings.release();
+    else await vi.advanceTimersByTimeAsync(1);
+    await stopping;
+    settings.release();
+    expect(steps.closeDb).toHaveBeenCalledOnce();
     expect(exit).toHaveBeenCalledExactlyOnceWith(0);
   });
 
