@@ -224,7 +224,7 @@ export default function MtplxServerCard({
             </button>
           )}
           <button
-            onClick={() => onSaveLaunch({ ...(launch || {}), model: model || null, ...(port ? { port: Number(port) } : {}) })}
+            onClick={() => onSaveLaunch({ ...(launch || {}), model: model || null, port: port ? Number(port) : null })}
             disabled={busy || emptyCache}
             className={`${btnClass} bg-port-accent/20 hover:bg-port-accent/30 text-port-accent`}
             title={emptyCache ? 'Download an MTP checkpoint below first — a start never fetches weights' : 'Remember these options for the next on-demand start'}

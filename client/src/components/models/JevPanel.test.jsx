@@ -38,6 +38,7 @@ import {
 } from '../../services/apiLocalLlm.js';
 import socket from '../../services/socket';
 import JevPanel from './JevPanel';
+import toast from '../ui/Toast';
 import { MemoryRouter, Routes, Route } from 'react-router';
 let initialView = 'try';
 
@@ -142,13 +143,15 @@ describe('JevPanel install', () => {
     await act(async () => { settle({ ok: false }); });
   });
 
-  it('cancels an in-flight install', async () => {
+  it.each([undefined, 'Cancellation failed'])('handles install cancellation (error: %s)', async (error) => {
+    if (error) cancelJevInstall.mockRejectedValueOnce(new Error(error));
     let settle;
     installJev.mockReturnValue(new Promise((resolve) => { settle = resolve; }));
     await renderPanel();
     fireEvent.click(await screen.findByRole('button', { name: 'Install jev' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }));
     expect(cancelJevInstall).toHaveBeenCalled();
+    if (error) await waitFor(() => expect(toast.error).toHaveBeenCalledWith(error));
     await act(async () => { settle({ ok: false }); });
   });
 });
@@ -211,6 +214,16 @@ describe('JevPanel try-it box', () => {
     fill('Some text.', 'first\nsecond');
     fireEvent.click(screen.getByRole('button', { name: 'Score' }));
     expect(await screen.findByText('Scoring failed: jev-timeout')).toBeInTheDocument();
+  });
+
+  it('reports failed unloads and leaves the resident model available to retry', async () => {
+    initialView = 'setup';
+    getJevStatus.mockResolvedValue(status({ ready: true, setupState: 'ready', stages: stages(true), resident: true }));
+    unloadJev.mockRejectedValueOnce(new Error('Unload failed'));
+    await renderPanel();
+    fireEvent.click(await screen.findByRole('button', { name: 'Unload now' }));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Unload failed'));
+    expect(screen.getByRole('button', { name: 'Unload now' })).toBeEnabled();
   });
 
   it('offers an immediate unload only while the model is resident', async () => {

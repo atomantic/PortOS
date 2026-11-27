@@ -1687,6 +1687,17 @@ describe('Settings routes — atomic partial saves (#11045)', () => {
     expect(syncParallelLimits).toHaveBeenCalledWith(expect.objectContaining({ videoGen: { gemini: { parallelLimit: 2 } } }));
   });
 
+  it('clears a saved MTPLX port through the settings API', async () => {
+    const app = buildApp();
+    const launch = { model: 'example-model', port: 8010 };
+    expect((await patch(app, 'localLlm.mtplx', { launch })).status).toBe(200);
+    expect((await patch(app, 'localLlm.mtplx', { launch: { ...launch, port: null } })).status).toBe(200);
+    expect(persisted().localLlm.mtplx).toMatchObject({
+      idleMinutes: 20,
+      launch: { model: 'example-model', port: null },
+    });
+  });
+
   it('keeps unrelated fields, permits explicit clearing, and reconciles saved settings', async () => {
     const app = buildApp();
     expect((await patch(app, 'imageGen.local', { pythonPath: null })).status).toBe(200);

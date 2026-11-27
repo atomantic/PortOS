@@ -13,6 +13,9 @@ vi.mock('../settings/MemoryManagement.jsx', () => ({
   },
 }));
 
+vi.mock('../ui/Toast');
+const toast = (await import('../ui/Toast')).default;
+
 const ModelsPanel = (await import('./ModelsPanel.jsx')).default;
 
 const model = {
@@ -140,13 +143,17 @@ describe('ModelsPanel live residency', () => {
   });
 });
 
-it('confirms duplicate linking and refreshes the inventory', async () => {
+it.each([false, true])('confirms duplicate linking and refreshes the inventory (refresh fails: %s)', async (refreshFails) => {
   const refresh = vi.fn();
+  if (refreshFails) refresh.mockRejectedValueOnce(new Error('Refresh failed'));
   render(<MemoryRouter><ModelsPanel report={{ ...report, modelDuplicates: {
-    items: [{ model: 'Example weights', sourcePath: '/models/example.safetensors', targetPath: '/pinokio/example.safetensors', canLink: true, sizeBytes: 1024, reclaimableBytes: 1024 }],
+    items: [
+      { model: 'Example weights', sourcePath: '/models/example.safetensors', targetPath: '/pinokio/example.safetensors', canLink: true, sizeBytes: 1024, reclaimableBytes: 1024 },
+      { model: 'Other weights', sourcePath: '/models/other.safetensors', targetPath: '/pinokio/other.safetensors', canLink: true, sizeBytes: 2048, reclaimableBytes: 2048 },
+    ],
   } }} loading={false} onRunReport={refresh} cleanup={cleanup} /></MemoryRouter>);
   expect(screen.getByText('Duplicate Model Weights')).toBeInTheDocument();
-  fireEvent.click(screen.getByRole('button', { name: 'Link All' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Link & Reclaim 1 KB' }));
   expect(rectifyModelDuplicates).not.toHaveBeenCalled();
   expect(screen.getByText(/In-place edits affect both applications/)).toBeInTheDocument();
   fireEvent.click(screen.getByRole('button', { name: 'Confirm linking' }));
@@ -154,10 +161,15 @@ it('confirms duplicate linking and refreshes the inventory', async () => {
   expect(rectifyModelDuplicates).toHaveBeenCalledWith({ mode: 'hardlink', pairs: [{
     sourcePath: '/models/example.safetensors', targetPath: '/pinokio/example.safetensors',
   }] }, { silent: true });
+  if (refreshFails) {
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Link & Reclaim 2 KB' })).toBeEnabled());
+    expect(toast.error).toHaveBeenCalledWith('Refresh failed');
+  }
 });
 
-it('names the repos and bytes before a hub clone can be armed', async () => {
+it.each([false, true])('names the repos and bytes before a hub clone can be armed (refresh fails: %s)', async (refreshFails) => {
   const refresh = vi.fn();
+  if (refreshFails) refresh.mockRejectedValueOnce(new Error('Refresh failed'));
   const blob = 'ab'.repeat(32);
   const sourcePath = `/cache/models--example--base/blobs/${blob}`;
   const targetPath = `/cache/models--example--distilled/blobs/${blob}`;
@@ -191,6 +203,10 @@ it('names the repos and bytes before a hub clone can be armed', async () => {
   fireEvent.click(confirm);
   await waitFor(() => expect(refresh).toHaveBeenCalledOnce());
   expect(rectifyModelDuplicates).toHaveBeenCalledWith({ mode: 'clone', pairs: [{ sourcePath, targetPath }] }, { silent: true });
+  if (refreshFails) {
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Clone duplicates' })).toBeEnabled());
+    expect(toast.error).toHaveBeenCalledWith('Refresh failed');
+  }
 });
 
 it('explains hub duplicates that cannot be cloned', () => {

@@ -71,6 +71,7 @@ export default function SlotstreamServerCard({
   onUninstall,
   onDownloadModel,
   onCancelDownload,
+  cancelling,
   onRemoveModel,
   download,
 }) {
@@ -358,7 +359,7 @@ export default function SlotstreamServerCard({
             <DownloadProgress
               download={download}
               onCancel={onCancelDownload ? () => onCancelDownload(download.model) : null}
-              cancelling={actionInProgress === 'slotstream-download-cancel'}
+              cancelling={cancelling}
             />
           )}
         </div>
