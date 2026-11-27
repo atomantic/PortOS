@@ -301,6 +301,69 @@ describe('DraftsTab editing and review', () => {
     expect(screen.getByRole('button', { name: 'Approve' })).toBeInTheDocument();
   });
 
+  it.each([
+    ['gmail', 'api', 'original', 'new@example.com, , other@example.com ', ['new@example.com', 'other@example.com']],
+    ['outlook', 'playwright', null, '', []],
+  ])('shows every recipient and saves Cc changes on %s drafts', async (type, sendVia, replyToMessageId, input, cc) => {
+    const draft = {
+      id: 'd1', accountId: 'acc1', status: 'approved', sendVia, replyToMessageId,
+      subject: 'Example mail', body: 'Example message', to: ['one@example.com', 'two@example.com'],
+      cc: ['old@example.com', 'second@example.com'],
+    };
+    getMessageDrafts.mockResolvedValueOnce([draft]);
+    updateMessageDraft.mockResolvedValueOnce({ ...draft, cc, status: 'draft' });
+    render(<DraftsTab accounts={[{ id: 'acc1', type, name: 'Account', canSend: true }]} />);
+
+    expect(await screen.findByRole('button', { name: 'Send' })).toBeEnabled();
+    expect(screen.getByText('To: one@example.com, two@example.com')).toBeVisible();
+    expect(screen.getByText('Cc: old@example.com, second@example.com')).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    const ccField = screen.getByRole('textbox', { name: 'Cc' });
+    expect(ccField).toHaveValue('old@example.com, second@example.com');
+    fireEvent.change(ccField, { target: { value: input } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save draft' }));
+
+    expect(updateMessageDraft).toHaveBeenCalledWith('d1', {
+      to: draft.to, cc, subject: draft.subject, body: draft.body,
+    });
+    expect(await screen.findByRole('button', { name: 'Approve' })).toBeEnabled();
+    expect(screen.queryByRole('button', { name: 'Send' })).not.toBeInTheDocument();
+    if (cc.length) {
+      expect(screen.getByText(`Cc: ${cc.join(', ')}`)).toBeVisible();
+    } else {
+      expect(screen.queryByText(/^Cc:/)).not.toBeInTheDocument();
+    }
+  });
+
+  it.each([
+    ['teams', 'playwright', null, true],
+    ['outlook', 'playwright', 'original', true],
+    ['outlook', 'playwright', null, false],
+    ['gmail', 'review', null, true],
+  ])('keeps stored Cc visible and omits its edit for %s %s (reply=%s, canSend=%s)', async (type, sendVia, replyToMessageId, canSend) => {
+    const draft = {
+      id: 'd1', accountId: 'acc1', status: 'draft', sendVia, replyToMessageId,
+      subject: 'Example message', body: 'Old body', to: ['one@example.com'], cc: ['copy@example.com'],
+    };
+    getMessageDrafts.mockResolvedValueOnce([draft]);
+    updateMessageDraft.mockResolvedValueOnce({ ...draft, body: 'Updated body' });
+    render(<DraftsTab accounts={[{ id: 'acc1', type, name: 'Account', canSend }]} />);
+
+    expect(await screen.findByText('Cc: copy@example.com')).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    expect(screen.getByText('Cc: copy@example.com')).toBeVisible();
+    expect(screen.queryByRole('textbox', { name: 'Cc' })).not.toBeInTheDocument();
+    fireEvent.change(screen.getByRole('textbox', { name: 'Body' }), { target: { value: 'Updated body' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save draft' }));
+
+    expect(updateMessageDraft).toHaveBeenCalledWith('d1', {
+      to: draft.to, subject: draft.subject, body: 'Updated body',
+    });
+    await screen.findByRole('button', { name: 'Edit' });
+    expect(screen.getByText('Updated body')).toBeVisible();
+    expect(screen.getByText('Cc: copy@example.com')).toBeVisible();
+  });
+
   it('expands a clamped sendable body and leaves copy-only drafts fully visible', async () => {
     const longBody = 'Line one\nLine two\nLine three\nLine four that was hidden';
     getMessageDrafts.mockResolvedValue([
