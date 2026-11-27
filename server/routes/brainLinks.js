@@ -7,7 +7,8 @@
 
 import { Router } from 'express';
 import { existsSync } from 'fs';
-import * as brainService from '../services/brain.js';
+import * as brainStorage from '../services/brainStorage.js';
+import * as brainLinks from '../services/brainLinks.js';
 import { openFolderInSystemExplorer } from '../lib/openFolder.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
@@ -34,7 +35,7 @@ const router = Router();
  * preconditions, so they are stated once rather than re-spelled per route.
  */
 async function requireClonedRepoLink(id) {
-  const link = await brainService.getLinkById(id);
+  const link = await brainStorage.getLinkById(id);
   if (!link) {
     throw new ServerError('Link not found', { status: 404, code: 'NOT_FOUND' });
   }
@@ -70,7 +71,7 @@ router.get('/links', asyncHandler(async (req, res) => {
   // Filtering, newest-first ordering, and the total count are answered from
   // brainStorage's cached link-summary index, so only THIS page's records are
   // read and parsed from disk (issue #3509) — not the whole collection.
-  const { links, total } = await brainService.getLinksPage({ linkType, isRepo: repoFilter, limit, offset });
+  const { links, total } = await brainStorage.getLinksPage({ linkType, isRepo: repoFilter, limit, offset });
   res.json({ links, total, limit, offset });
 }));
 
@@ -88,7 +89,7 @@ router.post('/links/reorder', asyncHandler(async (req, res) => {
   // apply (mirrors the single-link PUT's 404 on an unknown id).
   // Membership only — `listLinkIds` answers it from the summary index instead
   // of parsing every link body (issue #3509).
-  const known = new Set(await brainService.listLinkIds());
+  const known = new Set(await brainStorage.listLinkIds());
   const missing = updates.filter(u => !known.has(u.id)).map(u => u.id);
   if (missing.length) {
     throw new ServerError('Unknown link id in reorder batch', {
@@ -97,7 +98,7 @@ router.post('/links/reorder', asyncHandler(async (req, res) => {
       context: { missing }
     });
   }
-  const links = await brainService.reorderLinks(updates);
+  const links = await brainStorage.reorderLinks(updates);
   res.json({ links });
 }));
 
@@ -106,7 +107,7 @@ router.post('/links/reorder', asyncHandler(async (req, res) => {
  * Get a single link by ID
  */
 router.get('/links/:id', asyncHandler(async (req, res) => {
-  const link = await brainService.getLinkById(req.params.id);
+  const link = await brainStorage.getLinkById(req.params.id);
   if (!link) {
     throw new ServerError('Link not found', { status: 404, code: 'NOT_FOUND' });
   }
@@ -123,7 +124,7 @@ router.get('/links/:id', asyncHandler(async (req, res) => {
 router.post('/links', asyncHandler(async (req, res) => {
   const { url, ...options } = validateRequest(linkInputSchema, req.body);
 
-  const existing = await brainService.getLinkByUrl(url);
+  const existing = await brainStorage.getLinkByUrl(url);
   if (existing) {
     throw new ServerError('Link with this URL already exists', {
       status: 409,
@@ -135,7 +136,7 @@ router.post('/links', asyncHandler(async (req, res) => {
   // Title derivation, repository metadata, and the background clone all live in the
   // service so a URL captured in the Brain inbox lands identically (see
   // captureUrlAsLink in services/brain.js).
-  const link = await brainService.createLinkFromUrl(url, options);
+  const link = await brainLinks.createLinkFromUrl(url, options);
   res.status(201).json(link);
 }));
 
@@ -146,7 +147,7 @@ router.post('/links', asyncHandler(async (req, res) => {
 router.put('/links/:id', asyncHandler(async (req, res) => {
   const data = validateRequest(linkUpdateInputSchema, req.body);
 
-  const existing = await brainService.getLinkById(req.params.id);
+  const existing = await brainStorage.getLinkById(req.params.id);
   if (!existing) {
     throw new ServerError('Link not found', { status: 404, code: 'NOT_FOUND' });
   }
@@ -154,7 +155,7 @@ router.put('/links/:id', asyncHandler(async (req, res) => {
   // When the URL changes, re-derive the repository fields so the link type /
   // repo metadata stay consistent with the new target.
   if (data.url && data.url !== existing.url) {
-    const duplicate = await brainService.getLinkByUrl(data.url);
+    const duplicate = await brainStorage.getLinkByUrl(data.url);
     if (duplicate && duplicate.id !== existing.id) {
       throw new ServerError('Link with this URL already exists', {
         status: 409,
@@ -172,7 +173,7 @@ router.put('/links/:id', asyncHandler(async (req, res) => {
     data.cloneError = null;
   }
 
-  const link = await brainService.updateLink(req.params.id, data);
+  const link = await brainStorage.updateLink(req.params.id, data);
   res.json(link);
 }));
 
@@ -181,7 +182,7 @@ router.put('/links/:id', asyncHandler(async (req, res) => {
  * Delete a link
  */
 router.delete('/links/:id', asyncHandler(async (req, res) => {
-  const deleted = await brainService.deleteLink(req.params.id);
+  const deleted = await brainStorage.deleteLink(req.params.id);
   if (!deleted) {
     throw new ServerError('Link not found', { status: 404, code: 'NOT_FOUND' });
   }
@@ -193,7 +194,7 @@ router.delete('/links/:id', asyncHandler(async (req, res) => {
  * Manually trigger clone for a repository link
  */
 router.post('/links/:id/clone', asyncHandler(async (req, res) => {
-  const link = await brainService.getLinkById(req.params.id);
+  const link = await brainStorage.getLinkById(req.params.id);
   if (!link) {
     throw new ServerError('Link not found', { status: 404, code: 'NOT_FOUND' });
   }
@@ -216,7 +217,7 @@ router.post('/links/:id/clone', asyncHandler(async (req, res) => {
 
   // Awaits the claim only; git runs in the background and records its own
   // outcome on the link.
-  const claimed = await brainService.cloneRepoInBackground(link.id, link.url);
+  const claimed = await brainLinks.cloneRepoInBackground(link.id, link.url);
   if (!claimed) {
     throw new ServerError('Link not found', { status: 404, code: 'NOT_FOUND' });
   }
@@ -229,7 +230,7 @@ router.post('/links/:id/clone', asyncHandler(async (req, res) => {
  * Pull latest changes for a cloned repo
  */
 router.post('/links/:id/pull', asyncHandler(async (req, res) => {
-  const link = await brainService.getLinkById(req.params.id);
+  const link = await brainStorage.getLinkById(req.params.id);
   if (!link) {
     throw new ServerError('Link not found', { status: 404, code: 'NOT_FOUND' });
   }
@@ -250,7 +251,7 @@ router.post('/links/:id/pull', asyncHandler(async (req, res) => {
  * Open the cloned repo folder in the system file manager
  */
 router.post('/links/:id/open-folder', asyncHandler(async (req, res) => {
-  const link = await brainService.getLinkById(req.params.id);
+  const link = await brainStorage.getLinkById(req.params.id);
   if (!link) {
     throw new ServerError('Link not found', { status: 404, code: 'NOT_FOUND' });
   }
@@ -290,7 +291,7 @@ router.post('/links/:id/scan', asyncHandler(async (req, res) => {
   // Record the pending scan the same way the capture-time path does, so a
   // reload shows the "Scan queued" chip instead of re-arming the button (whose
   // second click would 409 as a duplicate).
-  await brainService.updateLink(link.id, result.linkPatch);
+  await brainStorage.updateLink(link.id, result.linkPatch);
 
   res.json({ message: 'Scan queued', taskId: result.taskId, linkId: link.id, scanPath: link.localPath });
 }));
@@ -310,7 +311,7 @@ router.post('/links/:id/study', asyncHandler(async (req, res) => {
   if (!result.queued) throw queueFailure(result.reason, 'study');
   // Record the pending study the same way the capture-time path does, so a
   // reload shows the queued chip and the brief the run was given.
-  const updated = await brainService.updateLink(link.id, result.linkPatch);
+  const updated = await brainStorage.updateLink(link.id, result.linkPatch);
 
   res.json({
     message: 'Study queued',
@@ -322,7 +323,7 @@ router.post('/links/:id/study', asyncHandler(async (req, res) => {
 }));
 
 router.get('/links/:id/scan-report', asyncHandler(async (req, res) => {
-  const link = await brainService.getLinkById(req.params.id);
+  const link = await brainStorage.getLinkById(req.params.id);
   if (!link?.malwareScan?.reportId) {
     throw new ServerError('No malware scan report is available for this link', { status: 404, code: 'REPORT_NOT_FOUND' });
   }
@@ -342,7 +343,7 @@ router.get('/links/:id/scan-report', asyncHandler(async (req, res) => {
  * List buckets sorted by their display order.
  */
 router.get('/buckets', asyncHandler(async (req, res) => {
-  const buckets = await brainService.getBuckets();
+  const buckets = await brainStorage.getBuckets();
   buckets.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
   res.json({ buckets });
 }));
@@ -353,7 +354,7 @@ router.get('/buckets', asyncHandler(async (req, res) => {
  */
 router.post('/buckets', asyncHandler(async (req, res) => {
   const { name, color, icon } = validateRequest(bucketInputSchema, req.body);
-  const bucket = await brainService.createBucketAppended({ name, color, icon });
+  const bucket = await brainLinks.createBucketAppended({ name, color, icon });
   console.log(`🗂️ Created bucket: ${bucket.id} (${bucket.name})`);
   res.status(201).json(bucket);
 }));
@@ -365,8 +366,8 @@ router.post('/buckets', asyncHandler(async (req, res) => {
  */
 router.post('/buckets/reorder', asyncHandler(async (req, res) => {
   const { ids } = validateRequest(bucketReorderSchema, req.body);
-  await brainService.reorderBuckets(ids.map((id, order) => ({ id, order })));
-  const buckets = await brainService.getBuckets();
+  await brainStorage.reorderBuckets(ids.map((id, order) => ({ id, order })));
+  const buckets = await brainStorage.getBuckets();
   buckets.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
   res.json({ buckets });
 }));
@@ -377,11 +378,11 @@ router.post('/buckets/reorder', asyncHandler(async (req, res) => {
  */
 router.put('/buckets/:id', asyncHandler(async (req, res) => {
   const data = validateRequest(bucketUpdateInputSchema, req.body);
-  const existing = await brainService.getBucketById(req.params.id);
+  const existing = await brainStorage.getBucketById(req.params.id);
   if (!existing) {
     throw new ServerError('Bucket not found', { status: 404, code: 'NOT_FOUND' });
   }
-  const bucket = await brainService.updateBucket(req.params.id, data);
+  const bucket = await brainStorage.updateBucket(req.params.id, data);
   res.json(bucket);
 }));
 
@@ -391,12 +392,12 @@ router.put('/buckets/:id', asyncHandler(async (req, res) => {
  * so they fall back to the ungrouped list rather than being orphaned.
  */
 router.delete('/buckets/:id', asyncHandler(async (req, res) => {
-  const existing = await brainService.getBucketById(req.params.id);
+  const existing = await brainStorage.getBucketById(req.params.id);
   if (!existing) {
     throw new ServerError('Bucket not found', { status: 404, code: 'NOT_FOUND' });
   }
 
-  const result = await brainService.deleteBucketAndUnlinkChildren(req.params.id);
+  const result = await brainLinks.deleteBucketAndUnlinkChildren(req.params.id);
   console.log(`🗂️ Deleted bucket: ${req.params.id} (unassigned ${result.unassigned} links)`);
   res.json(result);
 }));

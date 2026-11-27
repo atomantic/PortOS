@@ -213,7 +213,8 @@ vi.mock('./idealoomAutoSync.js', () => ({ flushAutoSync: steps.flushIdeaLoom }))
 vi.mock('./meatspace/meatspacePostDrillCache.js', () => ({ initDrillCache: asyncNoop }));
 vi.mock('./meatspace/meatspacePostReminder.js', () => ({ registerPostReminderSchedule: asyncNoop }));
 vi.mock('./autobiographyReminder.js', () => ({ registerAutobiographyReminderSchedule: asyncNoop }));
-vi.mock('./brain.js', () => ({ recoverInterruptedRepoClones: steps.recoverClones, recoverStuckClassifications: asyncNoop }));
+vi.mock('./brainLinks.js', () => ({ recoverInterruptedRepoClones: steps.recoverClones }));
+vi.mock('./brain.js', () => ({ recoverStuckClassifications: asyncNoop }));
 vi.mock('./writersRoom/analysisSnapshots.js', () => ({ recoverStuckAnalyses: asyncNoop }));
 vi.mock('./pipeline/recovery.js', () => ({
   recoverStuckGeneratingStages: asyncNoop, recoverStuckAutoRuns: asyncNoop, recoverStuckAutopilots: asyncNoop,

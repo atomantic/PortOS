@@ -9,10 +9,11 @@ const mocks = vi.hoisted(() => ({
   getProviderById: vi.fn(),
 }));
 
-vi.mock('../services/brain.js', () => ({
+vi.mock('../services/brainStorage.js', async (importOriginal) => ({
+  ...await importOriginal(),
   loadMeta: (...args) => mocks.loadMeta(...args),
   updateMeta: (...args) => mocks.updateMeta(...args),
-  getSummary: vi.fn(),
+  getSummary: vi.fn()
 }));
 vi.mock('../services/provider/providers.js', () => ({
   getProviderById: (...args) => mocks.getProviderById(...args),

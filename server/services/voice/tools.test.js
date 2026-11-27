@@ -3,8 +3,11 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 // Stub every external side-effect before importing tools.js so the unit test
 // exercises pure validation/dispatch logic without hitting the filesystem.
 vi.mock('../brain.js', () => ({
-  captureThought: vi.fn(async () => ({ inboxLog: { id: 'inbox-1' }, message: 'ok' })),
-  getInboxLog: vi.fn(async () => []),
+  captureThought: vi.fn(async () => ({ inboxLog: { id: 'inbox-1' }, message: 'ok' }))
+}));
+vi.mock('../brainStorage.js', async (importOriginal) => ({
+  ...await importOriginal(),
+  getInboxLog: vi.fn(async () => [])
 }));
 vi.mock('../auth.js', async (importOriginal) => ({
   ...(await importOriginal()),

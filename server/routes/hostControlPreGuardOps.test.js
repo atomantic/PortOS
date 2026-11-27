@@ -46,9 +46,10 @@ vi.mock('../services/subscriptions.js', () => ({
   setSubscriptionEnabled: effects.setSubscription,
   getSubscriptionOverview: vi.fn(async () => ({ subscriptions: [] })),
 }));
-vi.mock('../services/brain.js', () => ({
+vi.mock('../services/brainStorage.js', async (importOriginal) => ({
+  ...await importOriginal(),
   loadMeta: vi.fn(async () => ({ defaultProvider: 'example-cli', defaultModel: 'example-model' })),
-  updateMeta: effects.updateBrainMeta,
+  updateMeta: effects.updateBrainMeta
 }));
 vi.mock('../services/provider/providers.js', () => ({
   getProviderById: vi.fn(async (id) => ({ id, type: 'api', models: [] })),

@@ -37,7 +37,7 @@ vi.mock('../services/nodeRuntime.js', () => nodeRuntime);
 const brainService = vi.hoisted(() => ({
   getLinkById: vi.fn(),
 }));
-vi.mock('../services/brain.js', () => brainService);
+vi.mock('../services/brainStorage.js', async (importOriginal) => ({ ...await importOriginal(), ...brainService }));
 
 const repoCloner = vi.hoisted(() => ({
   pullRepo: vi.fn(),

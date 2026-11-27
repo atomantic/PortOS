@@ -71,7 +71,7 @@ vi.mock('../services/agent/agentDrafts.js', () => ({
 // The AI Assignments facade reads unrelated catalogs after writing. Keep its
 // real socialAgent writer while excluding other features and provider calls.
 vi.mock('../services/provider/providers.js', () => ({ getSelectableProviders: async () => ({ providers: [] }) }));
-vi.mock('../services/brain.js', () => ({ loadMeta: async () => null }));
+vi.mock('../services/brainStorage.js', async (importOriginal) => ({ ...await importOriginal(), loadMeta: async () => null }));
 vi.mock('../services/universeBuilder.js', () => ({ listUniverses: async () => [] }));
 vi.mock('../services/storyBuilder.js', () => ({ listStorySessions: async () => [] }));
 vi.mock('../services/pipeline/series.js', () => ({ listSeries: async () => [] }));

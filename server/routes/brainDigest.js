@@ -6,6 +6,7 @@
 
 import { Router } from 'express';
 import * as brainService from '../services/brain.js';
+import * as brainStorage from '../services/brainStorage.js';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { limitQuerySchema, parsePagination } from '../lib/queryValidation.js';
 import { validateRequest } from '../lib/validateRequest.js';
@@ -18,7 +19,7 @@ const router = Router();
  * Get the most recent daily digest
  */
 router.get('/digest/latest', asyncHandler(async (req, res) => {
-  const digest = await brainService.getLatestDigest();
+  const digest = await brainStorage.getLatestDigest();
   res.json(digest);
 }));
 
@@ -28,7 +29,7 @@ router.get('/digest/latest', asyncHandler(async (req, res) => {
  */
 router.get('/digests', asyncHandler(async (req, res) => {
   const { limit } = parsePagination(validateRequest(limitQuerySchema, req.query), { defaultLimit: 10, maxLimit: 500 });
-  const digests = await brainService.getDigests(limit);
+  const digests = await brainStorage.getDigests(limit);
   res.json(digests);
 }));
 
@@ -47,7 +48,7 @@ router.post('/digest/run', asyncHandler(async (req, res) => {
  * Get the most recent weekly review
  */
 router.get('/review/latest', asyncHandler(async (req, res) => {
-  const review = await brainService.getLatestReview();
+  const review = await brainStorage.getLatestReview();
   res.json(review);
 }));
 
@@ -57,7 +58,7 @@ router.get('/review/latest', asyncHandler(async (req, res) => {
  */
 router.get('/reviews', asyncHandler(async (req, res) => {
   const { limit } = parsePagination(validateRequest(limitQuerySchema, req.query), { defaultLimit: 10, maxLimit: 500 });
-  const reviews = await brainService.getReviews(limit);
+  const reviews = await brainStorage.getReviews(limit);
   res.json(reviews);
 }));
 

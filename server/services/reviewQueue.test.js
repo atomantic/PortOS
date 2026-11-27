@@ -4,8 +4,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 // only the normalization / sort / bounded-read / snapshot / degrade-on-failure logic.
 const apps = { getAllApps: vi.fn(), getAppById: vi.fn() };
 vi.mock('./apps.js', () => apps);
-const brain = { getInboxLog: vi.fn(), markInboxDone: vi.fn() };
-const brainStorage = { getThreadListRows: vi.fn(), getThreadById: vi.fn(), updateWith: vi.fn() };
+const brain = { markInboxDone: vi.fn() };
+const brainStorage = { getInboxLog: vi.fn(), getThreadListRows: vi.fn(), getThreadById: vi.fn(), updateWith: vi.fn() };
 const askConversations = { listConversations: vi.fn() };
 const cosTaskStore = { getCosApprovalView: vi.fn(), approveTask: vi.fn(), getTaskById: vi.fn() };
 const cosAgentFeedback = { getPendingAgentFeedback: vi.fn(), submitAgentFeedback: vi.fn() };
@@ -88,7 +88,7 @@ function resetEmpty() {
   apps.getAllApps.mockResolvedValue([]);
   apps.getAppById.mockResolvedValue(null);
   cosTaskStore.getTaskById.mockResolvedValue(null);
-  brain.getInboxLog.mockResolvedValue([]);
+  brainStorage.getInboxLog.mockResolvedValue([]);
   brainStorage.getThreadListRows.mockResolvedValue([]);
   brainStorage.getThreadById.mockResolvedValue(null);
   brainStorage.updateWith.mockResolvedValue(null);
@@ -197,7 +197,7 @@ describe('reviewQueue.buildQueue', () => {
   });
 
   it('normalizes each producer into the common row shape', async () => {
-    brain.getInboxLog.mockResolvedValue([{ id: 'b1', capturedText: 'classify me', capturedAt: '2026-06-03T10:00:00.000Z' }]);
+    brainStorage.getInboxLog.mockResolvedValue([{ id: 'b1', capturedText: 'classify me', capturedAt: '2026-06-03T10:00:00.000Z' }]);
     const queue = await buildQueue();
     const row = queue.items.find(i => i.source === 'brain');
     expect(row).toMatchObject({
@@ -269,7 +269,7 @@ describe('reviewQueue.buildQueue', () => {
   });
 
   it('admits product recommendations once per occurrence below required work', async () => {
-    brain.getInboxLog.mockResolvedValue([{ id: 'required-1', capturedText: 'required work' }]);
+    brainStorage.getInboxLog.mockResolvedValue([{ id: 'required-1', capturedText: 'required work' }]);
     productMetrics.getProductEngagement.mockResolvedValue({
       actions: [
         {
@@ -980,14 +980,14 @@ describe('reviewQueue.buildQueue', () => {
 
   it('reports missing health identity without hiding healthy sources', async () => {
     proactiveAlerts.generateNonProductAlerts.mockResolvedValue([{ type: 'system_resource', severity: 'critical' }]);
-    brain.getInboxLog.mockResolvedValue([{ id: 'b1', capturedText: 'classify' }]);
+    brainStorage.getInboxLog.mockResolvedValue([{ id: 'b1', capturedText: 'classify' }]);
     const queue = await buildQueue();
     expect(queue.sources.health.error).toBe('Health alert identity is unavailable');
     expect(queue.items.map(i => i.id)).toEqual(['brain:b1']);
   });
 
   it('sorts required work by severity, then due time, priority, and stable ID', async () => {
-    brain.getInboxLog.mockResolvedValue([{ id: 'b1', capturedText: 'normal', capturedAt: '2026-06-03T12:00:00.000Z' }]);
+    brainStorage.getInboxLog.mockResolvedValue([{ id: 'b1', capturedText: 'normal', capturedAt: '2026-06-03T12:00:00.000Z' }]);
     proactiveAlerts.generateNonProductAlerts.mockResolvedValue([{ id: 'disk:primary', type: 'disk', severity: 'critical', title: 'crit', detail: 'full', link: '/apps', timestamp: '2026-06-03T01:00:00.000Z' }]);
     const queue = await buildQueue();
     // critical alert sorts ahead of the normal brain item.
@@ -997,7 +997,7 @@ describe('reviewQueue.buildQueue', () => {
     const past = new Date(Date.now() - 60_000).toISOString();
     const future = new Date(Date.now() + 60_000).toISOString();
     proactiveAlerts.generateNonProductAlerts.mockResolvedValue([]);
-    brain.getInboxLog.mockResolvedValue([
+    brainStorage.getInboxLog.mockResolvedValue([
       { id: 'optional', capturedText: 'optional', required: false, dueAt: past },
       { id: 'required-low', capturedText: 'low', required: true, dueAt: future, priority: 'LOW' },
       { id: 'required-high-b', capturedText: 'high b', required: true, dueAt: future, priority: 'HIGH' },
@@ -1016,7 +1016,7 @@ describe('reviewQueue.buildQueue', () => {
   });
 
   it('treats a producer returning null/non-array as empty', async () => {
-    brain.getInboxLog.mockResolvedValue(null);
+    brainStorage.getInboxLog.mockResolvedValue(null);
     askConversations.listConversations.mockResolvedValue(undefined);
     const queue = await buildQueue();
     expect(queue.items).toEqual([]);
@@ -1025,7 +1025,7 @@ describe('reviewQueue.buildQueue', () => {
   });
 
   it('degrades a failing producer to empty without sinking the queue', async () => {
-    brain.getInboxLog.mockRejectedValue(new Error('inbox boom'));
+    brainStorage.getInboxLog.mockRejectedValue(new Error('inbox boom'));
     messageDrafts.listDrafts.mockResolvedValue([{ id: 'd1', status: 'draft', subject: 'still here' }]);
     const queue = await buildQueue();
     expect(queue.sources.brain.error).toBe('inbox boom');
@@ -1038,7 +1038,7 @@ describe('reviewQueue.buildQueue', () => {
   });
 
   it('returns every row within the bounded source read and reports its total', async () => {
-    brain.getInboxLog.mockResolvedValue(
+    brainStorage.getInboxLog.mockResolvedValue(
       Array.from({ length: 40 }, (_, i) => ({ id: `b${i}`, capturedText: `t${i}`, capturedAt: '2026-06-03T10:00:00.000Z' }))
     );
     const queue = await buildQueue();
@@ -1055,18 +1055,18 @@ describe('reviewQueue.buildQueue', () => {
       capturedText: `row ${i}`,
       capturedAt: '2026-06-03T10:00:00.000Z',
     }));
-    brain.getInboxLog.mockResolvedValue(firstRows);
+    brainStorage.getInboxLog.mockResolvedValue(firstRows);
     const first = await buildQueue({ limit: 2 });
     expect(first.items.map((item) => item.id)).toEqual(['brain:b0', 'brain:b1']);
     expect(first.total).toBe(5);
     expect(first.counts.total).toBe(5);
     expect(first.nextCursor).toBeTruthy();
 
-    brain.getInboxLog.mockResolvedValue([{ id: 'new', capturedText: 'changed source' }]);
+    brainStorage.getInboxLog.mockResolvedValue([{ id: 'new', capturedText: 'changed source' }]);
     const second = await buildQueue({ limit: 2, cursor: first.nextCursor });
     expect(second.items.map((item) => item.id)).toEqual(['brain:b2', 'brain:b3']);
     expect(second.counts.total).toBe(5);
-    expect(brain.getInboxLog).toHaveBeenCalledTimes(1);
+    expect(brainStorage.getInboxLog).toHaveBeenCalledTimes(1);
 
     const third = await buildQueue({ cursor: second.nextCursor });
     expect(third.items.map((item) => item.id)).toEqual(['brain:b4']);
@@ -1079,7 +1079,7 @@ describe('reviewQueue.buildQueue', () => {
       code: 'INVALID_CURSOR',
     });
 
-    brain.getInboxLog.mockResolvedValue([
+    brainStorage.getInboxLog.mockResolvedValue([
       { id: 'b1', capturedText: 'one' },
       { id: 'b2', capturedText: 'two' },
     ]);
@@ -1099,11 +1099,11 @@ describe('reviewQueue.buildQueue', () => {
   });
 
   it('marks a bounded source as partial instead of claiming inbox zero', async () => {
-    brain.getInboxLog.mockResolvedValue(
+    brainStorage.getInboxLog.mockResolvedValue(
       Array.from({ length: REVIEW_QUEUE_SOURCE_READ_LIMIT + 1 }, (_, i) => ({ id: `b${i}`, capturedText: `t${i}` }))
     );
     const queue = await buildQueue({ limit: 10 });
-    expect(brain.getInboxLog).toHaveBeenCalledWith({ status: 'needs_review', limit: REVIEW_QUEUE_SOURCE_READ_LIMIT + 1 });
+    expect(brainStorage.getInboxLog).toHaveBeenCalledWith({ status: 'needs_review', limit: REVIEW_QUEUE_SOURCE_READ_LIMIT + 1 });
     expect(queue.partial).toBe(true);
     expect(queue.total).toBeNull();
     expect(queue.totalsBySource.brain).toBeNull();
@@ -1117,7 +1117,7 @@ describe('reviewQueue.buildQueue', () => {
   });
 
   it('tags resolvable rows with an inline action verb, leaves no-clean-resolve sources without one', async () => {
-    brain.getInboxLog.mockResolvedValue([{ id: 'b1', capturedText: 'classify', capturedAt: '2026-06-03T10:00:00.000Z' }]);
+    brainStorage.getInboxLog.mockResolvedValue([{ id: 'b1', capturedText: 'classify', capturedAt: '2026-06-03T10:00:00.000Z' }]);
     cosTaskStore.getCosApprovalView.mockResolvedValue({ awaitingApproval: [{ id: 'sys-1', description: 'approve me', priority: 'HIGH', createdAt: '2026-06-03T09:00:00.000Z' }] });
     askConversations.listConversations.mockResolvedValue([{ id: 'a1', title: 'promote me', promoted: false, turnCount: 1, assistantTurnCount: 1 }]);
     proactiveAlerts.generateNonProductAlerts.mockResolvedValue([{ id: 'disk:primary', type: 'disk', severity: 'critical', title: 'crit', detail: 'full', link: '/apps' }]);
@@ -1134,7 +1134,7 @@ describe('reviewQueue.buildQueue', () => {
   });
 
   it('attaches source-appropriate meta chips when the raw field is present', async () => {
-    brain.getInboxLog.mockResolvedValue([{ id: 'b1', capturedText: 'classify', source: 'voice', capturedAt: '2026-06-03T10:00:00.000Z' }]);
+    brainStorage.getInboxLog.mockResolvedValue([{ id: 'b1', capturedText: 'classify', source: 'voice', capturedAt: '2026-06-03T10:00:00.000Z' }]);
     askConversations.listConversations.mockResolvedValue([{ id: 'a1', title: 'promote me', promoted: false, turnCount: 4, assistantTurnCount: 2 }]);
     cosTaskStore.getCosApprovalView.mockResolvedValue({ awaitingApproval: [{ id: 'sys-1', description: 'approve me', priority: 'MEDIUM', createdAt: '2026-06-03T09:00:00.000Z' }] });
     messageDrafts.listDrafts.mockResolvedValue([{ id: 'd1', status: 'draft', subject: 's', to: ['boss@example.com'], sendVia: 'gmail', updatedAt: '2026-06-03T08:00:00.000Z' }]);
@@ -1150,7 +1150,7 @@ describe('reviewQueue.buildQueue', () => {
   it('omits meta entirely when the raw fields are missing (no fabricated values)', async () => {
     // Brain entry with no `source`, draft with no recipient/channel — meta should
     // be absent, not an empty object.
-    brain.getInboxLog.mockResolvedValue([{ id: 'b1', capturedText: 'classify', capturedAt: '2026-06-03T10:00:00.000Z' }]);
+    brainStorage.getInboxLog.mockResolvedValue([{ id: 'b1', capturedText: 'classify', capturedAt: '2026-06-03T10:00:00.000Z' }]);
     messageDrafts.listDrafts.mockResolvedValue([{ id: 'd1', status: 'draft', subject: 's', to: [], updatedAt: '2026-06-03T08:00:00.000Z' }]);
     const queue = await buildQueue();
     expect(queue.items.find(i => i.source === 'brain').meta).toBeUndefined();
@@ -1165,7 +1165,7 @@ describe('reviewQueue.buildQueue', () => {
 
   it('advertises Ask promote targets (brain/task) and no other source carries them', async () => {
     askConversations.listConversations.mockResolvedValue([{ id: 'a1', title: 'promote me', promoted: false, turnCount: 1, assistantTurnCount: 1 }]);
-    brain.getInboxLog.mockResolvedValue([{ id: 'b1', capturedText: 'classify', capturedAt: '2026-06-03T10:00:00.000Z' }]);
+    brainStorage.getInboxLog.mockResolvedValue([{ id: 'b1', capturedText: 'classify', capturedAt: '2026-06-03T10:00:00.000Z' }]);
     const queue = await buildQueue();
     const ask = queue.items.find(i => i.source === 'ask');
     // No active goals → goal target is not offered and no picker options ride along.
@@ -1247,7 +1247,7 @@ describe('reviewQueue triage', () => {
 
   it('hides a snoozed row until the injected expiry, then shows it again', async () => {
     const now = Date.parse('2026-09-20T10:00:00.000Z');
-    brain.getInboxLog.mockResolvedValue([{ id: 'b1', capturedText: 'classify', capturedAt: 'revision-1' }]);
+    brainStorage.getInboxLog.mockResolvedValue([{ id: 'b1', capturedText: 'classify', capturedAt: 'revision-1' }]);
     reviewQueueTriageStore.listReviewQueueTriage.mockResolvedValue([{
       actionKey: 'brain.classify:b1',
       occurrence: '',
@@ -1307,7 +1307,7 @@ describe('reviewQueue triage', () => {
   });
 
   it('revalidates capabilities before allowing an optional dismissal', async () => {
-    brain.getInboxLog.mockResolvedValue([{ id: 'b1', capturedText: 'required' }]);
+    brainStorage.getInboxLog.mockResolvedValue([{ id: 'b1', capturedText: 'required' }]);
 
     await expect(triageQueueItem('brain:b1', 'dismiss')).rejects.toMatchObject({
       status: 400,
@@ -1336,7 +1336,7 @@ describe('reviewQueue triage', () => {
     await expect(triageQueueItem('brain:missing', 'unsnooze')).rejects.toMatchObject({
       status: 404, code: 'NOT_FOUND',
     });
-    expect(brain.getInboxLog).toHaveBeenCalledOnce();
+    expect(brainStorage.getInboxLog).toHaveBeenCalledOnce();
     expect(askConversations.listConversations).not.toHaveBeenCalled();
     expect(identity.getGoals).not.toHaveBeenCalled();
     expect(reviewService.getItems).not.toHaveBeenCalled();
@@ -1344,7 +1344,7 @@ describe('reviewQueue triage', () => {
 
     await expect(triageQueueItem('ask:a1', 'dismiss')).resolves.toMatchObject({ triaged: true });
     expect(identity.getGoals).toHaveBeenCalledOnce();
-    expect(brain.getInboxLog).toHaveBeenCalledOnce();
+    expect(brainStorage.getInboxLog).toHaveBeenCalledOnce();
   });
 
   it.each([
@@ -1360,12 +1360,12 @@ describe('reviewQueue triage', () => {
     expect(reviewQueueTriageStore.removeReviewQueueTriage).toHaveBeenCalledWith(expect.objectContaining({
       actionKey: `${actionKind}:target`,
     }));
-    expect(brain.getInboxLog).not.toHaveBeenCalled();
+    expect(brainStorage.getInboxLog).not.toHaveBeenCalled();
     expect(identity.getGoals).not.toHaveBeenCalled();
   });
 
   it('rejects a triage mutation when the owning source read is unavailable', async () => {
-    brain.getInboxLog.mockRejectedValue(new Error('inbox unavailable'));
+    brainStorage.getInboxLog.mockRejectedValue(new Error('inbox unavailable'));
 
     await expect(triageQueueItem('brain:b1', 'snooze', {
       snoozedUntil: '2026-09-20T11:00:00.000Z',
@@ -1397,7 +1397,7 @@ describe('reviewQueue triage', () => {
   it('arms snooze expiry without a queue read and preserves it when another row is snoozed', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-09-20T10:00:00.000Z'));
-    brain.getInboxLog.mockResolvedValue([
+    brainStorage.getInboxLog.mockResolvedValue([
       { id: 'b1', capturedText: 'first' },
       { id: 'b2', capturedText: 'second' },
     ]);
@@ -1411,7 +1411,7 @@ describe('reviewQueue triage', () => {
   });
 
   it('persists a future snooze without invoking the source completion primitive', async () => {
-    brain.getInboxLog.mockResolvedValue([{ id: 'b1', capturedText: 'required', capturedAt: 'revision-1' }]);
+    brainStorage.getInboxLog.mockResolvedValue([{ id: 'b1', capturedText: 'required', capturedAt: 'revision-1' }]);
 
     await expect(triageQueueItem('brain:b1', 'snooze', {
       snoozedUntil: '2026-09-27T10:00:00.000Z',
@@ -1425,7 +1425,7 @@ describe('reviewQueue triage', () => {
   });
 
   it('rejects an effectively permanent snooze window', async () => {
-    brain.getInboxLog.mockResolvedValue([{ id: 'b1', capturedText: 'required' }]);
+    brainStorage.getInboxLog.mockResolvedValue([{ id: 'b1', capturedText: 'required' }]);
 
     await expect(triageQueueItem('brain:b1', 'snooze', {
       snoozedUntil: '2099-01-01T00:00:00.000Z',
@@ -1434,7 +1434,7 @@ describe('reviewQueue triage', () => {
   });
 
   it('clears a stored snooze through the explicit unsnooze operation', async () => {
-    brain.getInboxLog.mockResolvedValue([{ id: 'b1', capturedText: 'required', capturedAt: 'revision-1' }]);
+    brainStorage.getInboxLog.mockResolvedValue([{ id: 'b1', capturedText: 'required', capturedAt: 'revision-1' }]);
     reviewQueueTriageStore.listReviewQueueTriage.mockResolvedValue([{
       actionKey: 'brain.classify:b1',
       occurrence: '',
@@ -1455,7 +1455,7 @@ describe('reviewQueue triage', () => {
   });
 
   it('invalidates a pagination snapshot after a triage mutation', async () => {
-    brain.getInboxLog.mockResolvedValue([
+    brainStorage.getInboxLog.mockResolvedValue([
       { id: 'b1', capturedText: 'first' },
       { id: 'b2', capturedText: 'second' },
     ]);
@@ -1477,7 +1477,7 @@ describe('reviewQueue triage', () => {
     ['complete', () => resolveQueueItem('todo:todo-1', 'complete')],
     ['promote', () => promoteAskQueueItem('ask:a1', 'brain')],
   ])('invalidates an active cursor after %s', async (_operation, mutate) => {
-    brain.getInboxLog.mockResolvedValue([{ id: 'b1', capturedText: 'classify' }]);
+    brainStorage.getInboxLog.mockResolvedValue([{ id: 'b1', capturedText: 'classify' }]);
     brain.markInboxDone.mockResolvedValue({ id: 'b1' });
     storedItems.mockReturnValue([{ id: 'todo-1', type: 'todo', status: 'pending', title: 'Follow up' }]);
     askConversations.listConversations.mockResolvedValue([{
@@ -1495,7 +1495,7 @@ describe('reviewQueue triage', () => {
   });
 
   it('removes an expired unused marker during projection', async () => {
-    brain.getInboxLog.mockResolvedValue([{ id: 'b1', capturedText: 'required', capturedAt: 'revision-1' }]);
+    brainStorage.getInboxLog.mockResolvedValue([{ id: 'b1', capturedText: 'required', capturedAt: 'revision-1' }]);
     const marker = {
       actionKey: 'brain.classify:b1',
       occurrence: '',
