@@ -308,11 +308,46 @@ describe('updateAiAssignment routing', () => {
     expect(mocks.updateJob).toHaveBeenCalledWith('managed-app', { providerId: 'claude', model: 'opus', effort: 'high' });
   });
 
-  it('provider.model.<id>.<field> writes the field on the right provider, even when the id contains a dot', async () => {
-    mocks.getProviderById.mockResolvedValue({ id: 'lm.studio', name: 'LM Studio', models: ['mistral'] });
-    await updateAiAssignment('provider.model.lm.studio.heavyModel', { model: 'mistral' });
-    expect(mocks.getProviderById).toHaveBeenCalledWith('lm.studio');
-    expect(mocks.updateProvider).toHaveBeenCalledWith('lm.studio', { heavyModel: 'mistral' });
+  it.each(['defaultModel', 'lightModel', 'mediumModel', 'heavyModel'])(
+    'updates the %s field for a provider with a dotted ID',
+    async (field) => {
+      mocks.getProviderById.mockResolvedValue({ id: 'lm.studio' });
+      await updateAiAssignment(`provider.model.lm.studio.${field}`, { model: 'example-model' });
+      expect(mocks.getProviderById).toHaveBeenCalledWith('lm.studio');
+      expect(mocks.updateProvider).toHaveBeenCalledExactlyOnceWith('lm.studio', { [field]: 'example-model' });
+    },
+  );
+
+  it.each(['lmstudio', 'ollama'])('lists and updates the %s reviewer assignment', async (backend) => {
+    const codeReview = { lmstudioModel: 'example-lmstudio-model', ollamaModel: 'example-ollama-model' };
+    mocks.getSettings.mockResolvedValue({ codeReview });
+    const id = `settings.codeReview.${backend}`;
+    const field = `${backend}Model`;
+    const result = await getAiAssignments();
+    expect(result.assignments).toContainEqual(expect.objectContaining({ id, model: codeReview[field] }));
+    await updateAiAssignment(id, { model: 'replacement-model' });
+    expect(mocks.updateSettings).toHaveBeenCalledExactlyOnceWith({
+      codeReview: { ...codeReview, [field]: 'replacement-model' },
+    });
+  });
+
+  it.each(['default', 'content', 'engagement'])('lists and updates the %s social agent assignment', async (key) => {
+    const current = { providerId: 'example-provider', model: 'example-model' };
+    const next = { providerId: 'replacement-provider', model: 'replacement-model' };
+    const agent = {
+      id: 'example-agent',
+      name: 'Example Agent',
+      aiConfig: { ...current, content: current, engagement: current },
+    };
+    mocks.getAllAgents.mockResolvedValue([agent]);
+    mocks.getAgentById.mockResolvedValue(agent);
+
+    const id = `socialAgent.${agent.id}.${key}`;
+    const result = await getAiAssignments();
+    expect(result.assignments).toContainEqual(expect.objectContaining({ id, ...current }));
+    await updateAiAssignment(id, next);
+    const patch = key === 'default' ? next : { [key]: next };
+    expect(mocks.updateAgent).toHaveBeenCalledExactlyOnceWith(agent.id, { aiConfig: { ...agent.aiConfig, ...patch } });
   });
 });
 
@@ -340,6 +375,32 @@ describe('updateAiAssignment guards', () => {
     mocks.updateJob.mockResolvedValue(null);
     await expect(updateAiAssignment('cos.job.gone', { providerId: 'x' })).rejects.toMatchObject({ status: 404 });
   });
+
+  it.each(['example-provider.displayName', 'example-provider', '.defaultModel'])(
+    'rejects unsupported or incomplete provider assignment %s before accessing providers',
+    async (suffix) => {
+      await expect(updateAiAssignment(`provider.model.${suffix}`, { model: 'example-model' }))
+        .rejects.toMatchObject({ status: 400, code: 'VALIDATION_ERROR' });
+      expect(mocks.getProviderById).not.toHaveBeenCalled();
+      expect(mocks.updateProvider).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['custom', 'ollama.extra'])('rejects unsupported reviewer assignment %s before writing settings', async (suffix) => {
+    await expect(updateAiAssignment(`settings.codeReview.${suffix}`, { model: 'example-model' }))
+      .rejects.toMatchObject({ status: 400, code: 'VALIDATION_ERROR' });
+    expect(mocks.updateSettings).not.toHaveBeenCalled();
+  });
+
+  it.each(['example-agent.summary', 'example-agent', '.content', 'example-agent.content.extra'])(
+    'rejects unsupported or incomplete social assignment %s before accessing agents',
+    async (suffix) => {
+      await expect(updateAiAssignment(`socialAgent.${suffix}`, { model: 'example-model' }))
+        .rejects.toMatchObject({ status: 400, code: 'VALIDATION_ERROR' });
+      expect(mocks.getAgentById).not.toHaveBeenCalled();
+      expect(mocks.updateAgent).not.toHaveBeenCalled();
+    },
+  );
 
   it('surfaces a 404 when a provider model target is missing', async () => {
     mocks.getProviderById.mockResolvedValue(null);
