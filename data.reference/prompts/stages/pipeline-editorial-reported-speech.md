@@ -42,11 +42,7 @@ reported line at a pivotal beat where the quote would clearly raise the tension,
 and `high` only when the scene's central dramatic turn happens entirely in
 summarized speech.
 
-## Manuscript
-
-The manuscript is stitched from the drafted issues. Section headers attribute
-each chunk to an issue (e.g. `# Issue 3 — Title (prose)`). Use the issue number
-in each section header to attribute every finding to its `issueNumber`.
+{{> editorial-manuscript-preamble }}
 
 ```
 {{manuscript}}
@@ -64,14 +60,7 @@ beat and let them write it.
 Be specific and cite the text. If the decisive beats are already quoted, return
 an empty `findings` array — do not invent problems.
 
-## Output contract
-
-Return ONLY valid JSON matching this shape — no prose, no markdown fence, no
-commentary:
-
-```json
-{
-  "findings": [
+{{> editorial-findings-contract }}
     {
       "severity": "high|medium|low",
       "issueNumber": 3,

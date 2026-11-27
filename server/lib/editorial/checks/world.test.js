@@ -1,14 +1,17 @@
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'fs';
+import { readFile } from 'fs/promises';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 
 import { applyTemplate } from '../../promptTemplate.js';
+import { expandPartials } from '../../promptPartials.js';
 import { canonWorldSummary, listChecks, getCheck } from '../checkRegistry.js';
 import { worldChecks, __testing } from './world.js';
 
 const STAGE_DIR = join(dirname(fileURLToPath(import.meta.url)), '../../../../data.reference/prompts/stages');
-const readStage = (file) => readFileSync(join(STAGE_DIR, file), 'utf-8');
+const readStage = async (file) => expandPartials(await readFile(join(STAGE_DIR, file), 'utf-8'), {
+  partialsDir: join(STAGE_DIR, '..', '_partials'),
+});
 
 describe('worldbuilding-doctrine checks — registration (#2175)', () => {
   it('registers both world.* checks as enabled series-scope LLM checks', () => {
@@ -75,8 +78,8 @@ describe('canonWorldSummary (#2175)', () => {
 });
 
 describe('worldbuilding-doctrine prompt rendering (#2175)', () => {
-  it('unforeshadowed-solution: shows canon + world rules, and the final-part gate', () => {
-    const prompt = readStage('pipeline-editorial-world-unforeshadowed-solution.md');
+  it('unforeshadowed-solution: shows canon + world rules, and the final-part gate', async () => {
+    const prompt = await readStage('pipeline-editorial-world-unforeshadowed-solution.md');
     const out = applyTemplate(prompt, {
       manuscript: '# Issue 1\n\nThe orb saved them.',
       canonWorld: 'CANON_BLOCK',
@@ -90,8 +93,8 @@ describe('worldbuilding-doctrine prompt rendering (#2175)', () => {
     expect(out).not.toContain('{{');
   });
 
-  it('unforeshadowed-solution: hides canon block and shows the non-final PARTS warning when empty', () => {
-    const prompt = readStage('pipeline-editorial-world-unforeshadowed-solution.md');
+  it('unforeshadowed-solution: hides canon block and shows the non-final PARTS warning when empty', async () => {
+    const prompt = await readStage('pipeline-editorial-world-unforeshadowed-solution.md');
     const out = applyTemplate(prompt, {
       manuscript: '# Issue 1\n\nThe orb saved them.',
       canonWorld: '',
@@ -103,8 +106,8 @@ describe('worldbuilding-doctrine prompt rendering (#2175)', () => {
     expect(out).not.toContain('{{');
   });
 
-  it('cost-free-power: shows canon + world rules and cites the Second Law', () => {
-    const prompt = readStage('pipeline-editorial-world-cost-free-power.md');
+  it('cost-free-power: shows canon + world rules and cites the Second Law', async () => {
+    const prompt = await readStage('pipeline-editorial-world-cost-free-power.md');
     const out = applyTemplate(prompt, {
       manuscript: '# Issue 1\n\nShe teleported the army home, effortlessly.',
       canonWorld: 'CANON_BLOCK',
@@ -118,8 +121,8 @@ describe('worldbuilding-doctrine prompt rendering (#2175)', () => {
 
   // Codex P2 false-negative fixes — pin the corrected craft logic so a future
   // prompt edit can't quietly re-introduce the holes.
-  it('unforeshadowed-solution: bible-only canon does NOT count as reader foreshadowing', () => {
-    const prompt = readStage('pipeline-editorial-world-unforeshadowed-solution.md');
+  it('unforeshadowed-solution: bible-only canon does NOT count as reader foreshadowing', async () => {
+    const prompt = await readStage('pipeline-editorial-world-unforeshadowed-solution.md');
     const out = applyTemplate(prompt, { manuscript: 'M', canonWorld: 'C', worldRules: '', finalPart: 'true' });
     // Only the PROSE plants for the reader; a canon rule the prose never
     // surfaced is still unforeshadowed.
@@ -127,8 +130,8 @@ describe('worldbuilding-doctrine prompt rendering (#2175)', () => {
     expect(out).toContain('does **NOT** by itself count as planted');
   });
 
-  it('cost-free-power: flags a power with NO established cost anywhere (not only a skipped one)', () => {
-    const prompt = readStage('pipeline-editorial-world-cost-free-power.md');
+  it('cost-free-power: flags a power with NO established cost anywhere (not only a skipped one)', async () => {
+    const prompt = await readStage('pipeline-editorial-world-cost-free-power.md');
     const out = applyTemplate(prompt, { manuscript: 'M', canonWorld: '', worldRules: '' });
     // The finding does not require a pre-defined cost to skip.
     expect(out).toContain('whether or not');

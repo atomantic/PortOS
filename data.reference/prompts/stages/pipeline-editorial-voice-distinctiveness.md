@@ -30,11 +30,7 @@ recorded voice that the prose never realizes is also worth flagging.
 ```
 {{/voiceProfiles}}
 
-## Manuscript
-
-The manuscript is stitched from the drafted issues. Section headers attribute
-each chunk to an issue (e.g. `# Issue 3 — Title (prose)`). Use the issue number
-in each header to attribute every finding to its `issueNumber`.
+{{> editorial-manuscript-preamble }}
 
 ```
 {{manuscript}}
@@ -59,14 +55,7 @@ medium–high; a single off-voice line is low. If every character sounds distinc
 and consistent with their canon voice, return an empty `findings` array — do not
 invent drift where the voices already work.
 
-## Output contract
-
-Return ONLY valid JSON matching this shape — no prose, no markdown fence, no
-commentary:
-
-```json
-{
-  "findings": [
+{{> editorial-findings-contract }}
     {
       "severity": "high|medium|low",
       "issueNumber": 3,

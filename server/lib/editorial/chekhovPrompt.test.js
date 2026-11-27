@@ -1,18 +1,20 @@
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'fs';
+import { readFile } from 'fs/promises';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 
 import { applyTemplate } from '../promptTemplate.js';
+import { expandPartials } from '../promptPartials.js';
 
 // Renders the SHIPPED Chekhov stage prompt to pin the {{#distantGap}} toggle and
 // the four-way taxonomy (#1595). A string-valued section (`distantGap: '6'`) is
 // the same pattern as `{{#finalPart}}`/`{{#authoredSetups}}` — guard against a
 // regression where the distant-payoff rule silently disappears or `{{distantGap}}`
 // fails to interpolate inside its own section.
-const CHEKHOV_PROMPT = readFileSync(
-  join(dirname(fileURLToPath(import.meta.url)), '../../../data.reference/prompts/stages/pipeline-editorial-chekhov.md'),
-  'utf-8',
+const PROMPTS_DIR = join(dirname(fileURLToPath(import.meta.url)), '../../../data.reference/prompts');
+const CHEKHOV_PROMPT = await expandPartials(
+  await readFile(join(PROMPTS_DIR, 'stages', 'pipeline-editorial-chekhov.md'), 'utf-8'),
+  { partialsDir: join(PROMPTS_DIR, '_partials') },
 );
 
 const baseVars = (overrides = {}) => ({

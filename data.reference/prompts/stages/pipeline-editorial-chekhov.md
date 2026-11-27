@@ -89,11 +89,8 @@ list alone. Do not invent findings just to match the list.
 ```
 {{/authoredSetups}}
 
-## Manuscript
-
-The manuscript is stitched from the drafted issues. Section headers attribute each
-chunk to an issue (e.g. `# Issue 3 — Title (prose)`). Use the issue number in each
-header to attribute every finding to its `issueNumber`. Because setups and payoffs
+{{> editorial-manuscript-preamble }}
+Because setups and payoffs
 span issues, the text below may be prefixed with a short digest of elements
 already planted in earlier parts (with the issue each was planted in) — use it so
 you do not re-flag a setup that pays off later{{#distantGap}}, so you can measure
@@ -121,14 +118,7 @@ Be specific and cite the text. If every plant pays off, every payoff is set up,
 and no payoff strays too far from its plant, return an empty `findings` array — do
 not invent issues.
 
-## Output contract
-
-Return ONLY valid JSON matching this shape — no prose, no markdown fence, no
-commentary:
-
-```json
-{
-  "findings": [
+{{> editorial-findings-contract }}
     {
       "severity": "high|medium|low",
       "issueNumber": 2,

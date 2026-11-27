@@ -61,14 +61,7 @@ not an incidental one-shot mention. Only a genuine contradiction for the SAME
 entity across two shots of the SAME scene is a break. If nothing breaks appearance/prop continuity,
 return an empty `findings` array — do not invent issues.
 
-## Output contract
-
-Return ONLY valid JSON matching this shape — no prose, no markdown fence, no
-commentary:
-
-```json
-{
-  "findings": [
+{{> editorial-findings-contract }}
     {
       "severity": "high|medium|low",
       "issueNumber": 4,

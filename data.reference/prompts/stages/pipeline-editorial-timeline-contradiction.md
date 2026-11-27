@@ -51,10 +51,8 @@ role, status, or a fixed described trait).
 {{/canonStates}}
 
 {{#sceneMap}}
-## Scene segmentation
-
-The reverse outline below segments the manuscript into scenes in story order
-(with the recorded setting, POV character, and characters present). Use it to
+{{> scene-segmentation-note }}
+Use it to
 reason about chronology — who is present where, and in what sequence — when
 judging whether the timeline holds.
 
@@ -75,11 +73,7 @@ prose that contradicts the recorded start or end state without earning the chang
 ```
 {{/characterArcs}}
 
-## Manuscript
-
-The manuscript is stitched from the drafted issues. Section headers attribute
-each chunk to an issue (e.g. `# Issue 3 — Title (prose)`). Use the issue number
-in each header to attribute every finding to its `issueNumber`.
+{{> editorial-manuscript-preamble }}
 
 ```
 {{manuscript}}
@@ -102,14 +96,7 @@ a minor, easily-reconciled age slip is low. If the manuscript is internally
 consistent, return an empty `findings` array — do not invent contradictions where
 the story holds together.
 
-## Output contract
-
-Return ONLY valid JSON matching this shape — no prose, no markdown fence, no
-commentary:
-
-```json
-{
-  "findings": [
+{{> editorial-findings-contract }}
     {
       "severity": "high|medium|low",
       "issueNumber": 3,

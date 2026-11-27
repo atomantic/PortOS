@@ -57,14 +57,7 @@ that). Absence of a stated eyeline is NOT a break — only a genuine contradicti
 or non-reciprocating pair is. If nothing breaks eyeline continuity, return an
 empty `findings` array — do not invent issues.
 
-## Output contract
-
-Return ONLY valid JSON matching this shape — no prose, no markdown fence, no
-commentary:
-
-```json
-{
-  "findings": [
+{{> editorial-findings-contract }}
     {
       "severity": "high|medium|low",
       "issueNumber": 4,

@@ -26,11 +26,7 @@ What each expectation means:
 Only enforce the expectations that are actually listed above. If an expectation
 isn't listed, don't invent it.
 
-## Manuscript
-
-The manuscript is stitched from the drafted issues. Each section begins with a
-header like `# Issue 3 — Title (prose)`; use the issue number in that header to
-attribute each finding to its `issueNumber`.
+{{> editorial-manuscript-preamble }}
 
 ```
 {{manuscript}}
@@ -46,14 +42,7 @@ suggest a concrete fix.
 Be specific and cite the text. If the manuscript conforms to the style guide,
 return an empty `findings` array — do not invent violations.
 
-## Output contract
-
-Return ONLY valid JSON matching this shape — no prose, no markdown fence, no
-commentary:
-
-```json
-{
-  "findings": [
+{{> editorial-findings-contract }}
     {
       "severity": "high|medium|low",
       "issueNumber": 3,

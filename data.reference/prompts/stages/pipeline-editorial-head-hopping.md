@@ -50,11 +50,8 @@ list alone.
 ```
 {{/povMap}}
 
-## Manuscript
-
-The manuscript is stitched from the drafted issues. Section headers attribute
-each chunk to an issue (e.g. `# Issue 3 — Title (prose)`). Use the issue number
-in each header to attribute every finding to its `issueNumber`. If no POV map is
+{{> editorial-manuscript-preamble }}
+If no POV map is
 provided above, infer each scene's anchor from the prose and scan issue by issue.
 
 ```
@@ -77,14 +74,7 @@ character's running thoughts is more serious than a single stray line.
 Be specific and cite the text. If every scene holds its POV anchor cleanly,
 return an empty `findings` array — do not invent issues.
 
-## Output contract
-
-Return ONLY valid JSON matching this shape — no prose, no markdown fence, no
-commentary:
-
-```json
-{
-  "findings": [
+{{> editorial-findings-contract }}
     {
       "severity": "high|medium|low",
       "issueNumber": 3,

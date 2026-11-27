@@ -23,11 +23,7 @@ anything you'd cut purely as a matter of taste. This is the precious/self-
 indulgent lens; stock and tired language is the dead-metaphor check's job. The bar
 is "the story is better without it," not "I would have written it differently."
 
-## Manuscript
-
-The manuscript is stitched from the drafted issues. Section headers attribute
-each chunk to an issue (e.g. `# Issue 3 — Title (prose)`). Use the issue number
-in each section header to attribute every finding to its `issueNumber`.
+{{> editorial-manuscript-preamble }}
 
 ```
 {{manuscript}}
@@ -45,14 +41,7 @@ Be specific and cite the text. Favor a few high-confidence cuts over many
 uncertain ones. If nothing is precious, return an empty `findings` array — do not
 invent problems.
 
-## Output contract
-
-Return ONLY valid JSON matching this shape — no prose, no markdown fence, no
-commentary:
-
-```json
-{
-  "findings": [
+{{> editorial-findings-contract }}
     {
       "severity": "high|medium|low",
       "issueNumber": 3,

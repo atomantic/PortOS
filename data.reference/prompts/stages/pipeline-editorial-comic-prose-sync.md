@@ -85,14 +85,7 @@ the two media order incompatibly) or a consequential plot beat shown in one medi
 and absent from the other is medium; a softer divergence the reader would likely
 shrug off is low.
 
-## Output contract
-
-Return ONLY valid JSON matching this shape — no prose, no markdown fence, no
-commentary:
-
-```json
-{
-  "findings": [
+{{> editorial-findings-contract }}
     {
       "severity": "high|medium|low",
       "issueNumber": {{issueNumber}},

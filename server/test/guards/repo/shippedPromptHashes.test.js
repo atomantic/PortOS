@@ -135,6 +135,14 @@ describe('shipped prompt hash table', () => {
     expect(missing).toEqual([]);
   });
 
+  it('ships brief stage descriptions without internal issue references', () => {
+    const { stages } = JSON.parse(readText(join(repoRoot, 'data.reference', 'prompts', 'stage-config.json')));
+    const invalid = Object.entries(stages)
+      .filter(([, { description }]) => typeof description !== 'string' || description.length > 160 || /#\d+/.test(description))
+      .map(([name]) => name);
+    expect(invalid).toEqual([]);
+  });
+
   it('allows no new numbered prompt-hash migration', () => {
     const migrations = readdirSync(migrationsDir).filter(isNumberedMigrationFile);
     expect(migrations).toEqual(expect.arrayContaining([...FROZEN_PROMPT_HASH_MIGRATIONS]));

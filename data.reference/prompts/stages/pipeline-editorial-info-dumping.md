@@ -17,11 +17,7 @@ Watch for:
 Do NOT flag: tension-bearing revelation, earned exposition woven into action,
 or a character genuinely learning something new.
 
-## Manuscript
-
-The manuscript is stitched from the drafted issues. Each section begins with a
-header like `# Issue 3 — Title (prose)`; use the issue number in that header to
-attribute each finding to its `issueNumber`.
+{{> editorial-manuscript-preamble }}
 
 ```
 {{manuscript}}
@@ -37,14 +33,7 @@ trim the exposition instead.
 Be specific and cite the text. If the manuscript has no real info-dumping
 problems, return an empty `findings` array — do not invent issues.
 
-## Output contract
-
-Return ONLY valid JSON matching this shape — no prose, no markdown fence, no
-commentary:
-
-```json
-{
-  "findings": [
+{{> editorial-findings-contract }}
     {
       "severity": "high|medium|low",
       "issueNumber": 3,

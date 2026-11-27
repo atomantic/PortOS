@@ -39,14 +39,7 @@ Use the object/character names from the entries as the `location` (e.g.
 `Object "Pocket Watch" — Mara's attachment`). If no attachment contradicts its
 character's background, return an empty `findings` array — do not invent issues.
 
-## Output contract
-
-Return ONLY valid JSON matching this shape — no prose, no markdown fence, no
-commentary:
-
-```json
-{
-  "findings": [
+{{> editorial-findings-contract }}
     {
       "severity": "high|medium|low",
       "location": "Object \"<name>\" — <character>'s attachment",

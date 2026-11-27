@@ -22,11 +22,8 @@ deliberate slow-burn literary opening that is clearly earned by voice, or a
 mid-book chapter opening that is a legitimate quiet beat after a high-tension one.
 The bar is an opener that costs the reader momentum, not merely a calm one.
 
-## Manuscript
-
-The manuscript is stitched from the drafted issues. Section headers attribute
-each chunk to an issue (e.g. `# Issue 3 — Title (prose)`). Use the issue number
-in each section header to attribute every finding to its `issueNumber`. Focus on
+{{> editorial-manuscript-preamble }}
+Focus on
 the FIRST scene of the whole story and the opening of each chapter/issue.
 
 ```
@@ -44,14 +41,7 @@ reader momentum, and suggest where the scene should actually begin.
 Be specific and cite the text. If the openings are strong, return an empty
 `findings` array — do not invent problems.
 
-## Output contract
-
-Return ONLY valid JSON matching this shape — no prose, no markdown fence, no
-commentary:
-
-```json
-{
-  "findings": [
+{{> editorial-findings-contract }}
     {
       "severity": "high|medium|low",
       "issueNumber": 1,
