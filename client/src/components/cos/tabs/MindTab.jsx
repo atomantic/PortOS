@@ -736,7 +736,6 @@ export default function MindTab() {
     closePanel();
     document.getElementById('mind-input-text')?.focus();
   };
-  const refreshContext = () => setContextRefreshKey((current) => current + 1);
   const updateCapabilities = (capabilities) => setMind((current) => current ? { ...current, capabilities } : current);
   const saveThinkingRequests = (capabilities) => setMind((current) => ({ ...current, capabilities }));
   const cancelThinkingRequest = () => setMind((current) => ({ ...current, thinkingRequests: { ...current.thinkingRequests, pending: null } }));
@@ -837,7 +836,6 @@ export default function MindTab() {
         loadVisibility={loadVisibility}
         prepareRepair={prepareRepair}
         contextRefreshKey={contextRefreshKey}
-        refreshContext={refreshContext}
         mind={mind}
         handleMindspaceCleaned={handleMindspaceCleaned}
         updateCapabilities={updateCapabilities}

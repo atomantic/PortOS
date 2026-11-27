@@ -355,15 +355,25 @@ describe('MindTab temporary thinking sessions', () => {
     expect(api.sendPersistentMindMessage).not.toHaveBeenCalled();
   });
 
-  it('removes a preset by replacing the list, never by merging a deletion', async () => {
+  it('replaces the preset list only after confirming a removal', async () => {
     const user = userEvent.setup();
+    const other = { ...DEEP_PRESET, id: 'another-route', label: 'Another route' };
+    api.getPersistentMind.mockResolvedValue(response({
+      thinkingPresets: { schemaVersion: 1, presets: [DEEP_PRESET, other] },
+    }));
     renderTab('/cos/mind?panel=models');
 
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Remove Deep think' })).toBeTruthy());
-    await user.click(screen.getByRole('button', { name: 'Remove Deep think' }));
+    await user.click(await screen.findByRole('button', { name: 'Remove Deep think' }));
+    expect(api.updateCosConfig).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: 'Cancel removal of Deep think' }));
+    expect(api.updateCosConfig).not.toHaveBeenCalled();
 
-    await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledTimes(1));
-    expect(api.updateCosConfig.mock.calls[0][0].persistentMindThinkingPresets.presets).toEqual([]);
+    await user.click(screen.getByRole('button', { name: 'Remove Deep think' }));
+    await user.click(screen.getByRole('button', { name: 'Confirm removal of Deep think' }));
+    await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledExactlyOnceWith(
+      { persistentMindThinkingPresets: { presets: [other] } },
+      { silent: true },
+    ));
   });
 
   it('deep-links one session receipt and reports unreported usage as unknown', async () => {
