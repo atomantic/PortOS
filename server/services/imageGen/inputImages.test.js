@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdir, rm, writeFile } from 'fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import sharp from 'sharp';
 
 const TEST_ROOT = join(tmpdir(), `portos-inputimages-test-${process.pid}-${Date.now()}`);
 const FAKE_IMAGES_DIR = join(TEST_ROOT, 'data-images');
@@ -11,7 +12,7 @@ vi.mock('../../lib/fileUtils.js', async () => {
   return actual;
 });
 
-const { resolveInputImages } = await import('./inputImages.js');
+const { resolveInputImages, stageCliPromptImages, stageSanitizedInputImages } = await import('./inputImages.js');
 const { IMAGE_GEN_MODE } = await import('./modes.js');
 const { maxInputImages } = await import('./cloudProviderConfig.js');
 
@@ -99,5 +100,28 @@ describe('resolveInputImages', () => {
       referenceImagePaths: ['a.png', 'b.png'],
     });
     expect(out.paths).toHaveLength(2);
+  });
+});
+
+describe('CLI input staging', () => {
+  it('stages upright JPEGs without EXIF in both CLI layouts', async () => {
+    const name = 'portrait.jpg';
+    await mkdir(FAKE_IMAGES_DIR, { recursive: true });
+    const source = await sharp({ create: { width: 96, height: 64, channels: 3, background: 'orange' } })
+      .withMetadata({ orientation: 6 })
+      .jpeg()
+      .toBuffer();
+    await writeFile(abs(name), source);
+    const inputImages = { paths: [abs(name)], initPath: abs(name), referencePaths: [] };
+    await stageCliPromptImages({ paths: inputImages.paths, scratchDir: TEST_ROOT });
+    const staged = await stageSanitizedInputImages({ inputImages, scratchDir: TEST_ROOT });
+    expect(staged.initPath).toBe(join(TEST_ROOT, 'inputs', `0-${name}`));
+
+    for (const path of [join(TEST_ROOT, 'input-1.jpg'), staged.initPath]) {
+      const meta = await sharp(path).metadata();
+      expect(meta).toMatchObject({ width: 64, height: 96, format: 'jpeg' });
+      expect(meta).not.toHaveProperty('exif');
+    }
+    expect(await readFile(abs(name))).toEqual(source);
   });
 });

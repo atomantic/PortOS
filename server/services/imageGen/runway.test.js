@@ -102,9 +102,11 @@ describe('Runway image workflow', () => {
     expect(sidecar.referenceTags.map((r) => r.filename)).toEqual(['hero.png', 'rival.png']);
     expect(JSON.stringify(sidecar)).not.toContain(root);
   });
-  it('strips EXIF and XMP from reference images before encoding Runway data URIs', async () => {
+  it('rotates reference images and strips EXIF and XMP before encoding Runway data URIs', async () => {
     const jpegWithExif = await sharp(output)
+      .resize(96, 64)
       .withExif({ IFD0: { Make: 'TestPhone' }, IFD3: { GPSLatitudeRef: 'N', GPSLongitudeRef: 'W' } })
+      .withMetadata({ orientation: 6 })
       .jpeg({ quality: 85 })
       .toBuffer();
     const xmpPayload = Buffer.from('http://ns.adobe.com/xap/1.0/\0<x:xmpmeta>runway-secret-gps</x:xmpmeta>');
@@ -118,6 +120,7 @@ describe('Runway image workflow', () => {
     const uri = calls[0].body.referenceImages[0].uri;
     const sent = Buffer.from(uri.slice(uri.indexOf(',') + 1), 'base64');
     const meta = await sharp(sent).metadata();
+    expect(meta).toMatchObject({ width: 64, height: 96 });
     expect(meta.exif).toBeUndefined();
     expect(meta.xmp).toBeUndefined();
     expect(sent.includes(Buffer.from('runway-secret-gps'))).toBe(false);

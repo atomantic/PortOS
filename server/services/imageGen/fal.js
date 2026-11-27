@@ -32,7 +32,7 @@
 import { createHash } from 'crypto';
 import { readFile } from 'fs/promises';
 import { ensureDir, PATHS } from '../../lib/fileUtils.js';
-import { stripImageMetadata } from '../../lib/imageClean.js';
+import { stripImageMetadataPreservingOrientation } from '../../lib/imageClean.js';
 import { detectImageFormat } from '../../lib/mimeTypes.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { withAbortTimeout } from '../../lib/abortTimeout.js';
@@ -292,13 +292,15 @@ async function encodeInputImage(filePath, reviewedBytes = null) {
   const { default: sharp } = await import('sharp');
   const metadata = await sharp(input).metadata();
   const longSide = Math.max(metadata.width || 0, metadata.height || 0);
-  const passThrough = longSide <= INPUT_MAX_LONG_SIDE
+  const withinBudget = longSide <= INPUT_MAX_LONG_SIDE
     && input.length <= INPUT_MAX_BYTES
     && ['png', 'jpeg', 'webp'].includes(metadata.format);
-  if (passThrough) {
-    const clean = stripImageMetadata(input).data;
-    const mime = detectImageFormat(clean)?.mime || `image/${metadata.format}`;
-    return { dataUri: `data:${mime};base64,${clean.toString('base64')}`, megapixels: ((metadata.width || 0) * (metadata.height || 0)) / FAL_MEGAPIXEL };
+  if (withinBudget) {
+    const { data: clean } = await stripImageMetadataPreservingOrientation(input, metadata);
+    if (clean.length <= INPUT_MAX_BYTES) {
+      const mime = detectImageFormat(clean)?.mime || `image/${metadata.format}`;
+      return { dataUri: `data:${mime};base64,${clean.toString('base64')}`, megapixels: ((metadata.width || 0) * (metadata.height || 0)) / FAL_MEGAPIXEL };
+    }
   }
   const resized = sharp(input)
     .rotate()

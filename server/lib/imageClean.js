@@ -303,6 +303,23 @@ export function stripImageMetadata(buffer) {
   };
 }
 
+/** Strip upload metadata while keeping the image upright. Identity orientation
+ * uses the lossless container stripper; EXIF transforms require re-encoding.
+ * Pass metadata when the caller already inspected the same buffer.
+ * @returns {Promise<{ data: Buffer, stripped: boolean }>}
+ */
+export async function stripImageMetadataPreservingOrientation(buffer, metadata = null) {
+  const format = detectFormat(buffer);
+  if (!format) return stripImageMetadata(buffer);
+  const { default: sharp } = await import('sharp');
+  const image = sharp(buffer, { limitInputPixels: MAX_PIXELS });
+  const orientation = (metadata ?? await image.metadata().catch(() => null))?.orientation;
+  if (!(orientation >= 2 && orientation <= 8)) return stripImageMetadata(buffer);
+  const upright = image.autoOrient();
+  const data = await (format === 'jpeg' ? upright.jpeg({ quality: 90 }) : upright).toBuffer();
+  return { data, stripped: true };
+}
+
 /**
  * Lossless C2PA strip — removes only the gpt-image `caBX` provenance chunk.
  * Kept as a focused wrapper so the post-generation auto-clean hook (which only

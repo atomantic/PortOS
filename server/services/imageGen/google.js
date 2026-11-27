@@ -17,7 +17,7 @@
 
 import { readFile } from 'fs/promises';
 import { ensureDir, PATHS } from '../../lib/fileUtils.js';
-import { stripImageMetadata } from '../../lib/imageClean.js';
+import { stripImageMetadataPreservingOrientation } from '../../lib/imageClean.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { GOOGLE_IMAGE_DEFAULT_MODEL, buildGoogleImageRequest, googleImageFamily } from '../../lib/googleImageModels.js';
 import { imageGenEvents } from '../imageGenEvents.js';
@@ -103,10 +103,9 @@ async function encodeInputImage(filePath, reviewedBytes = null) {
   const { default: sharp } = await import('sharp');
   const metadata = await sharp(input).metadata();
   const longSide = Math.max(metadata.width || 0, metadata.height || 0);
-  // Removing EXIF is safe only once the stored pixels already match the displayed orientation.
-  const isUpright = !metadata.orientation || metadata.orientation === 1;
-  if (isUpright && longSide <= INPUT_MAX_LONG_SIDE && input.length <= INPUT_MAX_BYTES && ['png', 'jpeg', 'webp'].includes(metadata.format)) {
-    return googleInlineImage(stripImageMetadata(input).data);
+  if (longSide <= INPUT_MAX_LONG_SIDE && input.length <= INPUT_MAX_BYTES && ['png', 'jpeg', 'webp'].includes(metadata.format)) {
+    const { data } = await stripImageMetadataPreservingOrientation(input, metadata);
+    if (data.length <= INPUT_MAX_BYTES) return googleInlineImage(data);
   }
   const resized = sharp(input).rotate()
     .resize({ width: INPUT_MAX_LONG_SIDE, height: INPUT_MAX_LONG_SIDE, fit: 'inside', withoutEnlargement: true });

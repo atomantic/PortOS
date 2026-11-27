@@ -1,11 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import sharp from 'sharp';
 
 vi.mock('../lib/fetchWithTimeout.js', () => ({ fetchWithTimeout: vi.fn() }));
 vi.mock('../lib/maintenanceAdmission.js', () => ({ maintenance: { markCurrentUnsettled: vi.fn() } }));
 const { fetchWithTimeout } = await import('../lib/fetchWithTimeout.js');
 const { maintenance } = await import('../lib/maintenanceAdmission.js');
 const {
-  awaitHiggsfieldRequest, createHiggsfieldRequestEntry, submitHiggsfieldRequest, uploadHiggsfieldFile,
+  awaitHiggsfieldRequest, createHiggsfieldRequestEntry, submitHiggsfieldRequest, uploadHiggsfieldFile, uploadHiggsfieldImage,
 } = await import('./higgsfieldApi.js');
 
 const json = (status, payload) => ({ ok: status >= 200 && status < 300, status, json: async () => payload, body: { cancel: async () => {} } });
@@ -46,6 +47,25 @@ describe('uploadHiggsfieldFile', () => {
     const [, put] = fetchWithTimeout.mock.calls[1];
     expect(put.method).toBe('PUT');
     expect(put.headers).toEqual({ 'Content-Type': 'image/png', 'x-amz-acl': 'public-read' });
+  });
+});
+
+describe('uploadHiggsfieldImage', () => {
+  it('uploads upright JPEG pixels and leaves EXIF out of the signed upload', async () => {
+    fetchWithTimeout
+      .mockResolvedValueOnce(json(200, { public_url: 'https://cdn.example.com/portrait.jpg', upload_url: 'https://upload.example.com/portrait' }))
+      .mockResolvedValueOnce(json(200, {}));
+    const bytes = await sharp({ create: { width: 96, height: 64, channels: 3, background: 'orange' } })
+      .withMetadata({ orientation: 6 })
+      .jpeg()
+      .toBuffer();
+
+    await expect(uploadHiggsfieldImage({ apiKey: 'k', bytes })).resolves.toBe('https://cdn.example.com/portrait.jpg');
+    const [, put] = fetchWithTimeout.mock.calls[1];
+    expect(put.headers['Content-Type']).toBe('image/jpeg');
+    const meta = await sharp(put.body).metadata();
+    expect(meta).toMatchObject({ width: 64, height: 96 });
+    expect(meta).not.toHaveProperty('exif');
   });
 });
 
