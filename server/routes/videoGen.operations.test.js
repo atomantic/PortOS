@@ -21,6 +21,7 @@ import * as stitchJobService from '../services/videoGen/stitchJob.js';
 import { enqueueVertical } from '../services/videoGen/verticalJob.js';
 import { trimHistoryItem } from '../services/videoGen/trim.js';
 import * as mediaJobQueue from '../services/mediaJobQueue/index.js';
+import { getProject as getMusicVideoProject } from '../services/musicVideo/projects.js';
 import { listIcLoraRemixModes, IC_LORA_MODES, icLoraWeightKey } from '../lib/icLoraWeights.js';
 
 describe('videoGen routes', () => {
@@ -1195,6 +1196,24 @@ describe('videoGen routes', () => {
       expect(r.body.ok).toBe(true);
       expect(r.body.video).toEqual(upscaled);
       expect(videoGenService.upscaleHistoryItem).toHaveBeenCalledWith(validHistoryId, { method: 'lanczos' });
+    });
+
+    it('queues an upscale for the selected shot and refuses a changed selection', async () => {
+      const context = { musicVideoProjectId: 'mv-example', sceneId: 's1', method: 'ltx' };
+      getMusicVideoProject.mockResolvedValueOnce({ id: 'mv-example', scenes: [{ sceneId: 's1', videoHistoryId: otherValidId }] });
+      const stale = await request(app).post(`/api/video-gen/upscale/${validHistoryId}`).send(context);
+      expect(stale.status).toBe(409);
+      expect(upscaleJobService.enqueueLtxUpscale).not.toHaveBeenCalled();
+
+      getMusicVideoProject.mockResolvedValueOnce({ id: 'mv-example', scenes: [{ sceneId: 's1', videoHistoryId: validHistoryId }] });
+      mediaJobQueue.listJobs.mockReturnValueOnce([]);
+      upscaleJobService.enqueueLtxUpscale.mockResolvedValueOnce({ jobId: 'ltx-upscale', status: 'queued' });
+      const accepted = await request(app).post(`/api/video-gen/upscale/${validHistoryId}`).send(context);
+      expect(accepted.status).toBe(200);
+      expect(accepted.body.job).toMatchObject({ jobId: 'ltx-upscale', status: 'queued' });
+      expect(upscaleJobService.enqueueLtxUpscale).toHaveBeenCalledWith(validHistoryId, {
+        musicVideo: { projectId: 'mv-example', sceneId: 's1', tier: 'final', selectOnComplete: true },
+      });
     });
 
     it('forwards a shared-gallery upload id to upscaleHistoryItem', async () => {

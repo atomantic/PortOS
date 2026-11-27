@@ -138,6 +138,8 @@ export default function useMusicVideoModelSettings({ project, onProjectPatch } =
     // #16136: ceilings for the shot card's Render draft / Render final; null = the model's lowest / highest tier.
     draftResolution: project?.videoSettings?.draftResolution ?? null,
     finalResolution: project?.videoSettings?.finalResolution ?? null,
+    upscaleMethod: project?.videoSettings?.upscaleMethod,
+    upscaleTargetResolution: project?.videoSettings?.upscaleTargetResolution,
     generationMode: project?.videoSettings?.generationMode || 'image',
     audioReactiveLora: project?.videoSettings?.audioReactiveLora || '',
     audioReactiveScale: project?.videoSettings?.audioReactiveScale ?? 1.2,

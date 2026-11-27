@@ -367,8 +367,8 @@ export const upscaleVideo = (id, { method, targetResolution, musicVideoProjectId
 export const quoteTopazUpscale = (id, model, options = {}) => request(`/video-gen/upscale/${encodeURIComponent(id)}/topaz/quote`, {
   method: 'POST', body: JSON.stringify({ model }), ...options,
 });
-export const startTopazUpscale = (id, token, options = {}) => request(`/video-gen/upscale/${encodeURIComponent(id)}/topaz`, {
-  method: 'POST', body: JSON.stringify({ token }), ...options,
+export const startTopazUpscale = (id, token, { musicVideoProjectId, sceneId, ...options } = {}) => request(`/video-gen/upscale/${encodeURIComponent(id)}/topaz`, {
+  method: 'POST', body: JSON.stringify({ token, musicVideoProjectId, sceneId }), ...options,
 });
 export const getTopazJobStatus = (id, options = {}) => request(`/video-gen/upscale/topaz/jobs/${encodeURIComponent(id)}/status`, options);
 export const cancelTopazRemoteJob = (id, options = {}) => request(`/video-gen/upscale/topaz/jobs/${encodeURIComponent(id)}/cancel`, { method: 'POST', ...options });
@@ -377,8 +377,8 @@ export const recoverTopazJob = (id, options = {}) => request(`/video-gen/upscale
 // required padding, and runtime/adapter readiness for `method`. Never queues a
 // job or triggers a download. `silent` by default — the picker owns its own
 // inline error state rather than a toast.
-export const getUpscalePlan = (id, method, options = {}) => request(
-  `/video-gen/upscale/${encodeURIComponent(id)}/plan?method=${encodeURIComponent(method)}`,
+export const getUpscalePlan = (id, method, { targetResolution, ...options } = {}) => request(
+  `/video-gen/upscale/${encodeURIComponent(id)}/plan?${new URLSearchParams({ method, ...(targetResolution ? { targetResolution } : {}) })}`,
   { silent: true, ...options },
 );
 // Live-progress URL for the generative upscale adapter's HF pull, for a small

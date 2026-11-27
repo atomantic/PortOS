@@ -1,3 +1,5 @@
+import { MUSIC_VIDEO_UPSCALERS, musicVideoUpscaleSettings } from '../../../../server/lib/musicVideo/musicVideoUpscale.js';
+import { FAL_SEEDVR2_TARGET_RESOLUTIONS } from '../../../../server/lib/videoGenRequestFields.js';
 import { HIGGSFIELD_VIDEO_MODELS, HIGGSFIELD_DEFAULT_VIDEO_MODEL } from '../../../../server/lib/higgsfieldVideoModels.js';
 import { GOOGLE_VIDEO_MODELS, GOOGLE_DEFAULT_VIDEO_MODEL } from '../../../../server/lib/googleVideoModels.js';
 import { useRunwayCatalog } from '../../hooks/useRunwayCatalog.js';
@@ -70,6 +72,7 @@ export default function VideoRenderSettings({ videoSettings, generating, project
   // The audio-reactive lane stays local-only (root AGENTS.md's environmental-
   // motion contract needs an independently verified provider capability).
   const locked = saving || generating;
+  const upscale = musicVideoUpscaleSettings(settings, videoSettings.falEnabled);
   const falModel = getFalVideoModel(settings.falModelId || FAL_DEFAULT_IMAGE_VIDEO_MODEL);
   const falResolutions = falVideoResolutions(falModel);
   const lipSync = SOURCE_AUDIO_LIPSYNC.fal;
@@ -96,28 +99,50 @@ export default function VideoRenderSettings({ videoSettings, generating, project
         <ListLoadError what="Video Gen status" onRetry={retryCatalog} className="w-full" />
       )}
       <RenderPoolPicker settings={settings} change={change} disabled={locked} />
-      <label htmlFor="mv-video-backend" className="sr-only">Scene video renderer</label>
-      <select
-        id="mv-video-backend"
-        value={settings.backend}
-        onChange={(e) => change({ backend: e.target.value || null })}
-        disabled={locked}
-        title="Saved renderer for this project's scene videos"
-        className="w-full max-w-full bg-port-bg border border-port-border rounded px-1.5 py-1.5 text-sm disabled:opacity-50 min-h-[44px] pointer-fine:sm:min-h-0 sm:w-auto"
-      >
-        <option value="">Install default</option>
-        <option value="local">Local video</option>
-        {/* Grok's CLI lane takes no audio, so it renders cutaways only —
-            performance (lip-sync) shots need fal.ai (#8977). */}
-        <option value="grok">Grok video (cutaway only)</option>
-        <option value="fal">fal.ai video</option>
-        {/* Runway is image-to-video only, so like Grok it renders cutaways. */}
-        <option value="runway">Runway video (cutaway only)</option>
-        <option value="higgsfield">Higgsfield video (cutaway only)</option>
-        <option value="google">Google video (cutaway only)</option>
-        {/* Drives the Gemini web app in the PortOS Browser; no audio, so cutaways only. */}
-        <option value="gemini">{GEMINI_OMNI_WEB_MODEL.label} (cutaway only, PortOS Browser)</option>
-      </select>
+      <fieldset className="flex min-w-0 flex-wrap items-end gap-2 rounded border border-port-border p-2" disabled={locked}>
+        <legend className="px-1 text-sm font-medium">Preferred Shot Workflow</legend>
+        <p className="basis-full text-xs text-port-text-muted">Choose a starting frame, render a draft, then upscale the selected clip after reviewing its motion and framing.</p>
+        <div className="grid min-w-0 gap-1">
+          <label htmlFor="mv-video-backend" className="text-xs text-port-text-muted">Draft clip backend</label>
+          <select
+            id="mv-video-backend"
+            value={settings.backend}
+            onChange={(e) => change({ backend: e.target.value || null })}
+            disabled={locked}
+            title="Saved renderer for this project's scene videos"
+            className="w-full max-w-full bg-port-bg border border-port-border rounded px-1.5 py-1.5 text-sm disabled:opacity-50 min-h-[44px] pointer-fine:sm:min-h-0 sm:w-auto"
+          >
+            <option value="">Install default</option>
+            <option value="local">Local video</option>
+            {/* Grok's CLI lane takes no audio, so it renders cutaways only —
+                performance (lip-sync) shots need fal.ai (#8977). */}
+            <option value="grok">Grok video (recommended for cutaways)</option>
+            <option value="fal">fal.ai video</option>
+            {/* Runway is image-to-video only, so like Grok it renders cutaways. */}
+            <option value="runway">Runway video (cutaway only)</option>
+            <option value="higgsfield">Higgsfield video (cutaway only)</option>
+            <option value="google">Google video (cutaway only)</option>
+            {/* Drives the Gemini web app in the PortOS Browser; no audio, so cutaways only. */}
+            <option value="gemini">{GEMINI_OMNI_WEB_MODEL.label} (cutaway only, PortOS Browser)</option>
+          </select>
+        </div>
+        <div className="grid min-w-0 gap-1">
+          <label htmlFor="mv-upscale-method" className="text-xs text-port-text-muted">Clip upscaler</label>
+          <select id="mv-upscale-method" value={upscale.upscaleMethod} onChange={(event) => change({ upscaleMethod: event.target.value })}
+            className="min-h-[44px] w-full rounded border border-port-border bg-port-bg p-1.5 text-sm pointer-fine:sm:min-h-0">
+            {Object.entries(MUSIC_VIDEO_UPSCALERS).map(([method, label]) => (
+              <option key={method} value={method} disabled={method === 'realesrgan'}>{label}{method === 'realesrgan' ? ' (unavailable)' : ''}</option>
+            ))}
+          </select>
+        </div>
+        <div className="grid min-w-0 gap-1">
+          <label htmlFor="mv-upscale-resolution" className="text-xs text-port-text-muted">SeedVR2 target resolution</label>
+          <select id="mv-upscale-resolution" value={upscale.upscaleTargetResolution} onChange={(event) => change({ upscaleTargetResolution: event.target.value })}
+            className="min-h-[44px] w-full rounded border border-port-border bg-port-bg p-1.5 text-sm pointer-fine:sm:min-h-0">
+            {FAL_SEEDVR2_TARGET_RESOLUTIONS.map((resolution) => <option key={resolution}>{resolution}</option>)}
+          </select>
+        </div>
+      </fieldset>
       {settings.backend === 'local' && (
         <>
           <label htmlFor="mv-generation-mode" className="sr-only">Scene generation mode</label>

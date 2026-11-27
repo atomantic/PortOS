@@ -557,7 +557,11 @@ export const topazQuoteBodySchema = z.object({ model: z.enum(['proteus', 'starli
 
 export const topazJobParamsSchema = z.object({ jobId: z.string().uuid() });
 
-export const topazTokenBodySchema = z.object({ token: z.string().uuid() });
+export const topazTokenBodySchema = z.object({
+  token: z.string().uuid(),
+  musicVideoProjectId: upscaleMethodSchema.shape.musicVideoProjectId,
+  sceneId: upscaleMethodSchema.shape.sceneId,
+});
 
 export const speedProfileDownloadQuerySchema = modelDownloadQuerySchema.extend({
   speedProfileId: z.string().min(1).max(64).optional(),

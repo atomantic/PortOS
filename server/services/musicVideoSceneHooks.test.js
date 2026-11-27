@@ -26,6 +26,8 @@ const projects = await import('./musicVideo/projects.js');
 const boardEdits = await import('./musicVideo/projectBoardEdits.js');
 const imageHook = await import('./musicVideoSceneImageHook.js');
 const videoHook = await import('./musicVideoSceneVideoHook.js');
+const spendHook = await import('./musicVideoRenderSpendHook.js');
+const { readProjectRenderSpend } = await import('./musicVideo/renderSpend.js');
 
 // A ceiling, not a delay: it returns the moment the predicate holds. Kept well under
 // the 30s test timeout so a slow file-backed write on a loaded runner still lands.
@@ -76,7 +78,7 @@ describe('music-video scene completion hooks → takes', () => {
       writeFileSync(join(TEST_DATA_ROOT, 'images', `${name}.png`), 'synthetic image');
     }
     mkdirSync(join(TEST_DATA_ROOT, 'videos'), { recursive: true });
-    const clips = ['clip-1', 'clip-2', 'clip-old', 'late-clip', 'clip-ok', 'clip-guided', 'clip-draft', 'clip-final', 'clip-plain'];
+    const clips = ['clip-upscaled', 'clip-1', 'clip-2', 'clip-old', 'late-clip', 'clip-ok', 'clip-guided', 'clip-draft', 'clip-final', 'clip-plain'];
     for (const id of clips) writeFileSync(join(TEST_DATA_ROOT, 'videos', `${id}.mp4`), 'synthetic clip');
     writeFileSync(join(TEST_DATA_ROOT, 'video-history.json'), JSON.stringify(clips.map(id => ({ id, filename: `${id}.mp4` }))));
     imageHook.__testing.reset();
@@ -94,6 +96,7 @@ describe('music-video scene completion hooks → takes', () => {
   afterEach(() => {
     imageHook.__testing.reset();
     videoHook.__testing.reset();
+    spendHook.__testing.reset();
     musicVideoEvents.off('scene-image', onImage);
     musicVideoEvents.off('scene-video', onVideo);
     musicVideoEvents.off('scene-failure', onFailure);
@@ -106,7 +109,7 @@ describe('music-video scene completion hooks → takes', () => {
   afterAll(async () => {
     imageHook.__testing.reset();
     videoHook.__testing.reset();
-    await Promise.all([imageHook.__testing.settled(), videoHook.__testing.settled()]);
+    await Promise.all([imageHook.__testing.settled(), videoHook.__testing.settled(), spendHook.__testing.drain()]);
     rmSync(TEST_DATA_ROOT, { recursive: true, force: true });
     await new Promise((r) => setTimeout(r, 50));
     rmSync(TEST_DATA_ROOT, { recursive: true, force: true });
@@ -252,6 +255,35 @@ describe('music-video scene completion hooks → takes', () => {
       ['video', 'clip-2', 'frame-a.png'],
     ]);
     expect(emitted[1]).toMatchObject({ event: 'scene-video', videoHistoryId: 'clip-1' });
+  });
+
+  it.each([false, true])('keeps the upscale as a final take and honors a newer selection (%s)', async (changeSelection) => {
+    await projects.updateScene(project.id, scene.sceneId, { referenceImageId: 'frame-a.png' });
+    spendHook.initMusicVideoRenderSpendHook();
+    mediaJobEvents.emit('completed', videoJob(project.id, scene.sceneId, 'clip-1'));
+    await waitFor(() => emitted.some((entry) => entry.videoHistoryId === 'clip-1'));
+    if (changeSelection) {
+      await projects.appendSceneTakes(project.id, scene.sceneId, [{ kind: 'video', assetId: 'clip-2', source: 'imported' }]);
+      const alternate = (await sceneOf(project.id, scene.sceneId)).takes.find((take) => take.assetId === 'clip-2');
+      await projects.selectSceneTake(project.id, scene.sceneId, alternate.takeId);
+    }
+    const job = {
+      id: 'upscale-job', kind: 'video-upscale', result: { id: 'clip-upscaled' },
+      params: {
+        historyId: 'clip-1', musicVideo: { projectId: project.id, sceneId: scene.sceneId, tier: 'final', selectOnComplete: true },
+        mode: 'fal', musicVideoCostUsd: 0.3712, musicVideoCostModelId: 'fal:seedvr2',
+      },
+    };
+    mediaJobEvents.emit('completed', job);
+    await Promise.all([videoHook.__testing.settled(), spendHook.__testing.drain()]);
+    const updated = await projects.getProject(project.id);
+    const stored = updated.scenes.find((entry) => entry.sceneId === scene.sceneId);
+    expect(stored.videoHistoryId).toBe(changeSelection ? 'clip-2' : 'clip-upscaled');
+    expect(stored.takes.find((take) => take.assetId === 'clip-upscaled')).toMatchObject({
+      tier: 'final', jobId: 'upscale-job', costUsd: 0.3712, sourceImageId: 'frame-a.png',
+    });
+    const spend = await readProjectRenderSpend(updated);
+    expect(spend.lanes).toContainEqual(expect.objectContaining({ lane: 'fal', count: 1, usd: 0.3712 }));
   });
 
   it('records the tier a draft or final clip was rendered at (#16136), and none on an untiered clip', async () => {

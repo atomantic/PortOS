@@ -225,7 +225,8 @@ export default function BoardStage({ board }) {
       {scenes.length > 0 && <SharedTakeOffers scenes={scenes} onSave={board.saveScene} />}
       {scenes.length > 1 && <SequenceTakePanel key={`sequence-take-${project.id}`} project={project} shotName={shotName} disabled={locked} />}
       {scenes.length > 0 && board.approveFinal && (
-        <FinalUpgradePanel key={`final-upgrade-${project.id}`} project={project} shotName={shotName} disabled={locked} onApprove={board.approveFinal}
+        <FinalUpgradePanel key={`final-upgrade-${project.id}`} project={project} shotName={shotName} disabled={locked || videoSettings.saving} onApprove={board.approveFinal}
+          onUpscaleQueued={sceneMedia.trackShotUpscale}
           onOpenShot={(sceneId) => onToggleSceneExpand?.(sceneId, true)} />
       )}
       {scenes.length > 0 && (

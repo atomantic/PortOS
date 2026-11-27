@@ -14,7 +14,7 @@ import { listJobs } from '../mediaJobQueue/index.js';
 import { isRemoteMediaJob } from '../mediaJobQueue/remoteMediaJob.js';
 import { mediaJobExecutionLane } from '../../lib/generationModes.js';
 
-const LANE_BY_KIND = Object.freeze({ image: 'image', video: 'video' });
+const LANE_BY_KIND = Object.freeze({ image: 'image', video: 'video', 'video-upscale': 'upscale' });
 
 // Where a clip renders, for the shot's "Rendering grok…" placeholder take: the cloud
 // provider's mode, a federated peer, or this machine's GPU.
