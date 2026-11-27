@@ -458,6 +458,30 @@ describe.skipIf(!runDb)('catalog export identity round trip', () => {
     expect(await catalogDB.listSourcesForIngredient(concurrentId)).toHaveLength(1);
   });
 
+  it('reuses IDs repeated within one bundle and revives a single reference on retry', async () => {
+    const id = `cat-idea-repeated-${NONCE}`;
+    const scrapId = `scrap-repeated-${NONCE}`;
+    const refId = `series-repeated-${NONCE}`;
+    createdIngredientIds.add(id);
+    createdScrapIds.add(scrapId);
+    const entry = { id, type: 'idea', name: 'First edit', scraps: [{ id: scrapId, rawText: 'Shared note' }] };
+    const bundle = { version: 1, ref: { kind: 'series', id: refId },
+      ingredients: [entry, { ...entry, name: 'Second edit' }] };
+
+    const first = await send(bundle);
+    expect(first.status).toBe(201);
+    expect(first.body.scrapsCreated).toBe(1);
+    expect(first.body.created.map(ingredient => ingredient.name)).toEqual(['First edit', 'Second edit']);
+    await catalogDB.unlinkIngredientFromRef(id, 'series', refId, 'bulk-series');
+    const retry = await send(bundle);
+    expect(retry.status).toBe(201);
+    expect(retry.body.scrapsCreated).toBe(0);
+    expect(await catalogDB.listRefsForIngredient(id)).toEqual([
+      expect.objectContaining({ refKind: 'series', refId, role: 'bulk-series' }),
+    ]);
+    expect(await catalogDB.listSourcesForIngredient(id)).toHaveLength(1);
+  });
+
   it.each(['json', 'csv'])('keeps ID-less %s imports as new creates', async (format) => {
     const payload = format === 'json'
       ? JSON.stringify([{ type: 'idea', name: 'No identity' }])

@@ -1,11 +1,13 @@
 /** Recover inactive admission residue while an update waits for its fence. */
+import { createBoundedStateMap } from '../lib/boundedStateMap.js';
 import { maintenance } from '../lib/maintenanceAdmission.js';
 import { assertInactiveActivity, isOrdinaryAgentRecord, reconcileWaitingUpdate } from './maintenanceReservationDisposition.js';
 import { recordedMediaChildIds } from '../lib/mediaRecoveryActivity.js';
 import { assertNoObservedReservationProcesses, snapshotMaintenanceProcesses } from './maintenanceProcessInventory.js';
 import { PATHS } from '../lib/paths.js';
 
-const topazChecks = new Map();
+const TOPAZ_CHECK_INTERVAL_MS = 60_000;
+const topazChecks = createBoundedStateMap({ maxSize: 1000, ttlMs: TOPAZ_CHECK_INTERVAL_MS });
 
 export async function checkActivity(update, operations) {
   let runnerScopeUnavailable = false;
@@ -49,7 +51,7 @@ export async function checkActivity(update, operations) {
     const now = Date.now();
     const candidate = listJobs({ kind: 'video-upscale' }).find(job => job.params?.mode === 'topaz'
       && !['queued', 'running'].includes(job.status) && job.result?.topazUncertain === true
-      && now - (topazChecks.get(job.id) ?? 0) >= 60000);
+      && now - (topazChecks.get(job.id) ?? -Infinity) >= TOPAZ_CHECK_INTERVAL_MS);
     if (candidate) {
       topazChecks.set(candidate.id, now);
       const { reconcileTopazStatus } = await import('./videoGen/topazJob.js');

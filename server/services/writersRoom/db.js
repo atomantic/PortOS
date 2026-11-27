@@ -42,7 +42,7 @@ import {
   WRITERS_ROOM_FOLDER_KIND, mergeFolderRecord,
   WRITERS_ROOM_EXERCISE_KIND, mergeExerciseRecord,
 } from './syncLogic.js';
-import { queueWorkWrite, queueFolderWrite, queueExerciseWrite } from './_shared.js';
+import { queueWorkWrite, queueFolderWrite, queueExerciseWrite, summarizeWork, WORK_SUMMARY_FIELDS } from './_shared.js';
 import { toPgJson } from '../../lib/pgJson.js';
 
 /**
@@ -323,15 +323,22 @@ export async function listOrderedWorkIds() {
   return rows.map(row => row.id);
 }
 
-/** Hydrate only the already bounded page, preserving snapshot order. */
-export async function readWorksPage(ids) {
-  if (!ids.length) return [];
-  const works = await query(
-    `SELECT id, data FROM writers_room_works
-     WHERE deleted = FALSE AND id = ANY($1::text[])
-     ORDER BY array_position($1::text[], id) LIMIT $2`, [ids, ids.length],
+/** Live summaries only. A supplied page keeps its snapshot order. */
+export async function listWorkSummaries(ids) {
+  if (ids?.length === 0) return [];
+  const { rows } = await query(
+    `SELECT (SELECT jsonb_object_agg(key, value)
+             FROM jsonb_each(CASE WHEN jsonb_typeof(w.data) = 'object' THEN w.data ELSE '{}'::jsonb END)
+             WHERE key = ANY($1::text[])) AS summary,
+            (SELECT count(*)::int FROM writers_room_draft_versions WHERE work_id = w.id) AS draft_count,
+            COALESCE(active.word_count, 0) AS word_count
+     FROM writers_room_works w
+     LEFT JOIN writers_room_draft_versions active ON active.id = w.active_draft_version_id AND active.work_id = w.id
+     WHERE w.deleted = FALSE
+     ${ids ? 'AND w.id = ANY($2::text[]) ORDER BY array_position($2::text[], w.id) LIMIT cardinality($2::text[])' : ''}`,
+    ids ? [WORK_SUMMARY_FIELDS, ids] : [WORK_SUMMARY_FIELDS],
   );
-  return hydrateWorks(works.rows);
+  return rows.map(row => summarizeWork(row.summary ?? {}, row.draft_count, row.word_count));
 }
 
 /** Every live work's manifest, rebuilt with its drafts[] — one pair of queries. */

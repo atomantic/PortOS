@@ -235,6 +235,7 @@ export const catalogDdl = [
     `CREATE INDEX IF NOT EXISTS idx_catalog_tags_label ON catalog_tags (label)`,
     `CREATE INDEX IF NOT EXISTS idx_catalog_tags_parent ON catalog_tags (parent_id)`,
     `CREATE INDEX IF NOT EXISTS idx_catalog_tags_sync_seq ON catalog_tags (sync_sequence)`,
+    `CREATE INDEX IF NOT EXISTS idx_catalog_tags_created ON catalog_tags (created_at DESC)`,
 
     `CREATE TABLE IF NOT EXISTS catalog_ingredient_merges (
       id TEXT PRIMARY KEY,

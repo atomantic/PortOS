@@ -97,6 +97,31 @@ describe('startPhotorealRender', () => {
     expect(JSON.parse(fakeWorker.lastFiles.find((f) => f.path === 'greybox-blender.json').content)).toMatchObject({ engine: 'CYCLES', useGpu: false });
   });
 
+  it('prunes stale finished statuses on completion and keeps their saved scenes', async () => {
+    const first = place();
+    const second = { ...first, id: `${first.id}-next` };
+    db.getIngredient.mockImplementation(async id => id === first.id ? first : second);
+    const worker = fakeWorker({ 'report.json': '{"device":"CPU"}', 'blockout.blend': 'SCENE', 'shot-wide.png': PNG });
+    __setPhotorealDepsForTests({
+      resolveTool: async () => ({ executable: '/opt/blender', version: '5.2.3', worker }),
+      lastCheckedVersion: async () => '5.2.3',
+    });
+    const options = { shotIds: ['wide'], engine: 'cycles' };
+    await startPhotorealRender(first.id, options);
+    await finished(first.id);
+    expect(await getPhotorealStatus(first.id)).toMatchObject({ job: { state: 'done' } });
+
+    const realNow = Date.now;
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => realNow() + 25 * 60 * 60 * 1000);
+    try {
+      await startPhotorealRender(second.id, options);
+      await finished(second.id);
+      expect(await getPhotorealStatus(first.id)).toMatchObject({ job: null, blendUrl: expect.any(String) });
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   it('renders the saved greybox in Blender, attaches each camera, keeps plates and the .blend', async () => {
     const record = place();
     record.payload.photoreal = { materials: [], lights: [{ id: 'panel', type: 'area', position: [0, 6, 0], watts: 600 }], atmosphere: { haze: 0.2 }, textures: { 'wood-floor': 'oak_planks' } };

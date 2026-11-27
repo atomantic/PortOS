@@ -86,6 +86,7 @@ export const mediaDdl = [
     `ALTER TABLE creative_director_projects ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ`,
     projectPageDdl('creative_director_projects'),
     `CREATE INDEX IF NOT EXISTS idx_creative_director_projects_live_created ON creative_director_projects (created_at ASC) WHERE deleted = FALSE`,
+    `CREATE INDEX IF NOT EXISTS idx_creative_director_projects_live_commission_created ON creative_director_projects ((data->>'commissionId'), created_at ASC) WHERE deleted = FALSE`,
 
     // Three.js procedural models. The user-authored/generative record (gallery
     // image reference, provider/model attribution, validated scene spec, status,
