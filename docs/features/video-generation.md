@@ -18,6 +18,12 @@ Video conditioning depends on the pinned model's encoder architecture and weight
 
 LTX-2.3 uses a separate Gemma model. LTX-2.5 uses the embedded Gemma 4 12B tower by default. The LTX-2.5 substitute loader can resolve a self-describing compatible tower while retaining the pack connector, but evaluated substitutes failed validation and the shipped registry stays stock-only. Do not infer cross-model compatibility from checkpoint branding or use partial weights to bypass a strict-load failure.
 
+## LTX audio-to-video LoRA stages
+
+On a supported local LTX MLX audio-to-video runtime, select a user LoRA and set separate **Motion** and **Detail refinement** multipliers between 0 and 1. The default `[1, 1]` keeps each adapter's selected strength. **Motion-friendly** `[0, 1]` suppresses user adapters for motion generation and restores their strength for refinement.
+
+History and retries preserve the selection. For the API, send `a2vLoraStageStrengths: [motion, detail]` as JSON in multipart requests. Non-default multipliers require a selected user LoRA and a validated local runtime. Reset them before rendering on CUDA, hosted, or peer backends. The effect on lip sync and likeness remains unverified in a fixed-seed character comparison.
+
 ## Video upscale
 
 Use **Upscale** on a gallery clip. The read-only plan probes the source, runtime and weights before submission. Every result becomes a separate item with measured output geometry, duration and method provenance. Failure and cancellation preserve the source and remove partial local output.

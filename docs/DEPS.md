@@ -2,9 +2,9 @@
 
 Living reference of every third-party dependency in PortOS, why it's kept, and what the current verdict is. Updated by `/do:depfree` runs.
 
-That "every dependency" claim is enforced by `server/test/guards/repo/docsIntegrity.test.js` (run by `cd server && npm test`): every dependency needs a row under the workspace and dependency group that declares it. Delete the row when its declaration is removed.
+The documentation integrity check requires a row for every dependency under the workspace and dependency group that declares it. Remove the row when its declaration is removed. Run the check with `npm test --prefix server -- test/guards/repo.guard.test.js`.
 
-**Last audited:** 2026-11-26 (metadata refresh after #19040–#19042).
+**Last audited:** 2026-11-26.
 **Verdict:** Current direct dependencies are listed below with their justification.
 
 ## Audit Methodology
@@ -25,7 +25,7 @@ Before removing a Tier 3 candidate, run a transitive-dep check (`npm ls <pkg>`).
 | `@babel/parser` | 1 | KEEP | JavaScript parsing for server features and developer tools | Parses source without executing it, including for the complexity report and prompt-stage call-site generator |
 | `@cantoo/pdf-lib` | 2 | KEEP | PDF generation for the volume / comic / prose / legacy-archive exports | Maintained MIT fork of `pdf-lib`, which has had no publish since 2022-05. Same public API (`PDFDocument`/`rgb`/`StandardFonts`); the swap was 4 import lines. On maintenance watch — see the detailed finding |
 | `@novnc/novnc` | 1 | KEEP | PortDeck remote desktop viewer | Mature RFB/VNC protocol implementation; replacing it would require owning multiple security types and framebuffer encodings |
-| `better-sqlite3-multiple-ciphers` | 2 | KEEP | `server/services/signalSnapshot.js` — read-only SQLCipher snapshot of the local Signal Desktop database | MIT build of better-sqlite3 with SQLCipher 4 compatibility. Ships prebuilds and sets `gypfile` false, so install does not compile it. `node:sqlite` cannot open SQLCipher, and a main-file copy misses committed WAL frames (#11149). A missing prebuild fails that sync closed |
+| `better-sqlite3-multiple-ciphers` | 2 | KEEP | `server/services/signalSnapshot.js` — read-only SQLCipher snapshot of the local Signal Desktop database | MIT build of better-sqlite3 with SQLCipher 4 compatibility. Ships prebuilds and sets `gypfile` false, so install does not compile it. `node:sqlite` cannot open SQLCipher, and a main-file copy misses committed WAL frames. A missing prebuild fails that sync closed |
 | `express` | 1 | KEEP | `server/index.js` + routes | Framework |
 | `node-pty` | 1 | KEEP | shell/terminal services | Native PTY binding (N-API) |
 | `pg` | 1 | KEEP | Postgres access | Official `pg` driver |
@@ -55,7 +55,7 @@ Before removing a Tier 3 candidate, run a transitive-dep check (`npm ls <pkg>`).
 | `@vitejs/plugin-react` | 1 | KEEP | build | |
 | `vite` | 1 | KEEP | build | |
 | `vitest` | 1 | KEEP | client test runner | happy-dom environment |
-| `happy-dom` | 1 | KEEP | test DOM | Paired with vitest. Replaced `jsdom` in #6144 — same suite, ~65% less time in `environment` |
+| `happy-dom` | 1 | KEEP | test DOM | Lightweight DOM environment for Vitest |
 | `@testing-library/jest-dom` | 1 | KEEP | test matchers | |
 | `@testing-library/react` | 1 | KEEP | component tests | |
 | `@testing-library/user-event` | 1 | KEEP | interaction tests | |
@@ -65,7 +65,7 @@ Before removing a Tier 3 candidate, run a transitive-dep check (`npm ls <pkg>`).
 
 ## Detailed Findings — Tier 2/3 Audits
 
-### `@cantoo/pdf-lib` — KEEP (Tier 2), replaced `pdf-lib` 2026-09-02 (issue #5672)
+### `@cantoo/pdf-lib` — KEEP (Tier 2)
 
 - **Usage**: 4 import sites, all the same named import — `server/services/pipeline/volumePdf.js`, `comicPdf.js`, `proseExport.js`, and `server/services/legacyExport.js` (`import { PDFDocument, rgb, StandardFonts }`). ~40 call sites across them, all in the narrow high-level core: `PDFDocument.create`, `addPage`, `embedFont`, `drawText`, `drawImage`, `widthOfTextAtSize`, `save`, plus `rgb()` and 9 `StandardFonts` constants. No low-level `PDFDict`/`PDFRef` work, no form filling, no encryption, no incremental update.
 - **Why the swap**: `pdf-lib@1.17.1` has had **no npm publish since 2022-05-12** — the pinned version and the latest published version are the same release. It is not deprecated and `npm audit` was clean, but it is a parser/serializer for a hostile binary format sitting on the export path for four user-facing pipelines. When a PDF advisory lands there is no upstream release to take. Migrating while audit is green is a planned change; migrating after an advisory is an emergency.

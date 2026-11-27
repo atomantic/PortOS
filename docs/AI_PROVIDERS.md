@@ -29,6 +29,12 @@ The stored records, **grouped by harness** and ordered within a group by readine
 - A harness with both CLI and TUI modes has one shared provider configuration: catalog, access policy, model and tier pins, effort, fallback, hardware requirements, and generation settings. The mode records remain addressable by their existing ids so saved tasks and peers keep working. When legacy records conflict on a shared setting, the CLI value takes precedence; if CLI is unset, a configured TUI value is retained. Their model catalogs and known context windows are merged. Arguments, headless-only arguments, timeouts, TUI timing, and CLI transport consent remain mode-specific because they control how each mode launches.
 - **Tiers** (Light / Medium / Heavy / Ultra, [MODEL_TIERS.md](./MODEL_TIERS.md)) are pins on a preset, so a `model: "heavy"` selection resolves on whichever preset the task names.
 
+### Mixture of Agents presets
+
+In **Models → Providers → Presets → Mixture of Agents**, select one aggregator and one to five reference models from enabled API providers. On a text run, the reference models answer in parallel, then the aggregator receives successful answers as advisory context. Each call is billed separately. An explicit selection can also be saved as a Persistent Mind thinking preset using the aggregator model without an effort pin.
+
+Choose the privacy filter for advisor output. **Display** redacts advisor output shown to the caller. **Full** also redacts the advisory block sent to the aggregator. Run History shows the exact prompts sent to each provider.
+
 ### Harnesses (`/ai/harnesses`)
 
 One card per registry harness: the **enable switch** (the user's word; a harness with no word follows whether its binary is detected on PATH; `direct` is always on), the detected and latest versions, the methods it runs, how many switched-on services it can reach, the install/update/removal lifecycle for its binary, model catalog refresh, and — for a program that signs into its own vendor — the subscription service only it can reach, with that service's readiness and a link to it. Sign-in itself (the ChatGPT device flow, for instance) stays on the preset card. A toggle here is one write plus a catalog invalidation, so an open picker's compose flow reflects it without a reload.
