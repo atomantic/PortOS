@@ -103,7 +103,16 @@ vi.mock('../../services/voiceFastPath', () => ({
 
 vi.mock('../../services/browserLlm', () => ({ warmNano: vi.fn() }));
 vi.mock('../../services/apiPalette', () => ({ getPaletteManifest: vi.fn() }));
-vi.mock('../../services/apiVoice', () => ({ getVoiceConfig: mocks.getVoiceConfig }));
+vi.mock('../../services/apiVoice', () => ({
+  getVoiceConfig: mocks.getVoiceConfig,
+  updateVoiceConfig: vi.fn(async (patch) => ({ config: patch })),
+}));
+vi.mock('../../services/apiProviders', () => ({
+  getProviders: vi.fn(async () => ({
+    providers: [{ id: 'lmstudio', type: 'api', name: 'LM Studio', models: ['gemma4:31b', 'qwen3:14b'] }],
+  })),
+  refreshProviderModels: vi.fn(async () => ({ name: 'LM Studio', models: ['gemma4:31b', 'qwen3:14b'] })),
+}));
 vi.mock('../../services/apiVoiceAvatar', () => ({
   fetchVoiceAvatar: vi.fn(async () => ({ supported: false })),
 }));

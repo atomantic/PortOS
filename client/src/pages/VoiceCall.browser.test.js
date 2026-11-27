@@ -328,4 +328,33 @@ describe.skipIf(!chrome)('Voice Call console in Chrome', () => {
       await page.close();
     }
   });
+
+  it('lets the user switch the voice LLM inline and animates the living idle portrait when not speaking', async () => {
+    const page = await fixture.browser.newPage({ viewport: { width: 1100, height: 820 }, reducedMotion: 'no-preference' });
+    try {
+      await stubApi(page, true, { status: { supported: true, installed: false, phase: 'stopped' } });
+      await page.goto(`${fixture.origin}voice-console-test`);
+      const consoleView = page.getByRole('region', { name: 'PortOS call console' });
+      await consoleView.waitFor();
+
+      // Living idle portrait canvas animates automatically while waiting (without reduced motion)
+      const idleCanvas = consoleView.locator('canvas[data-idle-portrait]');
+      await idleCanvas.waitFor({ state: 'visible' });
+
+      // Inline Voice LLM picker lets the user select a model directly and explains Conversational Gemma setup
+      const quickModel = consoleView.getByLabel('Voice LLM model', { exact: true });
+      await quickModel.waitFor();
+      expect(await quickModel.inputValue()).toBe('fixture-model');
+      const save = page.waitForRequest(req => req.url().endsWith('/api/voice/config') && req.method() === 'PUT');
+      await quickModel.selectOption('fixture-alternate');
+      expect((await save).postDataJSON().llm.model).toBe('fixture-alternate');
+      await consoleView.getByText(/How to install & enable Conversational Gemma 4 31B/).waitFor();
+
+      // Reduced motion disables the idle portrait animation cleanly
+      await page.emulateMedia({ reducedMotion: 'reduce' });
+      await idleCanvas.waitFor({ state: 'hidden' });
+    } finally {
+      await page.close();
+    }
+  });
 });

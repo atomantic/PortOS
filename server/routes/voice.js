@@ -112,6 +112,8 @@ router.put('/config', asyncHandler(async (req, res) => {
     vad: { endOfSpeechMs: next.vad?.endOfSpeechMs, minUtteranceMs: next.vad?.minUtteranceMs },
     fastPath: next.llm?.fastPath || null,
     personality: next.llm?.usePersonality === false ? null : (next.llm?.personality || null),
+    llmProvider: next.llm?.provider,
+    llmModel: next.llm?.model,
   });
   res.json({ config: next, reconciliation });
 }));
