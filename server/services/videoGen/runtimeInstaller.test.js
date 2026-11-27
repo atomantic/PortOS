@@ -1,8 +1,20 @@
 import { EventEmitter } from 'node:events';
+import { existsSync } from 'fs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { spawn } from '../../lib/childProcess.js';
 import { spawnSetupScript, stopSetupScript } from '../../lib/setupScriptRunner.js';
-import { streamVideoRuntimeInstall } from './runtimeInstaller.js';
-import { isByovRuntimeCurrent, isByovRuntimeInstalled, isByovRuntimeReady } from './runtimes.js';
+import { getVideoRuntimeStatus, streamVideoRuntimeInstall } from './runtimeInstaller.js';
+import { BYOV_RUNTIME_INFO, isByovRuntimeCurrent, isByovRuntimeInstalled, isByovRuntimeReady } from './runtimes.js';
+
+vi.mock('fs', async (importOriginal) => {
+  const fs = await importOriginal();
+  return { ...fs, existsSync: vi.fn(fs.existsSync) };
+});
+
+vi.mock('../../lib/childProcess.js', async (importOriginal) => ({
+  ...await importOriginal(),
+  spawn: vi.fn(),
+}));
 
 vi.mock('../../lib/setupScriptRunner.js', async () => {
   const { fileURLToPath } = await import('node:url');
@@ -17,8 +29,9 @@ vi.mock('../../lib/installLogger.js', () => ({
   createInstallLogger: () => ({ start: vi.fn(), onEvent: vi.fn(), cancel: vi.fn() }),
 }));
 
-vi.mock('./runtimes.js', () => ({
+vi.mock('./runtimes.js', async (importOriginal) => ({
   BYOV_RUNTIME_INFO: {
+    ...(await importOriginal()).BYOV_RUNTIME_INFO,
     example: {
       id: 'example',
       label: 'Example',
@@ -34,7 +47,7 @@ vi.mock('./runtimes.js', () => ({
   isByovRuntimeReady: vi.fn(),
 }));
 
-function stream({ onSend } = {}) {
+function stream({ onSend, runtime = 'example' } = {}) {
   const close = Promise.withResolvers();
   const connection = new EventEmitter();
   let ended = false;
@@ -45,7 +58,7 @@ function stream({ onSend } = {}) {
     connection.emit('close');
   });
   const started = streamVideoRuntimeInstall({
-    runtime: 'example',
+    runtime,
     send,
     safeEnd,
     onDisconnect: (handler) => connection.on('close', handler),
@@ -167,7 +180,7 @@ describe('streamVideoRuntimeInstall', () => {
   it.each([
     { installed: true, current: true, ready: true, type: 'complete', message: 'Example ready:' },
     { installed: false, current: false, ready: false, type: 'error', message: 'runtime is still missing' },
-    { installed: true, current: false, ready: false, type: 'error', message: 'outdated revision' },
+    { installed: true, current: false, ready: false, type: 'error', message: 'still out of date' },
     { installed: true, current: true, ready: false, type: 'error', message: "can't import its core packages" },
   ])('checks the installed runtime after exit 0 and reports $message', async ({ installed, current, ready, type, message }) => {
     isByovRuntimeInstalled.mockReturnValueOnce(false).mockReturnValueOnce(installed);
@@ -205,5 +218,70 @@ describe('streamVideoRuntimeInstall', () => {
     expect(isByovRuntimeReady).not.toHaveBeenCalled();
     expect(response.send).not.toHaveBeenCalled();
     expect(response.safeEnd).not.toHaveBeenCalled();
+  });
+});
+
+describe('locked runtime upgrades', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+  });
+
+  it.each(['minimax_h3', 'fastvideo'])('offers Upgrade for %s lock drift and skips setup after sync', async (runtime) => {
+    const actual = await vi.importActual('./runtimes.js');
+    const info = BYOV_RUNTIME_INFO[runtime];
+    existsSync.mockReturnValue(true);
+    isByovRuntimeInstalled.mockImplementation(actual.isByovRuntimeInstalled);
+    isByovRuntimeCurrent.mockImplementation(actual.isByovRuntimeCurrent);
+    isByovRuntimeReady.mockImplementation(actual.isByovRuntimeReady);
+    actual.invalidateByovReadyCache(runtime);
+
+    let locked = false;
+    const importProbe = vi.fn(() => 0);
+    spawn.mockImplementation((file, args) => {
+      const child = new EventEmitter();
+      child.stdout = new EventEmitter();
+      queueMicrotask(() => {
+        if (file === 'git') {
+          const revision = info.sourcePath ? `# branch.oid ${info.expectedRevision}` : info.expectedRevision;
+          child.stdout.emit('data', `${revision}\n`);
+          child.emit('close', 0);
+          return;
+        }
+        const isLockProbe = args === info.currencyProbeArgs;
+        const lockExit = locked ? 0 : 78;
+        child.emit('close', isLockProbe ? lockExit : importProbe());
+      });
+      return child;
+    });
+
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      await expect(getVideoRuntimeStatus(runtime)).resolves.toMatchObject({
+        binaryPresent: true, current: false, installed: false, upgradeAvailable: true,
+      });
+
+      const child = mockChildProcess();
+      const upgrade = stream({ runtime });
+      await upgrade.started;
+      expect(importProbe).not.toHaveBeenCalled();
+      expect(spawnSetupScript).toHaveBeenCalledExactlyOnceWith({
+        [info.installEnvVar]: '1',
+        [info.pinEnvVar]: info.expectedRevision,
+      });
+
+      locked = true;
+      child.emit('close', 0);
+      await upgrade.closed;
+      expect(importProbe).toHaveBeenCalledOnce();
+      expect(upgrade.send).toHaveBeenLastCalledWith({ type: 'complete', message: expect.stringContaining('ready') });
+      await expect(getVideoRuntimeStatus(runtime)).resolves.toMatchObject({
+        binaryPresent: true, current: true, installed: true, upgradeAvailable: false,
+      });
+
+      const current = stream({ runtime });
+      await current.started;
+      expect(current.send).toHaveBeenLastCalledWith({ type: 'complete', message: expect.stringContaining('Already installed') });
+      expect(spawnSetupScript).toHaveBeenCalledOnce();
+    } finally { log.mockRestore(); }
   });
 });
