@@ -18,6 +18,8 @@ import * as repository from './cosTaskRepository.js';
 const actualRepository = await vi.importActual('./cosTaskRepository.js');
 import { resolveReviewerConfig, buildReviewerEffortNote } from '../../lib/reviewerConfig.js';
 import { planListSave } from '../../lib/cos/cosTaskRows.js';
+import { normalizeCodeReviewVerdict } from '../../lib/codeReviewVerdict.js';
+import { classifyRecheckOutcome } from './cosChallenge.js';
 
 vi.mock('../prWatcher.js', () => ({ persistPrWatcherState: vi.fn(async () => ({})) }));
 import { persistPrWatcherState } from '../prWatcher.js';
@@ -3201,6 +3203,30 @@ describe('cosTaskStore.resolveTaskChallengeWithRecheck (#2471)', () => {
     expect(resolved.status).toBe('blocked');
     expect(resolved.metadata.challengeResolution.outcome).toBe('escalated');
     expect(mock.reviewCalls[0].model).toBe('coder-7b');
+  });
+
+  it.each(['blocking', 'recommended'])('escalates normalized %s findings', async (severity) => {
+    const id = await seedChallenged();
+    const { verdict } = normalizeCodeReviewVerdict(JSON.stringify({
+      verdict: 'findings',
+      findings: [{ severity, location: 'example.js:4', outcome: 'A failed save loses the edit.', fix: 'Retain the edit when saving fails.' }],
+    }));
+    expect(classifyRecheckOutcome(verdict.findings)).toBe('escalated');
+    mock.review = { ok: true, ...verdict };
+
+    const resolved = await resolveTaskChallengeWithRecheck(id, { recheck: { backend: 'ollama', diff: 'diff' } });
+    expect(resolved.status).toBe('blocked');
+    expect(resolved.metadata.challengeResolution.outcome).toBe('escalated');
+    expect(resolved.metadata.challengeResolution.note).toContain('a finding still requires resolution');
+  });
+
+  it('keeps the task challenged when a successful request returns unusable findings', async () => {
+    const id = await seedChallenged();
+    mock.review = { ok: true, findings: 'Review interrupted' };
+
+    const result = await resolveTaskChallengeWithRecheck(id, { recheck: { backend: 'ollama', diff: 'diff' } });
+    expect(result.code).toBe('RECHECK_FAILED');
+    expect((await getTaskById(id)).status).toBe('challenged');
   });
 
   // The model read is keyed off `<backend>Model`, not an ollama-or-lmstudio
