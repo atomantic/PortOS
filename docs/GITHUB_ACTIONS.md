@@ -242,9 +242,9 @@ The selected work is split across parallel jobs:
   selected job failed or was cancelled. Both block, but the message distinguishes
   them: `scripts/ci-gate-report.js` says *cancelled, not failed* and names the
   cancelled jobs when nothing actually failed — as far as the gate job itself
-  runs, which a run-wide cancel prevents. See [External cancellation and one
-  automatic retry](CI_NATIVE_JOBS.md#external-cancellation-and-one-automatic-retry). A job the planner skipped
-  counts as passing here; the impact summary and `suite_reasons` say which
+  runs. A run-wide cancellation prevents the gate from reporting a pass.
+  A job the planner skipped counts as passing here. The impact summary
+  and `suite_reasons` say which
   ones, and why.
 - **Full CI Gate** — published only when the plan chose the complete suite and
   the supported native Windows contracts, with the full browser profile executed in hosted CI.
