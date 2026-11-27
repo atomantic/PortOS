@@ -147,8 +147,17 @@ export async function renderStatsOutroClip({ project, outputPath, width, height,
       const staged = source && await link(source, target).then(() => true, () => copyFile(source, target).then(() => true, () => false));
       imageSrcs.push(staged ? `media/${name}` : '');
     }
+    let creditsBgSrc = '';
+    const creditsBgId = parts.find((part) => part.kind === 'credits')?.credits?.backgroundImageId;
+    if (creditsBgId && /^[^/\\]+\.(?:png|jpe?g|webp)$/i.test(creditsBgId)) {
+      const source = join(PATHS.images, creditsBgId);
+      const ext = creditsBgId.slice(creditsBgId.lastIndexOf('.')).toLowerCase();
+      const target = join(scratch, 'media', `credits-bg${ext}`);
+      const staged = await link(source, target).then(() => true, () => copyFile(source, target).then(() => true, () => false));
+      if (staged) creditsBgSrc = `media/credits-bg${ext}`;
+    }
     await writeFile(join(scratch, 'index.html'), endingPage({ width, height }));
-    await writeFile(join(scratch, 'app.js'), endingPageSource({ stats, parts, imageSrcs, width, height, fps, durationSec }));
+    await writeFile(join(scratch, 'app.js'), endingPageSource({ stats, parts, imageSrcs, creditsBgSrc, width, height, fps, durationSec }));
     signal?.throwIfAborted();
     // A render whose film look is drawn in its page (the seeked modes) has no later
     // pass to grade the outro, so the outro page draws the look itself.

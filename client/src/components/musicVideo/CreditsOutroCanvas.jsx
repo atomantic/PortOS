@@ -23,6 +23,8 @@ function addCreditsFaces() {
 export default function CreditsOutroCanvas({ credits, t, durationSec }) {
   const canvasRef = useRef(null);
   const [fontsReady, setFontsReady] = useState(false);
+  const [bgImage, setBgImage] = useState(null);
+  const bgId = credits?.backgroundImageId || '';
 
   useEffect(() => {
     addCreditsFaces();
@@ -33,10 +35,20 @@ export default function CreditsOutroCanvas({ credits, t, durationSec }) {
   }, []);
 
   useEffect(() => {
+    if (!bgId) { setBgImage(null); return undefined; }
+    let active = true;
+    const img = new Image();
+    img.onload = () => { if (active) setBgImage(img); };
+    img.onerror = () => { if (active) setBgImage(null); };
+    img.src = `/data/images/${encodeURIComponent(bgId)}`;
+    return () => { active = false; };
+  }, [bgId]);
+
+  useEffect(() => {
     const ctx = canvasRef.current?.getContext?.('2d');
     if (!ctx) return;
-    drawCreditsOutro(ctx, { width: WIDTH, height: HEIGHT, t, durationSec, credits });
-  }, [t, durationSec, credits, fontsReady]);
+    drawCreditsOutro(ctx, { width: WIDTH, height: HEIGHT, t, durationSec, credits, bgImage });
+  }, [t, durationSec, credits, fontsReady, bgImage]);
   const label = [credits?.title, credits?.showPerformer === false ? '' : credits?.artist].filter(Boolean).join(', performed by ');
 
   return (
