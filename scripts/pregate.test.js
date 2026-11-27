@@ -240,6 +240,9 @@ describe('pregate hidden-content invocation', () => {
     scratch = template.scratch;
     git('config', 'core.hooksPath', join(scratch, 'empty-hooks'));
     git('config', 'core.excludesFile', join(scratch, 'empty-excludes'));
+    // The missing-blob case deletes one loose object from the committed fixture.
+    git('config', 'maintenance.auto', 'false');
+    git('config', 'gc.auto', '0');
     // Copy the real builtin-only entrypoints so REPO_ROOT targets this fixture.
     // Docs-only changes select no test owners; full plans still have a native inventory.
     for (const path of [
@@ -1133,7 +1136,12 @@ await linkWorktreeDependencies(process.argv[2], process.argv[3]);\n`);
     write(trackedPath, `${clean}ordinary addition\n`);
     git('add', '--', trackedPath);
     git('commit', '-qm', 'changed fixture');
+    expect(git('cat-file', '-t', blob)).toBe('blob');
     rmSync(join(root, '.git', 'objects', blob.slice(0, 2), blob.slice(2)));
+    const probe = execFileSync('git', ['cat-file', '--batch-check'], {
+      cwd: root, encoding: 'utf8', input: `${blob}\n`,
+    });
+    expect(probe.trim()).toBe(`${blob} missing`);
     const result = run('--skip-lint');
     expect(result.status).toBe(2);
     expect(result.stderr).toContain('Hidden-content scan failed:');

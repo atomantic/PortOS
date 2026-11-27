@@ -88,16 +88,15 @@ const FOUR_SHARD_OWNERS = {
   'server/services/codeAnimation/poster.realBrowser.test.js': 2,
 };
 
-// Seven-shard smoke and full share owners so a shard can restore its own memo.
-// Use hosted per-file timings (45804312833, 45804297540, 45910290367) to
-// spread serial captures and group expensive parallel suites. Shard 5 also
-// runs the full-only rich-authoring suite, so give it less common work.
+// Cold full run 45949376269 put rich authoring and GPU capture on the
+// critical path together. Put GPU capture beside the parallel parity suite and
+// spread the audio/timeline shard's other captures onto quieter runners.
 const FULL_SHARD_OWNERS = {
   'server/lib/filmLook.browser.test.js': 7,
-  'server/lib/filmLookGpu.browser.test.js': 5,
+  'server/lib/filmLookGpu.browser.test.js': 6,
   'server/lib/musicVideo/musicVideoTitleCard.browser.test.js': 2,
   'server/routes/catalogGreyboxViewer.browser.test.js': 2,
-  'server/routes/musicVideoProductionReview.browser.test.js': 3,
+  'server/routes/musicVideoProductionReview.browser.test.js': 1,
   'server/routes/musicVideoRichAuthoring.browser.test.js': 5,
   'server/routes/musicVideoSongRevision.browser.test.js': 5,
   'server/services/codeAnimation/export.realBrowser.test.js': 5,
@@ -110,7 +109,7 @@ const FULL_SHARD_OWNERS = {
   'server/services/musicVideo/animaticCaptureOverlays.browser.test.js': 1,
   'server/services/musicVideo/compositionRender.test.js': 6,
   'server/services/musicVideo/documentRender.browser.test.js': 1,
-  'server/services/musicVideo/documentRenderTemplates.browser.test.js': 6,
+  'server/services/musicVideo/documentRenderTemplates.browser.test.js': 5,
   'server/services/musicVideo/documentRenderAudioTimeline.browser.test.js': 4,
   'server/services/musicVideo/documentRenderEffects.browser.test.js': 2,
   'server/services/musicVideo/documentRenderGeneration.browser.test.js': 3,
@@ -129,7 +128,7 @@ const FULL_SHARD_OWNERS = {
   'server/routes/manualUpdateRecovery.browser.test.js': 7,
   'server/routes/autofixerUi.browser.test.js': 3,
   'server/services/musicVideo/overlayTextService.browser.test.js': 5,
-  'server/services/codeAnimation/poster.realBrowser.test.js': 4,
+  'server/services/codeAnimation/poster.realBrowser.test.js': 1,
 };
 
 // Moving the serial GPU suite (82s on smoke run 45081031945) splits it from
@@ -137,6 +136,18 @@ const FULL_SHARD_OWNERS = {
 // separates GPU film look from animatic capture and shares the full owners.
 const TWO_SHARD_SMOKE_OVERRIDES = {
   'server/lib/filmLookGpu.browser.test.js': 2,
+};
+
+// Cold smoke run 45947826202 had no rich authoring, and serial templates
+// extended the parallel parity shard. Keep this override small so only
+// moved suites need a second full-run memo partition.
+const SEVEN_SHARD_SMOKE_OVERRIDES = {
+  'server/lib/filmLookGpu.browser.test.js': 5,
+  'server/lib/musicVideo/musicVideoTitleCard.browser.test.js': 1,
+  'server/routes/musicVideoProductionReview.browser.test.js': 3,
+  'server/services/codeAnimation/poster.realBrowser.test.js': 6,
+  'server/services/musicVideo/documentRenderTemplates.browser.test.js': 4,
+  'server/services/musicVideo/publish/sunoHook.browser.test.js': 6,
 };
 
 /**
@@ -154,8 +165,15 @@ export function browserShardSlice(files, { index, count }, profile) {
   const owners = count === 2 ? BROWSER_SUITE_OWNERS
     : count === 4 ? FOUR_SHARD_OWNERS
       : count === FULL_BROWSER_SHARD_COUNT ? FULL_SHARD_OWNERS : null;
-  const overrides = smoke && count === 2 ? TWO_SHARD_SMOKE_OVERRIDES : {};
+  const overrides = smoke && count === 2 ? TWO_SHARD_SMOKE_OVERRIDES
+    : smoke && count === FULL_BROWSER_SHARD_COUNT ? SEVEN_SHARD_SMOKE_OVERRIDES : {};
   return BROWSER_SUITES.filter((file, position) => (
     selected.has(file) && (overrides[file] ?? (owners ? owners[file] : (position % count) + 1)) === index
   ));
+}
+
+/** Full-run memo partitions needed by the selected suites owned by a seven-shard smoke runner. */
+export function browserSmokeMemoDonors(files, index) {
+  const owned = browserShardSlice(files, { index, count: FULL_BROWSER_SHARD_COUNT }, 'smoke');
+  return [...new Set(owned.map(file => FULL_SHARD_OWNERS[file]).filter(owner => owner !== index))].sort((a, b) => a - b);
 }
