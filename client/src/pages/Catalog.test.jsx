@@ -233,6 +233,110 @@ describe('Catalog page', () => {
     expect(toast.success).toHaveBeenCalled();
   });
 
+  it('starts an unscoped create at the required universe and keeps the controls in tab order', async () => {
+    const user = userEvent.setup();
+    renderCatalog();
+    await screen.findByText('Echo Saint');
+
+    const openForm = screen.getByRole('button', { name: 'New' });
+    openForm.focus();
+    await user.keyboard('{Enter}');
+    const universe = screen.getByLabelText(/Owning universe/);
+    expect(universe).toHaveFocus();
+    expect(universe).toHaveValue('');
+
+    await screen.findByRole('option', { name: 'Echo Saints' });
+    await user.selectOptions(universe, 'u-1');
+    expect(universe).toHaveFocus();
+    await user.tab();
+    const babbleLink = screen.getByRole('link', { name: /Babble and Prune/ });
+    expect(babbleLink).toHaveFocus();
+    expect(babbleLink).toHaveAttribute('href', '/catalog/ingest?mode=babble');
+    await user.tab();
+    expect(screen.getByLabelText('Type', { exact: true })).toHaveFocus();
+    await user.tab();
+    expect(screen.getByLabelText('Name', { exact: true })).toHaveFocus();
+  });
+
+  it('prefills the filtered universe, starts at the name, and immediately prepends the created ingredient', async () => {
+    const user = userEvent.setup();
+    const created = { id: 'i-3', name: 'New Character', type: 'character', payload: {}, tags: [] };
+    createCatalogIngredient.mockResolvedValue(created);
+    listCatalogIngredients.mockResolvedValue({ items: [sample[0]] });
+    renderCatalog('/catalog?universe=u-1');
+    await screen.findByText('Echo Saint');
+
+    await user.click(screen.getByRole('button', { name: 'New' }));
+    const name = screen.getByLabelText('Name', { exact: true });
+    expect(name).toHaveFocus();
+    await screen.findByRole('option', { name: 'Echo Saints' });
+    expect(screen.getByLabelText(/Owning universe/)).toHaveValue('u-1');
+
+    await user.type(name, created.name);
+    await user.click(screen.getByRole('button', { name: 'Create', exact: true }));
+
+    expect(createCatalogIngredient).toHaveBeenCalledWith(
+      { name: created.name, type: 'character', payload: {}, tags: [], universeId: 'u-1' },
+      { silent: true },
+    );
+    const newCard = await screen.findByText(created.name);
+    expect(within(newCard.closest('li')).getByText('Universe: Echo Saints')).toBeInTheDocument();
+    expect(newCard.compareDocumentPosition(screen.getByText('Echo Saint')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(listCatalogIngredients).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['/catalog?universe=u-1', 'u-2'],
+    ['/catalog?universe=u-1&series=s-1', 'u-1'],
+    ['/catalog?scrap=scrap-1', 'u-1'],
+  ])('keeps a nonmatching new ingredient out of %s', async (entry, universeId) => {
+    const user = userEvent.setup();
+    listUniverseNames.mockResolvedValue([{ id: 'u-1', name: 'Echo Saints' }, { id: 'u-2', name: 'Otherworld' }]);
+    createCatalogIngredient.mockResolvedValue({ id: 'i-3', type: 'character', name: 'New Character', payload: {}, tags: [] });
+    renderCatalog(entry);
+    await screen.findByText('Echo Saint');
+
+    await user.click(screen.getByRole('button', { name: 'New' }));
+    await screen.findByRole('option', { name: 'Otherworld' });
+    await user.selectOptions(screen.getByLabelText(/Owning universe/), universeId);
+    await user.type(screen.getByLabelText('Name', { exact: true }), 'New Character');
+    await user.click(screen.getByRole('button', { name: 'Create', exact: true }));
+
+    expect(createCatalogIngredient).toHaveBeenCalledWith(expect.objectContaining({ universeId }), { silent: true });
+    expect(toast.success).toHaveBeenCalled();
+    expect(screen.queryByText('New Character')).not.toBeInTheDocument();
+    expect(screen.getByText('Echo Saint')).toBeInTheDocument();
+  });
+
+  it('applies the current universe filter when creation finishes after a filter change', async () => {
+    const user = userEvent.setup();
+    const pendingCreate = Promise.withResolvers();
+    createCatalogIngredient.mockReturnValue(pendingCreate.promise);
+    listUniverseNames.mockResolvedValue([{ id: 'u-1', name: 'Echo Saints' }, { id: 'u-2', name: 'Otherworld' }]);
+    getCatalogFacets.mockResolvedValue({
+      ...sampleFacets,
+      universes: [...sampleFacets.universes, { refId: 'u-2', name: 'Otherworld', count: 1 }],
+    });
+    listCatalogIngredients.mockImplementation(async ({ refId }) => ({
+      items: refId === 'u-1' ? [sample[0]] : [sample[1]],
+    }));
+    renderCatalog('/catalog?universe=u-1');
+    await screen.findByText('Echo Saint');
+
+    await user.click(screen.getByRole('button', { name: 'New' }));
+    await screen.findByRole('option', { name: 'Echo Saints' });
+    await user.type(screen.getByLabelText('Name', { exact: true }), 'New Character');
+    await user.click(screen.getByRole('button', { name: 'Create', exact: true }));
+    await user.selectOptions(screen.getByLabelText('Universe', { exact: true }), 'u-2');
+    await screen.findByText('Old Harbor');
+
+    await act(() => pendingCreate.resolve({ id: 'i-3', type: 'character', name: 'New Character', payload: {}, tags: [] }));
+    expect(toast.success).toHaveBeenCalled();
+    expect(screen.queryByText('New Character')).not.toBeInTheDocument();
+    expect(screen.getByText('Old Harbor')).toBeInTheDocument();
+    expect(listCatalogIngredients).toHaveBeenLastCalledWith(expect.objectContaining({ refKind: 'universe', refId: 'u-2' }));
+  });
+
   it('two-click-arms then deletes a card, removing it locally', async () => {
     deleteCatalogIngredient.mockResolvedValue({ success: true });
     renderCatalog();
