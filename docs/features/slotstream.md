@@ -215,6 +215,7 @@ it just is not in the dump a reboot replays.
 | `POST /slotstream/install` | Download the pinned Apple Silicon binary, verify its SHA-256, and install it. |
 | `POST /slotstream/models/download` | Fetch one catalog (or `owner/name`) checkpoint into the cache; streams byte progress on the `slotstream:download` socket event. |
 | `POST /slotstream/models/download/cancel` | Cancel the in-flight checkpoint download (body: `{ model }`). |
+| `POST /slotstream/models/remove` | Remove an unused cached checkpoint or unlink it while keeping the original files (body: `{ model }` with the cache entry ID). |
 
 `POST /api/local-llm/download-preflight` also accepts `{ kind: 'slotstream', model }` to
 preview a checkpoint download's size and free-disk verdict before the confirm

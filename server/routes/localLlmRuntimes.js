@@ -5,7 +5,7 @@ import { validateRequest } from '../lib/validateRequest.js'
 import {
   localLlmLlamaServerStartSchema, localLlmMtplxStartSchema, localLlmSlotstreamStartSchema,
   managedInklingActionSchema, managedInklingCancelSchema, mkserveInstallSchema, splashContextSchema, localLlmSpecModelDownloadSchema,
-  localLlmMtplxSearchSchema, localLlmMtplxPullSchema, localLlmMtplxRemoveSchema, localLlmSlotstreamDownloadSchema,
+  localLlmMtplxSearchSchema, localLlmMtplxPullSchema, localLlmMtplxRemoveSchema, localLlmSlotstreamDownloadSchema, localLlmSlotstreamRemoveSchema,
 } from '../lib/mediaValidation.js'
 import {
   getLlamaServerStatus,
@@ -22,7 +22,7 @@ import { getSplashRuntimeStatus } from '../services/splashRuntimeStatus.js'
 import { installSplashRuntime, saveSplashContextWindow, startSplashServer, stopSplashServer, uninstallSplashRuntime } from '../services/splashServerManager.js'
 import { getMkserveRuntimeStatus, installMkserve, startMkserveServer, stopMkserveServer, uninstallMkserve } from '../services/mkserveRuntimeManager.js'
 import { getSlotstreamServerStatus, startSlotstreamServer, stopSlotstreamServer, installSlotstream, uninstallSlotstream, waitForSlotstreamReady } from '../services/slotstreamServerManager.js'
-import { cancelSlotstreamModelDownload, downloadSlotstreamModel } from '../services/slotstreamModelManager.js'
+import { cancelSlotstreamModelDownload, downloadSlotstreamModel, removeSlotstreamModel } from '../services/slotstreamModelManager.js'
 import { searchMtplxCatalog, pullMtplxModel, cancelMtplxModelPull, removeMtplxModel } from '../services/mtplxModelManager.js'
 import { saveProcessList } from '../services/pm2.js'
 import { getSpecDecodePresetStatus, downloadSpecDecodeModel, cancelSpecDecodeModelDownload, removeSpecDecodeModel } from '../services/specDecodeModels.js'
@@ -413,6 +413,15 @@ router.post('/slotstream/models/download', asyncHandler(async (req, res) => {
 router.post('/slotstream/models/download/cancel', asyncHandler(async (req, res) => {
   const { model } = validateRequest(localLlmSlotstreamDownloadSchema, req.body)
   res.json({ success: true, cancelled: cancelSlotstreamModelDownload({ model }) })
+}))
+
+// POST /api/local-llm/slotstream/models/remove — remove one cache entry
+router.post('/slotstream/models/remove', asyncHandler(async (req, res) => {
+  const { model } = validateRequest(localLlmSlotstreamRemoveSchema, req.body)
+  const result = await removeSlotstreamModel(model)
+  resetProviderReadinessCache()
+  res.json(result)
+  refreshRuntimeModels(req, 'slotstream')
 }))
 
 // POST /api/local-llm/save-startup — `pm2 save`, so the PM2-managed local

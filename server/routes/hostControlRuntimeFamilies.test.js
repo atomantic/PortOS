@@ -83,6 +83,7 @@ vi.mock('../services/mkserveRuntimeManager.js', () => ({
 vi.mock('../services/slotstreamModelManager.js', () => ({
   cancelSlotstreamModelDownload: vi.fn(),
   downloadSlotstreamModel: vi.fn(),
+  removeSlotstreamModel: vi.fn(),
   previewSlotstreamDownload: vi.fn(),
 }));
 vi.mock('../services/mtplxModelManager.js', () => ({
@@ -193,6 +194,7 @@ import browserRoutes from './browser.js';
 import harnessRoutes from './harnesses.js';
 import localLlmRoutes from './localLlm.js';
 import { cancelMtplxModelPull } from '../services/mtplxModelManager.js';
+import { removeSlotstreamModel } from '../services/slotstreamModelManager.js';
 import { uninstallSlotstream } from '../services/slotstreamServerManager.js';
 import { updateConfig, launchBrowser } from '../services/browserService.js';
 import { streamHarnessAction } from '../services/harnessActionStream.js';
@@ -211,7 +213,9 @@ const mounts = [
 ];
 
 const mtplxCancel = ['post', '/api/local-llm/mtplx/models/pull/cancel', undefined, cancelMtplxModelPull];
+const slotstreamRemoval = ['post', '/api/local-llm/slotstream/models/remove', { model: 'example-model' }, removeSlotstreamModel];
 const writes = [
+  slotstreamRemoval,
   mtplxCancel,
   ['post', '/api/local-llm/capability-tests/run', { backend: 'ollama', modelId: 'example-model', testId: 'sandbox-repair' }, runCapabilityTest],
   ['put', '/api/browser/config', { chromePath: '/opt/example/bin/chrome', headless: true }, updateConfig],
@@ -229,6 +233,7 @@ describe('operator authority for browser, harness and local-runtime management',
     auth.enabled = false;
     installBackend.mockResolvedValue({ success: true });
     uninstallSlotstream.mockResolvedValue({ success: true });
+    removeSlotstreamModel.mockResolvedValue({ success: true });
     runOpenCodeAgentBenchmark.mockResolvedValue({ completed: true });
     runCapabilityTest.mockResolvedValue({ passed: true });
     getStatus.mockResolvedValue({ available: true });
@@ -242,6 +247,7 @@ describe('operator authority for browser, harness and local-runtime management',
     await expectRemoteRefusal(mounts, ['post', '/api/local-llm/install-backend', { backend: 'ollama' }, installBackend]);
     await expectRemoteRefusal(mounts, ['post', '/api/local-llm/slotstream/uninstall', {}, uninstallSlotstream]);
     await expectRemoteRefusal(mounts, mtplxCancel);
+    await expectRemoteRefusal(mounts, slotstreamRemoval);
   });
 
   it('preserves local and delegated-agent runtime management and inference', async () => {

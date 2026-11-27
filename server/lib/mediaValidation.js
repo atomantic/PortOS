@@ -13,6 +13,7 @@ import { ASSESSABLE_RUNTIMES } from './localProviderRuntime.js';
 import { BENCHMARK_PROFILE, SWEEP_SCOPES } from './localModelAssessment.js';
 import { CAPABILITY_TEST_IDS } from './modelCapabilityTests.js';
 import { HF_REPO_ID_RE } from './huggingfaceLora.js';
+import { isSlotstreamCheckpointId } from './slotstreamModels.js';
 import { SPEC_MODEL_ROLES } from './specDecodePresets.js';
 import { isLoopbackHostname, parseBrowserOrigin } from './beeperOAuthOrigin.js';
 import { ANNOTATION_KINDS, isValidAnnotationKey, MEDIA_COLLECTION_BULK_MAX } from './mediaItemKey.js';
@@ -243,6 +244,9 @@ export const localLlmSlotstreamStartSchema = z.object({
 // no "download whatever" default for a transfer this size.
 const slotstreamModelSchema = z.string().trim().min(1).max(200);
 export const localLlmSlotstreamDownloadSchema = z.object({ model: slotstreamModelSchema });
+export const localLlmSlotstreamRemoveSchema = z.object({
+  model: z.string().refine(isSlotstreamCheckpointId, 'model must be a checkpoint directory name'),
+});
 // MTPLX model catalog. `mtplx forge discover` is upstream's own index of
 // MTPLX-branded MTP checkpoints; an empty query means its default listing.
 export const localLlmMtplxSearchSchema = z.object({

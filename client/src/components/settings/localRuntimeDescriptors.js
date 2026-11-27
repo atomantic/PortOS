@@ -238,7 +238,7 @@ export const LOCAL_RUNTIME_DESCRIPTORS = {
           ? (status?.cacheError
             ? `Checkpoint cache unreadable — ${status.cacheError}`
             : (status?.cachedModels?.length === 0
-              ? 'No checkpoint yet — a start never fetches weights'
+              ? 'No checkpoint yet. Open Configure and select Download checkpoint.'
               : null))
           : null,
         detail: [
