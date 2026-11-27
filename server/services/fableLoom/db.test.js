@@ -10,10 +10,19 @@
  * alongside the new id projections added for the tombstone-sweep hydration fix.
  */
 
-import { describe, it, expect, afterAll, beforeAll, beforeEach } from 'vitest';
+import { describe, it, expect, afterAll, beforeAll, beforeEach, vi } from 'vitest';
 import { checkHealth, ensureSchema, query, close, withTransaction } from '../../lib/db.js';
 import { requireDbOrSkip } from '../../lib/dbTestGate.js';
 import { toPgJson } from '../../lib/pgJson.js';
+import { LOOM_LIMITS } from './limits.js';
+
+vi.mock('../../lib/pgFileFacade.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    createPgFileFacade: (options) => actual.createPgFileFacade({ ...options, isFile: () => false }),
+  };
+});
 
 let dbReady = false;
 let skipReason = '';
@@ -81,6 +90,69 @@ describe.skipIf(!runDb)('fableLoom DB adapter round-trip', () => {
     await db.writeRaw('loom-b', L('loom-b', { updatedAt: '2026-02-01T00:00:00.000Z' }));
     const all = await db.listRaw();
     expect(all.map((r) => r.id)).toEqual(['loom-b', 'loom-a']);
+  });
+
+  it('returns small live summaries with legacy defaults, capped counts, and series scoping', async () => {
+    const { listLoomSummaries, sanitizeLoom } = await import('./records.js');
+    const linked = L('loom-linked', {
+      name: '  Zebra  ',
+      seriesId: 'series-one',
+      universeId: '  universe-one  ',
+      logline: { legacy: 'invalid' },
+      participationMode: 'unknown',
+      format: 'unknown',
+      audienceCommunicationMedium: '  Intercom  ',
+      updatedAt: '2026-01-02T00:00:00Z',
+      episodes: [
+        { id: false },
+        {
+          id: 'ep-real',
+          nodes: [
+            { id: 123, isEnding: true },
+            { id: 'n1', isEnding: true, prose: 'Example scene. '.repeat(1300) },
+            { id: 'n2', isEnding: 'true' },
+            ...Array.from({ length: LOOM_LIMITS.NODES_MAX - 2 }, (_, i) => ({ id: `node-${i}` })),
+            { id: 'n-over-cap', isEnding: true },
+          ],
+        },
+        ...Array.from({ length: LOOM_LIMITS.EPISODES_MAX - 1 }, (_, i) => ({ id: `episode-${i}`, nodes: {} })),
+        { id: 'ep-over-cap', nodes: [{ id: 'n-over-episode-cap', isEnding: true }] },
+      ],
+    });
+    const other = L('loom-other', { name: 'alpha', seriesId: 'series-two', updatedAt: linked.updatedAt, episodes: {} });
+    const newer = L('loom-newer', { updatedAt: '2026-01-03T00:00:00.000Z' });
+    const deleted = L('loom-deleted', { seriesId: 'series-one', deleted: true });
+    const invalid = L('loom-invalid', { seriesId: 'series-one', name: '  ' });
+    for (const record of [linked, other, newer, deleted, invalid]) await db.writeRaw(record.id, record);
+
+    const sanitized = sanitizeLoom(linked);
+    const { id, name, logline, format, participationMode, audienceCommunicationMedium,
+      universeId, seriesId, createdAt, updatedAt, episodes } = sanitized;
+    const expected = {
+      id, name, logline, format, participationMode, audienceCommunicationMedium,
+      universeId, seriesId, createdAt, updatedAt,
+      episodeCount: episodes.length,
+      sceneCount: episodes.reduce((count, ep) => count + ep.nodes.length, 0),
+      endingCount: 1,
+    };
+    const summaries = await listLoomSummaries();
+    expect(summaries.map((row) => row.id)).toEqual([newer.id, other.id, linked.id]);
+    expect(summaries[1]).toMatchObject({ episodeCount: 0, sceneCount: 0, endingCount: 0 });
+    expect(await listLoomSummaries({ seriesId })).toEqual([expected]);
+    expect(await listLoomSummaries({ seriesId: 'series-missing' })).toEqual([]);
+
+    const projected = (await db.listSummaries({ seriesId })).find((row) => row.header.id === id);
+    expect(projected).toEqual({
+      header: {
+        id, name: linked.name, logline: linked.logline, format: linked.format,
+        participationMode: linked.participationMode,
+        audienceCommunicationMedium: linked.audienceCommunicationMedium,
+        universeId: linked.universeId, seriesId, createdAt, updatedAt,
+      },
+      episodeCount: LOOM_LIMITS.EPISODES_MAX,
+      sceneCount: LOOM_LIMITS.NODES_MAX,
+      endingCount: 1,
+    });
   });
 
   it('waits for an in-flight video attachment before taking the retirement snapshot', async () => {

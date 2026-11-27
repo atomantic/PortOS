@@ -39,6 +39,7 @@ function makeFileBackend() {
     name: 'file',
     readRaw: (id) => collection.loadOneRaw(id),
     listRaw: () => collection.loadAll(),
+    listSummaries: async () => (await collection.loadAll()).map((fileRecord) => ({ fileRecord })),
     withMediaReferences: work => queueMediaWrite(async () => work((await collection.loadAll()).filter(r => r?.deleted !== true))),
     listIds: () => collection.listIds(),
     // The file layout can't project — `deleted` lives inside each record, so
@@ -72,6 +73,7 @@ function makePgBackend(db) {
     name: 'postgres',
     readRaw: db.readRaw,
     listRaw: db.listRaw,
+    listSummaries: db.listSummaries,
     withMediaReferences: db.withMediaReferences,
     listIds: db.listIds,
     listLiveIds: db.listLiveIds,
@@ -105,6 +107,8 @@ export const readRaw = async (id) => {
 };
 
 export const listRaw = async () => (await facade.getBackend()).listRaw();
+
+export const listSummaries = async (options) => (await facade.getBackend()).listSummaries(options);
 
 export const withLoomMediaReferences = async work => (await facade.getBackend()).withMediaReferences(work);
 
