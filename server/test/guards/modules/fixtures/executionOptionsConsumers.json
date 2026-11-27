@@ -103,6 +103,7 @@
   "client/src/components/universe/VisionProviderPicker.jsx",
   "client/src/components/universeBuilder/MoodBoardStyleSynthesis.jsx",
   "client/src/components/universeBuilder/UniverseBibleTab.jsx",
+  "client/src/components/voice/VoiceLlmQuickPicker.jsx",
   "client/src/components/writers-room/StagePromptModelPicker.jsx",
   "client/src/pages/CatalogIngest.jsx",
   "client/src/pages/FableLoom.jsx",

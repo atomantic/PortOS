@@ -17,9 +17,11 @@ function AvatarActions({ data, ask, terms, pending }) {
   </>;
 }
 
-export default function AvatarRuntimeSettings({ data, error, updateData, refetch, compact = false }) {
+export default function AvatarRuntimeSettings({ data, error, updateData, refetch, compact = false, open, onToggleOpen }) {
   const useGenerativeAvatar = useAvatarMode();
-  const [showControls, setShowControls] = useState(false);
+  const [localOpen, setLocalOpen] = useState(false);
+  const showControls = typeof open === 'boolean' ? open : localOpen;
+  const setShowControls = onToggleOpen || setLocalOpen;
   const [terms, setTerms] = useState(false);
   const [pending, setPending] = useState(false);
   const [failure, setFailure] = useState('');
@@ -41,6 +43,13 @@ export default function AvatarRuntimeSettings({ data, error, updateData, refetch
   };
 
   const running = data?.supported && data.phase === 'running' && !error;
+  // When embedded with an external toggle (e.g. the Voice Call telemetry card's
+  // settings icon) and AvatarForcing is already live, collapse completely until
+  // the user opens avatar settings.
+  if (typeof open === 'boolean' && running && useGenerativeAvatar && !showControls) {
+    return null;
+  }
+
   const ledTone = running && useGenerativeAvatar
     ? 'bg-port-success shadow-[0_0_6px_rgb(var(--port-success)/0.85)]'
     : data?.phase === 'starting' || data?.phase === 'installing'
@@ -53,11 +62,10 @@ export default function AvatarRuntimeSettings({ data, error, updateData, refetch
         <span aria-hidden="true" className={`h-2 w-2 shrink-0 rounded-full ${ledTone}`} />
         <h3 className="font-mono text-xs font-semibold uppercase tracking-wider">
           {running && useGenerativeAvatar ? 'AvatarForcing ready' : 'Avatar setup'}
-          <span className="ml-2 rounded border border-port-border bg-port-bg px-1.5 py-0.5 text-[10px] font-normal text-port-text-muted">Experimental</span>
         </h3>
       </div>
       {running && useGenerativeAvatar && <button type="button" className={button} aria-expanded={showControls}
-        onClick={() => setShowControls(value => !value)}>{showControls ? 'Hide avatar settings' : 'Avatar settings'}</button>}
+        onClick={() => setShowControls(!showControls)}>{showControls ? 'Hide avatar settings' : 'Avatar settings'}</button>}
     </div>
     {(!running || !useGenerativeAvatar) && <p className="text-xs text-port-text-muted">Calls and Play sample still work with a still portrait.</p>}
     {(error || !data) && <p role="status" className="text-xs">{error ? 'Could not load avatar status.' : 'Checking avatar runtime…'}</p>}

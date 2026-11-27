@@ -8,6 +8,8 @@ import {
 import AvatarRuntimeSettings from './AvatarRuntimeSettings';
 import SatPhoneRotaryDial from './SatPhoneRotaryDial';
 import VoiceCallGenerativePortrait from './VoiceCallGenerativePortrait';
+import VoiceLlmQuickPicker from './VoiceLlmQuickPicker';
+import { CONVERSATIONAL_GEMMA, isConversationalGemma } from '../../../../server/lib/voiceModelCatalog.js';
 
 const STATUS_LABELS = {
   idle: 'Standby',
@@ -121,6 +123,9 @@ export default function SatPhoneHandset({
   onSample,
   onClear,
   voiceLabel,
+  llmProvider,
+  llmModel,
+  onLlmSaved,
   avatar,
   onToggleAvatar,
   avatarData,
@@ -184,6 +189,10 @@ export default function SatPhoneHandset({
     : (capturing ? `Click or press ${hotkey} to send voice` : `Click or press ${hotkey} to talk`);
 
   const paddleLegend = capturing ? (openMic ? 'LIVE' : 'SEND') : 'TALK';
+  const llmDisplay = llmModel && llmModel !== 'auto'
+    ? (isConversationalGemma(llmModel) ? CONVERSATIONAL_GEMMA.name : llmModel)
+    : (llmProvider ? `${llmProvider} · auto` : null);
+  const lcdSubline = [voiceLabel || 'Saved voice', llmDisplay].filter(Boolean).join(' · ');
 
   const keyBase = 'satphone-key inline-flex min-h-10 pointer-coarse:min-h-11 items-center justify-center gap-1 rounded-lg border px-2 py-1.5 font-mono text-[10px] font-semibold uppercase tracking-wider disabled:opacity-45';
   const utilityBtn = 'inline-flex items-center justify-center rounded-md border border-transparent p-1 pointer-coarse:min-h-11 pointer-coarse:min-w-11 text-port-text-muted hover:border-port-border hover:bg-port-bg/60 hover:text-port-text transition-colors';
@@ -245,8 +254,8 @@ export default function SatPhoneHandset({
                   type="button"
                   onClick={() => setShowFloatingAvatarSetup((v) => !v)}
                   aria-expanded={showFloatingAvatarSetup}
-                  aria-label="Avatar model setup"
-                  title="AvatarForcing setup & status"
+                  aria-label="Voice LLM and avatar setup"
+                  title="Voice LLM & AvatarForcing setup"
                   className={`${utilityBtn} ${showFloatingAvatarSetup ? 'text-port-accent border-port-accent/40' : ''}`}
                 >
                   <SlidersHorizontal size={13} aria-hidden="true" />
@@ -297,15 +306,23 @@ export default function SatPhoneHandset({
           </div>
         </header>
 
-        {/* Expandable inline Avatar setup panel in floating mode */}
+        {/* Expandable inline LLM + Avatar setup tray in floating mode */}
         {isFloating && showFloatingAvatarSetup && (
-          <AvatarRuntimeSettings
-            compact
-            data={avatarData}
-            error={avatarError}
-            updateData={onUpdateAvatarData}
-            refetch={onRefetchAvatar}
-          />
+          <div className="space-y-2">
+            <VoiceLlmQuickPicker
+              compact
+              provider={llmProvider}
+              model={llmModel}
+              onSaved={onLlmSaved}
+            />
+            <AvatarRuntimeSettings
+              compact
+              data={avatarData}
+              error={avatarError}
+              updateData={onUpdateAvatarData}
+              refetch={onRefetchAvatar}
+            />
+          </div>
         )}
 
         {/* Viewfinder bay + integrated right-edge tactile TALK paddle */}
@@ -316,6 +333,7 @@ export default function SatPhoneHandset({
               <VoiceCallGenerativePortrait
                 key={runningAvatar ? 'animated' : 'still'}
                 running={runningAvatar}
+                stage={stage}
                 fill
               />
             ) : (
@@ -423,8 +441,8 @@ export default function SatPhoneHandset({
                     {muted ? 'MUTE' : `${Math.round(volume * 100)}%`}
                   </span>
                 </div>
-                <span className="font-mono text-[10px] opacity-75 truncate" title={voiceLabel || 'Saved voice settings'}>
-                  {voiceLabel || 'Saved voice'}
+                <span className="font-mono text-[10px] opacity-75 truncate" title={lcdSubline}>
+                  {lcdSubline}
                 </span>
               </div>
               <SignalMeter level={signalLevel} stage={stage} muted={muted} />

@@ -10,6 +10,7 @@ import ProviderModelSelector from '../../ProviderModelSelector';
 import FormField from '../../ui/FormField';
 import ListLoadError from '../../ui/ListLoadError';
 import useMounted from '../../../hooks/useMounted';
+import ConversationalGemmaNotice from './ConversationalGemmaNotice';
 
 const parseTraits = (text) => text.split(',').map((s) => s.trim()).filter(Boolean);
 
@@ -196,11 +197,19 @@ export default function VoiceLlmSection({ cfg, patch, inputCls, traitsSyncRef })
             {refreshingModels ? <BrailleSpinner /> : <RefreshCw size={14} />}
           </button>
         </div>
-        <p className="text-xs text-port-text-muted">
-          <a href={CONVERSATIONAL_GEMMA.url} target="_blank" rel="noreferrer" className="text-port-accent hover:underline">
-            {CONVERSATIONAL_GEMMA.name}
-          </a>{' is available here when your provider serves it. After connecting the provider, refresh the model list.'}
-        </p>
+        <ConversationalGemmaNotice
+          apiProviders={apiProviders}
+          selectedProviderId={llmProvider}
+          selectedModelId={llmModel}
+          onSelectModel={(modelId) => patch('llm.model', modelId)}
+          onSwitchProviderAndModel={(providerId, modelId) => {
+            patch('llm.provider', providerId);
+            patch('llm.model', modelId);
+            patch('llm.visionModel', 'auto');
+          }}
+          onRefresh={!providerMissing && apiProviders.length > 0 ? () => handleRefreshModels(llmProvider) : undefined}
+          refreshing={refreshingModels}
+        />
       </div>
 
       <div className="space-y-1">

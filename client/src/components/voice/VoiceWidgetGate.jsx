@@ -27,6 +27,7 @@ const DISABLED_CONFIG = {
   sttLanguage: 'en',
   fastPath: null,
   personality: null,
+  llm: { provider: 'lmstudio', model: 'auto' },
   tts: {},
 };
 
@@ -52,6 +53,9 @@ const hydrate = (previous, cfg, updated) => {
     sttLanguage: !updated.has('sttLanguage') && cfg?.stt?.language ? cfg.stt.language : previous.sttLanguage,
     fastPath: updated.has('fastPath') ? previous.fastPath : cfg?.llm?.fastPath || null,
     personality: updated.has('personality') ? previous.personality : cfg?.llm?.usePersonality === false ? null : cfg?.llm?.personality || null,
+    llm: updated.has('llm')
+      ? previous.llm
+      : { provider: cfg?.llm?.provider || previous.llm?.provider || 'lmstudio', model: cfg?.llm?.model || previous.llm?.model || 'auto' },
     vad: updated.has('vad') ? previous.vad : cfg?.vad || null,
     tts: updated.has('tts')
       ? previous.tts
@@ -69,6 +73,9 @@ const changedFields = (cfg) => {
   if (cfg?.sttLanguage) patch.sttLanguage = cfg.sttLanguage;
   if ('fastPath' in (cfg || {})) patch.fastPath = cfg.fastPath || null;
   if ('personality' in (cfg || {})) patch.personality = cfg.personality || null;
+  if (cfg?.llmProvider || cfg?.llmModel) {
+    patch.llm = { provider: cfg.llmProvider || 'lmstudio', model: cfg.llmModel || 'auto' };
+  }
   if (cfg?.vad) patch.vad = cfg.vad;
   if (cfg?.ttsEngine) patch.tts = { engine: cfg.ttsEngine, voice: cfg.ttsVoice, rate: cfg.ttsRate };
   return patch;

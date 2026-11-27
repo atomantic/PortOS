@@ -82,7 +82,11 @@ export default function VoiceWidget({ config, claimHeld, consoleHost }) {
   const vadRef = useRef(config.vad);
   vadRef.current = config.vad;
   const navigate = useNavigate();
-  const { enabled, hotkey, sttEngine, sttLanguage, fastPath, personality, tts } = config;
+  const { enabled, hotkey, sttEngine, sttLanguage, fastPath, personality, llm, tts } = config;
+  const [llmOverride, setLlmOverride] = useState(null);
+  useEffect(() => { setLlmOverride(null); }, [llm?.provider, llm?.model]);
+  const activeLlmProvider = llmOverride?.provider || llm?.provider || 'lmstudio';
+  const activeLlmModel = llmOverride?.model || llm?.model || 'auto';
   const turnGenerationRef = useRef(0);
   const [stage, setStage] = useState('idle');
   const [history, setHistory] = useState([]);
@@ -972,6 +976,9 @@ export default function VoiceWidget({ config, claimHeld, consoleHost }) {
         onSample={playCallSample}
         onClear={handleClear}
         voiceLabel={tts?.voice || tts?.engine}
+        llmProvider={activeLlmProvider}
+        llmModel={activeLlmModel}
+        onLlmSaved={setLlmOverride}
         volume={audioPrefs.volume}
         muted={audioPrefs.muted}
         onVolumeChange={handleVolumeChange}
@@ -1068,6 +1075,9 @@ export default function VoiceWidget({ config, claimHeld, consoleHost }) {
             onSample={playCallSample}
             onClear={handleClear}
             voiceLabel={tts?.voice || tts?.engine}
+            llmProvider={activeLlmProvider}
+            llmModel={activeLlmModel}
+            onLlmSaved={setLlmOverride}
             avatar={floatingAvatar}
             onToggleAvatar={handleToggleFloatingAvatar}
             avatarData={floatingAvatarData}

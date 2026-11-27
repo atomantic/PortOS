@@ -1,16 +1,27 @@
 import { useState } from 'react';
-import { Play, Radio, Send, Trash2 } from 'lucide-react';
+import { Play, Radio, Send, Settings2, Trash2 } from 'lucide-react';
 import AvatarRuntimeSettings from './AvatarRuntimeSettings';
 import SatPhoneHandset from './SatPhoneHandset';
+import VoiceLlmQuickPicker from './VoiceLlmQuickPicker';
 import { useAvatarRuntime } from './useAvatarRuntime';
 import { useAvatarMode } from './useAvatarMode';
 import { safeReadStorage, safeWriteStorage } from '../../lib/safeStorage';
 
 const DISPLAY_KEY = 'portos.voice.callDisplay';
 
-function StationTelemetry({ voiceLabel, canChangeMicMode, handsFree, volume, muted, avatar, runningAvatar }) {
+function StationTelemetry({
+  voiceLabel,
+  canChangeMicMode,
+  handsFree,
+  volume,
+  muted,
+  avatar,
+  runningAvatar,
+  showAvatarSettings,
+  onToggleAvatarSettings,
+}) {
   const captureMode = !canChangeMicMode ? 'Web Speech' : handsFree ? 'Hands-free (VOX)' : 'Push-to-talk';
-  const avatarStatus = !avatar ? 'Audio only' : runningAvatar ? 'AvatarForcing live' : 'Still portrait';
+  const avatarStatus = !avatar ? 'Audio only' : runningAvatar ? 'AvatarForcing' : 'Living portrait';
 
   return (
     <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
@@ -26,17 +37,35 @@ function StationTelemetry({ voiceLabel, canChangeMicMode, handsFree, volume, mut
           {captureMode} · {muted ? 'Muted' : `${Math.round(volume * 100)}%`}
         </p>
       </div>
-      <div className="rounded-xl border border-port-border bg-port-card px-3 py-2.5 min-w-0">
-        <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-port-text-muted">Video feed</p>
-        <p className="mt-0.5 flex items-center gap-1.5 font-mono text-xs font-semibold text-port-text">
-          <span
-            aria-hidden="true"
-            className={`h-1.5 w-1.5 shrink-0 rounded-full ${
-              runningAvatar ? 'bg-port-accent shadow-[0_0_6px_rgb(var(--port-accent))]' : avatar ? 'bg-port-success' : 'bg-port-text-muted'
+      <div className="flex items-center justify-between gap-2 rounded-xl border border-port-border bg-port-card px-3 py-2.5 min-w-0">
+        <div className="min-w-0">
+          <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-port-text-muted">Video feed</p>
+          <p className="mt-0.5 flex items-center gap-1.5 font-mono text-xs font-semibold text-port-text">
+            <span
+              aria-hidden="true"
+              className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+                runningAvatar ? 'bg-port-accent shadow-[0_0_6px_rgb(var(--port-accent))]' : avatar ? 'bg-port-success' : 'bg-port-text-muted'
+              }`}
+            />
+            <span className="truncate" title={avatarStatus}>{avatarStatus}</span>
+          </p>
+        </div>
+        {avatar && runningAvatar && (
+          <button
+            type="button"
+            onClick={onToggleAvatarSettings}
+            aria-expanded={showAvatarSettings}
+            aria-label="Avatar settings"
+            title={showAvatarSettings ? 'Hide avatar settings' : 'Avatar settings'}
+            className={`inline-flex shrink-0 items-center justify-center rounded-lg border p-1.5 pointer-coarse:min-h-11 pointer-coarse:min-w-11 transition-colors ${
+              showAvatarSettings
+                ? 'border-port-accent bg-port-accent/10 text-port-accent-text'
+                : 'border-port-border bg-port-bg text-port-text-muted hover:border-port-accent hover:text-port-text'
             }`}
-          />
-          <span className="truncate" title={avatarStatus}>{avatarStatus}</span>
-        </p>
+          >
+            <Settings2 size={15} aria-hidden="true" />
+          </button>
+        )}
       </div>
     </div>
   );
@@ -45,10 +74,11 @@ function StationTelemetry({ voiceLabel, canChangeMicMode, handsFree, volume, mut
 export default function VoiceCallConsole({
   stage, history, scrollRef, interimTranscript, capturing, handsFree, canChangeMicMode,
   hotkey, draft, onDraft, onSend, onMic, onMode, onInterrupt, onEnd, onSample, onClear,
-  voiceLabel, volume = 0.85, muted = false, onVolumeChange, onToggleMute,
+  voiceLabel, llmProvider, llmModel, onLlmSaved, volume = 0.85, muted = false, onVolumeChange, onToggleMute,
   sfxEnabled = true, onToggleSfx, signalLevel = 0, visionEnabled = false, onToggleVision,
 }) {
   const [avatar, setAvatar] = useState(() => safeReadStorage(DISPLAY_KEY) !== 'audio');
+  const [showAvatarSettings, setShowAvatarSettings] = useState(false);
   const generativeAvatar = useAvatarMode();
   const { data, error, updateData, refetch } = useAvatarRuntime(avatar);
   const runningAvatar = generativeAvatar && !error && data?.supported && data.phase === 'running';
@@ -86,6 +116,9 @@ export default function VoiceCallConsole({
           onSample={onSample}
           onClear={onClear}
           voiceLabel={voiceLabel}
+          llmProvider={llmProvider}
+          llmModel={llmModel}
+          onLlmSaved={onLlmSaved}
           avatar={avatar}
           onToggleAvatar={toggleAvatar}
           avatarData={data}
@@ -115,6 +148,8 @@ export default function VoiceCallConsole({
           muted={muted}
           avatar={avatar}
           runningAvatar={runningAvatar}
+          showAvatarSettings={showAvatarSettings}
+          onToggleAvatarSettings={() => setShowAvatarSettings((prev) => !prev)}
         />
 
         {avatar && (
@@ -123,8 +158,16 @@ export default function VoiceCallConsole({
             error={error}
             updateData={updateData}
             refetch={refetch}
+            open={showAvatarSettings}
+            onToggleOpen={setShowAvatarSettings}
           />
         )}
+
+        <VoiceLlmQuickPicker
+          provider={llmProvider}
+          model={llmModel}
+          onSaved={onLlmSaved}
+        />
 
         {/* Dedicated full-height Transmission Log & Message Composer */}
         <section className="flex min-w-0 flex-col gap-3 rounded-2xl border border-port-border bg-port-card p-3.5 text-port-text sm:p-4">

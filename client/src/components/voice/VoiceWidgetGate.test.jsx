@@ -104,7 +104,14 @@ vi.mock('../../services/voiceFastPath', () => ({
 
 vi.mock('../../services/browserLlm', () => ({ warmNano: vi.fn() }));
 vi.mock('../../services/apiPalette', () => ({ getPaletteManifest: vi.fn() }));
-vi.mock('../../services/apiVoice', () => ({ getVoiceConfig: mocks.getVoiceConfig }));
+vi.mock('../../services/apiVoice', () => ({
+  getVoiceConfig: mocks.getVoiceConfig,
+  updateVoiceConfig: vi.fn(async (patch) => ({ config: patch })),
+}));
+vi.mock('../../services/apiProviders', () => ({
+  getProviders: vi.fn(async () => ({ providers: [] })),
+  refreshProviderModels: vi.fn(async () => ({ models: [] })),
+}));
 vi.mock('../../services/apiVoiceAvatar', () => ({
   fetchVoiceAvatar: vi.fn(async () => ({ supported: false })),
 }));

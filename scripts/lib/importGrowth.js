@@ -83,7 +83,8 @@ export const HEAVY_REGRESSION_BAND = Math.floor(REGRESSION_6156 / 2);
 const MIN_SERVER_TESTS = 1_000;
 
 const SKIP_DIRS = new Set(['node_modules', 'coverage', 'dist', 'data']);
-const SOURCE_EXT = /\.(?:[cm]?js|jsx|tsx?)$/;
+// Include `.json` because server tests statically import JSON fixtures (`with { type: 'json' }`).
+const SOURCE_EXT = /\.(?:[cm]?js|jsx|tsx?|json)$/;
 
 // Head, base and the parity walker use the same parser. Cache by text so
 // different source at the same path in two revisions still gets parsed.
