@@ -1,6 +1,6 @@
 import { readLayeredEngine } from './layeredEngineSource.js';
 import { createRequire } from 'node:module';
-import { generatedCanvasPlaybackEngine } from './generatedCanvasPlayback.js';
+import { generatedCanvasPlaybackEngine, matchesGeneratedCanvasPlaybackEngine } from './generatedCanvasPlayback.js';
 import { generatedThreePlaybackEngine } from './generatedThreePlayback.js';
 import { createHash } from 'node:crypto';
 /**
@@ -358,7 +358,7 @@ function generatedLayeredEngineMatches(engine, reference) {
     // function name. Pin its exact bytes and its exact shipped reference.
     const firstGeneratedCanvas = engineDigest(reference) === 'ecf110208a0861eb35a39ca559997eca647b922b49c1ca5d5bddc35b2f37bd61'
       && createHash('sha256').update(engine).digest('hex') === 'ac67ea53b8007d974e941e1a311ff8b801696928c67cca664580a7485972748f';
-    return firstGeneratedCanvas || engine.equals(generatedCanvasPlaybackEngine(reference));
+    return firstGeneratedCanvas || matchesGeneratedCanvasPlaybackEngine(engine, reference);
   } catch { return false; }
 }
 
@@ -389,7 +389,8 @@ export function upgradeDocumentEngine(projectId, directory) {
     const referenceFile = generated && files.find(file => file.rel === 'engine-reference.js');
     const reference = referenceFile ? await readFile(referenceFile.abs) : null;
     const nextEngine = generated && reference ? generatedCanvasPlaybackEngine(shipped) : shipped;
-    const engineCurrent = engineDigest(prior) === engineDigest(nextEngine);
+    const engineCurrent = engineDigest(prior) === engineDigest(nextEngine)
+      || (reference?.equals(shipped) && generatedLayeredEngineMatches(prior, reference));
     // A current engine can still sit beside stale shipped helpers (they are what the preview compares).
     const { refresh, custom: customHelpers } = generated ? { refresh: new Map(), custom: [] } : await staleStockHelpers(files);
     if (engineCurrent && refresh.size === 0) return { project, document: project.composition.document, changed: false, customHelpers };

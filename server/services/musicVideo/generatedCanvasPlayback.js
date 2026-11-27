@@ -1,5 +1,6 @@
 /** Host-owned producer packaged only into deliberately new Canvas candidates. */
-import { installLayeredPreviewPlayback } from './previewPlaybackRuntime.js';
+import { createHash } from 'node:crypto';
+import { layeredPreviewPlaybackSource } from './previewPlaybackRuntime.js';
 
 // Serialized beside the generated candidate's existing renderer. Original author
 // functions retain the existing synchronous/deterministic section contract.
@@ -124,7 +125,7 @@ const BRIDGE = `
       videos.clear(); images.clear();
       if (generatedBack) { generatedBack.width = 0; generatedBack.height = 0; generatedBack = null; }
     },
-  }, ${installLayeredPreviewPlayback.toString()});
+  }, ${layeredPreviewPlaybackSource});
 `;
 
 /** Canonical host seams only; never called for an existing/imported document. */
@@ -142,4 +143,22 @@ export function generatedCanvasPlaybackEngine(original) {
     source = source.replace(from, () => to);
   }
   return Buffer.from(source);
+}
+
+/** Recognize the current and pre-split stock wrappers with the same host seams. */
+export function matchesGeneratedCanvasPlaybackEngine(engine, reference) {
+  const expected = generatedCanvasPlaybackEngine(reference);
+  if (engine.equals(expected)) return true;
+
+  // Only the scheduler bytes changed. All surrounding bytes and the shipped
+  // scheduler digest must match before treating a prior wrapper as stock.
+  const scheduler = Buffer.from(layeredPreviewPlaybackSource);
+  const start = expected.indexOf(scheduler);
+  if (start < 0) return false;
+  const prefix = expected.subarray(0, start);
+  const suffix = expected.subarray(start + scheduler.length);
+  const end = engine.length - suffix.length;
+  if (end <= start || !engine.subarray(0, start).equals(prefix) || !engine.subarray(end).equals(suffix)) return false;
+  return createHash('sha256').update(engine.subarray(start, end)).digest('hex')
+    === '66e013bce86c861ee7fb34a98c6dae4569f0a41ec1513fba1688615a06b128df';
 }

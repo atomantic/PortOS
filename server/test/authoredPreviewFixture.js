@@ -1,4 +1,4 @@
-import { installLayeredPreviewPlayback } from '../services/musicVideo/previewPlaybackRuntime.js';
+import { layeredPreviewPlaybackSource } from '../services/musicVideo/previewPlaybackRuntime.js';
 
 /**
  * Synthetic custom-document reference, not an admission rule or a shipped
@@ -11,7 +11,7 @@ export function authoredPreviewFixtureFiles() {
     'badge-a.svg': '<svg xmlns="http://www.w3.org/2000/svg" width="240" height="80"><rect width="240" height="80" fill="#39e7c2"/><path d="M20 60L60 20L100 60L140 20L180 60L220 20" fill="none" stroke="#102528" stroke-width="8"/></svg>',
     'badge-b.svg': '<svg xmlns="http://www.w3.org/2000/svg" width="240" height="80"><rect width="240" height="80" fill="#ffb15f"/><circle cx="120" cy="40" r="26" fill="none" stroke="#251820" stroke-width="8"/></svg>',
     'index.html': `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Authored complete-frame reference</title><style>html,body{margin:0;width:100%;height:100%;background:#000;overflow:hidden}#stage{display:block;width:100vw;height:100vh;object-fit:contain}</style></head><body><canvas id="stage" width="1920" height="1080"></canvas><script src="portos-mv.js"></script><!-- portos-allow-hidden-content: host render-time project data --><script src="authored-engine.js"></script><!-- portos-allow-hidden-content: author-owned complete-frame engine --></body></html>`,
-    'authored-engine.js': `(${authoredEngine.toString()})(${installLayeredPreviewPlayback.toString()});\n`,
+    'authored-engine.js': `(${authoredEngine.toString()})(${layeredPreviewPlaybackSource});\n`,
   };
 }
 

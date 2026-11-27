@@ -1,15 +1,26 @@
+/** Install layered preview scheduling inside the private engine closure. */
+import { createPreviewPlaybackClock } from './previewPlaybackClock.js';
+import { classifyPreviewPlaybackFrame } from './previewPlaybackFrames.js';
+import { createPreviewPlaybackLayers } from './previewPlaybackLayers.js';
+
+const playbackHelpers = { createPreviewPlaybackClock, createPreviewPlaybackLayers, classifyPreviewPlaybackFrame };
+
 /** Serialized into an admitted layered preview's private engine closure. */
-export function installLayeredPreviewPlayback(bridge, composition = globalThis.portosComposition) {
+export function installLayeredPreviewPlayback(bridge, composition = globalThis.portosComposition, {
+  createPreviewPlaybackClock, createPreviewPlaybackLayers, classifyPreviewPlaybackFrame,
+} = playbackHelpers) {
   const FPS = 30;
   const FRAME_FRESH_MS = 100;
   let epoch = -1, lease = 0, sequence = -1, phase = 'idle', disposed = false, poisoned = false, motion = null;
-  let handle = null, active = null, transition = null, clockAt = 0, songTime = 0, rate = 1, correction = 0, posted = -1, lastAnchor = 0;
+  let handle = null, active = null, transition = null, posted = -1;
   const pending = new Set();
   const notified = new Set();
-  const now = performance.now.bind(performance);
+  const clock = createPreviewPlaybackClock(bridge);
+  const { now, advance } = clock;
+  const { stateAt, videoOf, keyOf, layersFit, sourceTarget, endHold, load, freshSource, publish, liveVideo, needsTransition } =
+    createPreviewPlaybackLayers(bridge, { now, owns: (token) => token === lease && !disposed });
   let videoOwner = null;
   let transitionOwner = null;
-  const clamp = (n, lo, hi) => Math.min(hi, Math.max(lo, n));
   const error = (code) => Object.assign(new Error(code), { code });
   const check = (input, anchor = false) => {
     if (disposed) throw error('PLAYBACK_DISPOSED');
@@ -77,66 +88,12 @@ export function installLayeredPreviewPlayback(bridge, composition = globalThis.p
     cancel(result); emit('portos-mv:playback-resync', 'PLAYBACK_RESYNC');
     return result;
   };
-  const advance = (at) => {
-    const elapsed = Math.max(0, (at - clockAt) / 1000);
-    songTime = clamp(songTime + elapsed * rate, 0, bridge.duration);
-    correction -= elapsed * (rate - 1);
-    rate = 1 + clamp(correction / 2, -0.02, 0.02);
-    clockAt = at;
-    return songTime;
-  };
-  const stateAt = (t) => {
-    const state = bridge.state(t);
-    return { songTime: t, state, t: state.t, scene: bridge.scene(state.t) };
-  };
-  const videoOf = (item) => item?.scene?.media?.kind === 'video' && item.source ? item.source : null;
-  // Which drawable a still needs at item.t (a photo sequence's current step);
-  // null where one source serves the whole scene. A change is a transition.
-  const keyOf = (item) => item?.scene && bridge.needsSource(item.scene) ? bridge.sourceKey?.(item.scene, item.t) ?? null : null;
-  // Extra drawables a frame paints besides its source (a wipe's held outgoing
-  // shot). An item whose layers no longer fit its time is reloaded like a step.
-  const layersFit = (item) => !item?.scene || (bridge.layersReady?.(item.scene, item.t, item.layers ?? null) ?? true);
-  // Autonomous media advances on song time, while narrative holds deliberately
-  // freeze its source clock. Camera/code drawing still uses quantized item.t.
-  const sourceClock = (item) => item.state.hold ? item.t : item.songTime;
-  const sourceTarget = (item) => {
-    const video = videoOf(item), media = item.scene.media;
-    const end = Math.min(Number.isFinite(media.outSec) ? media.outSec : video.duration, video.duration);
-    const last = Math.max(0, end - 0.5 / (media.fps || bridge.fps));
-    return Math.min(Math.max((media.inSec || 0) + sourceClock(item) - item.scene.startSec, media.inSec || 0), last, Math.max(0, video.duration - 1e-3));
-  };
-  const endHold = (item) => {
-    const video = videoOf(item);
-    if (!video) return false;
-    const end = Math.min(Number.isFinite(item.scene.media.outSec) ? item.scene.media.outSec : video.duration, video.duration);
-    return Number.isFinite(end) && (item.scene.media.inSec || 0) + sourceClock(item) - item.scene.startSec >= end - 0.5 / (item.scene.media.fps || bridge.fps);
-  };
   const startMedia = async (item, token) => {
     const video = videoOf(item);
     if (!video || item.state.hold || item.endHold) { stopMedia(); return; }
-    video.playbackRate = rate;
+    video.playbackRate = clock.rate;
     await video.play();
     if (token !== lease || disposed) video.pause();
-  };
-  const load = async (t, token, live = false) => {
-    const item = stateAt(t);
-    const sourceTime = live && item.scene?.media?.kind === 'video' ? sourceClock(item) : item.t;
-    // Layers first: a held layer draws from a source the incoming one may reuse.
-    item.layers = item.scene ? await bridge.layers?.(item.scene, item.t) ?? null : null;
-    if (token !== lease || disposed) return null;
-    item.source = item.scene && bridge.needsSource(item.scene) ? await bridge.source(item.scene, sourceTime) : null;
-    if (token !== lease || disposed) return null;
-    item.sourceKey = keyOf(item);
-    item.endHold = endHold(item);
-    return item;
-  };
-  const freshSource = (aligned, latest, startedAt) => {
-    const video = videoOf(aligned), item = { ...latest, source: aligned.source, sourceKey: aligned.sourceKey ?? null, layers: aligned.layers ?? null };
-    const same = latest.scene === aligned.scene && latest.state.hold === aligned.state.hold
-      && (!latest.state.hold || latest.t === aligned.t) && endHold(item) === endHold(aligned) && layersFit(item);
-    const drift = video && latest.scene === aligned.scene ? video.currentTime - sourceTarget(item) : 0;
-    return { item, drift, valid: same && now() - startedAt < 100
-      && (!video || video.readyState >= 2 && !video.seeking && Number.isFinite(drift) && Math.abs(drift) < 0.1) };
   };
   const freshTransition = (owner) => {
     if (transitionOwner !== owner || owner.token !== lease || owner.epoch !== epoch || disposed) return false;
@@ -155,9 +112,6 @@ export function installLayeredPreviewPlayback(bridge, composition = globalThis.p
     }, FRAME_FRESH_MS);
     return progress;
   };
-  const publish = (item, token, valid = () => true) => bridge.publish(item.songTime, item.t, item.scene, item.source, item.state,
-    () => token === lease && !disposed && valid(), item.layers ?? null);
-  const liveVideo = (item) => videoOf(item) && !item.state.hold && !item.endHold;
   const ownVideo = (item, token, transitionLease = null) => {
     retireVideo();
     const video = videoOf(item);
@@ -175,7 +129,8 @@ export function installLayeredPreviewPlayback(bridge, composition = globalThis.p
         try {
           const at = now();
           if (owner.transitionLease && !freshTransition(owner.transitionLease)) return;
-          if (at - lastAnchor > 1000) { resync((at - lastAnchor) / 1000); return; }
+          const anchorGap = clock.anchorGap(at);
+          if (anchorGap > 1000) { resync(anchorGap / 1000); return; }
           const next = stateAt(advance(at));
           if (at - owner.lastFreshAt >= FRAME_FRESH_MS) { resync((at - owner.lastFreshAt) / 1000); return; }
           const item = { ...next, source: video, layers: owner.layers };
@@ -187,25 +142,9 @@ export function installLayeredPreviewPlayback(bridge, composition = globalThis.p
             else beginTransition(token, at);
             return;
           }
-          const mediaTime = metadata?.mediaTime, frames = metadata?.presentedFrames;
-          if (!Number.isFinite(mediaTime) || mediaTime < 0 || !Number.isSafeInteger(frames) || frames < 0
-            || (owner.mediaTime != null && (mediaTime < owner.mediaTime || frames < owner.presentedFrames))) {
-            resync(0.1); return;
-          }
-          const duplicate = owner.mediaTime != null && (mediaTime === owner.mediaTime || frames === owner.presentedFrames);
-          owner.presentedFrames = frames;
-          if (duplicate) {
-            arm(); return; // Duplicates never extend the freshness deadline.
-          }
-          const drift = mediaTime - sourceTarget(item);
-          if (video.readyState < 2 || video.seeking || video.paused || Math.abs(drift) >= 0.1) { resync(drift); return; }
-          owner.mediaTime = mediaTime; owner.lastFreshAt = at;
-          // A <=30 fps source publishes every fresh callback, independent of
-          // audio/RAF phase. Faster sources share source-time-relative bins.
-          if (owner.origin == null) owner.origin = mediaTime;
-          const bucket = Math.floor((mediaTime - owner.origin) * FPS + 1e-6);
-          if (item.scene.media.fps > FPS && bucket === owner.bucket) { arm(); return; }
-          owner.bucket = bucket;
+          const frame = classifyPreviewPlaybackFrame(owner, item, metadata, at, sourceTarget, FPS);
+          if (frame.status === 'resync') { resync(frame.drift); return; }
+          if (frame.status === 'skip') { arm(); return; }
           if (publish(item, token, () => !owner.transitionLease || freshTransition(owner.transitionLease))) {
             active = item;
             if (owner.transitionLease) { retireTransition(); owner.transitionLease = null; }
@@ -227,11 +166,11 @@ export function installLayeredPreviewPlayback(bridge, composition = globalThis.p
     try {
       const at = now();
       if (transitionOwner && !freshTransition(transitionOwner)) return;
-      if (at - lastAnchor > 1000) { resync((at - lastAnchor) / 1000); return; }
+      const anchorGap = clock.anchorGap(at);
+      if (anchorGap > 1000) { resync(anchorGap / 1000); return; }
       const t = advance(at), next = stateAt(t);
       const nextEndHold = active ? endHold({ ...next, source: active.source }) : false;
-      if (!active || active.scene !== next.scene || active.state.hold !== next.state.hold || active.endHold !== nextEndHold
-        || (active.sourceKey ?? null) !== keyOf(next) || !layersFit({ ...next, layers: active.layers })) {
+      if (needsTransition(active, next, nextEndHold)) {
         if (!transition) {
           if (videoOwner?.resolveFirst) { resync(0.1); return; }
           const progress = beginTransition(token, at);
@@ -275,7 +214,7 @@ export function installLayeredPreviewPlayback(bridge, composition = globalThis.p
         if (video && !next.state.hold && !nextEndHold) {
           const target = sourceTarget({ ...next, source: video });
           if (Math.abs(video.currentTime - target) >= 0.1) { resync(video.currentTime - target); return; }
-          video.playbackRate = rate;
+          video.playbackRate = clock.rate;
           if (videoOwner && at - videoOwner.lastFreshAt >= FRAME_FRESH_MS) { resync((at - videoOwner.lastFreshAt) / 1000); return; }
           // Fresh video frames are published only by their rVFC owner.
           if (phase === 'playing' && token === lease) handle = requestAnimationFrame(tick);
@@ -316,14 +255,15 @@ export function installLayeredPreviewPlayback(bridge, composition = globalThis.p
       check(input, true);
       if (input.epoch !== epoch || input.sequence <= sequence) return Promise.resolve({ epoch: input.epoch, status: 'stale' });
       if (phase !== 'prepared') throw error('PLAYBACK_NOT_PREPARED');
-      const at = now(), age = (at - input.workerTime) / 1000;
+      const at = now(), age = clock.anchorAge(input, at);
       if (age < -0.1 || age > 1) return Promise.resolve(resync(age));
       const token = lease;
-      sequence = input.sequence; songTime = clamp(input.t + age, 0, bridge.duration); clockAt = at;
-      lastAnchor = at;
-      correction = 0; rate = 1; phase = 'starting';
+      sequence = input.sequence;
+      clock.reset(clock.project(input, at), at);
+      clock.acceptAnchor(at);
+      phase = 'starting';
       const task = bounded((async () => {
-        const project = () => stateAt(clamp(input.t + (now() - input.workerTime) / 1000, 0, bridge.duration));
+        const project = () => stateAt(clock.project(input, now()));
         const wanted = project(), prepared = active;
         // Cold preparation precedes audio startup. Align its already-loaded
         // source once to the now-running master; never repeat this seek in sync.
@@ -343,22 +283,21 @@ export function installLayeredPreviewPlayback(bridge, composition = globalThis.p
         fresh = alignment();
         if (!fresh.valid) return resync(fresh.drift || (now() - at) / 1000);
         active = { ...fresh.item, endHold: endHold(fresh.item) };
-        songTime = fresh.item.songTime; clockAt = now(); correction = 0; rate = 1;
+        clock.reset(fresh.item.songTime, now());
         setMotion(true);
         phase = 'playing'; handle = requestAnimationFrame(tick);
-        return liveVideo(active) ? ownVideo(active, token) : { epoch, status: 'playing', t: songTime, workerTime: now() };
+        return liveVideo(active) ? ownVideo(active, token) : { epoch, status: 'playing', t: fresh.item.songTime, workerTime: now() };
       })(), 1500).catch((cause) => { if (token === lease) fail('PLAYBACK_MEDIA'); throw cause; });
       return tracked(task);
     },
     sync(input) {
       check(input, true);
       if (input.epoch !== epoch || input.sequence <= sequence || phase !== 'playing') return { epoch: input.epoch, status: 'stale' };
-      const at = now(), age = (at - input.workerTime) / 1000;
+      const at = now(), age = clock.anchorAge(input, at);
       const drift = input.t + age - advance(at);
       sequence = input.sequence;
       if (age < -0.1 || age > 1 || Math.abs(drift) >= 0.1) return resync(drift);
-      correction = drift;
-      lastAnchor = at;
+      clock.acceptAnchor(at, drift);
       return { epoch, status: 'accepted', driftSec: drift };
     },
     pause(input) {
@@ -377,3 +316,8 @@ export function installLayeredPreviewPlayback(bridge, composition = globalThis.p
   };
   Object.defineProperty(composition, 'previewPlayback', { value: api });
 }
+
+// Bind the same helpers when the scheduler runs in a document without module imports.
+export const layeredPreviewPlaybackSource = `((playbackHelpers) => (${installLayeredPreviewPlayback.toString()}))({
+  ${Object.entries(playbackHelpers).map(([name, helper]) => `${name}: ${helper.toString()}`).join(',\n')}
+})`;
