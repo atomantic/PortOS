@@ -3,6 +3,7 @@ import { Worker } from 'worker_threads';
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'os';
 import { atomicWrite, PATHS, readJSONFile } from '../lib/fileUtils.js';
+import { isHostShuttingDown } from '../lib/hostShutdown.js';
 import { applyGrokUsageRepair } from './grokUsageBackfill.js';
 import { applyAgyUsageRepair } from './agyUsageBackfill.js';
 import { applyCodexSpeedRepair } from './codexSpeedRepair.js';
@@ -28,7 +29,9 @@ const idleJob = () => ({
   completedAt: null
 });
 
+const SHUTDOWN_ERROR = 'Historical usage backfill interrupted by server shutdown';
 let job = idleJob();
+let stopActiveWorker = null;
 
 const publicJob = () => ({ ...job });
 
@@ -58,6 +61,9 @@ export function getHistoricalUsageBackfillStatus() {
   return publicJob();
 }
 
+export async function stopHistoricalUsageBackfill() {
+  await stopActiveWorker?.();
+}
 
 /**
  * Start the one-shot historical repair. The explicit POST route is the only
@@ -69,7 +75,7 @@ export async function startHistoricalUsageBackfill({
   WorkerClass = Worker,
   providers = null
 } = {}) {
-  if (job.status === 'running') return publicJob();
+  if (isHostShuttingDown() || job.status === 'running') return publicJob();
 
   const id = randomUUID();
   job = {
@@ -81,42 +87,47 @@ export async function startHistoricalUsageBackfill({
 
   notifyUsageBackfillUpdated();
 
+  const fail = (error, repairs = {}) => {
+    if (job.id !== id || job.status !== 'running') return;
+    job = { ...job, ...repairs, status: 'error', error, completedAt: new Date().toISOString() };
+    notifyUsageBackfillUpdated();
+  };
+
   // Resolved HERE, not inside the worker: the toolkit singleton that backs
   // `listProviders()` is never initialized in a worker thread, so a worker-side
   // lookup would silently find no provider to attribute a nested session to.
   // `job.status` is already `running` above, so the await can't let a second
   // POST start a duplicate scan.
   const providerList = providers ?? await listProviders().catch(() => []);
-  let runIds;
-  let reconciledRunIds;
-  let siblingReconciledRunIds;
+  let worker;
   try {
     const { listUsageRunIds } = await import('./usageBackfillWorker.js');
-    runIds = await listUsageRunIds(runsDir);
-    [reconciledRunIds, siblingReconciledRunIds] = await Promise.all([
+    const runIds = await listUsageRunIds(runsDir);
+    const [reconciledRunIds, siblingReconciledRunIds] = await Promise.all([
       getReconciledUsageRunIds(runIds), getSiblingReconciledUsageRunIds(runIds),
     ]);
+    // An accepted request may still be in preflight when the shutdown starts.
+    if (isHostShuttingDown()) {
+      fail(SHUTDOWN_ERROR);
+      return publicJob();
+    }
+    worker = new WorkerClass(new URL('./usageBackfillWorker.js', import.meta.url), {
+      workerData: {
+        runsDir,
+        runIds,
+        home,
+        reconciledRunIds,
+        siblingReconciledRunIds,
+        providers: providerList,
+        // The worker has a separate claim ledger. Seed it with messages already
+        // billed by live completion so the historical scan doesn't bill them again.
+        claimsSeed: snapshotUsageClaims()
+      }
+    });
   } catch (error) {
-    job = { ...job, status: 'error', error: error.message, completedAt: new Date().toISOString() };
-    notifyUsageBackfillUpdated();
+    fail(error.message);
     return publicJob();
   }
-
-  const worker = new WorkerClass(new URL('./usageBackfillWorker.js', import.meta.url), {
-    workerData: {
-      runsDir,
-      runIds,
-      home,
-      reconciledRunIds,
-      siblingReconciledRunIds,
-      providers: providerList,
-      // The worker gets its own empty copy of usageReconciler.js's claim
-      // ledger (a separate module instance) — seed it from this thread's
-      // ledger so a message the live completion path already billed isn't
-      // billed again by the backfill scan.
-      claimsSeed: snapshotUsageClaims()
-    }
-  });
 
   // One repair per click, including when the transcript worker fails. It
   // writes the in-memory ledger, so it stays on this thread rather than in
@@ -192,15 +203,29 @@ export async function startHistoricalUsageBackfill({
     };
   };
 
-  const fail = (error) => {
+  const failWithRepairs = async (error) => {
     if (job.id !== id || job.status !== 'running') return;
-    job = { ...job, status: 'error', error, completedAt: new Date().toISOString() };
-    notifyUsageBackfillUpdated();
+    const { error: repairError, ...repairs } = await repairMedia();
+    fail([error, repairError].filter(Boolean).join('. '), repairs);
   };
 
   let messageTail = Promise.resolve();
+  let exited = false;
+  let termination;
+  const stop = async () => {
+    if (!exited) {
+      termination ??= worker.terminate();
+      await termination;
+    }
+    await messageTail;
+  };
+  stopActiveWorker = stop;
+  const enqueue = (handle) => {
+    messageTail = messageTail.then(handle).catch((error) => fail(error.message));
+  };
+
   worker.on('message', (message) => {
-    messageTail = messageTail.then(async () => {
+    enqueue(async () => {
       if (job.id !== id || job.status !== 'running') return;
       if (message?.type === 'progress') {
         job = { ...job, ...message.progress, grok: job.grok ?? null, codex: job.codex ?? null, agy: job.agy ?? null };
@@ -208,11 +233,7 @@ export async function startHistoricalUsageBackfill({
         return;
       }
       if (message?.type === 'error') {
-        const repaired = await repairMedia();
-        const error = [message.error || 'Backfill failed', repaired.error]
-          .filter(Boolean).join('. ');
-        job = { ...job, status: 'error', error, grok: repaired.grok, codex: repaired.codex, agy: repaired.agy, completedAt: new Date().toISOString() };
-        notifyUsageBackfillUpdated();
+        await failWithRepairs(message.error || 'Backfill failed');
         return;
       }
       if (message?.type !== 'complete') return;
@@ -250,19 +271,22 @@ export async function startHistoricalUsageBackfill({
         completedAt: new Date().toISOString()
       };
       notifyUsageBackfillUpdated();
-    }).catch((error) => {
-      fail(error.message);
     });
   });
   worker.on('error', (error) => {
-    messageTail = messageTail.then(async () => {
-      if (job.id !== id || job.status !== 'running') return;
-      const repaired = await repairMedia();
-      const message = [error.message, repaired.error]
-        .filter(Boolean).join('. ');
-      job = { ...job, status: 'error', error: message, grok: repaired.grok, codex: repaired.codex, agy: repaired.agy, completedAt: new Date().toISOString() };
-      notifyUsageBackfillUpdated();
-    }).catch((err) => fail(err.message));
+    enqueue(() => failWithRepairs(error.message));
+  });
+  worker.once('exit', (code) => {
+    exited = true;
+    // The final message or error may still be applying repairs on this thread.
+    enqueue(async () => {
+      try {
+        if (termination) fail(SHUTDOWN_ERROR);
+        else await failWithRepairs(`Historical usage backfill worker exited before reporting a result (code ${code})`);
+      } finally {
+        if (stopActiveWorker === stop) stopActiveWorker = null;
+      }
+    });
   });
   worker.unref();
   return publicJob();
@@ -271,4 +295,5 @@ export async function startHistoricalUsageBackfill({
 
 export function __resetHistoricalUsageBackfillForTests() {
   job = idleJob();
+  stopActiveWorker = null;
 }

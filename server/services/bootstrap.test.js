@@ -69,6 +69,7 @@ const { asyncNoop, noop, steps, providerCalls, collectionStore } = vi.hoisted(()
       drainPeerSync: vi.fn(asyncNoop),
       shutdownSharing: vi.fn(),
       flushUsage: vi.fn(asyncNoop),
+      stopUsageBackfill: vi.fn(asyncNoop),
       closeDb: vi.fn(asyncNoop),
     },
     providerCalls: {
@@ -113,6 +114,7 @@ vi.mock('./ollamaManager.js', () => ({ ensureRunning: asyncNoop }));
 vi.mock('./provider/providerExecutionReadiness.js', () => ({ ensureProviderReadyForExecution: asyncNoop }));
 vi.mock('./provider/credentialPoolRuntime.js', () => ({ openCredentialSession: steps.openCredentialSession }));
 vi.mock('./usage.js', () => ({ loadUsage: steps.loadUsage, recordSession: asyncNoop, flushPendingUsageWrites: steps.flushUsage }));
+vi.mock('./usageBackfill.js', () => ({ stopHistoricalUsageBackfill: steps.stopUsageBackfill }));
 vi.mock('./usageReconciler.js', () => ({ recordCompletedRunUsage: asyncNoop }));
 vi.mock('./provider/providers.js', () => ({ setAIToolkit: noop }));
 vi.mock('./provider/providerStatus.js', () => ({ setAIToolkit: noop }));
@@ -530,6 +532,7 @@ describe('signal-driven shutdown', () => {
       expect(localHttpServer.close).toHaveBeenCalledOnce();
       expect(steps.quiesceMedia).toHaveBeenCalledOnce();
       expect(steps.quiesceScheduled).toHaveBeenCalledBefore(steps.drainScheduled);
+      expect(steps.stopUsageBackfill).toHaveBeenCalledOnce();
       expect(steps.writeMarker).toHaveBeenCalledExactlyOnceWith({
         agentIds: ['active-agent', 'initializing-agent'], signal: 'SIGTERM',
       });
@@ -635,10 +638,11 @@ describe('signal-driven shutdown', () => {
     expect(exit).toHaveBeenCalledExactlyOnceWith(0);
   });
 
-  it('joins scheduled events, catalog filing, and usage before closing the DB, then waits for remaining writes', async () => {
+  it('drains scheduled events, catalog filing, and usage backfill before flushing usage and closing the DB', async () => {
     const scheduled = hold(steps.drainScheduled);
     const catalog = hold(steps.flushCatalogFiling);
     const usage = hold(steps.flushUsage);
+    const backfill = hold(steps.stopUsageBackfill);
     const ideaLoom = hold(steps.flushIdeaLoom);
     const media = hold(steps.flushMedia);
     const peerSync = hold(steps.drainPeerSync);
@@ -662,6 +666,9 @@ describe('signal-driven shutdown', () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(steps.flushUsage).not.toHaveBeenCalled();
     catalog.release();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(steps.flushUsage).not.toHaveBeenCalled();
+    backfill.release();
     await usage.entered;
     expect(steps.closeDb).not.toHaveBeenCalled();
     expect(exit).not.toHaveBeenCalled();

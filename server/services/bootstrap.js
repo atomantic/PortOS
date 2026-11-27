@@ -70,6 +70,7 @@ import { bindLocalLlmIo, ensureBackendProvider, getBackend as getLocalLlmBackend
 import { ensureRunning as ensureOllamaRunning } from './ollamaManager.js';
 import { ensureProviderReadyForExecution } from './provider/providerExecutionReadiness.js';
 import { flushPendingUsageWrites, loadUsage, recordSession } from './usage.js';
+import { stopHistoricalUsageBackfill } from './usageBackfill.js';
 import { recordCompletedRunUsage } from './usageReconciler.js';
 import { setAIToolkit as setProvidersToolkit } from './provider/providers.js';
 import { setAIToolkit as setProviderStatusToolkit } from './provider/providerStatus.js';
@@ -1179,6 +1180,13 @@ export const registerShutdownHandlers = ({ io, httpServer, localHttpServer }, {
         () => finish('✅ Scheduled events drained'),
         (err) => finishWithError('⚠️ Scheduled events drain failed', err),
       ));
+    // Stop the worker while HTTP drains. Any ledger work its last message
+    // already queued must settle before the usage flush and DB close.
+    const usageBackfillStopped = withGrace('Historical usage backfill', HTTP_DRAIN_WINDOW_MS, ({ finish, finishWithError }) =>
+      stopHistoricalUsageBackfill().then(
+        () => finish(),
+        (err) => finishWithError('⚠️ Historical usage backfill stop failed', err),
+      ));
     const timing = createLagProbe().begin('tailcat');
     // Concurrent steps settle out of phase order; recorded as ms since the signal.
     const settledMs = {};
@@ -1357,6 +1365,7 @@ export const registerShutdownHandlers = ({ io, httpServer, localHttpServer }, {
 
     await scheduledEventsDrained;
     await catalogFilingFlushed;
+    await usageBackfillStopped;
     await flushPendingUsageWrites().catch(err => logBootstrapFailure('❌ Usage ledger flush failed', err));
     timing.mark('dbPool');
     const { close } = await import('../lib/db.js');
