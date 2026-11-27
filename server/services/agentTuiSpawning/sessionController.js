@@ -605,8 +605,14 @@ export function createTuiSessionController({
     // nudge must be re-ingested (not silently skipped by the once-only guard)
     // and needs a brand-new watcher — the original already closed itself on
     // its first (this) detection.
+    try {
+      await sentinel.remove();
+    } catch (err) {
+      // Re-arming against the old sentinel would read stale completion.
+      emitLog('warn', `Could not clear the TUI merge-gate sentinel for ${agentId}: ${err?.message || err}`, { agentId });
+      return false;
+    }
     sentinelIngested = false;
-    await sentinel.remove();
     doneSentinelWatcher = armSentinelWatcher();
     appendLine(LIFECYCLE_LINES.mergeGateReprompted());
     emitLog('warn', `🔁 Merge-gate contract nudge sent for ${agentId} — PR still OPEN with no stated blocker`, { agentId });
@@ -784,7 +790,12 @@ export function createTuiSessionController({
     }
     sessionPhase = 'finishing';
 
-    let decision = await runFinishDecision({ success, reason });
+    let decision = { type: 'finalize' };
+    try {
+      decision = await runFinishDecision({ success, reason });
+    } catch (err) {
+      emitLog('warn', `TUI completion decision failed for ${agentId}: ${err?.message || err}`, { agentId });
+    }
     // A refusal observed while a sentinel/probe was awaited outranks its result.
     if (terminalRefusal) {
       decision = { type: 'finalize' };
@@ -891,30 +902,6 @@ export function createTuiSessionController({
     // do NOT writeFile() it from the output buffer at finalize — the buffer is
     // capped at OUTPUT_BUFFER_CAP and would silently truncate the on-disk
     // record for long runs. The append-only stream is the authoritative copy.
-    //
-    // For failure analysis: resolveErrorAnalysis reads only the tail of the raw
-    // PTY spool (the analyzer strips ANSI and windows it to the last ~200 lines /
-    // 16K chars) and falls back to the capped output buffer if the spool is
-    // missing/unreadable. Successful runs skip the read entirely. raw.txt stays
-    // in agentDir alongside output.txt as the persistent record of the agent's
-    // full PTY transcript.
-    const errorAnalysis = await finalization.resolveErrorAnalysis({
-      finalSuccess,
-      rawFile,
-      fallbackText: getOutputBuffer(),
-      task,
-      model,
-      immediateFallbackAnalysis,
-      // The finalize path's own verdict outranks a keyword sweep of the
-      // transcript when the analyzer recognizes it (COMPLETION_REASON_ANALYSES).
-      completionReason: reason,
-      completionError: finalError,
-      promptProvenance: {
-        submitted: submissionOutputBytes !== null,
-        bytesSinceSubmission: submissionOutputBytes === null ? null : rawOutputBytes - submissionOutputBytes,
-        suppliedPrompt: prompt,
-      },
-    });
 
     // `prOwnership` was resolved once, up front, by the adapter, so the
     // merge-gate contract check above and the completion dispatch below read the
@@ -941,6 +928,31 @@ export function createTuiSessionController({
     // best-effort posture).
     let cleanupSuccess = finalSuccess;
     try {
+      // Failure analysis reads the raw spool tail and falls back to the capped
+      // output buffer. An analyzer error must still let the run finalize.
+      let errorAnalysis = null;
+      try {
+        errorAnalysis = await finalization.resolveErrorAnalysis({
+          finalSuccess,
+          rawFile,
+          fallbackText: getOutputBuffer(),
+          task,
+          model,
+          immediateFallbackAnalysis,
+          // The finalize path's own verdict outranks a keyword sweep of the
+          // transcript when the analyzer recognizes it (COMPLETION_REASON_ANALYSES).
+          completionReason: reason,
+          completionError: finalError,
+          promptProvenance: {
+            submitted: submissionOutputBytes !== null,
+            bytesSinceSubmission: submissionOutputBytes === null ? null : rawOutputBytes - submissionOutputBytes,
+            suppliedPrompt: prompt,
+          },
+        });
+      } catch (err) {
+        emitLog('warn', `TUI error analysis failed for ${agentId}: ${err?.message || err}`, { agentId });
+      }
+
       const finalizeVerdict = await finalization.finalizeAgent({
         agentId,
         task,
@@ -1201,7 +1213,10 @@ export function createTuiSessionController({
 
       if (!hasStartedWorking) {
         hasStartedWorking = true;
-        await persistence.updateAgent(agentId, { metadata: { phase: 'working' } });
+        // A later PTY callback can arrive before the write settles. Keep the
+        // stream detectors below in the same synchronous turn as this chunk.
+        persistence.updateAgent(agentId, { metadata: { phase: 'working' } })
+          .catch(err => emitLog('warn', `Could not persist TUI working phase for ${agentId}: ${err?.message || err}`, { agentId }));
         emitLog('info', `TUI agent ${agentId} working...`, { agentId, phase: 'working' });
       }
 
