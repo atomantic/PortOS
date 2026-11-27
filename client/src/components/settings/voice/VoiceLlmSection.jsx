@@ -1,3 +1,4 @@
+import { CONVERSATIONAL_GEMMA, isConversationalGemma } from '../../../../../server/lib/voiceModelCatalog.js';
 import { PROVIDERS_PAGE_BREADCRUMB } from '../../../../../server/lib/navManifest.js';
 import { useState, useEffect, useCallback } from 'react';
 import { RefreshCw } from 'lucide-react';
@@ -181,7 +182,7 @@ export default function VoiceLlmSection({ cfg, patch, inputCls, traitsSyncRef })
           >
             <option value="auto">auto</option>
             {modelOptions.map((opt) => (
-              <option key={opt.id} value={opt.id}>{opt.id}{opt.current ? ' (current)' : ''}</option>
+              <option key={opt.id} value={opt.id}>{isConversationalGemma(opt.id) ? CONVERSATIONAL_GEMMA.name : opt.id}{opt.current ? ' (current)' : ''}</option>
             ))}
           </select>
           <button
@@ -195,6 +196,11 @@ export default function VoiceLlmSection({ cfg, patch, inputCls, traitsSyncRef })
             {refreshingModels ? <BrailleSpinner /> : <RefreshCw size={14} />}
           </button>
         </div>
+        <p className="text-xs text-port-text-muted">
+          <a href={CONVERSATIONAL_GEMMA.url} target="_blank" rel="noreferrer" className="text-port-accent hover:underline">
+            {CONVERSATIONAL_GEMMA.name}
+          </a>{' is available here when your provider serves it. After connecting the provider, refresh the model list.'}
+        </p>
       </div>
 
       <div className="space-y-1">

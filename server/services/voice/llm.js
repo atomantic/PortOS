@@ -10,6 +10,7 @@ import { getProviderById } from '../provider/providers.js';
 import { DEFAULT_VOICE_BACKEND } from './config.js';
 import { managedOllamaBaseUrl } from '../../lib/ollamaContext.js';
 import { normalizeOpenAiBaseUrl } from '../../lib/localProviderRuntime.js';
+import { isConversationalGemma } from '../../lib/voiceModelCatalog.js';
 import { assertSecretEndpoint } from '../../lib/aiToolkit/endpointGuard.js';
 
 // Legacy env-based LM Studio default. Returns the OpenAI-compatible API base
@@ -196,6 +197,13 @@ const resolveModel = async (requested, { apiBase, apiKey, defaultModel = null, r
   const body = await res.json().catch(() => null);
   const ids = (body?.data || []).map((m) => m.id);
   if (!isAuto) {
+    // The conversational fine-tune and base Gemma are different models.
+    // When the provider positively lists its models, never test the wrong one.
+    if (isConversationalGemma(requested) && Array.isArray(body?.data)) {
+      const served = ids.find(isConversationalGemma);
+      if (!served) throw new Error('This Voice provider does not serve Conversational Gemma 4 31B. Connect a compatible provider and refresh its model list.');
+      return served;
+    }
     return ids.includes(requested) ? requested : ids[0] || requested;
   }
   // 'auto' — prefer the provider's configured default when set (hosted

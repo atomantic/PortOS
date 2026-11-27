@@ -23,6 +23,17 @@ For Ollama Inkling 2 Mini, Voice requests thinking off for low-latency replies;
 structured tools remain available. This does not change Inkling settings for
 coding agents or other features.
 
+**Conversational Gemma 4 31B (optional):** [Trelis' tuned Gemma](https://huggingface.co/Trelis/gemma-4-31B-it-conversational)
+is a text LLM for English spoken-style replies and tool calls; it does not replace STT or TTS.
+Accept the model's PolyForm Small Business terms on Hugging Face if your use qualifies.
+For the official FP8 checkpoint, use a compatible native-FP8 CUDA host with enough VRAM;
+PortOS does not supply an Ollama or LM Studio installer for it. Trelis documents
+`vllm serve Trelis/gemma-4-31B-it-conversational --max-model-len 4096 --enable-auto-tool-choice --tool-call-parser gemma4`.
+Connect the server as an OpenAI-compatible provider, refresh its model list in **Model & voice settings**,
+and select **Conversational Gemma 4 31B**. PortOS sends structured OpenAI chat messages and tools as usual;
+the server applies the Gemma template. Keep your existing speech engine and use the assistant personality,
+not a caller-simulation prompt. The model also appears in the Model Library under **Externally served voice models**.
+
 The optional radio operator portrait was generated in PortOS Image Gen.
 Its mouth opens with the local playback level. This tests timing and
 interruption, not phoneme-level lip sync. Choose **Play sample** to test

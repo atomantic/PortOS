@@ -18,6 +18,7 @@ import {
 import { installAudioModel } from '../../services/apiMusic.js';
 import { localLlmBackendLabel as labelFor } from '../../lib/localLlmBackends.js';
 import CatalogBrowser from './library/CatalogBrowser';
+import ExternalVoiceModels from './library/ExternalVoiceModels';
 import LocalLlmInstalledModels from './LocalLlmInstalledModels.jsx';
 import DownloadPreflightConfirm from '../models/DownloadPreflightConfirm.jsx';
 
@@ -270,6 +271,8 @@ export default function LocalLlmLibraryView() {
           runAction={runAction}
           reloadCatalogRef={reloadCatalogRef}
         />
+
+        <ExternalVoiceModels />
 
         {(statusError || selectedData?.modelsError) && (
           <ListLoadError
