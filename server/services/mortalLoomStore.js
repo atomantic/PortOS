@@ -32,7 +32,7 @@ import { canonicalizePath, isPathAtOrInsideDir } from '../lib/pathContainment.js
 
 import { commitMortalLoomRevision, inspectMortalLoomTarget, listMortalLoomSnapshots, MORTALLOOM_MAX_BYTES, mortalLoomRevision, readMortalLoomSnapshot, storeFailure } from './mortalLoomCommit.js';
 import { suspiciousMortalLoomContraction, verifyMortalLoomStore } from './mortalLoomSchema.js';
-import { applyMortalLoomGoalChanges } from './mortalLoomGoals.js';
+import { applyMortalLoomGoalChanges, hasMortalLoomGoalChanges } from './mortalLoomGoals.js';
 
 const DEFAULT_ICLOUD_PATH = join(
   homedir(),
@@ -586,6 +586,7 @@ export function updateStore(mutator) {
 
 /** Project only changed shared fields; never copy PortOS's goal model wholesale. */
 export async function mlApplyGoalChanges(before, after) {
+  if (!hasMortalLoomGoalChanges(before, after)) return false;
   return updateStore(base => applyMortalLoomGoalChanges(base.goals, before, after));
 }
 

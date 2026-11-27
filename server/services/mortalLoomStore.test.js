@@ -1078,7 +1078,7 @@ describe('external store test isolation', () => {
       settings = { mortalloom: { enabled: true, path } };
       expect(await store.isMortalLoomEnabled()).toBe(false);
       expect(await store.readStore()).toBeNull();
-      await expect(store.mlApplyGoalChanges([], [])).rejects.toThrow('isolated temporary store');
+      await expect(store.mlUpsertHealthMetricByDate('2026-01-01', { steps: 10 })).rejects.toThrow('isolated temporary store');
       expect(readFileMock).not.toHaveBeenCalled();
       expect(writeFileMock).not.toHaveBeenCalled();
     });
@@ -1090,7 +1090,7 @@ describe('external store test isolation', () => {
       const outside = join(scratch, 'outside');
       await symlink(homedir(), outside, 'junction');
       settings = { mortalloom: { enabled: true, path: join(outside, 'MortalLoom.json') } };
-      await expect(store.mlApplyGoalChanges([], [])).rejects.toThrow('isolated temporary store');
+      await expect(store.mlUpsertHealthMetricByDate('2026-01-01', { steps: 10 })).rejects.toThrow('isolated temporary store');
       expect(readFileMock).not.toHaveBeenCalled();
       expect(writeFileMock).not.toHaveBeenCalled();
     } finally {

@@ -5,7 +5,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { EventEmitter } from 'events';
 import { _disposeMortalLoomHelperForTest, commitMortalLoomRevision, listMortalLoomSnapshots, readMortalLoomSnapshot } from './mortalLoomCommit.js';
-import { applyMortalLoomGoalChanges, overlayMortalLoomGoals } from './mortalLoomGoals.js';
+import { overlayMortalLoomGoals } from './mortalLoomGoals.js';
 import { exportMortalLoomRecoveryCopy, getStatus, mlApplyGoalChanges, mlUpsertHealthMetricByDate, restoreMortalLoomSnapshot } from './mortalLoomStore.js';
 
 // The regular PR suite must run even in macOS sandboxes that deny IPC to
@@ -79,6 +79,16 @@ describe('MortalLoom shared file contract', () => {
     expect(actual.goals[2]).not.toHaveProperty('tags');
   });
 
+  it('deletes a native defaulted goal without deleting an independently edited copy', async () => {
+    const detached = goal('Unchanged');
+    const previous = [{ ...detached, goalType: 'standard', status: 'active' }];
+    await put(fixture({ goals: [{ ...detached, title: 'Edited on phone' }] }));
+    await expect(mlApplyGoalChanges(previous, [])).rejects.toMatchObject({ code: 'MORTALLOOM_REVISION_CHANGED' });
+    await put(fixture({ goals: [detached] }));
+    await mlApplyGoalChanges(previous, []);
+    expect((await read()).goals).toEqual([]);
+  });
+
   it('rejects a competing edit to the same field without rewriting file or losing either version', async () => {
     const original = goal('Old');
     await put(fixture({ goals: [{ ...original, title: 'From iPhone' }] }));
@@ -89,9 +99,10 @@ describe('MortalLoom shared file contract', () => {
     expect(await listMortalLoomSnapshots(path)).toEqual([]);
   });
 
-  it('does not turn a PortOS-only planning change into a cloud write', async () => {
+  it('does not turn a PortOS-only planning change into a cloud write or even open an absent file', async () => {
     const current = [goal('One')];
-    expect(applyMortalLoomGoalChanges(current, current, [{ ...current[0], tags: ['one'], todos: [] }])).toBe(false);
+    expect(await mlApplyGoalChanges(current, [{ ...current[0], tags: ['one'], todos: [] }])).toBe(false);
+    expect((await getStatus()).state).toBe('missing');
   });
 
   it('preserves exact original bytes and requires the previewed revision to restore', async () => {
@@ -146,4 +157,3 @@ describe('MortalLoom shared file contract', () => {
     expect(await readFile(path)).toEqual(later);
   });
 });
-

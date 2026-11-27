@@ -57,7 +57,6 @@ vi.mock('./notifications.js', async (importOriginal) => ({ ...await importOrigin
 vi.mock('./mortalLoomStore.js', () => ({
   isMortalLoomEnabled: async () => false,
   mlArrayIfEnabled: async () => null,
-  mlReplace: async () => {},
 }));
 vi.mock('./digital-twin-meta.js', async (importOriginal) => ({ ...await importOriginal(), digitalTwinEvents: { emit: () => {} } }));
 vi.mock('./jira.js', () => ({

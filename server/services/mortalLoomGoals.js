@@ -48,7 +48,7 @@ function goalWire(goal) {
     targetDate: goal.targetDate ?? null, parentId: goal.parentId == null ? null : wireId(goal.parentId),
     status: oneOf(goal.status, NATIVE_GOAL_STATUSES) ?? 'active',
     horizon: oneOf(goal.horizon, NATIVE_HORIZONS),
-    category: oneOf(goal.category, NATIVE_CATEGORIES), goalType: oneOf(goal.goalType, NATIVE_GOAL_TYPES),
+    category: oneOf(goal.category, NATIVE_CATEGORIES), goalType: oneOf(goal.goalType, NATIVE_GOAL_TYPES) ?? 'standard',
     milestones: (goal.milestones ?? []).map(milestoneWire),
     checkIns: (goal.checkIns ?? []).filter(isNativeCheckIn).map(checkInWire),
   }, goal, explicitGoalFields);
@@ -92,7 +92,10 @@ export function overlayMortalLoomGoals(native, local) {
       targetDate: row.targetDate ?? null, status: row.status ?? 'active',
       parentId: aliases.get(nativeGoalId(row.parentId)) ?? row.parentId ?? null,
       milestones: mergeNativeMilestones(row.milestones, extra?.milestones),
-      checkIns: [...(row.checkIns ?? []), ...(extra?.checkIns ?? row.checkIns ?? []).filter(e => !isNativeCheckIn(e))],
+      checkIns: [
+        ...(row.checkIns ?? []),
+        ...(extra?.checkIns ?? []).filter(e => !isNativeCheckIn(e) && !(row.checkIns ?? []).some(native => native.id === e.id)),
+      ],
     };
     // Native fields cannot survive from the overlay after an explicit native clear.
     for (const field of explicitGoalFields) {
@@ -176,6 +179,13 @@ function patchGoal(current, before, after) {
       (row, old, next) => changedFields(row, old, next, checkInPatch),
     ) }),
   };
+}
+
+// An AI check-in summary or a planning-only change need not touch, open, or
+// wait for the canonical store after the goal reader loaded its overlay.
+export function hasMortalLoomGoalChanges(previous, desired) {
+  const project = goals => goals.map(goal => ({ ...goalWire(goal), progress: goal.progress ?? 0 }));
+  return !isDeepStrictEqual(project(previous), project(desired));
 }
 
 export function applyMortalLoomGoalChanges(native, previous, desired) {

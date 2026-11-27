@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { z } from 'zod';
+import { mortalLoomRecoverySchema, mortalLoomRestoreSchema } from '../lib/mortalLoomValidation.js';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import { requireHostControl } from '../services/authGate.js';
@@ -17,15 +17,12 @@ router.post('/import', asyncHandler(async (_req, res) => {
   res.json(result);
 }));
 
-const revisionId = z.string().regex(/^[a-f0-9]{64}$/);
-const restoreSchema = z.object({ id: revisionId, expectedRevision: revisionId, confirmed: z.literal(true) }).strict();
 router.post('/restore', requireHostControl, asyncHandler(async (req, res) => {
-  res.json(await restoreMortalLoomSnapshot(validateRequest(restoreSchema, req.body)));
+  res.json(await restoreMortalLoomSnapshot(validateRequest(mortalLoomRestoreSchema, req.body)));
 }));
 
-const recoverySchema = z.object({ id: revisionId }).strict();
 router.post('/recovery/download', requireHostControl, asyncHandler(async (req, res) => {
-  const { id } = validateRequest(recoverySchema, req.body);
+  const { id } = validateRequest(mortalLoomRecoverySchema, req.body);
   const bytes = await exportMortalLoomRecoveryCopy(id);
   res.set('Cache-Control', 'no-store');
   res.attachment('MortalLoom-Recovery.json').type('application/json').send(bytes);

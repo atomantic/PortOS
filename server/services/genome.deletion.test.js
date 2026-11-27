@@ -11,7 +11,6 @@ vi.mock('../lib/paths.js', async importOriginal => {
 vi.mock('./mortalLoomStore.js', () => ({
   isMortalLoomEnabled: vi.fn(async () => false),
   mlArrayIfEnabled: vi.fn(async () => null),
-  mlReplace: vi.fn()
 }));
 
 const { cleanupTempDataRoots } = await import('../lib/mockPathsDataRoot.js');
