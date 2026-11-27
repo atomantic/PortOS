@@ -20,7 +20,7 @@ export const ROUTE_CALLER_CLASSES = Object.freeze({
   'operator-script': 'Invoked by first-party operator tooling with a call site checked by API route parity.',
   'operator-workflow': 'Required by a specific supported manual setup, recovery, or data-management workflow. Cite the workflow and why the operation is needed.',
   'client-dynamic': 'Called from client code that builds a path segment at run time; the entry\'s comment names the call site.',
-  'server-reference': 'Referenced by a server module (a loopback or provider-compatible request path); the reference was found by text search and not individually traced.',
+  'server-emitted-url': 'Requested through a URL that the server returns in response data. Cite the producer and the consuming workflow.',
   'legacy-client-compat': 'Kept for a client build that predates the current routes: a deployed client/dist can lag the server across an upgrade.',
 });
 
@@ -108,6 +108,10 @@ export const UNCALLED_ROUTE_ALLOWLIST = Object.freeze({
     '/api/voice/public/voices',
   ]),
   'agent-facing': Object.freeze([
+    // docs/API.md: minimized tool discovery resource for agents.
+    'GET /api/api-docs/tools.min.json',
+    // server/routes/apps/launchVideos.js includes the render URL in its launch-video agent prompt.
+    'POST /api/html-composition/render',
     // server/lib/apiOperationContracts.js: a public OpenAPI operation exposed to agents through the API tool resource.
     '/api/apps/:id/logs',
     '/api/auth/logout',
@@ -165,6 +169,14 @@ export const UNCALLED_ROUTE_ALLOWLIST = Object.freeze({
     'GET /api/system/maintenance/runner-owner/:agentId',
   ]),
   'operator-workflow': Object.freeze([
+    // docs/API.md: inspect workspace status through the API Explorer.
+    'POST /api/git/status',
+    // docs/features/tailcat-peers.md: inspect devices without the management snapshot.
+    'GET /api/instances/peers/tailcat/devices',
+    // docs/features/post.md: edit an existing Post memory item.
+    'PUT /api/meatspace/post/memory-items/:id',
+    // docs/features/openclaw-operator-chat.md: send a message and collect the complete reply.
+    'POST /api/openclaw/sessions/:id/messages',
     // Dedicated Apple Health day and contacts cache erasure operations.
     'DELETE /api/apple-health/days/:date',
     'DELETE /api/contacts/cache',
@@ -228,19 +240,13 @@ export const UNCALLED_ROUTE_ALLOWLIST = Object.freeze({
     // client/src/hooks/useModelDownloadStatus.js: builds `/api/${kind}-gen/models/${modelId}/download`.
     '/api/image-gen/models/:modelId/download',
   ]),
-  'server-reference': Object.freeze([
-    '/api/api-docs/tools.min.json',
-    '/api/catalog/ingredients/:id/photoreal/blend',
-    '/api/git/status',
-    // docs/features/tailcat-peers.md documents the operator read without the full capability.
-    'GET /api/instances/peers/tailcat/devices',
-    '/api/html-composition/render',
-    // docs/features/post.md documents item editing over the API.
-    'PUT /api/meatspace/post/memory-items/:id',
-    '/api/music-video/:id/composition/document/file',
-    '/api/music/supercollider/renders/:jobId/audio',
-    // docs/features/openclaw-operator-chat.md documents the non-streaming API.
-    'POST /api/openclaw/sessions/:id/messages',
+  'server-emitted-url': Object.freeze([
+    // services/catalog/catalogPhotoreal.js returns blendUrl for the download in PhotorealSceneStatus.jsx.
+    'GET /api/catalog/ingredients/:id/photoreal/blend',
+    // services/musicVideo/documentPreview.js returns URL bindings for composition document assets.
+    'GET /api/music-video/:id/composition/document/file',
+    // services/superColliderRender.js returns audioUrl for the preview player in SuperColliderStage.jsx.
+    'GET /api/music/supercollider/renders/:jobId/audio',
   ]),
   'legacy-client-compat': Object.freeze([
     // CoS Health in older client builds requests standalone learning insights (before #19849).

@@ -23,3 +23,5 @@ Changing the admitted set or enforcement restarts the listener and disconnects c
 - If an add attempt stored the address but could not connect, use Retry in Instances. If the listener changed its capability, copy the current value and update the dialer.
 - A timeout after the listener is ready points to dial direction, relay reachability or a saved address. A PortOS authentication error means the tunnel reached the remote API. A relay TLS error points to DERP connectivity or the host trust store.
 - On installations using a custom DERP map, test reachability with the Tailcat process's Go networking environment as well as the browser or shell. Review the Instances diagnostics before replacing peer credentials.
+
+Use `GET /api/instances/peers/tailcat/devices` to inspect the device list directly when the full Tailcat management snapshot is unnecessary.

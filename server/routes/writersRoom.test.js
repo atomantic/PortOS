@@ -131,6 +131,13 @@ describe('writersRoom routes', () => {
   });
 
   describe('works', () => {
+    it('GET /works preserves the legacy array for a query without paging fields', async () => {
+      const response = await request(app).get('/api/writers-room/works?ignored=1');
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual([{ id: 'wr-work-1', title: 'A' }]);
+      expect(svc.listWorksPage).not.toHaveBeenCalled();
+    });
+
     it('GET /works returns a bounded envelope when pagination is requested', async () => {
       svc.listWorksPage.mockResolvedValueOnce({ items: [{ id: 'wr-work-1' }, { id: 'wr-work-2' }], total: 5, limit: 2, offset: 1, nextCursor: 'cursor' });
       const r = await request(app).get('/api/writers-room/works?limit=2&offset=1');

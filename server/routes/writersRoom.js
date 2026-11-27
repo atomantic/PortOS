@@ -78,10 +78,12 @@ router.delete('/folders/:id', asyncHandler(async (req, res) => {
 
 // No paging query preserves the legacy response for older callers.
 router.get('/works', asyncHandler(async (req, res) => {
-  if (req.query.limit === undefined && req.query.offset === undefined && req.query.cursor === undefined) {
+  const query = req.query;
+  const page = validateRequest(writersRoomWorksQuerySchema, query);
+  if (query.limit === undefined && query.offset === undefined && query.cursor === undefined) {
     return res.json(await listWorks());
   }
-  res.json(await listWorksPage(validateRequest(writersRoomWorksQuerySchema, req.query)));
+  res.json(await listWorksPage(page));
 }));
 
 router.post('/works', asyncHandler(async (req, res) => {

@@ -67,6 +67,18 @@ describe('rounds route', () => {
     for (const fn of Object.values(midiMocks)) fn.mockReset();
   });
 
+  it('returns the legacy list or a page when requested', async () => {
+    const records = [{ id: 'first' }, { id: 'second' }, { id: 'third' }];
+    mocks.listRounds.mockResolvedValueOnce(records).mockResolvedValueOnce(records);
+    const list = await request(makeApp()).get('/api/rounds');
+    expect(list.status).toBe(200);
+    expect(list.body).toEqual({ rounds: records });
+    const page = await request(makeApp()).get('/api/rounds?limit=1&offset=1');
+    expect(page.status).toBe(200);
+    expect(page.body).toEqual({ items: [records[1]], total: 3, limit: 1, offset: 1 });
+    expect((await request(makeApp()).get('/api/rounds?limit=1&limit=2')).status).toBe(400);
+  });
+
   it('GET /:id 404s with a NOT_FOUND code when the song is missing', async () => {
     mocks.getRound.mockResolvedValue(null);
     const res = await request(makeApp()).get('/api/rounds/song-nope');

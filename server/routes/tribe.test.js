@@ -86,6 +86,19 @@ describe('Tribe Routes', () => {
     expect(tribe.listPeople).toHaveBeenCalledWith({ search: 'ada', ring: 'core' });
   });
 
+  it('returns the legacy list or a page when requested', async () => {
+    const records = [{ id: 'first' }, { id: 'second' }, { id: 'third' }];
+    tribe.listPeople.mockResolvedValueOnce(records).mockResolvedValueOnce(records);
+    const list = await request(app).get('/api/tribe/people?search=test&ring=core');
+    expect(list.status).toBe(200);
+    expect(list.body).toEqual({ people: records });
+    const page = await request(app).get('/api/tribe/people?search=test&ring=core&limit=1&offset=1');
+    expect(page.status).toBe(200);
+    expect(page.body).toEqual({ items: [records[1]], total: 3, limit: 1, offset: 1 });
+    expect(tribe.listPeople).toHaveBeenLastCalledWith({ search: 'test', ring: 'core' });
+    expect((await request(app).get('/api/tribe/people?limit=1&limit=2')).status).toBe(400);
+  });
+
   it('returns the care summary with a clamped limit', async () => {
     tribe.getCareSummary.mockResolvedValue({ hasPeople: true, peopleCount: 2, overdueCount: 1, overdue: [] });
 
