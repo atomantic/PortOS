@@ -1,13 +1,14 @@
 /** Run npm test processes under supervision, with bounded output and a single native-crash retry. */
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { delimiter, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { stripVTControlCharacters } from 'node:util';
 import { killProcessTree, prepareCliSpawn } from '../../server/lib/bufferedSpawn.js';
 import { reportWindowsCrashDiagnostics } from '../ci-windows-crash-diagnostics.js';
-import { replayContext, diagnosticTestFile, persistTestDiagnostic } from '../ci-test-diagnostics.js';
+import { replayContext, diagnosticTestFile, persistTestDiagnostic, vitestChildRecord, VITEST_CHILD_REPORT } from '../ci-test-diagnostics.js';
 import { assertBrowserProfileExecuted, browserTestProfileArgs } from './browserTestProfiles.js';
 import { readRunReport, recordVitestDuration, structuredFailureDiagnostics } from './ciTestDiagnosticsFormat.js';
 import { formatErrorAnnotation } from './githubOutput.js';
@@ -107,7 +108,7 @@ export function toRunnerPath(scope, path) {
 }
 
 /**
- * Run `npm run <script> --prefix <scope> [-- extraArgs]`, streaming stdout and
+ * Run a workspace test script, streaming stdout and
  * stderr live (so a long CI job keeps showing progress) while also retaining
  * a bounded tail of the combined output for post-run crash detection.
  *
@@ -160,6 +161,21 @@ export async function runNpm(scope, script, extraArgs, { env = process.env, sign
   }
 }
 
+// Direct launch is opt-in for Windows CI. Read the npm script as the source of
+// truth for flags. Keep npm for lifecycle hooks or any command that needs a shell.
+function directVitestLaunch(scope, script) {
+  const cwd = join(repoRoot, scope);
+  const manifest = join(cwd, 'package.json');
+  const { scripts } = JSON.parse(readFileSync(manifest, 'utf8'));
+  const configured = scripts?.[script];
+  if (!/^vitest run(?: [\w=:./-]+)*$/.test(configured ?? '')
+    || scripts[`pre${script}`] || scripts[`post${script}`]) return null;
+  const require = createRequire(manifest);
+  const vitestManifest = require.resolve('vitest/package.json');
+  const entry = join(dirname(vitestManifest), require(vitestManifest).bin.vitest);
+  return { cwd, command: process.execPath, args: [entry, ...configured.split(' ').slice(1)] };
+}
+
 function runNpmWithReport(scope, script, extraArgs, reportPath, env, abortSignal, cancellationTimeoutMs) {
   const runReportPath = join(dirname(reportPath), 'run.json');
   const invocationPath = join(dirname(reportPath), 'invocation.json');
@@ -169,14 +185,22 @@ function runNpmWithReport(scope, script, extraArgs, reportPath, env, abortSignal
     selectors: extraArgs.filter(arg => !arg.startsWith('-')).slice(0, 100)
       .map(arg => diagnosticTestFile(arg.startsWith('../') ? arg.slice(3) : `${scope}/${arg.replace(/^\.\//, '')}`)),
   };
-  const args = ['run', script, '--prefix', scope];
-  args.push('--', ...extraArgs, '--reporter=json', `--outputFile.json=${reportPath}`,
-    `--reporter=${join(repoRoot, 'scripts', 'vitestRunDiagnostics.js')}`);
-  // Wrapped, not a bare `npm.cmd`: Node refuses to spawn a `.cmd` under
-  // `shell:false` and throws EINVAL, so this script could never run on a
-  // Windows checkout. See server/lib/bufferedSpawn.js.
-  const { command, args: spawnArgs } = prepareCliSpawn('npm', args, env);
-  invocation.commandBoundary = command === 'cmd.exe' ? 'cmd.exe -> npm.cmd' : 'direct npm process';
+  const testArgs = [...extraArgs, '--reporter=json', `--outputFile.json=${reportPath}`,
+    `--reporter=${join(repoRoot, 'scripts', 'vitestRunDiagnostics.js')}`];
+  const observeVitest = env.PORTOS_CI_OBSERVE_VITEST === '1';
+  const direct = observeVitest ? directVitestLaunch(scope, script) : null;
+  // prepareCliSpawn wraps npm.cmd on Windows, where bare .cmd spawning fails.
+  const { command, args: spawnArgs } = direct
+    ? { command: direct.command, args: [...direct.args, ...testArgs] }
+    : prepareCliSpawn('npm', ['run', script, '--prefix', scope, '--', ...testArgs], env);
+  invocation.commandBoundary = direct ? 'direct Vitest process'
+    : command === 'cmd.exe' ? 'cmd.exe -> npm.cmd' : 'direct npm process';
+  if (observeVitest) invocation.observeVitest = true;
+  const vitestChildPath = join(dirname(reportPath), VITEST_CHILD_REPORT);
+  const recordVitestChild = (phase, code, signal) => {
+    const record = direct && vitestChildRecord(phase, code, signal);
+    if (record) persistTestDiagnostic(vitestChildPath, record);
+  };
   persistTestDiagnostic(invocationPath, invocation);
   return new Promise((resolve) => {
     // npm is a launcher, not the entire test tree. Give this invocation its
@@ -190,8 +214,15 @@ function runNpmWithReport(scope, script, extraArgs, reportPath, env, abortSignal
     // fixtures must not overwrite or add to the job's failure provenance.
     delete childEnv.PORTOS_CI_DIAGNOSTICS_DIR;
     delete childEnv.PORTOS_CI_TEST_SUPERVISED_GROUP;
+    delete childEnv.PORTOS_CI_OBSERVE_VITEST;
+    if (direct) {
+      // Keep workspace package binaries on PATH as in npm run.
+      const pathKey = Object.keys(childEnv).sort().find(key => key.toUpperCase() === 'PATH') ?? 'PATH';
+      childEnv[pathKey] = [join(direct.cwd, 'node_modules', '.bin'), join(repoRoot, 'node_modules', '.bin'),
+        childEnv[pathKey]].filter(Boolean).join(delimiter);
+    }
     const child = spawn(command, spawnArgs, {
-      env: childEnv, cwd: repoRoot, detached: processGroup,
+      env: childEnv, cwd: direct?.cwd ?? repoRoot, detached: processGroup,
     });
     let interrupted;
     let escalation;
@@ -233,7 +264,10 @@ function runNpmWithReport(scope, script, extraArgs, reportPath, env, abortSignal
     child.on('error', (error) => { spawnError = error; });
     let childExit = null;
     let childClose = null;
-    child.on('exit', (code, signal) => { childExit = { code, signal }; });
+    child.on('exit', (code, signal) => {
+      childExit = { code, signal };
+      recordVitestChild('exit', code, signal);
+    });
     const finish = (code, signal) => {
       if (settled) return;
       settled = true;
@@ -262,6 +296,8 @@ function runNpmWithReport(scope, script, extraArgs, reportPath, env, abortSignal
     };
     child.on('close', (code, signal) => {
       childClose = { code, signal };
+      // A spawn error also emits close, without a Vitest process exit.
+      if (childExit) recordVitestChild('close', code, signal);
       finish(code, signal);
     });
   });
