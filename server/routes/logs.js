@@ -66,7 +66,9 @@ router.get('/:processName', asyncHandler(async (req, res) => {
   logProcess.stderr.on('data', stderrReader.push);
 
   logProcess.on('error', (err) => {
+    if (res.writableEnded || res.destroyed) return;
     res.write(`event: error\ndata: ${JSON.stringify({ error: err.message })}\n\n`);
+    safeEnd();
   });
 
   logProcess.on('close', (code) => {
