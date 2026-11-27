@@ -7,6 +7,7 @@ const calls = vi.hoisted(() => ({
   cleanupMerged: vi.fn(async () => ({ cleaned: ['b'], skipped: [] })),
   recoverRenders: vi.fn(async () => undefined),
   recoverExcerpts: vi.fn(async () => undefined),
+  restoreCredentialLock: vi.fn(async operation => operation()),
   importTopaz: vi.fn(),
   importBlenderHook: vi.fn(),
   initBlenderHook: vi.fn(),
@@ -45,6 +46,9 @@ vi.mock('./creativeDirector/videoExecution.js', () => ({ settleVideoAttempt: () 
 vi.mock('./musicVideo/projects.js', () => ({ getProject: () => 'project' }));
 vi.mock('./musicVideo/render.js', () => ({ recoverStuckMusicVideoRenders: () => calls.recoverRenders() }));
 vi.mock('./musicVideo/excerptRender.js', () => ({ recoverStuckMusicVideoExcerpts: () => calls.recoverExcerpts() }));
+vi.mock('./managedVisitors.js', () => ({
+  getManagedVisitorBroker: () => ({ withLiveCredentialRestore: operation => calls.restoreCredentialLock(operation) }),
+}));
 
 // The entry point the queue's runtime table invokes for each registered name.
 const ENTRY = {
@@ -63,7 +67,8 @@ import { createMediaJobHookLoader } from './mediaJobQueue/hookRegistry.js';
 import {
   MEDIA_RUNTIME_MODULES, QUEUE_IMPORTING_RUNTIMES, loadMediaRuntimeModule,
   registerMediaJobTerminalHooks, registerMediaRuntimeModules,
-  requireCosOrphanRecoveryHandlers, requireMediaJobTerminalHooks, requireMergedBranchCleanup, requireMusicVideoRecovery,
+  requireCosOrphanRecoveryHandlers, requireManagedVisitorCredentialRestore,
+  requireMediaJobTerminalHooks, requireMergedBranchCleanup, requireMusicVideoRecovery,
 } from './bootHookRegistry.js';
 
 describe('boot hook registration (#17499, #18217)', () => {
@@ -72,6 +77,7 @@ describe('boot hook registration (#17499, #18217)', () => {
     expect(() => requireCosOrphanRecoveryHandlers()).toThrow(/not registered/);
     expect(() => requireMergedBranchCleanup()).toThrow(/not registered/);
     expect(() => requireMusicVideoRecovery()).toThrow(/not registered/);
+    expect(() => requireManagedVisitorCredentialRestore()).toThrow(/not registered/);
     expect(() => requireMediaJobTerminalHooks()).toThrow(/not registered/);
     await expect(loadMediaRuntimeModule('videoLocal')).rejects.toThrow(/not registered/);
     await expect(loadMediaRuntimeModule('creativeDirectorVideoExecution')).rejects.toThrow(/not registered/);
@@ -99,6 +105,10 @@ describe('boot hook registration (#17499, #18217)', () => {
     await expect(requireMusicVideoRecovery().recoverExcerpts()).resolves.toBeUndefined();
     expect(calls.recoverRenders).toHaveBeenCalledOnce();
     expect(calls.recoverExcerpts).toHaveBeenCalledOnce();
+
+    const restored = await requireManagedVisitorCredentialRestore()(() => Promise.resolve('restored'));
+    expect(restored).toBe('restored');
+    expect(calls.restoreCredentialLock).toHaveBeenCalledOnce();
 
     const checkedNames = [...QUEUE_IMPORTING_RUNTIMES, 'videoLocal', 'imageLocal', 'audioLocal', 'creativeDirectorVideoExecution', 'musicVideoProjects'];
     const runtimes = await Promise.all(checkedNames.map(async name => [name, (await loadMediaRuntimeModule(name))[ENTRY[name]]()]));
