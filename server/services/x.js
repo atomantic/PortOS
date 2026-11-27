@@ -107,13 +107,22 @@ export async function createAccount({ label, username, enabled = true, notes = '
 }
 
 export async function updateAccount(id, updates) {
-  const existing = await getAccountRow(id);
-  if (!existing) return null;
-  await mapPgConstraintErrors(() => query(
-    `UPDATE x_accounts SET label=$2,username=$3,enabled=$4,notes=$5,updated_at=NOW() WHERE id=$1`,
-    [id, boundedText(updates.label ?? existing.label, 120).trim(), normalizeUsername(updates.username ?? existing.username), updates.enabled ?? existing.enabled, boundedText(updates.notes ?? existing.notes, 4_000)],
+  const sets = ['updated_at = NOW()'];
+  const params = [id];
+  const add = (column, value) => {
+    params.push(value);
+    sets.push(`${column} = $${params.length}`);
+  };
+  if (updates.label != null) add('label', boundedText(updates.label, 120).trim());
+  if (updates.username != null) add('username', normalizeUsername(updates.username));
+  if (updates.enabled != null) add('enabled', updates.enabled);
+  if (updates.notes != null) add('notes', boundedText(updates.notes, 4_000));
+
+  const { rows } = await mapPgConstraintErrors(() => query(
+    `UPDATE x_accounts SET ${sets.join(', ')} WHERE id = $1 RETURNING *`,
+    params,
   ), ACCOUNT_CONSTRAINT_MESSAGES);
-  return getAccount(id);
+  return rows[0] ? accountView(rows[0]) : null;
 }
 
 export async function deleteAccount(id) {
