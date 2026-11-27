@@ -1,77 +1,23 @@
-import { sortByLabel } from '../../lib/sortByLabel.js';
-import { useState, useEffect, useRef } from 'react';
-import { AlertTriangle, Check, Play, Trash2, ChevronDown, ChevronUp, Clock, ToggleLeft, ToggleRight, Edit3, Save, X, Terminal } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { AlertTriangle, Play, ChevronDown, ChevronUp, Clock, ToggleLeft, ToggleRight, Edit3 } from 'lucide-react';
 import toast from '../ui/Toast';
-import { updateCosJob, acknowledgeCosJobIncident } from '../../services/apiAgents.js';
-import { timeAgo, timeUntil, formatDateNumeric } from '../../utils/formatters';
-import { describeCron, describeRecurrence, parseCronToRecurrence, JOB_INTERVAL_OPTIONS as INTERVAL_OPTIONS, ON_DEMAND_INTERVAL } from '../../utils/cronHelpers';
-import { ScheduleFields, normalizeJobSchedule } from './JobScheduleFields';
-import AgentJobProviderFields, { hasRunnableAgentProvider } from './AgentJobProviderFields';
-import { AGENT_OPTIONS, agentOptionButtonClass } from './constants';
+import { acknowledgeCosJobIncident } from '../../services/apiAgents.js';
+import { timeAgo, timeUntil } from '../../utils/formatters';
+import { describeCron, describeRecurrence, JOB_INTERVAL_OPTIONS as INTERVAL_OPTIONS } from '../../utils/cronHelpers';
 import { triggerButtonClass } from './tabs/schedule/scheduleConstants';
-import InlineConfirmRow from '../ui/InlineConfirmRow';
-import FormField from '../ui/FormField';
+import { useAsyncAction } from '../../hooks/useAsyncAction';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
-import TaskDataInputs from './TaskDataInputs';
-import JobNotepad from './JobNotepad';
-import { JobFormFieldsEditor, JobFormValueInputs, missingRequiredJobFormFields } from './JobFormFields';
+import { useSingleFlight } from '../../hooks/useSingleFlight';
+import JobEditForm from './JobEditForm';
+import JobDetailsPanel from './JobDetailsPanel';
+import { isAgentJobType, isOnDemandSchedule } from './jobCardConfig';
+import { JobFormValueInputs, missingRequiredJobFormFields } from './JobFormFields';
+
+export { JOB_TYPE_OPTIONS, isAgentJobType, isOnDemandSchedule, normalizeJobPayload } from './jobCardConfig';
+export { TaskMetadataFields } from './JobEditForm';
 
 // Footer actions beside Run now — same shape, quieter than the accent trigger.
 const SECONDARY_ACTION_CLASS = 'flex items-center gap-1.5 min-h-[44px] px-3 py-1.5 text-sm rounded text-gray-300 hover:text-white hover:bg-port-border/50 transition-colors';
-
-export const JOB_TYPE_OPTIONS = [
-  { value: 'agent', label: 'AI Agent' },
-  { value: 'shell', label: 'Shell Command' }
-];
-
-// App scope, provider/model override, and prompt template only apply to
-// AI-agent jobs — shell/script jobs run a fixed command and never reach the
-// AI runner.
-export const isAgentJobType = (type) => type !== 'shell' && type !== 'script';
-
-// Interval-mode job with the no-recurrence cadence: never due, never scheduled,
-// runnable only from the Run-now button. Cron mode overrides it — a job switched
-// to Cron keeps whatever cadence it last had. Mirrors isOnDemandJob on the server.
-export const isOnDemandSchedule = (job) =>
-  !job?.cronExpression && !job?.cronSchedule && job?.interval === ON_DEMAND_INTERVAL;
-
-const BRIEFING_CONFIG_OPTIONS = [
-  { key: 'dailyJoke', label: 'Daily Joke', desc: 'Include a short joke to start the day' },
-  { key: 'dailyQuote', label: 'Daily Quote', desc: 'Include an inspirational quote related to focus areas' },
-  { key: 'dailyImage', label: 'Daily Image', desc: 'Generate an image via Stable Diffusion (requires image gen API)' }
-];
-
-export function normalizeJobPayload(formData) {
-  const payload = { ...formData };
-  if (isAgentJobType(payload.type)) {
-    payload.command = null;
-    payload.triggerAction = null;
-  } else {
-    // App scope only applies to AI-agent jobs (the scope drives the agent's
-    // workspace). Shell/script jobs always run in the PortOS root, so clear any
-    // appId left over from when the job was an agent type — otherwise the saved
-    // job shows a misleading app badge while executing in root.
-    payload.appId = null;
-    // Provider/model/effort overrides only apply to AI-agent jobs — clear any
-    // leftover selection so a shell/script job doesn't carry a misleading AI badge.
-    payload.providerId = null;
-    payload.model = null;
-    payload.effort = null;
-    if (payload.executionOptions !== undefined) payload.executionOptions = {};
-    payload.dataInputs = [];
-    // The configuration form exists to parameterize a PROMPT. A shell/script job
-    // has none, so its values would reach nothing — clear them rather than leave
-    // a saved job advertising knobs that do nothing.
-    payload.formFields = [];
-    payload.formValues = {};
-  }
-  // Empty app picker selection ('') → null so a PUT actively un-scopes the job
-  // back to global (undefined would be dropped from JSON and updateJob would
-  // preserve the old scope). The schema maps '' → null too; sending null directly
-  // is unambiguous across create and update.
-  if (!payload.appId) payload.appId = null;
-  return normalizeJobSchedule(payload);
-}
 
 // null reads as the epoch to Date, so it must be excluded before the finite check.
 const hasNextRunAt = (job) => job.nextRunAt != null && Number.isFinite(new Date(job.nextRunAt).getTime());
@@ -98,65 +44,106 @@ function getJobTypeLabel(job) {
   return 'AI';
 }
 
-function BriefingConfig({ config, onChange }) {
+function JobIncident({ job, onUpdate }) {
+  const incident = job.openIncident;
+  const [acknowledge, acknowledging] = useAsyncAction(async id => acknowledgeCosJobIncident(id, { silent: true }));
+  const handleAcknowledge = useSingleFlight(async () => {
+    const result = await acknowledge(incident.id);
+    if (!result) return;
+    toast.success('Incident acknowledged');
+    onUpdate();
+  });
+
+  if (!incident) return null;
   return (
-    <div className="space-y-2">
-      <span className="text-xs text-gray-400">Briefing Enrichments</span>
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-        {BRIEFING_CONFIG_OPTIONS.map(opt => (
-          <button
-            key={opt.key}
-            type="button"
-            onClick={() => onChange(opt.key, !config[opt.key])}
-            className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-left text-sm transition-colors ${
-              config[opt.key]
-                ? 'border-port-accent/50 bg-port-accent/10 text-white'
-                : 'border-port-border bg-port-bg text-gray-500 hover:text-gray-300'
-            }`}
-          >
-            <span className={`w-3 h-3 rounded-sm border shrink-0 ${
-              config[opt.key] ? 'bg-port-accent border-port-accent' : 'border-gray-600'
-            }`} />
-            <div>
-              <div className="font-medium">{opt.label}</div>
-              <div className="text-xs text-port-text-muted">{opt.desc}</div>
-            </div>
-          </button>
-        ))}
-      </div>
+    <div className="flex items-center gap-2 text-xs mt-1 flex-wrap" data-testid="job-incident">
+      <span
+        className={`flex items-center gap-1 ${incident.state === 'acknowledged' ? 'text-gray-400' : 'text-port-error'}`}
+        title={incident.sampleError}
+      >
+        <AlertTriangle size={12} />
+        {job.lastStatus === 'blocked_config' ? 'Blocked by configuration' : 'Failing'}
+        {incident.occurrenceCount > 1 && ` ×${incident.occurrenceCount}`}
+        {incident.state === 'acknowledged' && ' (acknowledged)'}
+      </span>
+      <span className="text-gray-500 truncate max-w-full" title={incident.sampleError}>{incident.sampleError}</span>
+      {incident.state !== 'acknowledged' && (
+        <button
+          type="button"
+          onClick={handleAcknowledge}
+          disabled={acknowledging}
+          className="min-h-[44px] px-3 py-1.5 rounded border border-port-border text-gray-300 hover:text-white hover:bg-port-border/50 transition-colors disabled:opacity-50"
+        >
+          Acknowledge
+        </button>
+      )}
     </div>
   );
 }
 
-export function TaskMetadataFields({ data, onChange }) {
-  const toggle = (field) => {
-    const metadata = { ...data.taskMetadata, [field]: !data.taskMetadata?.[field] };
-    if (field === 'openPR' && metadata.openPR) metadata.useWorktree = true;
-    if (field === 'useWorktree' && !metadata.useWorktree) metadata.openPR = false;
-    onChange({ taskMetadata: metadata });
-  };
-  const fields = AGENT_OPTIONS.filter(option => ['useWorktree', 'openPR', 'simplify'].includes(option.field));
+function JobCardHeader({ job, recordLabel, apps, appConstraint, onToggle, onUpdate }) {
+  const isShell = job.type === 'shell';
+  const isScript = job.type === 'script';
+  const appName = job.appId ? (apps.find(a => a.id === job.appId)?.name || job.appId) : null;
+
+  const isDue = job.enabled && !isOnDemandSchedule(job)
+    && (hasNextRunAt(job) ? Date.now() >= new Date(job.nextRunAt).getTime() : !job.lastRun);
 
   return (
-    <div className="flex items-center gap-2 flex-wrap">
-      <span className="text-xs text-gray-400">Options:</span>
-      {fields.map(({ field, shortLabel, label }) => {
-        const effective = !!data.taskMetadata?.[field];
-        return (
-          <button
-            key={field}
-            type="button"
-            onClick={() => toggle(field)}
-            aria-pressed={effective}
-            aria-label={`${label}: ${effective ? 'on' : 'off'}`}
-            title={`${label}: ${effective ? 'on' : 'off'}`}
-            className={`text-xs px-1.5 py-0.5 rounded transition-colors border ${agentOptionButtonClass(effective, true)}`}
-          >
-            {effective && <Check size={12} aria-hidden="true" />}
-            {shortLabel}
-          </button>
-        );
-      })}
+    <div className="flex items-start gap-3 p-4">
+      <button
+        type="button"
+        onClick={() => onToggle(job.id)}
+        aria-pressed={Boolean(job.enabled)}
+        className={`pointer-coarse:min-h-11 pointer-coarse:min-w-11 shrink-0 transition-colors ${job.enabled ? 'text-port-success' : 'text-gray-600'}`}
+        title={job.enabled ? 'Disable job' : 'Enable job'}
+        aria-label={`Enable job ${recordLabel}`}
+      >
+        {job.enabled ? <ToggleRight size={24} /> : <ToggleLeft size={24} />}
+      </button>
+
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-white font-medium truncate">{job.name}</span>
+          {!job.enabled && <span className="px-1.5 py-0.5 bg-port-bg text-port-text-muted text-xs rounded">Disabled</span>}
+          {isDue && (
+            <span className="px-1.5 py-0.5 bg-port-warning/20 text-port-warning text-xs rounded">Due</span>
+          )}
+          <span className={`px-1.5 py-0.5 text-xs rounded ${
+            isShell ? 'bg-emerald-500/20 text-emerald-400' :
+            isScript ? 'bg-port-accent-2/20 text-port-accent-2' :
+            'bg-port-bg text-gray-400'
+          }`}>
+            {getJobTypeLabel(job)}
+          </span>
+          <span className="px-1.5 py-0.5 bg-port-bg text-gray-400 text-xs rounded">{job.category}</span>
+          {!appConstraint && appName && (
+            <span className="px-1.5 py-0.5 bg-port-accent/15 text-port-accent text-xs rounded" title={`Scoped to app: ${appName}`}>
+              {appName}
+            </span>
+          )}
+        </div>
+        {job.description?.trim() && (
+          <p className="text-xs text-gray-400 truncate mt-1" title={job.description}>{job.description}</p>
+        )}
+        <JobIncident job={job} onUpdate={onUpdate} />
+        <div className="flex items-center gap-3 text-xs text-gray-500 mt-1 flex-wrap">
+          <span className="flex items-center gap-1">
+            <Clock size={10} />
+            {job.cronSchedule
+              ? <span title={job.cronExpression || undefined}>{describeRecurrence(job.cronSchedule)}</span>
+              : job.cronExpression
+              ? <span title={job.cronExpression}>{describeCron(job.cronExpression)}</span>
+              : <>{INTERVAL_OPTIONS.find(i => i.value === job.interval)?.label || job.interval}{job.scheduledTime && ` at ${job.scheduledTime}`}</>}
+          </span>
+          <span>Last: {timeAgo(job.lastRun, 'Never')}</span>
+          {job.enabled && <span className={isDue ? 'text-port-warning' : 'text-gray-500'}>Next: {formatNextDue(job)}</span>}
+          <span>Runs: {job.runCount || 0}</span>
+          {isShell && job.lastExitCode != null && (
+            <span className={job.lastExitCode === 0 ? 'text-port-success' : 'text-port-error'}>Exit: {job.lastExitCode}</span>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
@@ -186,20 +173,14 @@ export default function JobCard({
 }) {
   const [expanded, setExpanded] = useState(false);
   const [editing, setEditing] = useState(false);
-  const [editData, setEditData] = useState({});
   // The ad-hoc dial for the next Run now. `null` = "whatever the job is saved
   // with", which is why this is a nullable override rather than a copy: a value
   // the user never touched must keep tracking the saved one, so an edit made in
   // the drawer (or another surface) is picked up instead of pinned to whatever
   // the card happened to mount with.
   const [runValues, setRunValues] = useState(null);
-  const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
-  const deleteButtonRef = useRef(null);
-  const hasFixedApp = typeof fixedAppId === 'string' && fixedAppId.length > 0;
-  const isShell = job.type === 'shell';
-  const isScript = job.type === 'script';
-  const appName = job.appId ? (apps.find(a => a.id === job.appId)?.name || job.appId) : null;
-
+  const deleteConfirmation = useConfirmDelete();
+  const appConstraint = typeof fixedAppId === 'string' && fixedAppId.length > 0 ? fixedAppId : null;
   // The job's own configuration form, rendered inline on the card so a one-off
   // run can be re-aimed without opening the editor. Shell/script jobs have no
   // prompt for the values to reach, so they never declare any.
@@ -223,6 +204,7 @@ export default function JobCard({
     ? []
     : Object.keys(runValues).filter(key => !sameAsSaved(runValues[key], savedFormValues[key]));
   const runValuesDirty = changedRunKeys.length > 0;
+  const runDisabled = editing || triggering;
 
   const handleTrigger = () => {
     // The API accepts a half-filled configuration on purpose (a job is saved
@@ -246,167 +228,15 @@ export default function JobCard({
   };
 
   const startEditing = () => {
-    const base = {
-      name: job.name,
-      description: job.description,
-      type: fixedType || job.type || 'agent',
-      scheduleMode: job.cronExpression || job.cronSchedule ? 'cron' : 'interval',
-      interval: job.interval,
-      scheduledTime: job.scheduledTime || '',
-      weekdaysOnly: !!job.weekdaysOnly,
-      scheduleAnchor: job.scheduleAnchor ?? null,
-      cronExpression: job.cronExpression || '',
-      cronSchedule: job.cronSchedule || (job.cronExpression ? parseCronToRecurrence(job.cronExpression) : null),
-      priority: job.priority,
-      autonomyLevel: job.autonomyLevel,
-      promptTemplate: job.promptTemplate || '',
-      appId: hasFixedApp ? fixedAppId : (job.appId || ''),
-      providerId: job.providerId || '',
-      model: job.model || '',
-      effort: job.effort || '',
-      ...(job.executionOptions !== undefined ? { executionOptions: job.executionOptions } : {}),
-      dataInputs: job.dataInputs || [],
-      formFields: job.formFields || [],
-      formValues: job.formValues || {},
-      taskMetadata: showTaskMetadata
-        ? { useWorktree: false, openPR: false, simplify: false, ...(job.taskMetadata || {}) }
-        : job.taskMetadata || {}
-    };
-    // Always initialize shell fields so switching type to 'shell' during editing works
-    base.command = job.command || '';
-    if (job.id === 'job-daily-briefing') {
-      base.config = { dailyJoke: false, dailyQuote: false, dailyImage: false, ...job.config };
-    }
-    setEditData(base);
     setEditing(true);
     setExpanded(true);
   };
-
-  const handleSave = async () => {
-    if (validateEdit && !validateEdit(editData)) return;
-    const providerResolutionKnown = Boolean(editData.providerId || activeProviderId || providers?.length);
-    if (isAgentJobType(editData.type) && providerResolutionKnown
-      && !hasRunnableAgentProvider(providers, editData.providerId, activeProviderId)) {
-      toast.error('Select a CLI/TUI provider before saving an agent job');
-      return;
-    }
-    // The API schema deliberately accepts a half-filled configuration form (a
-    // job is routinely saved before it is aimed), so the "required" marker is
-    // only real if the form that collects the values enforces it.
-    const missingFields = missingRequiredJobFormFields(editData.formFields, editData.formValues);
-    if (missingFields.length) {
-      toast.error(`Fill in ${missingFields.map(field => field.label || field.key).join(', ')}`);
-      return;
-    }
-    const constrained = {
-      ...editData,
-      ...(hasFixedApp ? { appId: fixedAppId } : {}),
-      ...(fixedType ? { type: fixedType } : {})
-    };
-    const payload = normalizeJobPayload(constrained);
-    const result = await updateCosJob(job.id, payload, { silent: true }).catch(err => {
-      toast.error(err.message);
-      return null;
-    });
-    if (!result) return;
-    toast.success('Job updated');
-    setEditing(false);
-    onUpdate();
-  };
-
-  const incident = job.openIncident;
-  const handleAcknowledge = async () => {
-    const result = await acknowledgeCosJobIncident(incident.id, { silent: true }).catch(err => {
-      toast.error(err.message);
-      return null;
-    });
-    if (!result) return;
-    toast.success('Incident acknowledged');
-    onUpdate();
-  };
-
-  const isDue = job.enabled && !isOnDemandSchedule(job)
-    && (hasNextRunAt(job) ? Date.now() >= new Date(job.nextRunAt).getTime() : !job.lastRun);
 
   return (
     <div role="group" aria-label={`Job ${recordLabel}`} className={`flex flex-col bg-port-card border rounded-lg transition-colors ${
       job.enabled ? 'border-port-border' : 'border-port-border/50'
     }`}>
-      <div className="flex items-start gap-3 p-4">
-        <button
-          onClick={() => onToggle(job.id)}
-          className={`pointer-coarse:min-h-11 pointer-coarse:min-w-11 shrink-0 transition-colors ${job.enabled ? 'text-port-success' : 'text-gray-600'}`}
-          title={job.enabled ? 'Disable job' : 'Enable job'}
-          aria-label={`${job.enabled ? 'Disable' : 'Enable'} job ${recordLabel}`}
-        >
-          {job.enabled ? <ToggleRight size={24} /> : <ToggleLeft size={24} />}
-        </button>
-
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-white font-medium truncate">{job.name}</span>
-            {!job.enabled && <span className="px-1.5 py-0.5 bg-port-bg text-port-text-muted text-xs rounded">Disabled</span>}
-            {isDue && (
-              <span className="px-1.5 py-0.5 bg-port-warning/20 text-port-warning text-xs rounded">Due</span>
-            )}
-            <span className={`px-1.5 py-0.5 text-xs rounded ${
-              isShell ? 'bg-emerald-500/20 text-emerald-400' :
-              isScript ? 'bg-port-accent-2/20 text-port-accent-2' :
-              'bg-port-bg text-gray-400'
-            }`}>
-              {getJobTypeLabel(job)}
-            </span>
-            <span className="px-1.5 py-0.5 bg-port-bg text-gray-400 text-xs rounded">{job.category}</span>
-            {!hasFixedApp && appName && (
-              <span className="px-1.5 py-0.5 bg-port-accent/15 text-port-accent text-xs rounded" title={`Scoped to app: ${appName}`}>
-                {appName}
-              </span>
-            )}
-          </div>
-          {job.description?.trim() && (
-            <p className="text-xs text-gray-400 truncate mt-1" title={job.description}>{job.description}</p>
-          )}
-          {incident && (
-            <div className="flex items-center gap-2 text-xs mt-1 flex-wrap" data-testid="job-incident">
-              <span
-                className={`flex items-center gap-1 ${incident.state === 'acknowledged' ? 'text-gray-400' : 'text-port-error'}`}
-                title={incident.sampleError}
-              >
-                <AlertTriangle size={12} />
-                {job.lastStatus === 'blocked_config' ? 'Blocked by configuration' : 'Failing'}
-                {incident.occurrenceCount > 1 && ` ×${incident.occurrenceCount}`}
-                {incident.state === 'acknowledged' && ' (acknowledged)'}
-              </span>
-              <span className="text-gray-500 truncate max-w-full" title={incident.sampleError}>{incident.sampleError}</span>
-              {incident.state !== 'acknowledged' && (
-                <button
-                  type="button"
-                  onClick={handleAcknowledge}
-                  className="min-h-[44px] px-3 py-1.5 rounded border border-port-border text-gray-300 hover:text-white hover:bg-port-border/50 transition-colors"
-                >
-                  Acknowledge
-                </button>
-              )}
-            </div>
-          )}
-          <div className="flex items-center gap-3 text-xs text-gray-500 mt-1 flex-wrap">
-            <span className="flex items-center gap-1">
-              <Clock size={10} />
-              {job.cronSchedule
-                ? <span title={job.cronExpression || undefined}>{describeRecurrence(job.cronSchedule)}</span>
-                : job.cronExpression
-                ? <span title={job.cronExpression}>{describeCron(job.cronExpression)}</span>
-                : <>{INTERVAL_OPTIONS.find(i => i.value === job.interval)?.label || job.interval}{job.scheduledTime && ` at ${job.scheduledTime}`}</>}
-            </span>
-            <span>Last: {timeAgo(job.lastRun, 'Never')}</span>
-            {job.enabled && <span className={isDue ? 'text-port-warning' : 'text-gray-500'}>Next: {formatNextDue(job)}</span>}
-            <span>Runs: {job.runCount || 0}</span>
-            {isShell && job.lastExitCode != null && (
-              <span className={job.lastExitCode === 0 ? 'text-port-success' : 'text-port-error'}>Exit: {job.lastExitCode}</span>
-            )}
-          </div>
-        </div>
-      </div>
+      <JobCardHeader job={job} recordLabel={recordLabel} apps={apps} appConstraint={appConstraint} onToggle={onToggle} onUpdate={onUpdate} />
 
       {/* Ad-hoc run configuration — the inputs the job declares, right on the
           card, so an on-demand run can be re-aimed without opening the editor.
@@ -443,193 +273,31 @@ export default function JobCard({
       {expanded && (
         <div className="border-t border-port-border p-4 space-y-3">
           {editing ? (
-            <>
-              <FormField label="Job name" labelClassName="block text-xs text-gray-400 mb-1">
-                <input
-                  type="text"
-                  value={editData.name}
-                  onChange={e => setEditData(d => ({ ...d, name: e.target.value }))}
-                  className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
-                />
-              </FormField>
-              <FormField
-                label="Card summary"
-                hint="Shown beneath the task name on its card."
-                labelClassName="block text-xs text-gray-400 mb-1"
-              >
-                <input
-                  type="text"
-                  placeholder="One-line summary (optional)"
-                  value={editData.description}
-                  onChange={e => setEditData(d => ({ ...d, description: e.target.value }))}
-                  className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
-                />
-              </FormField>
-              <div className="flex gap-3">
-                {fixedType ? (
-                  <span className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-gray-400 text-sm">AI Agent</span>
-                ) : (
-                  <select
-                    aria-label="Job type"
-                    value={editData.type}
-                    onChange={e => setEditData(d => ({ ...d, type: e.target.value }))}
-                    className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
-                    disabled={isScript}
-                  >
-                    {JOB_TYPE_OPTIONS.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
-                    {isScript && <option value="script">Script Handler</option>}
-                  </select>
-                )}
-              </div>
-              <ScheduleFields data={editData} timezone={timezone} onChange={(key, val) => setEditData(d => ({ ...d, [key]: val }))} />
-              {isAgentJobType(editData.type) && !hasFixedApp && (
-                <div className="flex items-center gap-2">
-                  <span className="text-xs text-gray-400">App scope:</span>
-                  <select
-                    aria-label="App scope"
-                    value={editData.appId || ''}
-                    onChange={e => setEditData(d => ({ ...d, appId: e.target.value }))}
-                    className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
-                  >
-                    <option value="">Global (PortOS)</option>
-                    {sortByLabel(apps).map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
-                  </select>
-                </div>
-              )}
-              {isAgentJobType(editData.type) && (
-                <AgentJobProviderFields
-                  data={editData}
-                  providers={providers}
-                  activeProviderId={activeProviderId}
-                  onChange={patch => setEditData(d => ({ ...d, ...patch }))}
-                />
-              )}
-              {isAgentJobType(editData.type) && (
-                <TaskDataInputs
-                  catalog={dataInputCatalog}
-                  value={editData.dataInputs}
-                  onChange={dataInputs => setEditData(d => ({ ...d, dataInputs }))}
-                />
-              )}
-              {isAgentJobType(editData.type) && !job.portosOnly && (
-                <JobFormFieldsEditor
-                  fields={editData.formFields}
-                  onChange={formFields => setEditData(d => ({ ...d, formFields }))}
-                />
-              )}
-              {isAgentJobType(editData.type) && (
-                <JobFormValueInputs
-                  fields={editData.formFields}
-                  values={editData.formValues}
-                  onChange={formValues => setEditData(d => ({ ...d, formValues }))}
-                />
-              )}
-              {showTaskMetadata && isAgentJobType(editData.type) && <TaskMetadataFields data={editData} onChange={patch => setEditData(d => ({ ...d, ...patch }))} />}
-              {editData.config && (
-                <BriefingConfig
-                  config={editData.config}
-                  onChange={(key, val) => setEditData(d => ({ ...d, config: { ...d.config, [key]: val } }))}
-                />
-              )}
-              {editData.type === 'shell' ? (
-                <>
-                  <textarea
-                    aria-label="Shell command"
-                    value={editData.command}
-                    onChange={e => setEditData(d => ({ ...d, command: e.target.value }))}
-                    className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm font-mono h-20"
-                    placeholder="Shell command"
-                  />
-                  <span className="text-xs text-gray-500">Output and exit code are logged on the job card.</span>
-                </>
-              ) : editData.type === 'script' ? (
-                <div className="space-y-1">
-                  <span className="text-xs text-gray-400">Legacy script command (read-only)</span>
-                  <pre className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-gray-400 text-sm font-mono whitespace-pre-wrap break-all">{editData.command || 'No command'}</pre>
-                </div>
-              ) : (
-                <textarea
-                  aria-label="Prompt template"
-                  value={editData.promptTemplate}
-                  onChange={e => setEditData(d => ({ ...d, promptTemplate: e.target.value }))}
-                  className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm font-mono h-40"
-                  placeholder="Prompt template for the agent"
-                />
-              )}
-              <div className="flex justify-end gap-2">
-                <button
-                  onClick={() => setEditing(false)}
-                  className="flex items-center gap-1 px-3 py-1.5 text-sm text-gray-400 hover:text-white transition-colors"
-                >
-                  <X size={14} /> Cancel
-                </button>
-                <button
-                  onClick={handleSave}
-                  className="flex items-center gap-1 px-3 py-1.5 bg-port-accent/20 hover:bg-port-accent/30 text-port-accent rounded-lg text-sm transition-colors"
-                >
-                  <Save size={14} /> Save
-                </button>
-              </div>
-            </>
+            <JobEditForm
+              job={job}
+              apps={apps}
+              providers={providers}
+              activeProviderId={activeProviderId}
+              timezone={timezone}
+              validateEdit={validateEdit}
+              fixedAppId={appConstraint}
+              fixedType={fixedType}
+              showTaskMetadata={showTaskMetadata}
+              dataInputCatalog={dataInputCatalog}
+              onCancel={() => setEditing(false)}
+              onSaved={() => {
+                setEditing(false);
+                onUpdate();
+              }}
+            />
           ) : (
-            <>
-              <p className="text-sm text-gray-400">{job.description}</p>
-              {isShell && job.command && (
-                <div className="flex items-center gap-2 text-xs">
-                  <Terminal size={12} className="text-emerald-400 shrink-0" />
-                  <code className="text-emerald-300 bg-port-bg px-2 py-1 rounded font-mono">{job.command}</code>
-                </div>
-              )}
-              <div className="flex flex-wrap gap-4 text-xs text-gray-500">
-                {isAgentJobType(job.type) && job.providerId && (
-                  <span>AI: <span className="text-gray-300">{providers?.find(p => p.id === job.providerId)?.name || job.providerId}{job.model ? ` / ${job.model}` : ''}{job.effort ? ` · ${job.effort}` : ''}</span></span>
-                )}
-                <span>Created: <span className="text-gray-300">{formatDateNumeric(job.createdAt, '—')}</span></span>
-              </div>
-              {job.config && BRIEFING_CONFIG_OPTIONS.some(o => job.config[o.key]) && (
-                <div className="flex flex-wrap gap-2 text-xs">
-                  <span className="text-gray-500">Enrichments:</span>
-                  {BRIEFING_CONFIG_OPTIONS.filter(o => job.config[o.key]).map(o => (
-                    <span key={o.key} className="px-2 py-0.5 bg-port-accent/10 text-port-accent rounded">{o.label}</span>
-                  ))}
-                </div>
-              )}
-              {isShell && job.lastOutput && (
-                <details className="group">
-                  <summary className="text-xs text-gray-500 cursor-pointer hover:text-gray-300 transition-colors">Last output (exit {job.lastExitCode})</summary>
-                  <pre className="mt-2 p-3 bg-port-bg border border-port-border rounded-lg text-xs text-gray-400 font-mono whitespace-pre-wrap break-all max-h-48 overflow-y-auto">{job.lastOutput}</pre>
-                </details>
-              )}
-              {!isShell && !isScript && (
-                <details className="group">
-                  <summary className="text-xs text-gray-500 cursor-pointer hover:text-gray-300 transition-colors">View prompt template</summary>
-                  <pre className="mt-2 p-3 bg-port-bg border border-port-border rounded-lg text-xs text-gray-400 font-mono whitespace-pre-wrap break-words max-h-48 overflow-y-auto">{job.promptTemplate}</pre>
-                </details>
-              )}
-              <JobNotepad jobId={job.id} jobName={job.name} />
-              {isConfirming(job.id) ? (
-                <InlineConfirmRow
-                  autoFocus
-                  aria-label={`Confirm delete job ${recordLabel}`}
-                  returnFocusRef={deleteButtonRef}
-                  question="Delete this job? This cannot be undone."
-                  confirmTitle="Confirm delete"
-                  cancelTitle="Cancel delete"
-                  onConfirm={() => confirmDelete(() => onDelete(job.id))}
-                  onCancel={cancelDelete}
-                />
-              ) : (
-                <div className="flex justify-end">
-                  <button
-                    ref={deleteButtonRef}
-                    onClick={() => requestDelete(job.id)}
-                    className="flex items-center gap-1 px-2 py-1 text-xs text-red-400/60 hover:text-red-400 transition-colors"
-                  >
-                    <Trash2 size={12} /> Delete
-                  </button>
-                </div>
-              )}
-            </>
+            <JobDetailsPanel
+              job={job}
+              recordLabel={recordLabel}
+              providers={providers}
+              onDelete={onDelete}
+              deleteConfirmation={deleteConfirmation}
+            />
           )}
         </div>
       )}
@@ -645,8 +313,8 @@ export default function JobCard({
         <button
           type="button"
           onClick={handleTrigger}
-          disabled={editing || triggering}
-          className={triggerButtonClass(editing || triggering)}
+          disabled={runDisabled}
+          className={triggerButtonClass(runDisabled)}
           title={editing ? 'Save changes before running job' : triggering ? 'Triggering job' : 'Run now'}
         >
           <Play size={14} />
@@ -655,7 +323,8 @@ export default function JobCard({
         <button
           type="button"
           onClick={startEditing}
-          className={SECONDARY_ACTION_CLASS}
+          disabled={editing}
+          className={`${SECONDARY_ACTION_CLASS} disabled:opacity-50`}
           title="Edit"
           aria-label="Edit"
         >

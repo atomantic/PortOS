@@ -35,9 +35,10 @@ vi.mock('../../../services/apiAgents.js', () => ({
 vi.mock('../../ui/Toast');
 
 vi.mock('./AgentCard', () => ({
-  default: ({ agent, durations, onFeedbackChange, onResume, onRelaunch, onDelete }) => (
+  default: ({ agent, durations, liveOutput, onFeedbackChange, onResume, onRelaunch, onDelete }) => (
     <div data-testid={`agent-${agent.id}`}>
       <span>{agent.metadata?.taskDescription}</span>
+      {liveOutput?.map(({ line }) => <p key={line}>{line}</p>)}
       <output data-testid={`durations-${agent.id}`}>{JSON.stringify(durations)}</output>
       {onDelete && <button type="button" onClick={() => onDelete(agent.id)}>Delete {agent.id}</button>}
       <input aria-label={`Card draft ${agent.id}`} defaultValue="" />
@@ -143,6 +144,44 @@ beforeEach(() => {
   getCosCompletedAgents.mockResolvedValue({ items: [], total: 0, nextCursor: null });
   getCosPendingAgentFeedback.mockResolvedValue({ agents: [], count: null });
   hydrateCosAgentDescription.mockImplementation(async (agent) => agent);
+});
+
+it('reuses completed history sorting, search and feedback counts on live output updates', async () => {
+  const recent = completedAgent('recent', 'Recent completed job');
+  const archived = completedAgent('archived', 'Earlier completed job', { completedAt: '2026-07-12T10:00:00.000Z' });
+  Object.defineProperties(recent, {
+    completedAt: { configurable: true, get: () => '2026-07-13T10:00:00.000Z' },
+  });
+  Object.defineProperties(recent.metadata, {
+    model: { configurable: true, get: () => 'example-model' },
+    taskType: { configurable: true, get: () => 'user' },
+  });
+  const reads = [
+    vi.spyOn(recent, 'completedAt', 'get'),
+    vi.spyOn(recent.metadata, 'model', 'get'),
+    vi.spyOn(recent.metadata, 'taskType', 'get'),
+  ];
+  const running = { id: 'running', status: 'running' };
+  const agents = [recent, archived, running];
+  const onRefresh = vi.fn();
+  const view = liveOutputs => (
+    <MemoryRouter><AgentsTab agents={agents} liveOutputs={liveOutputs} onRefresh={onRefresh} providers={[]} apps={[]} /></MemoryRouter>
+  );
+  const { rerender } = render(view({}));
+  const search = await screen.findByRole('textbox', { name: 'Search completed agents' });
+  await userEvent.type(search, 'recent');
+  expect(screen.getByTestId('agent-recent')).toBeInTheDocument();
+  expect(screen.queryByTestId('agent-archived')).not.toBeInTheDocument();
+  for (const read of reads) {
+    expect(read).toHaveBeenCalled();
+    read.mockClear();
+  }
+
+  rerender(view({ running: [{ line: 'New terminal output' }] }));
+
+  expect(screen.getByText('New terminal output')).toBeInTheDocument();
+  expect(screen.getByTestId('agent-recent')).toBeInTheDocument();
+  for (const read of reads) expect(read).not.toHaveBeenCalled();
 });
 
 describe('AgentsTab duration loading lifecycle', () => {

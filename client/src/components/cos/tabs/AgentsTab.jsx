@@ -227,7 +227,7 @@ export default function AgentsTab({ agentsLoaded = true, agentsError = null, onR
   const pausedAgents = agents.filter(a => a.status === 'paused' && !deletedIds.has(a.id));
   const pendingDeliveryAgents = useMemo(() => agents.filter(agent => agent.deliveryPending && !deletedIds.has(agent.id)), [agents, deletedIds]);
   // Completed agents still in state (recently completed, not yet archived)
-  const recentCompleted = agents.filter(a => a.status === 'completed');
+  const recentCompleted = useMemo(() => agents.filter(a => a.status === 'completed'), [agents]);
   // Merge recent completed (from state) with loaded (from disk), deduplicate
   const allCompleted = useMemo(() => {
     const seen = new Set();
@@ -265,7 +265,7 @@ export default function AgentsTab({ agentsLoaded = true, agentsError = null, onR
     });
   }, [allCompleted, feedbackFilter, searchQuery]);
 
-  const locallyVisibleNeedsFeedback = allCompleted.filter(needsAgentFeedback).length;
+  const locallyVisibleNeedsFeedback = useMemo(() => allCompleted.filter(needsAgentFeedback).length, [allCompleted]);
   // A completion can arrive through the live agent stream just after the
   // durable-index request resolves. Never let that race hide a newly actionable
   // run; the server count still carries older archived obligations that are not

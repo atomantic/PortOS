@@ -266,6 +266,7 @@ export default function TasksTab({ completedRevision = 0, tasks, agents = [], ag
 
     const oldIndex = userTasksLocal.findIndex(t => t.id === active.id);
     const newIndex = userTasksLocal.findIndex(t => t.id === over.id);
+    if (oldIndex === -1 || newIndex === -1) return;
 
     // Optimistically update local state
     const newOrder = arrayMove(userTasksLocal, oldIndex, newIndex);
