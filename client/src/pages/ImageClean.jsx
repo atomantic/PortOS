@@ -89,10 +89,14 @@ export default function ImageClean() {
     return () => { alive = false; };
   }, []);
 
-  // Revoke any outstanding blob URL on unmount so we don't leak.
+  // Invalidate pending work before revoking URLs so a late response cannot
+  // allocate a new result URL after unmount.
   useEffect(() => () => {
+    requestIdRef.current++;
     if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
     if (resultUrlRef.current) URL.revokeObjectURL(resultUrlRef.current);
+    previewUrlRef.current = null;
+    resultUrlRef.current = null;
   }, []);
 
   // Once the tracked GPU job completes, fetch the finished bytes and show them
@@ -253,6 +257,7 @@ export default function ImageClean() {
     const previewUrl = URL.createObjectURL(file);
     previewUrlRef.current = previewUrl;
     const dims = await detectDimensions(previewUrl);
+    if (previewUrlRef.current !== previewUrl) return;
 
     setOriginal({
       previewUrl,
