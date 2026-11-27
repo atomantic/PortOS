@@ -45,6 +45,7 @@ import { homedir, tmpdir } from 'node:os';
 import * as nodePath from 'node:path';
 import { dirname, isAbsolute, join, relative, sep } from 'node:path';
 import { resolveTestChrome } from './testChrome.js';
+import { collectionFixtureSources } from '../perf/collectionFixtureSources.js';
 import { getAlwaysRunTests, isGateToolingTest } from './ciPlanRules.js';
 import { FULL_SUITE_SHARDS } from './ciPlanOutput.js';
 import { isGuardTest } from './guardScanners.js';
@@ -75,7 +76,13 @@ const reachesClosure = (info, sources) => sources.some((rel) => info.closure.has
 
 function createMemoRunAnalysis({ scope, repoRoot, env = process.env, platform, arch, nodeVersion, toolVersion, freshToolVersion = toolVersion,
   requireToolVersions, planBeforeClientSetup, caseFilter = [], acceptVerdictsFrom, listFiles = listRepositoryFiles, factsCache }) {
-  const options = { fs: createDiskFs(repoRoot, nodeFs, nodePath), workspaceRel: workspaceOf(scope), env, platform, arch, nodeVersion, toolVersion, requireToolVersions, planBeforeClientSetup, caseFilter, acceptVerdictsFrom, listFiles: () => listFiles(repoRoot), factsCache };
+  const fs = createDiskFs(repoRoot, nodeFs, nodePath, {
+    collectionFixtureSources: () => {
+      try { return collectionFixtureSources(repoRoot); } catch { return null; }
+    },
+  });
+  const options = { fs, workspaceRel: workspaceOf(scope), env, platform, arch, nodeVersion, toolVersion, requireToolVersions,
+    planBeforeClientSetup, caseFilter, acceptVerdictsFrom, listFiles: () => listFiles(repoRoot), factsCache };
   // Built on first use: a plan whose candidates are all unmemoizable never pays for the base closure.
   let primary = null;
   const analyze = (test, recorded, digests = null, served = null) => {

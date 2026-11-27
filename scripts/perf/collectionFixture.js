@@ -2,17 +2,17 @@
  * Opt-in synthetic collection instance. Parent owns every resource; the child
  * imports application modules only after its environment has been isolated.
  */
-import { execFile, fork } from 'node:child_process';
+import { fork } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { access, cp, lstat, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 
 import { isDirectlyInvoked } from '../lib/directInvocation.js';
 import { createFixtureStartup } from './collectionFixtureStartup.js';
+import { collectionFixtureSources } from './collectionFixtureSources.js';
 
 const codeRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const SOURCE_COPY_BATCH_SIZE = 16;
@@ -79,13 +79,10 @@ export async function startCollectionFixture({
     root = await realpath(await mkdtemp(join(tmpdir(), 'portos-collection-audit-')));
     // Copy code, never data, configuration, credentials, or the live checkout's
     // symlinks. A physical temp copy also preserves dataRoot's worktree guard.
-    const { stdout } = await promisify(execFile)('git', ['ls-files', '-z', '--', 'server', 'lib'], { cwd: codeRoot });
-    const sourceFiles = stdout.split('\0').filter(file =>
-      file && file !== 'lib/slashdo' && !file.endsWith('.test.js') && !file.endsWith('.test.jsx'));
-    for (let offset = 0; offset < sourceFiles.length; offset += SOURCE_COPY_BATCH_SIZE) {
-      const batch = sourceFiles.slice(offset, offset + SOURCE_COPY_BATCH_SIZE);
-      const copies = await Promise.allSettled(batch.map(async file => {
-        const source = join(codeRoot, file);
+    const { entries } = collectionFixtureSources();
+    for (let offset = 0; offset < entries.length; offset += SOURCE_COPY_BATCH_SIZE) {
+      const batch = entries.slice(offset, offset + SOURCE_COPY_BATCH_SIZE);
+      const copies = await Promise.allSettled(batch.map(async ({ file, source }) => {
         const destination = join(root, file);
         if (!(await lstat(source)).isFile()) throw new Error('Fixture source must contain regular files');
         await mkdir(dirname(destination), { recursive: true });

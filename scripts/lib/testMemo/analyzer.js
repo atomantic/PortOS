@@ -43,6 +43,14 @@ const NESTED_VITEST_CONFIGS = new Set([
 ]);
 const NESTED_VITEST_FIXTURE = 'scripts/lib/vitestTempRootFixture.js';
 const COS_WORKER_BUDGET = 'scripts/lib/cosWorkerBudget.js';
+const COLLECTION_FIXTURE_TEST = 'scripts/perf/collectionFixture.db.test.js';
+const COLLECTION_FIXTURE_SOURCE = 'scripts/perf/collectionFixtureSources.js';
+// Only this audited implementation maps the Git process and filesystem probes
+// completely to the source inventory below. A source edit needs an updated proof.
+const COLLECTION_FIXTURE_SOURCE_SHA = 'ad0c4940112339b6f63ef50ae884d5098d8425ed7716f56fd508d42fdb0acf2d';
+const knownCollectionFixtureSource = a => fileHash(a, COLLECTION_FIXTURE_SOURCE) === COLLECTION_FIXTURE_SOURCE_SHA;
+const usesCollectionFixtureInventory = (a, testRel, rel) =>
+  testRel === COLLECTION_FIXTURE_TEST && rel === COLLECTION_FIXTURE_SOURCE && knownCollectionFixtureSource(a);
 
 function lockedClientPackages(fs) {
   if (fs.kind('client/node_modules') !== null) return null;
@@ -760,6 +768,12 @@ function gather(a, roots, { walk, testRel = null, stop = null, followMockOnly = 
   while (stack.length) {
     const { rel, walkEdges, configEdge: fromConfig } = stack.pop();
     if (stop?.has(rel)) continue;
+    // The audited helper has only built-in imports. The exact checkout reads
+    // it performs are keyed by fixtureInputs instead of the generic walker.
+    if (usesCollectionFixtureInventory(a, testRel, rel)) {
+      g.members.add(rel);
+      continue;
+    }
     const configEdge = fromConfig || NESTED_VITEST_CONFIGS.has(rel);
     const context = configEdge ? 2 : 1;
     const f = factsFor(a, rel);
@@ -936,7 +950,20 @@ function fixtureInputs(a, testRel) {
     if (files === null) problems.push(`fixture directory too large: ${owner.dir}`);
     else for (const file of files) inputs.add(file);
   }
-  return { inputs, problems };
+  const lines = [];
+  if (testRel === COLLECTION_FIXTURE_TEST) {
+    const snapshot = knownCollectionFixtureSource(a) ? a.fs.collectionFixtureSources?.() : null;
+    if (!snapshot) problems.push('cannot verify the collection fixture source inventory');
+    else {
+      inputs.add(COLLECTION_FIXTURE_SOURCE);
+      for (const { file } of snapshot.entries) inputs.add(file);
+      // File contents use the ordinary input hashes. Include the distinct
+      // staged identity and current file mode without embedding checkout paths.
+      const index = snapshot.entries.map(({ file, indexMode, oid, mode }) => [file, indexMode, oid, mode]);
+      lines.push(`collection fixture index ${sha256(JSON.stringify([snapshot.version, index]))}`);
+    }
+  }
+  return { inputs, problems, lines };
 }
 
 /**
@@ -995,7 +1022,7 @@ function verdictReasons(testRel, gathered, extra, baseClosure, requireEdges) {
 function verdict(a, testRel, gathered, extra, baseClosure, { requireEdges }) {
   const { reasons, declared } = verdictReasons(testRel, gathered, extra, baseClosure, requireEdges);
   if (reasons.length) return { key: null, memoizable: false, reason: reasons[0], reasons, declared };
-  const lines = [];
+  const lines = [...extra.lines];
   // Suites that key the same tree from inside it hash the same file set, and an
   // entry names one test: without this line they would overwrite each other's entry.
   if (gathered.trees.size) lines.push(`test ${testRel}`);
@@ -1078,7 +1105,7 @@ function recordedReach(a, testRel, record) {
     const next = stack.pop();
     const { rel } = next;
     reach.add(rel);
-    if (fileHash(a, rel) === null) continue;
+    if (fileHash(a, rel) === null || usesCollectionFixtureInventory(a, testRel, rel)) continue;
     const stale = recordedDigest.has(rel) && moduleDigest(a, rel) !== recordedDigest.get(rel);
     const mode = stale ? FULL : next.mode;
     // Reached only through unchanged recorded code yet absent from the record:
@@ -1185,14 +1212,15 @@ export function relatedTests(keys, sources) {
   const changed = new Set(sources);
   const reaches = (set) => [...set].some((rel) => changed.has(rel));
   return [...keys.entries()]
-    .filter(([, info]) => (info.narrowed
-      ? info.narrowed.failClosed !== null || reaches(info.narrowed.reach)
-      : !info.edgesResolved || info.hasOpenReads || reaches(info.closure) || reaches(info.inputs)))
+    .filter(([test, info]) => (test === COLLECTION_FIXTURE_TEST && sources.some(rel => rel.startsWith('server/') || rel.startsWith('lib/')))
+      || (info.narrowed
+        ? info.narrowed.failClosed !== null || reaches(info.narrowed.reach)
+        : !info.edgesResolved || info.hasOpenReads || reaches(info.closure) || reaches(info.inputs)))
     .map(([test]) => test);
 }
 
 /** A disk-backed `fs` for `createTestMemoAnalyzer`, rooted at `repoRoot`. */
-export function createDiskFs(repoRoot, nodeFs, nodePath) {
+export function createDiskFs(repoRoot, nodeFs, nodePath, { collectionFixtureSources } = {}) {
   const abs = (rel) => nodePath.join(repoRoot, ...rel.split('/').filter(Boolean));
   const stat = (rel) => {
     try { return nodeFs.statSync(abs(rel)); } catch { return null; }
@@ -1210,5 +1238,6 @@ export function createDiskFs(repoRoot, nodeFs, nodePath) {
     list(rel) {
       try { return nodeFs.readdirSync(abs(rel)); } catch { return []; }
     },
+    collectionFixtureSources,
   };
 }
