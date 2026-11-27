@@ -1,9 +1,11 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { normalizeEmail } from '../../../../server/lib/messageRecipientEmail.js';
+import { unfoldEmailHeader } from '../../../../server/lib/messageReplySubject.js';
 import { FileText, Trash2, Send, Check, RefreshCw, Copy, Pencil } from 'lucide-react';
 import toast from '../ui/Toast';
 import {
   reconcileMessageDraft,
+  getMessageDetail,
   getMessageDrafts,
   approveMessageDraft,
   sendMessageDraft,
@@ -100,7 +102,8 @@ export default function DraftsTab({ accounts }) {
   const [editingId, setEditingId] = useState(null);
   const [editForm, setEditForm] = useState({ to: '', cc: '', subject: '', body: '' });
   const savingEditRef = useRef(false);
-  const [savingEdit, setSavingEdit] = useState(false);
+  const [editAction, setEditAction] = useState(null);
+  const savingEdit = editAction !== null;
   const [expandedIds, setExpandedIds] = useState(() => new Set());
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
 
@@ -148,6 +151,7 @@ export default function DraftsTab({ accounts }) {
   };
 
   const startEdit = (draft) => {
+    if (savingEditRef.current) return;
     setEditingId(draft.id);
     setEditForm({
       to: formatRecipientList(draft.to),
@@ -159,32 +163,51 @@ export default function DraftsTab({ accounts }) {
 
   const editingDraft = drafts.find(draft => draft.id === editingId);
   const editingAccount = accounts.find(account => account.id === editingDraft?.accountId);
+  const isTeamsDraft = editingAccount?.type === 'teams';
+  const isEmailReply = !isTeamsDraft && Boolean(editingDraft?.replyToMessageId);
   // Outlook replies use the recipients already set by the provider.
   const canEditCc = editingAccount?.canSend !== false && (
     (editingAccount?.type === 'gmail' && editingDraft?.sendVia === 'api') ||
     (editingAccount?.type === 'outlook' && editingDraft?.sendVia === 'playwright' && !editingDraft.replyToMessageId)
   );
 
-  const handleSaveEdit = async (event) => {
-    event.preventDefault();
-    if (!editingId || savingEditRef.current) return;
+  const runEditAction = async (action, update) => {
+    if (!editingDraft || savingEditRef.current) return;
     savingEditRef.current = true;
-    setSavingEdit(true);
-    // The response is the draft after the server drops approval when content changed.
-    const result = await updateMessageDraft(editingId, {
+    setEditAction(action);
+    try {
+      const result = await update(editingDraft).catch(() => null);
+      if (!result) return;
+      // The response is the draft after the server drops approval when content changed.
+      setDrafts(prev => prev.map(d => d.id === result.id ? result : d));
+      if (action === 'save') setEditingId(null);
+      toast.success(action === 'restore' ? 'Original subject restored' : 'Draft updated');
+    } finally {
+      savingEditRef.current = false;
+      setEditAction(null);
+    }
+  };
+
+  const handleSaveEdit = (event) => {
+    event.preventDefault();
+    return runEditAction('save', draft => updateMessageDraft(draft.id, {
       to: parseRecipientList(editForm.to),
       ...(canEditCc && { cc: parseRecipientList(editForm.cc) }),
-      subject: editForm.subject,
+      ...(!isEmailReply && !isTeamsDraft && { subject: editForm.subject }),
       body: editForm.body,
-    }).catch(() => null).finally(() => {
-      savingEditRef.current = false;
-      setSavingEdit(false);
-    });
-    if (!result) return;
-    setDrafts(prev => prev.map(d => d.id === result.id ? result : d));
-    setEditingId(null);
-    toast.success('Draft updated');
+    }));
   };
+
+  const handleRestoreSubject = () => runEditAction('restore', async draft => {
+    const { accountId, replyToMessageId, status } = draft;
+    const original = await getMessageDetail(accountId, replyToMessageId, { silent: true }).catch(() => null);
+    if (original?.id !== replyToMessageId || original.accountId !== accountId || typeof original.subject !== 'string') {
+      toast.error('The original subject is unavailable. Sync this account and try again.');
+      return null;
+    }
+    const subject = editingAccount?.type === 'gmail' ? unfoldEmailHeader(original.subject) : original.subject;
+    return updateMessageDraft(draft.id, { subject, ...(status === 'failed' && { status: 'draft' }) });
+  });
 
   const toggleExpanded = (id) => {
     setExpandedIds(prev => {
@@ -296,7 +319,8 @@ export default function DraftsTab({ accounts }) {
                   <button
                     type="button"
                     onClick={() => startEdit(draft)}
-                    className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-400 hover:text-white transition-colors"
+                    disabled={savingEdit}
+                    className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-400 hover:text-white transition-colors disabled:opacity-50"
                     title="Edit" aria-label="Edit"
                   >
                     <Pencil size={16} />
@@ -401,16 +425,38 @@ export default function DraftsTab({ accounts }) {
                     />
                   </div>
                 )}
-                <div>
-                  <label htmlFor={`draft-subject-${draft.id}`} className="block text-xs text-gray-400 mb-1">Subject</label>
-                  <input
-                    id={`draft-subject-${draft.id}`}
-                    value={editForm.subject}
-                    onChange={event => setEditForm(prev => ({ ...prev, subject: event.target.value }))}
-                    disabled={savingEdit}
-                    className={draftFieldClass}
-                  />
-                </div>
+                {!isTeamsDraft && (
+                  <div>
+                    <label htmlFor={`draft-subject-${draft.id}`} className="block text-xs text-gray-400 mb-1">Subject</label>
+                    <input
+                      id={`draft-subject-${draft.id}`}
+                      value={isEmailReply ? draft.subject || '' : editForm.subject}
+                      onChange={isEmailReply ? undefined : event => setEditForm(prev => ({ ...prev, subject: event.target.value }))}
+                      readOnly={isEmailReply}
+                      aria-describedby={isEmailReply ? `draft-subject-note-${draft.id}` : undefined}
+                      disabled={savingEdit}
+                      className={draftFieldClass}
+                    />
+                    {isEmailReply && (
+                      <div className="flex flex-wrap items-center gap-2 mt-1">
+                        <p id={`draft-subject-note-${draft.id}`} className="text-xs text-gray-400">
+                          The mail provider keeps the conversation subject.
+                        </p>
+                        {draft.accountId && (
+                          <button
+                            type="button"
+                            onClick={handleRestoreSubject}
+                            disabled={savingEdit}
+                            aria-busy={editAction === 'restore'}
+                            className="min-h-[44px] px-3 rounded border border-port-border text-sm text-port-accent hover:bg-port-border disabled:opacity-50"
+                          >
+                            Restore original subject
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
                 <div>
                   <label htmlFor={`draft-body-${draft.id}`} className="block text-xs text-gray-400 mb-1">Body</label>
                   <textarea
@@ -426,7 +472,7 @@ export default function DraftsTab({ accounts }) {
                   <button
                     type="submit"
                     disabled={savingEdit}
-                    aria-busy={savingEdit}
+                    aria-busy={editAction === 'save'}
                     className="min-h-[44px] px-3 rounded bg-port-accent text-white text-sm disabled:opacity-50"
                   >
                     Save draft

@@ -5,6 +5,7 @@
 
 import { emitToOperatorsOn } from './socketIo.js';
 import { messageLogError } from '../lib/messageLogError.js';
+import { matchesReplySubject, REPLY_SUBJECT_MISMATCH_MESSAGE, unfoldEmailHeader } from '../lib/messageReplySubject.js';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import crypto from 'crypto';
 import { getAuthenticatedClient } from './googleAuth.js';
@@ -438,8 +439,6 @@ const GMAIL_DELIVERY_UNKNOWN = {
 const isDefinitiveRefusal = (status) => Number.isInteger(status) && status >= 400 && status < 500 && status !== 408;
 
 const replyRefusal = (code, error, status = 422) => ({ refusal: { success: false, status, code, error } });
-const replySubject = subject => String(subject || '').replace(/^(?:\s*re:\s*)+/i, '').trim();
-const unfoldHeader = value => value.replace(/\r?\n[ \t]+/g, ' ').trim();
 
 // Resolve legacy cached messages through their Gmail API identity. Never persist
 // RFC metadata or interpret a PortOS UUID/thread hash as a provider identity.
@@ -465,15 +464,15 @@ export async function prepareGmailReply(account, draft, original) {
     return replyRefusal('GMAIL_REPLY_METADATA_UNAVAILABLE', 'Gmail could not verify the original message and conversation. Sync the account or reconnect Google, then try again.', 502);
   }
   const headers = metadata.payload?.headers;
-  const messageId = unfoldHeader(getHeader(headers, 'Message-ID'));
-  const subject = unfoldHeader(getHeader(headers, 'Subject'));
+  const messageId = unfoldEmailHeader(getHeader(headers, 'Message-ID'));
+  const subject = unfoldEmailHeader(getHeader(headers, 'Subject'));
   if (!/^<[^<>\s@]+@[^<>\s@]+>$/.test(messageId) || /[\r\n]/.test(subject)) {
     return replyRefusal('GMAIL_REPLY_METADATA_INVALID', 'The original message lacks valid reply headers. Select a different message or send a new email.');
   }
   // RFC 2822: use the parent's References, falling back to its single
   // In-Reply-To when References is absent, then append the parent's Message-ID.
   const parentReferences = getHeader(headers, 'References');
-  const referenceIds = unfoldHeader(parentReferences || getHeader(headers, 'In-Reply-To')).match(/<[^<>\s@]+@[^<>\s@]+>/g) || [];
+  const referenceIds = unfoldEmailHeader(parentReferences || getHeader(headers, 'In-Reply-To')).match(/<[^<>\s@]+@[^<>\s@]+>/g) || [];
   const references = parentReferences ? referenceIds : (referenceIds.length === 1 ? referenceIds : []);
   const delivery = Object.freeze({
     accountId: account.id, replyToMessageId: original.id, localThreadId: draft.threadId,
@@ -489,8 +488,8 @@ function gmailReplyDraftRefusal(account, draft, delivery) {
     || delivery.localThreadId !== draft.threadId) {
     return replyRefusal('GMAIL_REPLY_NOT_PREPARED', 'The Gmail reply target was not verified. Select the original message and try again.').refusal;
   }
-  if (draft.subject && replySubject(draft.subject) !== replySubject(delivery.subject)) {
-    return replyRefusal('GMAIL_REPLY_SUBJECT_MISMATCH', 'A reply must keep the original conversation subject. Restore the original subject or send a new email.').refusal;
+  if (!matchesReplySubject(draft.subject, delivery.subject)) {
+    return replyRefusal('GMAIL_REPLY_SUBJECT_MISMATCH', REPLY_SUBJECT_MISMATCH_MESSAGE).refusal;
   }
   return null;
 }

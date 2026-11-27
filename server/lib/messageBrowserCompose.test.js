@@ -41,19 +41,20 @@ describe('planDelivery', () => {
     expect(plan).toMatchObject({ to: ['alice@example.com'], cc: ['carol@example.com'], subject: 'Example subject', reply: null });
   });
 
-  it('answers the sender of the message a bare reply was written for, and locates it by provider row id', () => {
-    const planned = planDelivery('outlook', draft({ to: [], replyToMessageId: 'msg-1', threadId: 'thread-1' }), target());
+  it.each(['  re: RE: Re  ', ''])('plans an Outlook reply with subject %j to the sender of the original message', subject => {
+    const planned = planDelivery('outlook', draft({ subject, to: [], replyToMessageId: 'msg-1', threadId: 'thread-1' }), target());
     expect(planned.plan).toMatchObject({ to: ['bob@example.com'], reply: { providerRowId: 'row-1' } });
   });
 
   it.each([
     ['an empty body', 'outlook', { body: '  ' }, null, 'DRAFT_NOT_DELIVERABLE'],
     ['no recipient at all', 'outlook', { to: [] }, null, 'DRAFT_NOT_DELIVERABLE'],
-    ['a bare reply whose sender has no email', 'outlook', { to: [], replyToMessageId: 'msg-1' }, target({ from: { name: 'Bob' } }), 'DRAFT_NOT_DELIVERABLE'],
+    ['a bare reply whose sender has no email', 'outlook', { to: [], subject: 'Re: Re', replyToMessageId: 'msg-1' }, target({ from: { name: 'Bob' } }), 'DRAFT_NOT_DELIVERABLE'],
     ['a new Outlook message without a subject', 'outlook', { subject: ' ' }, null, 'DRAFT_NOT_DELIVERABLE'],
     ['Cc on a Teams chat', 'teams', { cc: ['carol@example.com'] }, null, 'DRAFT_NOT_DELIVERABLE'],
     ['a reply with no target', 'outlook', { replyToMessageId: 'msg-1' }, null, 'REPLY_TARGET_NOT_FOUND'],
     ['an Outlook reply whose target has no provider row id', 'outlook', { replyToMessageId: 'msg-1' }, target({ providerRowId: null }), 'REPLY_TARGET_UNIDENTIFIABLE'],
+    ['a reply with a different subject', 'outlook', { replyToMessageId: 'msg-1' }, target(), 'OUTLOOK_REPLY_SUBJECT_MISMATCH'],
     ['a thread that is not the target\'s thread', 'teams', { replyToMessageId: 'msg-1', threadId: 'thread-2' }, target(), 'THREAD_MISMATCH'],
     ['an account type with no browser transport', 'gmail', {}, null, 'SEND_NOT_SUPPORTED']
   ])('refuses %s', (_label, type, overrides, replyTarget, code) => {

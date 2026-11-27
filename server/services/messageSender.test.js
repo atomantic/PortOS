@@ -196,7 +196,7 @@ describe('browser draft delivery', () => {
   });
 
   it('resolves the reply target inside the draft\'s own account only', async () => {
-    seed({ id: 'reply', replyToMessageId: 'msg-1', threadId: 'thread-1', ...browserDraft({ to: [] }) });
+    seed({ id: 'reply', replyToMessageId: 'msg-1', threadId: 'thread-1', ...browserDraft({ to: [], subject: 'Re: Example' }) });
     doubles.getMessage.mockResolvedValueOnce(cachedMessage());
     expect(await sendDraft('reply')).toEqual({ success: true });
     expect(doubles.getMessage).toHaveBeenCalledWith('account-1', 'msg-1');
@@ -206,6 +206,7 @@ describe('browser draft delivery', () => {
   it.each([
     ['a reply target that belongs to another account', { replyToMessageId: 'msg-1' }, null, 'REPLY_TARGET_NOT_FOUND'],
     ['a reply whose thread differs from its target', { replyToMessageId: 'msg-1', threadId: 'thread-2' }, cachedMessage(), 'THREAD_MISMATCH'],
+    ['a reply whose subject differs from its target', { replyToMessageId: 'msg-1' }, cachedMessage(), 'OUTLOOK_REPLY_SUBJECT_MISMATCH'],
     ['a draft with no recipient', { to: [] }, null, 'DRAFT_NOT_DELIVERABLE'],
     ['a recipient that is not an email address', { to: ['Alice'] }, null, 'DRAFT_NOT_DELIVERABLE']
   ])('refuses %s without consuming approval or touching the provider', async (_label, overrides, target, code) => {
@@ -213,6 +214,17 @@ describe('browser draft delivery', () => {
     doubles.getMessage.mockResolvedValue(target);
     expect(await sendDraft('draft-1')).toMatchObject({ success: false, code });
     expect((await getDraft('draft-1')).status).toBe('approved');
+    expect(doubles.sendPlaywright).not.toHaveBeenCalled();
+  });
+
+  it('rechecks the Outlook reply subject before claim when the draft was edited and re-approved during lookup', async () => {
+    seed({ id: 'reply', replyToMessageId: 'msg-1', ...browserDraft({ subject: 'Re: Example' }) });
+    doubles.getMessage.mockImplementationOnce(async () => {
+      await updateDraft('reply', { subject: 'Different conversation', status: 'approved' });
+      return cachedMessage();
+    });
+    await expect(sendDraft('reply')).rejects.toMatchObject({ status: 422, code: 'OUTLOOK_REPLY_SUBJECT_MISMATCH' });
+    expect(await getDraft('reply')).toMatchObject({ status: 'approved', subject: 'Different conversation' });
     expect(doubles.sendPlaywright).not.toHaveBeenCalled();
   });
 
