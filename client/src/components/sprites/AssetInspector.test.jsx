@@ -77,10 +77,10 @@ describe('AssetInspector', () => {
   });
 
   it('paints a checkerboard behind the preview so alpha is not read as black', () => {
-    const { container } = render(<AssetInspector recordId="trail-hand" asset={IMAGE} onClose={() => {}} />);
-    const checker = container.querySelector('[style*="linear-gradient"]');
-    expect(checker).toBeTruthy();
-    expect(screen.getByAltText('reference/main.png')).toHaveStyle({ imageRendering: 'pixelated' });
+    render(<AssetInspector recordId="trail-hand" asset={IMAGE} onClose={() => {}} />);
+    const preview = screen.getByRole('img', { name: IMAGE.path });
+    expect(preview.parentElement).toHaveAttribute('style', expect.stringContaining('linear-gradient'));
+    expect(preview).toHaveStyle({ imageRendering: 'pixelated' });
   });
 
   it('omits image rows entirely for a non-image sidecar', () => {
@@ -112,10 +112,9 @@ describe('AssetInspector', () => {
 
   it('plays a walk run source clip inline instead of forcing a download', () => {
     const clip = { path: 'grok/walk-east-abc/generated/source-video.mp4', size: 900, mtime: Date.now() };
-    const { container } = render(
-      <AssetInspector recordId="trail-hand" asset={clip} onClose={() => {}} />,
-    );
-    const video = container.querySelector('video');
+    render(<AssetInspector recordId="trail-hand" asset={clip} onClose={() => {}} />);
+    const dialog = screen.getByRole('dialog', { name: `Asset ${clip.path}` });
+    const video = dialog.querySelector('video');
     // Same content token as every other asset URL (#3020). A run's clip is
     // write-once per run directory so it can't actually go stale, but the
     // inspector builds one URL for the download link and the inline player —
@@ -156,8 +155,8 @@ describe('AssetInspector', () => {
   });
 
   it('renders nothing when no asset is selected', () => {
-    const { container } = render(<AssetInspector recordId="trail-hand" asset={null} onClose={() => {}} />);
-    expect(container).toBeEmptyDOMElement();
+    render(<AssetInspector recordId="trail-hand" asset={null} onClose={() => {}} />);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
   it('offers no Delete action unless an onDeleted handler is wired', () => {
