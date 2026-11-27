@@ -1,8 +1,8 @@
 import LoomShotPlanner from './LoomShotPlanner';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, CheckCircle2, ChevronDown, ChevronUp, CircleAlert, Loader2, Save, Sparkles, Trash2 } from 'lucide-react';
+import { CheckCircle2, Loader2, Save, Sparkles } from 'lucide-react';
 import ProviderModelSelector from '../ProviderModelSelector';
-import { FormField } from '../ui/FormField.jsx';
+import ConfirmButtonPair from '../ui/ConfirmButtonPair';
 import toast from '../ui/Toast';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
 import useFableLoomAiRun from '../../hooks/useFableLoomAiRun';
@@ -14,14 +14,10 @@ import {
   validateLoomEpisodeOutline,
 } from '../../services/apiFableLoom.js';
 import { effectiveModelFor, effortAwareModelOptions } from '../../utils/providers';
-import { fieldClass, labelClass } from './fieldStyles';
 import LoomAiRunStatus from './LoomAiRunStatus';
-import {
-  FABLELOOM_CHALLENGE_PHASES,
-  fableLoomPlotPointKind,
-} from '../../../../server/lib/fableLoomOutline.js';
-
-const asArray = (value) => (Array.isArray(value) ? value : []);
+import OutlineBeat from './OutlineBeat';
+import OutlineValidationResult from './OutlineValidationResult';
+import { asArray } from '../../../../server/lib/arrayUtils.js';
 const TELEPLAY_SYNC_ISSUE_CODES = new Set([
   'TELEPLAY_SCENE_MEMBERSHIP_MISMATCH',
   'TELEPLAY_START_MISMATCH',
@@ -42,191 +38,6 @@ const cloneOutline = (outline) => (outline ? {
 
 const draftValidation = { status: 'draft', issues: [] };
 
-function ValidationResult({ validation, teleplayReplacementReady = false }) {
-  if (!validation) return null;
-  const issues = asArray(validation.issues);
-  const hasErrors = !teleplayReplacementReady
-    && issues.some((issue) => issue.severity !== 'warning');
-  const status = validation.stats
-    ? (validation.stats.errorCount ? 'invalid' : 'valid')
-    : validation.status || 'draft';
-  const label = teleplayReplacementReady
-    ? 'Outline is ready to replace the old teleplay'
-    : status === 'valid'
-      ? 'Outline is structurally valid'
-      : status === 'invalid'
-        ? 'Outline needs edits'
-        : 'Outline is a draft';
-  return (
-    <div className={`rounded border p-3 space-y-2 ${status === 'valid' ? 'border-port-success/40 bg-port-success/5' : hasErrors ? 'border-port-error/40 bg-port-error/5' : 'border-port-warning/40 bg-port-warning/5'}`} aria-live="polite">
-      <div className="flex items-center gap-2 text-sm font-semibold">
-        {status === 'valid' ? <CheckCircle2 size={15} className="text-port-success" /> : hasErrors ? <CircleAlert size={15} className="text-port-error" /> : <AlertTriangle size={15} className="text-port-warning" />}
-        {label}
-        {validation.stats ? <span className="ml-auto text-xs font-normal text-port-text-muted">
-          {validation.stats.sceneCount} beats · {validation.stats.decisionCount} choices · {validation.stats.endingCount} endings
-        </span> : null}
-      </div>
-      {issues.length ? (
-        <ul className="space-y-1 text-xs text-port-text-muted">
-          {issues.map((issue, index) => <li key={`${issue.code || 'issue'}-${issue.sceneKey || 'outline'}-${index}`} className="flex items-start gap-1.5">
-            {issue.severity === 'warning' || teleplayReplacementReady ? <AlertTriangle size={12} className="mt-0.5 shrink-0 text-port-warning" /> : <CircleAlert size={12} className="mt-0.5 shrink-0 text-port-error" />}
-            <span>{issue.message}</span>
-          </li>)}
-        </ul>
-      ) : status === 'valid' ? (
-        <p className="text-xs text-port-success">Every beat is reachable, choices are distinct, and each path reaches an ending.</p>
-      ) : null}
-    </div>
-  );
-}
-
-function OutlineBeat({
-  scene, index, scenes, plotPoints, onChange, onRemovePath, onAddPath, expanded, onToggle,
-}) {
-  const possibleTargets = scenes.filter((candidate) => candidate.key !== scene.key);
-  const selectedPlotPoint = plotPoints.find((item) => item.id === scene.plotPointId) || null;
-  return (
-    <article className="rounded-lg border border-port-border bg-port-bg/40" data-testid={`outline-beat-${scene.key}`}>
-      <button
-        type="button"
-        onClick={onToggle}
-        className="flex w-full items-start justify-between gap-3 p-3 text-left hover:bg-port-bg/60"
-        aria-expanded={expanded}
-      >
-        <span className="flex min-w-0 items-start gap-2">
-          <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-port-accent/15 text-[10px] font-semibold text-port-accent">{index + 1}</span>
-          <span className="min-w-0">
-            <span className="block break-words text-sm font-semibold">{scene.title || 'Untitled beat'}</span>
-            <span className="mt-1 block break-words text-xs text-port-text-muted">{scene.summary || 'No log-line yet.'}</span>
-            {scene.challengePhase ? (
-              <span className="mt-1 inline-flex rounded bg-port-accent/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-port-accent">
-                {scene.challengePhase}
-              </span>
-            ) : null}
-          </span>
-        </span>
-        {expanded ? <ChevronUp size={15} className="shrink-0 text-port-text-muted" /> : <ChevronDown size={15} className="shrink-0 text-port-text-muted" />}
-      </button>
-      {expanded ? (
-        <div className="space-y-3 border-t border-port-border p-3">
-          <FormField label="Beat title" labelClassName={labelClass}>
-            <input
-              className={fieldClass}
-              value={scene.title || ''}
-              onChange={(event) => onChange({ title: event.target.value })}
-            />
-          </FormField>
-          <FormField label="Log-line / summary" labelClassName={labelClass} hint="What changes in this camera-cut beat, and why does it matter?">
-            <textarea
-              rows={3}
-              className={fieldClass}
-              value={scene.summary || ''}
-              onChange={(event) => onChange({ summary: event.target.value })}
-            />
-          </FormField>
-          {plotPoints.length ? (
-            <div className="grid gap-2 sm:grid-cols-2">
-              <FormField label="Mapped plot point" labelClassName={labelClass} hint="Connect this beat to the durable series-plan item it realizes.">
-                <select
-                  className={fieldClass}
-                  value={scene.plotPointId || ''}
-                  onChange={(event) => {
-                    const plotPointId = event.target.value || null;
-                    const selected = plotPoints.find((item) => item.id === plotPointId);
-                    onChange({
-                      plotPointId,
-                      challengePhase: fableLoomPlotPointKind(selected) === 'challenge'
-                        ? scene.challengePhase || 'setup'
-                        : null,
-                    });
-                  }}
-                >
-                  <option value="">Not mapped</option>
-                  {plotPoints.map((item) => (
-                    <option key={item.id} value={item.id}>
-                      {fableLoomPlotPointKind(item) === 'challenge' ? 'Challenge: ' : ''}{item.title || 'Untitled plot point'}
-                    </option>
-                  ))}
-                </select>
-              </FormField>
-              {fableLoomPlotPointKind(selectedPlotPoint) === 'challenge' ? (
-                <FormField label="Challenge phase" labelClassName={labelClass} hint="Every challenge needs all five phases before validation passes.">
-                  <select
-                    className={fieldClass}
-                    value={scene.challengePhase || 'setup'}
-                    onChange={(event) => onChange({ challengePhase: event.target.value })}
-                  >
-                    {FABLELOOM_CHALLENGE_PHASES.map((phase) => (
-                      <option key={phase} value={phase}>{phase[0].toUpperCase() + phase.slice(1)}</option>
-                    ))}
-                  </select>
-                </FormField>
-              ) : null}
-            </div>
-          ) : null}
-          <div className="grid grid-cols-2 gap-2">
-            <label className={labelClass}>
-              Playback
-              <select className={`${fieldClass} mt-1`} value={scene.playbackMode || 'decision'} onChange={(event) => onChange({ playbackMode: event.target.value })}>
-                <option value="cut">Automatic cut</option>
-                <option value="decision">Viewer choice</option>
-              </select>
-            </label>
-            <label className={labelClass}>
-              Audience channel
-              <select className={`${fieldClass} mt-1`} value={scene.audienceConnection || 'disconnected'} onChange={(event) => onChange({ audienceConnection: event.target.value })}>
-                <option value="disconnected">Disconnected</option>
-                <option value="connected">Connected</option>
-              </select>
-            </label>
-          </div>
-          <label className="flex items-center gap-2 text-xs text-port-text-muted">
-            <input type="checkbox" checked={scene.isEnding === true} onChange={(event) => onChange({ isEnding: event.target.checked })} />
-            Ending beat
-          </label>
-          {scene.isEnding ? (
-            <FormField label="Ending label" labelClassName={labelClass}>
-              <input className={fieldClass} value={scene.endingLabel || ''} onChange={(event) => onChange({ endingLabel: event.target.value })} />
-            </FormField>
-          ) : (
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <h4 className="text-xs font-semibold uppercase tracking-wide text-port-text-muted">Paths to the next beat</h4>
-                <button type="button" onClick={onAddPath} className="text-xs text-port-accent hover:underline">+ Add path</button>
-              </div>
-              {asArray(scene.transitions).map((transition, transitionIndex) => (
-                <div key={`${scene.key}-path-${transitionIndex}`} className="flex items-start gap-2">
-                  <div className="min-w-0 flex-1 space-y-1">
-                    <input
-                      className={fieldClass}
-                      aria-label={`Path ${transitionIndex + 1} choice label for ${scene.title || scene.key}`}
-                      placeholder="choice label"
-                      value={transition.intent || ''}
-                      onChange={(event) => onChange({ transitions: asArray(scene.transitions).map((item, index) => index === transitionIndex ? { ...item, intent: event.target.value } : item) })}
-                    />
-                    <select
-                      className={fieldClass}
-                      aria-label={`Path ${transitionIndex + 1} destination for ${scene.title || scene.key}`}
-                      value={transition.targetKey || ''}
-                      onChange={(event) => onChange({ transitions: asArray(scene.transitions).map((item, index) => index === transitionIndex ? { ...item, targetKey: event.target.value } : item) })}
-                    >
-                      <option value="">Choose destination…</option>
-                      {possibleTargets.map((target) => <option key={target.key} value={target.key}>{target.title || target.key}</option>)}
-                    </select>
-                  </div>
-                  <button type="button" onClick={() => onRemovePath(transitionIndex)} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center mt-2 p-1 text-port-text-muted hover:text-port-error" aria-label={`Remove path ${transitionIndex + 1} from ${scene.title || scene.key}`}>
-                    <Trash2 size={14} />
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      ) : null}
-    </article>
-  );
-}
-
 export default function LoomEpisodeOutlinePlanner({
   open,
   loom,
@@ -241,6 +52,7 @@ export default function LoomEpisodeOutlinePlanner({
   const lastServerOutline = useRef({ episodeId: episode.id, outline: episode.storyOutline });
   const publishedOutline = useRef(null);
   const [dirty, setDirty] = useState(false);
+  const [confirmRefresh, setConfirmRefresh] = useState(false);
   const [validation, setValidation] = useState(null);
   const [review, setReview] = useState(null);
   const [shotPlanning, setShotPlanning] = useState(false);
@@ -267,6 +79,7 @@ export default function LoomEpisodeOutlinePlanner({
       && publishedOutline.current?.episodeId === episode.id;
     publishedOutline.current = null;
     if (!switchedEpisode && (dirty || cameFromPlanner)) return;
+    setConfirmRefresh(false);
     setOutline(cloneOutline(episode.storyOutline));
     setValidation(null);
     setReview(null);
@@ -373,6 +186,8 @@ export default function LoomEpisodeOutlinePlanner({
     if (result.structural) setValidation(result.structural);
   }, { errorMessage: 'Episode outline review failed' });
 
+  const actionsBusy = busy || generating || saving || validating || reviewing || expanding;
+
   return (
     <section className="space-y-3 border-t border-port-border pt-4" aria-label="Episode story outline planner">
       <div>
@@ -392,8 +207,8 @@ export default function LoomEpisodeOutlinePlanner({
         onEffortChange={(effort) => setRoute((current) => ({ ...current, effort }))}
         label="Outline AI route"
         layout="stacked"
-        disabled={busy || generating || saving || validating || reviewing || expanding}
-        modelDisabled={busy || generating || saving || validating || reviewing || expanding}
+        disabled={actionsBusy}
+        modelDisabled={actionsBusy}
         loading={providersLoading}
         emptyProviderOption="Default (outline stage or active provider)"
         emptyModelOption="Default model"
@@ -405,7 +220,7 @@ export default function LoomEpisodeOutlinePlanner({
         <button
           type="button"
           onClick={generateOutline}
-          disabled={busy || generating || saving || validating || reviewing || expanding}
+          disabled={actionsBusy}
           className="flex w-full items-center justify-center gap-2 rounded bg-port-accent px-3 py-2 text-sm text-white disabled:opacity-50"
         >
           {generating ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
@@ -413,13 +228,36 @@ export default function LoomEpisodeOutlinePlanner({
         </button>
       ) : (
         <>
-          <div className="flex items-center justify-between gap-2 text-xs text-port-text-muted">
+          <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-port-text-muted">
             <span>{scenes.length} beat{scenes.length === 1 ? '' : 's'} · {scenes.filter((scene) => scene.isEnding).length} ending{scenes.filter((scene) => scene.isEnding).length === 1 ? '' : 's'} · {outlineStatus}</span>
-            <button type="button" onClick={generateOutline} disabled={busy || generating || saving || validating || reviewing || expanding} className="text-port-accent hover:underline disabled:opacity-50">
-              {generating ? 'Refreshing…' : 'Refresh with AI'}
-            </button>
+            {confirmRefresh ? (
+              <ConfirmButtonPair
+                tone="warning"
+                prompt={dirty
+                  ? 'Replace the saved outline and discard your unsaved edits?'
+                  : 'Replace the saved outline with a new AI draft?'}
+                confirmText="Replace outline"
+                busy={actionsBusy}
+                busyText={generating ? 'Refreshing…' : undefined}
+                onConfirm={async () => {
+                  await generateOutline();
+                  setConfirmRefresh(false);
+                }}
+                onCancel={() => setConfirmRefresh(false)}
+                className="flex-wrap"
+              />
+            ) : (
+              <button
+                type="button"
+                onClick={() => setConfirmRefresh(true)}
+                disabled={actionsBusy}
+                className="rounded border border-port-accent px-3 py-2 text-xs text-port-accent hover:bg-port-accent/10 focus-visible:outline-2 focus-visible:outline-port-accent disabled:opacity-50 pointer-coarse:min-h-11"
+              >
+                Refresh with AI
+              </button>
+            )}
           </div>
-          <div className="max-h-[42vh] space-y-2 overflow-y-auto pr-1">
+          <fieldset disabled={generating} aria-label="Outline beats" className="max-h-[42vh] min-w-0 space-y-2 overflow-y-auto pr-1">
             {scenes.map((scene, index) => (
               <OutlineBeat
                 key={scene.key}
@@ -438,23 +276,23 @@ export default function LoomEpisodeOutlinePlanner({
                 })}
               />
             ))}
-          </div>
+          </fieldset>
           <div className="flex flex-wrap gap-2">
-            <button type="button" onClick={saveOutline} disabled={!dirty || busy || saving || generating || validating || reviewing || expanding} className="flex items-center gap-1.5 rounded border border-port-border px-3 py-2 text-xs hover:border-port-accent disabled:opacity-50">
+            <button type="button" onClick={saveOutline} disabled={!dirty || actionsBusy} className="flex items-center gap-1.5 rounded border border-port-border px-3 py-2 text-xs hover:border-port-accent disabled:opacity-50">
               {saving ? <Loader2 size={13} className="animate-spin" /> : <Save size={13} />}
               {saving ? 'Saving…' : 'Save outline'}
             </button>
-            <button type="button" onClick={validateOutline} disabled={busy || saving || generating || validating || reviewing || expanding} className="flex items-center gap-1.5 rounded border border-port-accent px-3 py-2 text-xs text-port-accent hover:bg-port-accent/10 disabled:opacity-50">
+            <button type="button" onClick={validateOutline} disabled={actionsBusy} className="flex items-center gap-1.5 rounded border border-port-accent px-3 py-2 text-xs text-port-accent hover:bg-port-accent/10 disabled:opacity-50">
               {validating ? <Loader2 size={13} className="animate-spin" /> : <CheckCircle2 size={13} />}
               {validating ? 'Validating…' : dirty ? 'Save & validate' : 'Validate outline'}
             </button>
-            <button type="button" onClick={reviewOutline} disabled={busy || dirty || saving || generating || validating || reviewing || expanding} className="flex items-center gap-1.5 rounded border border-port-border px-3 py-2 text-xs hover:border-port-accent disabled:opacity-50">
+            <button type="button" onClick={reviewOutline} disabled={dirty || actionsBusy} className="flex items-center gap-1.5 rounded border border-port-border px-3 py-2 text-xs hover:border-port-accent disabled:opacity-50">
               {reviewing ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
               {reviewing ? 'Reviewing…' : 'Review arc with AI'}
             </button>
           </div>
           {dirty ? <p className="text-xs text-port-warning">Save the edited log-lines before asking the AI to review them.</p> : null}
-          <ValidationResult
+          <OutlineValidationResult
             validation={activeValidation}
             teleplayReplacementReady={teleplayReplacementReady}
           />
@@ -462,7 +300,7 @@ export default function LoomEpisodeOutlinePlanner({
             <button
               type="button"
               onClick={() => onExpand(routeBody)}
-              disabled={busy || dirty || !canExpand || saving || generating || validating || reviewing || expanding}
+              disabled={dirty || !canExpand || actionsBusy}
               className="flex w-full items-center justify-center gap-2 rounded bg-port-accent px-3 py-2 text-sm text-white disabled:opacity-50"
             >
               {expanding ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
@@ -489,7 +327,7 @@ export default function LoomEpisodeOutlinePlanner({
           ) : null}
         </>
       )}
-      <LoomShotPlanner onRunningChange={setShotPlanning} key={episode.id} loom={loom} episode={episode} route={routeBody} guidance={guidance} disabled={busy || dirty || generating || saving || validating || reviewing || expanding} onLoomUpdate={(next) => { setOutline(cloneOutline(publishOutlineUpdate(next))); setValidation(null); }} />
+      <LoomShotPlanner onRunningChange={setShotPlanning} key={episode.id} loom={loom} episode={episode} route={routeBody} guidance={guidance} disabled={dirty || actionsBusy} onLoomUpdate={(next) => { setOutline(cloneOutline(publishOutlineUpdate(next))); setValidation(null); }} />
       <LoomAiRunStatus run={generateRun.run} />
       <LoomAiRunStatus run={reviewRun.run} />
     </section>
