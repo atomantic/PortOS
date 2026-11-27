@@ -1192,6 +1192,8 @@ describe('MiniMax H3 CUDA hash-pinned installation', () => {
   const direct = readFileSync(join(REQUIREMENTS_DIR, 'requirements-minimax-h3-cuda.txt'), 'utf8')
     .split(/\r?\n/).filter((line) => /^[\w.-]+==/.test(line));
 
+  const historyContract = JSON.parse(readFileSync(join(REQUIREMENTS_DIR, '..', 'minimax_h3_cuda_history.json'), 'utf8'));
+
   it.each(['windows', 'linux'])('hashes the complete %s set, including CUDA torch and torchao', (target) => {
     const lock = readFileSync(join(REQUIREMENTS_DIR, `requirements-minimax-h3-cuda-${target}.lock.txt`), 'utf8');
     const requirements = lock.split(/\r?\n/).filter((line) => /^\w/.test(line));
@@ -1203,6 +1205,10 @@ describe('MiniMax H3 CUDA hash-pinned installation', () => {
     for (const pin of direct) expect(pins.some((locked) => locked === pin || (!pin.includes('+') && locked.split('+')[0] === pin))).toBe(true);
     expect(pins.find((pin) => pin.startsWith('torch=='))).toMatch(/\+cu126$/);
     expect(pins.find((pin) => pin.startsWith('torchao=='))).toMatch(/^torchao==0\.18\.0(?:\+cu126)?$/);
+    for (const [name, expected] of Object.entries(historyContract.runtimePackages)) {
+      const versions = [expected].flat().map((version) => `${name}==${version}`);
+      expect(versions).toContain(pins.find((pin) => pin.startsWith(`${name}==`)));
+    }
     expect(lock.includes('nvidia-cuda-runtime-cu12==')).toBe(target === 'linux');
     expect(section).not.toMatch(/pip install|--upgrade|git\+|requirements-minimax-h3-cuda\.txt/);
   });
