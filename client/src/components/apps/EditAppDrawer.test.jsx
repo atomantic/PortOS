@@ -20,8 +20,11 @@ vi.mock('../../services/apiProviders.js', () => ({
 
 vi.mock('../../services/apiSystem.js', async (importOriginal) => ({
   ...(await importOriginal()),
-  getInstanceFeatures,
   getDatadogInstances: vi.fn(),
+}));
+vi.mock('../../services/apiAppShell.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  getInstanceFeatures,
 }));
 
 import { getDatadogInstances } from '../../services/apiSystem.js';

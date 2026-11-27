@@ -10,14 +10,16 @@ const mock = vi.hoisted(() => ({
   updateEidoverseWorldsSource: vi.fn(),
 }));
 
-// useInstanceFeatures reads apiSystem.js directly, not the api barrel (#16562).
 vi.mock('../../services/apiSystem.js', async (importOriginal) => ({
   ...(await importOriginal()),
-  getInstanceFeatures: mock.getInstanceFeatures,
-  updateInstanceFeature: mock.updateInstanceFeature,
   updateInstanceFeatureGroup: mock.updateInstanceFeatureGroup,
   installEidoverseFeature: mock.installEidoverseFeature,
   updateEidoverseWorldsSource: mock.updateEidoverseWorldsSource,
+}));
+vi.mock('../../services/apiAppShell.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  getInstanceFeatures: mock.getInstanceFeatures,
+  updateInstanceFeature: mock.updateInstanceFeature,
 }));
 
 // The audit-priority section has its own suite and its own fetch.

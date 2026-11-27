@@ -10,6 +10,10 @@
  */
 
 import { request } from './apiCore.js';
+import { getCosAgent } from './apiAppShell.js';
+
+export { getCosAgent };
+export { submitCosAgentFeedback } from './apiAppShell.js';
 
 // Running Agents (Process Management)
 const getRunningAgents = (options) => request('/agents', options);
@@ -251,11 +255,6 @@ export const recheckCosAgentCleanup = (agentId, taskId, options = {}) => request
 export const getCosCompletedAgents = ({ cursor, limit = 25, feedback = false, ...options } = {}) =>
   request(`/cos/agents/${feedback ? 'feedback/pending' : 'completed'}${runEventQuery({ limit, cursor })}`, options);
 export const getCosPendingAgentFeedback = ({ countOnly, ...options } = {}) => request(`/cos/agents/feedback/pending${countOnly ? '?countOnly=1' : ''}`, options);
-// `lines` caps the transcript TAIL the server hydrates (server default: 1000
-// lines / 512 KB). Pass it when the record is wanted for its metadata rather
-// than its log.
-export const getCosAgent = (id, { lines, ...options } = {}) =>
-  request(`/cos/agents/${id}${lines ? `?lines=${lines}` : ''}`, options);
 
 // Agent LIST responses bound `metadata.taskDescription` (see
 // `server/lib/cos/cosAgentListProjection.js`), which is fine for a clamped card but
@@ -305,11 +304,6 @@ export const getCosAgentStats = (id, options) => request(`/cos/agents/${id}/stat
 export const getCosAgentPrompt = (id, options = {}) => request(`/cos/agents/${id}/prompt`, options);
 export const deleteCosAgent = (id, options = {}) => request(`/cos/agents/${id}`, { method: 'DELETE', ...options });
 export const clearCompletedCosAgents = (options = {}) => request('/cos/agents/completed', { method: 'DELETE', ...options });
-export const submitCosAgentFeedback = (id, feedback, options = {}) => request(`/cos/agents/${id}/feedback`, {
-  method: 'POST',
-  body: JSON.stringify(feedback),
-  ...options
-});
 export const sendCosAgentBtw = (id, message, options = {}) => request(`/cos/agents/${id}/btw`, {
   method: 'POST',
   body: JSON.stringify({ message }),

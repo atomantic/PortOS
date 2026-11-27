@@ -30,8 +30,8 @@ const featureMock = vi.hoisted(() => ({ features: [{ id: 'beeper', label: 'Beepe
 vi.mock('../services/apiMessages.js', () => ({
   getMessageAccounts: vi.fn(() => Promise.resolve([])),
 }));
-// useInstanceFeatures reads apiSystem.js directly, not the api barrel (#16562).
-vi.mock('../services/apiSystem.js', async (importOriginal) => ({
+// useInstanceFeatures reads apiAppShell.js directly, not the api barrel (#16562).
+vi.mock('../services/apiAppShell.js', async (importOriginal) => ({
   ...(await importOriginal()),
   getInstanceFeatures: vi.fn(() => Promise.resolve({ features: featureMock.features })),
 }));

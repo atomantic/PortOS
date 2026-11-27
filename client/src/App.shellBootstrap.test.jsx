@@ -6,7 +6,7 @@ import { getNavPageForPath } from '../../server/lib/navManifest.js';
 import App from './App.jsx';
 import { ThemeProvider } from './components/ThemeContext.jsx';
 import { useSidebarContext } from './components/SidebarContext.jsx';
-import { getShellBootstrap } from './services/apiSystem.js';
+import { getShellBootstrap } from './services/apiAppShell.js';
 import { startShellBootstrap } from './services/shellBootstrap.js';
 
 const mock = vi.hoisted(() => {

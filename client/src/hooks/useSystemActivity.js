@@ -7,7 +7,7 @@
  */
 
 import { useCallback, useSyncExternalStore } from 'react';
-import { getSystemActivity } from '../services/apiSystem.js';
+import { getSystemActivity } from '../services/apiAppShell.js';
 import socket from '../services/socket';
 import { sameJsonShape } from '../lib/sameJsonShape';
 import { subscribeVisibility } from './useVisibilityEvent.js';

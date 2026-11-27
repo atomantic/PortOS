@@ -13,7 +13,7 @@ import { registerServiceWorker } from './lib/registerServiceWorker';
 import { suppressIosFocusZoom } from './lib/iosFocusZoom';
 import { installActionFeedback } from './services/actionFeedback';
 import DownloadManager from './components/DownloadManager';
-import { getShellBootstrap } from './services/apiSystem.js';
+import { getShellBootstrap } from './services/apiAppShell.js';
 import { startShellBootstrap } from './services/shellBootstrap.js';
 import App from './App';
 import './index.css';

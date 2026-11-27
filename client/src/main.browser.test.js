@@ -36,7 +36,7 @@ const fixtureModules = {
   `,
   './components/DownloadManager': 'export default () => null;',
   './services/shellBootstrap.js': 'export const startShellBootstrap = () => {};',
-  './services/apiSystem.js': 'export const getShellBootstrap = () => {};',
+  './services/apiAppShell.js': 'export const getShellBootstrap = () => {};',
   './index.css': '',
 };
 const fixtureModulePrefix = '\0client-crash-fixture:';

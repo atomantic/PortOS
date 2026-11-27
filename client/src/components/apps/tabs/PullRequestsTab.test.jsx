@@ -55,8 +55,8 @@ vi.mock('../../../services/apiCodeReview.js', () => ({
   getCodeReviewDefaults: vi.fn(),
 }));
 
-// useInstanceFeatures reads apiSystem.js directly (#16562), so wire the same mock there.
-vi.mock('../../../services/apiSystem.js', async (importOriginal) => ({
+// useInstanceFeatures reads apiAppShell.js directly (#16562), so wire the same mock there.
+vi.mock('../../../services/apiAppShell.js', async (importOriginal) => ({
   ...(await importOriginal()),
   getInstanceFeatures: (...args) => getInstanceFeatures(...args),
 }));

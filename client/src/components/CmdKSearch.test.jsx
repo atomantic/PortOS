@@ -24,7 +24,7 @@ vi.mock('../services/apiPalette.js', () => ({
   getPaletteManifest: (...args) => getPaletteManifest(...args),
   runPaletteAction: (...args) => runPaletteAction(...args),
 }));
-vi.mock('../services/apiSystem.js', () => ({ getInstanceFeatures: (...args) => getInstanceFeatures(...args) }));
+vi.mock('../services/apiAppShell.js', () => ({ getInstanceFeatures: (...args) => getInstanceFeatures(...args) }));
 vi.mock('../services/apiDashboard.js', () => ({
   getDashboardLayouts: (...args) => getDashboardLayouts(...args),
   setActiveDashboardLayout: vi.fn(() => Promise.resolve()),

@@ -3,7 +3,7 @@ import { CircleAlert } from 'lucide-react';
 import { useLocation, useNavigate } from 'react-router';
 import { readShellBootstrap } from '../services/shellBootstrap.js';
 import socket from '../services/socket.js';
-import { getCapabilities } from '../services/apiSystem.js';
+import { getCapabilities } from '../services/apiAppShell.js';
 import { safeReadJsonSession, safeWriteJsonSession } from '../lib/safeStorage.js';
 import Banner from './ui/Banner';
 

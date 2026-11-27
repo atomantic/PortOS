@@ -19,7 +19,7 @@ vi.mock('../../services/apiGoals.js', () => ({
   decomposeGoal: vi.fn(),
 }));
 
-vi.mock('../../services/apiSystem.js', async (importOriginal) => ({
+vi.mock('../../services/apiAppShell.js', async (importOriginal) => ({
   ...(await importOriginal()),
   getInstanceFeatures,
   getSettings: vi.fn(() => Promise.resolve({ timezone: 'UTC' })),

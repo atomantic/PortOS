@@ -20,7 +20,7 @@ const socket = vi.hoisted(() => ({
   off: vi.fn()
 }));
 
-vi.mock('../services/apiSystem.js', () => api);
+vi.mock('../services/apiAppShell.js', () => api);
 vi.mock('../services/apiReview.js', () => ({ getReviewQueue: api.getReviewQueue }));
 vi.mock('../services/socket', () => ({ default: socket }));
 

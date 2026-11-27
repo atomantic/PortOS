@@ -1,7 +1,7 @@
 // Keeps the browser title in sync with the active navigation page and instance.
 import { useEffect, useState } from 'react';
 import { useLocation } from 'react-router';
-import { getSelfInstance } from '../services/apiSystem.js';
+import { getSelfInstance } from '../services/apiAppShell.js';
 import { readShellBootstrap } from '../services/shellBootstrap.js';
 import { getNavPageForPath } from '../../../server/lib/navManifest.js';
 

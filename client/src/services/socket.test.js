@@ -20,7 +20,7 @@ vi.mock('socket.io-client', () => ({
   }),
 }));
 vi.mock('../lib/publicGuestRoutes', () => ({ isPublicGuestRoute: () => fake.guestRoute }));
-vi.mock('./apiSystem', () => ({ getSystemBuild: vi.fn(() => new Promise(() => {})) }));
+vi.mock('./apiAppShell', () => ({ getSystemBuild: vi.fn(() => new Promise(() => {})) }));
 vi.mock('./staleBuildToast', () => ({ showStaleBuildToast: vi.fn() }));
 vi.mock('../components/ui/Toast');
 

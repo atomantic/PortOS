@@ -20,11 +20,13 @@ const { mockGetSystemActivity, mockGetGpuTelemetry, mockCancelMediaJob } = vi.ho
 }));
 
 // The widget imports apiSystem.js and apiMediaJobs.js directly, not the api barrel (#16813).
-// useSystemActivity reads apiSystem.js too, so the same mock serves both.
 vi.mock('../../services/apiSystem.js', async (importOriginal) => ({
   ...(await importOriginal()),
-  getSystemActivity: (...args) => mockGetSystemActivity(...args),
   getGpuTelemetry: (...args) => mockGetGpuTelemetry(...args),
+}));
+vi.mock('../../services/apiAppShell.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  getSystemActivity: (...args) => mockGetSystemActivity(...args),
 }));
 vi.mock('../../services/apiMediaJobs.js', () => ({
   cancelMediaJob: (...args) => mockCancelMediaJob(...args),

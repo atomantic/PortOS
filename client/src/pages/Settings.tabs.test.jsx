@@ -5,8 +5,8 @@ import { TABS } from '../components/settings/SettingsTabsHeader';
 
 // Same stub as Settings.redirects.test.jsx — Settings.jsx imports every tab
 // component, and those pull in the API client at import time.
-// useInstanceFeatures reads apiSystem.js directly, not the api barrel (#16562).
-vi.mock('../services/apiSystem.js', async (importOriginal) => ({
+// useInstanceFeatures reads apiAppShell.js directly, not the api barrel (#16562).
+vi.mock('../services/apiAppShell.js', async (importOriginal) => ({
   ...(await importOriginal()),
   getInstanceFeatures: vi.fn().mockResolvedValue({ features: [] }),
 }));

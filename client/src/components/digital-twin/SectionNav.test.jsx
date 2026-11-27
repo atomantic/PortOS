@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { act, render, screen, fireEvent, within } from '@testing-library/react';
 
-vi.mock('../../services/apiSystem.js', async (importOriginal) => ({
+vi.mock('../../services/apiAppShell.js', async (importOriginal) => ({
   ...(await importOriginal()),
   getInstanceFeatures: vi.fn().mockResolvedValue({ features: [], groups: [] }),
 }));

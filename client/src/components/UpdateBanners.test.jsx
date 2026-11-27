@@ -18,7 +18,7 @@ const getUpdateStatus = vi.fn();
 const getSystemActivity = vi.fn();
 const ignoreUpdateVersion = vi.fn(() => Promise.resolve({}));
 vi.mock('../lib/appIdentity.js', () => ({ PORTOS_APP_ID: 'portos-default' }));
-vi.mock('../services/apiSystem.js', () => ({
+vi.mock('../services/apiAppShell.js', () => ({
   getSystemActivity: (...a) => getSystemActivity(...a),
   getUpdateStatus: (...a) => getUpdateStatus(...a),
   ignoreUpdateVersion: (...a) => ignoreUpdateVersion(...a),

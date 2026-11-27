@@ -3,10 +3,10 @@ import { MemoryRouter, useNavigate } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { getNavPageForPath } from '../../../server/lib/navManifest.js';
 
-vi.mock('../services/apiSystem.js', () => ({ getSelfInstance: vi.fn() }));
+vi.mock('../services/apiAppShell.js', () => ({ getSelfInstance: vi.fn() }));
 vi.mock('../services/shellBootstrap.js', () => ({ readShellBootstrap: (_key, fetcher) => fetcher() }));
 
-import { getSelfInstance } from '../services/apiSystem.js';
+import { getSelfInstance } from '../services/apiAppShell.js';
 import useDocumentTitle, { setDocumentTitleInstanceName } from './useDocumentTitle.js';
 
 function TitleFixture() {

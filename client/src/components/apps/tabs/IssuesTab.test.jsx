@@ -45,9 +45,9 @@ vi.mock('../../../services/apiProviders.js', () => ({
   getProviders: vi.fn(),
 }));
 
-// useInstanceFeatures reads apiSystem.js directly (#16562); the barrel mock above never
+// useInstanceFeatures reads apiAppShell.js directly (#16562); the barrel mock above never
 // provided it, so keep the hook on its fail-open path instead of a real fetch.
-vi.mock('../../../services/apiSystem.js', async (importOriginal) => ({
+vi.mock('../../../services/apiAppShell.js', async (importOriginal) => ({
   ...(await importOriginal()),
   getInstanceFeatures: vi.fn(() => Promise.reject(new Error('features unavailable'))),
 }));

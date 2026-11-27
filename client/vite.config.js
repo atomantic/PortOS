@@ -26,6 +26,28 @@ export function resolveBuildOutDir(env, configDir) {
 }
 const BUILD_OUT_DIR = resolveBuildOutDir(process.env, CONFIG_DIR);
 
+function guardInitialApiBundle() {
+  // Legacy client navigation also contains /universe-builder/ and /cos/tools.
+  // Check the rendered API modules so those redirects can stay in the shell.
+  const lazyApiModules = /[\\/]services[\\/]api(?:Agents|Apps|SyncReview|System|UniverseBuilder)\.js$/;
+  const lazyEndpoints = ['/image-gen/generate', '/cos/mind/runtime', '/update/execute'];
+  return {
+    name: 'portos-initial-api-guard',
+    apply: (config, { command }) => command === 'build' && resolve(config.root ?? process.cwd()) === CONFIG_DIR,
+    generateBundle(_options, bundle) {
+      const initial = Object.values(bundle).find((output) => output.type === 'chunk' && output.name === 'app-initial');
+      if (!initial) this.error('Expected the app-initial chunk for the lazy API bundle check');
+
+      const modules = Object.entries(initial.modules)
+        .filter(([id, module]) => module.renderedLength > 0 && lazyApiModules.test(id))
+        .map(([id]) => id.split(/[\\/]/).at(-1));
+      const endpoints = lazyEndpoints.filter((endpoint) => initial.code.includes(endpoint));
+      const matches = [...modules, ...endpoints];
+      if (matches.length) this.error(`Lazy APIs in app-initial: ${matches.join(', ')}`);
+    },
+  };
+}
+
 function primaryCheckoutDir(configDir) {
   try {
     const paths = execFileSync('git', ['rev-parse', '--git-dir', '--git-common-dir'], {
@@ -223,6 +245,7 @@ export default defineConfig(({ command, mode }) => {
     },
     plugins: [
       react(),
+      guardInitialApiBundle(),
       command === 'build' && ANALYZE_BUNDLE && requireFromConfig('./vite.bundleReport.js').bundleReport(),
     ].filter(Boolean),
     resolve: {

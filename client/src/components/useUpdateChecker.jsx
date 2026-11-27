@@ -16,7 +16,7 @@ import { safeReadStorage, safeWriteStorage } from '../lib/safeStorage';
 import useMounted from '../hooks/useMounted';
 import socket from '../services/socket';
 import { readShellBootstrap } from '../services/shellBootstrap.js';
-import { getUpdateStatus, ignoreUpdateVersion } from '../services/apiSystem.js';
+import { getUpdateStatus, ignoreUpdateVersion } from '../services/apiAppShell.js';
 
 // Out-of-sync dismissals are keyed by the on-disk commit the advisory was
 // raised for, so dismissing it silences THIS half-updated state without
