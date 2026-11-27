@@ -4,10 +4,11 @@
 // refactor). The series-side helpers stay live until Phase B migrates
 // series.cast → references into universe entities.
 
+import { DESC_LIMIT } from '../lib/universeBibleLimits.js';
 import { getUniverse, updateUniverse, listUniverses, joinInfluenceList } from './universeBuilder.js';
 import { extractBible } from './bibleExtractor.js';
 import {
-  BIBLE_KIND, BIBLE_KINDS, BIBLE_FIELD, BIBLE_KEYS, BIBLE_SOURCE, BIBLE_LIMITS, mergeExtractedBible,
+  BIBLE_KIND, BIBLE_KINDS, BIBLE_FIELD, BIBLE_KEYS, BIBLE_SOURCE, mergeExtractedBible,
   isSeriesScopedCanonEntry,
   SANITIZERS, SERVER_OWNED_CHARACTER_FIELDS,
 } from '../lib/storyBible.js';
@@ -231,11 +232,7 @@ export const DESC_FIELD = Object.freeze({
   [BIBLE_KIND.PLACE]: 'description',
   [BIBLE_KIND.OBJECT]: 'description',
 });
-export const DESC_LIMIT = Object.freeze({
-  [BIBLE_KIND.CHARACTER]: BIBLE_LIMITS.PHYSICAL_DESCRIPTION_MAX,
-  [BIBLE_KIND.PLACE]: BIBLE_LIMITS.PLACE_DESCRIPTION_MAX,
-  [BIBLE_KIND.OBJECT]: BIBLE_LIMITS.OBJECT_DESCRIPTION_MAX,
-});
+export { DESC_LIMIT };
 
 // True when an entry already carries a non-empty description (so the backfill
 // pass has nothing to do for it). Characters check both the canonical and the

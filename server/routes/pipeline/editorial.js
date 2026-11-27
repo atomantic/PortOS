@@ -5,7 +5,6 @@
 
 import { randomUUID } from 'crypto';
 import { Router } from 'express';
-import { z } from 'zod';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
 import { validateRequest } from '../../lib/validateRequest.js';
 import {
@@ -14,7 +13,13 @@ import {
   editorialCustomCheckCreateSchema,
   editorialCustomCheckUpdateSchema,
   editorialCustomCheckPreviewSchema,
-} from '../../lib/pipelineValidation.js';
+  editorialAnalyzeSchema,
+  judgeIssueSchema,
+  comparativeRankRunSchema,
+  seriesReviewRunSchema,
+  seriesFixRunSchema,
+  readinessGateSchema,
+} from '../../lib/editorialValidation.js';
 import {
   resolveCheckState,
   readChecksSlice,
@@ -35,30 +40,11 @@ import * as comparativeRank from '../../services/pipeline/editorial/comparativeR
 import * as voiceFingerprint from '../../services/pipeline/voiceFingerprint.js';
 import * as checkRunner from '../../services/pipeline/editorial/checkRunner.js';
 import * as seriesReview from '../../services/pipeline/seriesReview.js';
-import { getSeriesHealth, READINESS_GATES, DEFAULT_READINESS_GATE } from '../../services/pipeline/editorialScore.js';
+import { getSeriesHealth, DEFAULT_READINESS_GATE } from '../../services/pipeline/editorialScore.js';
 import { getSettings, updateSettingsWith } from '../../services/settings.js';
 import { mapServiceError } from './shared.js';
 
 const router = Router();
-
-// Editorial reader-emotion analysis — provider/model optional (falls through
-// to the active or stage-pinned provider); `force` re-analyzes unchanged issues.
-const editorialAnalyzeSchema = z.object({
-  providerId: z.string().trim().max(80).optional(),
-  model: z.string().trim().max(200).optional(),
-  force: z.boolean().optional(),
-});
-
-// Calibrated LLM issue quality judge (#2167, CWQE Phase 3). Provider/model
-// optional (writer/judge split resolves from the writer stage's judgeProvider by
-// default); `stageId` forces a particular drafted stage; `force` re-judges
-// unchanged content. Runs ONLY from this explicit action (AI-provider policy).
-const judgeIssueSchema = z.object({
-  stageId: z.enum(['prose', 'comicScript', 'teleplay']).optional(),
-  providerId: z.string().trim().max(80).optional(),
-  model: z.string().trim().max(200).optional(),
-  force: z.boolean().optional(),
-});
 
 // Aggregate roadmap (Plot / Character / Reader curves + character arcs + coverage)
 router.get('/series/:id/editorial', asyncHandler(async (req, res) => {
@@ -191,14 +177,6 @@ router.post('/series/:id/editorial/panel/run/cancel', asyncHandler(async (req, r
 // call per match — runs only from this explicit action (AI-provider policy).
 // ---------------------------------------------------------------------------
 
-// Optional compare-judge provider/model override + Swiss rounds. Provider/model
-// fall through to the compare stage's own config when omitted.
-const comparativeRankRunSchema = z.object({
-  providerId: z.string().trim().max(80).optional(),
-  model: z.string().trim().max(200).optional(),
-  rounds: z.coerce.number().int().min(1).max(8).optional(),
-});
-
 // Stored ranking: { status:'complete'|'partial', ranking[], weakest[], matches[], stale, ... }
 // A partial ranking is budget-stopped evidence and is never a revision-priority
 // source. Also { status:'none' } / { status:'insufficient' }.
@@ -224,16 +202,6 @@ router.post('/series/:id/editorial/rank', asyncHandler(async (req, res) => {
 // reuses the existing autopilot revision cycle + per-finding manuscriptFix
 // routes — it is NOT here.
 // ---------------------------------------------------------------------------
-
-// Optional free-text observation + provider/model overrides + a per-run
-// readiness-gate override + `force` (re-judge an unchanged foundation).
-const seriesReviewRunSchema = z.object({
-  feedback: z.string().trim().max(4000).optional(),
-  providerId: z.string().trim().max(80).optional(),
-  model: z.string().trim().max(200).optional(),
-  force: z.boolean().optional(),
-  readinessGate: z.enum([...READINESS_GATES]).optional(),
-});
 
 // Last stored verdict (+ current fix availability from the cos-domain gate), or
 // `{ review: null, fix }` when never run — so a (re)mounting client can reload
@@ -284,12 +252,6 @@ router.post('/series/:id/review/cancel', asyncHandler(async (req, res) => {
 // manuscriptFix machinery (NOT a second orchestrator). Fails closed on the
 // cos-domain gate + budget inside the service; progress streams over SSE.
 // Optional `commentIds` scopes the fix to specific findings (else all open).
-const seriesFixRunSchema = z.object({
-  commentIds: z.array(z.string().min(1).max(120)).max(500).optional(),
-  providerId: z.string().trim().max(80).optional(),
-  model: z.string().trim().max(200).optional(),
-});
-
 router.post('/series/:id/review/fix', asyncHandler(async (req, res) => {
   const body = validateRequest(seriesFixRunSchema, req.body ?? {});
   await seriesSvc.getSeries(req.params.id).catch((err) => { throw mapServiceError(err); });
@@ -348,7 +310,6 @@ router.get('/series/:id/editorial/health', asyncHandler(async (req, res) => {
 // Set the editorial-health readiness gate (the convergence signal the autopilot
 // loop + UI read as "manuscript clean"). Persists into the same
 // `pipelineEditorialChecks` settings slice as the per-check enable/config state.
-const readinessGateSchema = z.object({ readinessGate: z.enum([...READINESS_GATES]) }).strict();
 router.patch('/editorial/readiness-gate', asyncHandler(async (req, res) => {
   const body = validateRequest(readinessGateSchema, req.body ?? {});
   const updated = await updateSettingsWith((current) => {

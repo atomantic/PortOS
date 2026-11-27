@@ -14,7 +14,7 @@ import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import { moodBoardCreateSchema, moodBoardUpdateSchema, moodBoardItemCreateSchema, moodBoardItemUpdateSchema, moodBoardPinterestLinkSchema, moodBoardXPostImportSchema, moodBoardCollageSchema, moodBoardExtractFramesSchema, moodBoardItemRenderSchema, moodBoardGenerateSchema } from '../lib/moodBoardValidation.js';
 import { moodBoardCombineSchema, moodBoardListQuerySchema } from '../lib/moodBoardValidation.js';
-import { influencesSchema, lockedSchema } from './universeBuilder/shared.js';
+import { influencesSchema, lockedSchema } from '../lib/universeBuilderValidation.js';
 import { synthesizeBoardStyle } from '../services/moodBoardStyleSynthesis.js';
 import { composeBoardPrompt } from '../services/moodBoardCompositeStyle.js';
 import { startAnalyzeJob, getAnalyzeJob } from '../services/moodBoard/analyzeJob.js';

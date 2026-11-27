@@ -8,11 +8,18 @@
  */
 
 import { Router } from 'express';
-import { z } from 'zod';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
 import { validateRequest } from '../../lib/validateRequest.js';
+import {
+  manuscriptCompletenessSchema,
+  manuscriptFixGenerateSchema,
+  manuscriptFixAcceptSchema,
+  manuscriptCommentPatchSchema,
+  manuscriptSectionSaveSchema,
+  manuscriptReformatSchema,
+  manuscriptViewQuerySchema,
+} from '../../lib/pipelineManuscriptValidation.js';
 import * as seriesSvc from '../../services/pipeline/series.js';
-import * as issuesSvc from '../../services/pipeline/issues.js';
 import * as arcPlanner from '../../services/pipeline/arcPlanner.js';
 import * as manuscriptReview from '../../services/pipeline/manuscriptReview.js';
 import * as manuscriptFix from '../../services/pipeline/manuscriptFix.js';
@@ -21,72 +28,9 @@ import { getReviewWithStaleness } from '../../services/pipeline/editorial/checkR
 import { recordTrendSnapshot } from '../../services/pipeline/editorialScore.js';
 import { readReadinessGate, mergeSeverityWeights } from '../../lib/editorial/severityConfig.js';
 import { getSettings } from '../../services/settings.js';
-import { providerOverrideShape } from '../../lib/pipelineValidation.js';
 import { mapServiceError } from './shared.js';
 
 const router = Router();
-
-// Manuscript-completeness ("finish the draft") editor pass — override shape plus
-// the re-run mode: 'merge' (default) leaves prior comments as-is and appends new
-// findings; 'fresh' also auto-dismisses open comments this pass no longer finds
-// (accepted/dismissed untouched). See seedReviewFromFindings.
-const manuscriptCompletenessSchema = z.object({
-  ...providerOverrideShape,
-  mode: z.enum(manuscriptReview.REVIEW_RUN_MODES).optional(),
-});
-
-// Manuscript editor — review comment operations.
-const manuscriptFixGenerateSchema = z.object(providerOverrideShape);
-const manuscriptFixEditSchema = z.object({
-  issueNumber: z.number().int().nullable().optional(),
-  issueId: z.string().min(1).max(120).nullable().optional(),
-  stageId: z.enum(seriesSvc.MANUSCRIPT_TYPES).nullable().optional(),
-  find: z.string().min(1).max(issuesSvc.STAGE_OUTPUT_MAX),
-  replace: z.string().max(issuesSvc.STAGE_OUTPUT_MAX),
-});
-const manuscriptFixAcceptSchema = z.object({
-  find: z.string().min(1).max(issuesSvc.STAGE_OUTPUT_MAX).optional(),
-  replace: z.string().max(issuesSvc.STAGE_OUTPUT_MAX).optional(),
-  edits: z.array(manuscriptFixEditSchema).max(20).optional(),
-}).refine((v) => (Array.isArray(v.edits) && v.edits.length > 0) || !!v.find, {
-  message: 'Provide find/replace or at least one edit',
-}).refine((v) => !v.find || typeof v.replace === 'string', {
-  path: ['replace'],
-  message: 'replace is required when find is provided',
-});
-// Comment PATCH: status flip and/or attach/clear a fix. `.strict()` rejects
-// stray keys; `fix` nullable so an explicit clear is distinguishable from absent.
-const manuscriptCommentPatchSchema = z.object({
-  status: z.enum(['open', 'accepted', 'dismissed']).optional(),
-  // Why a dismissal was made (#1605) — `false-positive` flags a broken check;
-  // `null` clears the reason back to a plain "won't fix" dismiss. Validated
-  // against the same source the service sanitizes from.
-  dismissReason: z.enum(manuscriptReview.DISMISS_REASONS).nullable().optional(),
-  fix: z.object({
-    find: z.string().max(issuesSvc.STAGE_OUTPUT_MAX).optional(),
-    replace: z.string().max(issuesSvc.STAGE_OUTPUT_MAX).optional(),
-    fuzzy: z.boolean().optional(),
-    edits: z.array(manuscriptFixEditSchema.extend({
-      title: z.string().max(200).optional(),
-      note: z.string().max(1000).optional(),
-      fuzzy: z.boolean().optional(),
-    })).max(20).optional(),
-  }).refine((v) => !!v.find || !!v.replace || (Array.isArray(v.edits) && v.edits.length > 0), {
-    message: 'Fix must include find/replace or edits',
-  }).nullable().optional(),
-}).strict();
-// Versioned free-text section save — writes one issue's manuscript stage.
-const manuscriptSectionSaveSchema = z.object({
-  stageId: z.enum(seriesSvc.MANUSCRIPT_TYPES),
-  output: z.string().max(issuesSvc.STAGE_OUTPUT_MAX),
-});
-
-const manuscriptReformatSchema = z.object({
-  stageId: z.enum(seriesSvc.MANUSCRIPT_TYPES),
-  content: z.string().max(issuesSvc.STAGE_OUTPUT_MAX),
-  ...providerOverrideShape,
-});
-
 
 // Manuscript-completeness editor pass — categorized "finish the draft"
 // suggestions read from the actual drafted script (not synopses). Advisory.
@@ -147,12 +91,6 @@ router.post('/series/:id/manuscript/completeness/cancel', asyncHandler(async (re
   const canceled = completenessRunner.cancelCompletenessReview(req.params.id);
   res.json({ canceled });
 }));
-
-// Full series manuscript in a chosen format (prose / teleplay / comic script).
-// `?type=` selects the format; absent → the series' pinned primaryManuscriptType,
-// else the auto-detected dominant format. Returns the requested format's
-// sections plus the metadata the editor's format switcher needs.
-const manuscriptViewQuerySchema = z.object({ type: z.string().optional() });
 
 router.get('/series/:id/manuscript', asyncHandler(async (req, res) => {
   const { type } = validateRequest(manuscriptViewQuerySchema, req.query);

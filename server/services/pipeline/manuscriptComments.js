@@ -23,6 +23,7 @@
  * manuscriptFix.js).
  */
 
+import { DISMISS_REASONS } from '../../lib/pipelineSeriesConfig.js';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { atomicWrite, readJSONFile } from '../../lib/fileUtils.js';
@@ -47,7 +48,7 @@ const STATUS_SET = new Set(COMMENT_STATUSES);
 // re-surfacing the same bad finding every run. Only meaningful when
 // `status === 'dismissed'`. Optional + additive, so the synced review doc stays
 // backward-compatible with older peers (who simply ignore the field).
-export const DISMISS_REASONS = Object.freeze(['false-positive']);
+export { DISMISS_REASONS };
 const DISMISS_REASON_SET = new Set(DISMISS_REASONS);
 
 const REVIEW_FILE = 'manuscript-review.json';

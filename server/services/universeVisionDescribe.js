@@ -18,23 +18,18 @@
  * description from nothing.
  */
 
+import { VISION_MAX_IMAGES } from '../lib/universeBibleLimits.js';
 import { PROVIDERS_PAGE_BREADCRUMB } from '../lib/navManifest.js';
 import { resolveAPIProvider, stripCodeFences } from './aiProvider.js';
 import { runPromptThroughProvider, assertProvider, assertVisionRunUsedImages } from './promptRunner.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { getUniverse } from './universeBuilder.js';
-import { BIBLE_FIELD } from '../lib/storyBible.js';
+import { BIBLE_FIELD, BIBLE_KINDS as VISION_KINDS } from '../lib/universeCanon.js';
 import { DESC_FIELD, DESC_LIMIT } from './universeCanon.js';
 
 // Singular kind → render-prompt focus. Mirrors the descriptor emphasis the
 // canon render path already uses (CanonCard's descField placeholders).
-export const VISION_KINDS = ['character', 'place', 'object'];
-
-// Cap the number of images per call. The runner base64-inlines every image
-// into a single request body, so a large batch balloons the prompt and the
-// provider's context window. 8 angles is plenty to triangulate a consistent
-// subject.
-export const VISION_MAX_IMAGES = 8;
+export { VISION_KINDS, VISION_MAX_IMAGES };
 
 const KIND_NOUN = {
   character: 'character',
