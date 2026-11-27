@@ -1018,7 +1018,25 @@ describe('prepareAgentWorkspace — the branch is checked out in another worktre
     const REVIEWED = 'a'.repeat(40);
     const remediationTask = (extra = {}) => ({
       id: 't-remediation', taskType: 'internal',
-      metadata: { useWorktree: true, prRemediationFollowUp: true, existingBranch: 'contributor/fix-thing', prRemediationHeadSha: REVIEWED, ...extra },
+      metadata: { useWorktree: true, prRemediationFollowUp: true, prRemediationWriteAccess: 'own-repo', existingBranch: 'contributor/fix-thing', prRemediationHeadSha: REVIEWED, ...extra },
+    });
+
+    it.each([
+      ['queued writable fork', { prRemediationWriteAccess: 'fork-maintainer-modifiable' }],
+      ['resumed fork', { prRemediationWriteAccess: 'fork-maintainer-modifiable', resumedFromAgentId: 'agent-old', useWorktree: false }],
+      ['legacy task without repository evidence', { prRemediationWriteAccess: undefined }],
+      ['conflicting fork coordinates', { forkHead: { remoteUrl: 'https://example.com/contributor/repo.git', ownerLogin: 'contributor' } }],
+    ])('blocks a %s before touching any checkout', async (_label, extra) => {
+      const task = remediationTask(extra);
+      const result = await prepareAgentWorkspace({ agentId: 'agent-new', task });
+
+      expect(result.outcome).toBe('blocked');
+      expect(updateTask).toHaveBeenCalledWith(task.id, expect.objectContaining({
+        status: 'blocked', metadata: expect.objectContaining({ blockedCategory: 'pr-validation-unavailable' }),
+      }), 'internal');
+      expect(execGit).not.toHaveBeenCalled();
+      expect(createWorktree).not.toHaveBeenCalled();
+      expect(adoptWorktree).not.toHaveBeenCalled();
     });
 
     it('never adopts a holder and attaches fresh at the reviewed commit', async () => {

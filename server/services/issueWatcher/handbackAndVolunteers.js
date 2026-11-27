@@ -1,7 +1,6 @@
 /** Assign screened volunteer claims and hand reviewed pull requests back to a contributor or remediation task. */
 import { IN_PROGRESS_LABEL, dispatchLabelSpec, volunteerClaimLabels } from '../../lib/dispatchLabels.js';
 import { MAX_PR_REMEDIATION_ATTEMPTS, PR_HANDBACK, resolveHandbackDisposition, resolvePullRequestWriteAccess } from '../../lib/prHandbackPolicy.js';
-import { forkHeadFromGithubPr } from '../../lib/forkHead.js';
 import { trimTo } from '../../lib/textUtils.js';
 import { sameLogin, runGh, readCurrentIssueComment } from './forgeClient.js';
 import { readState } from './state.js';
@@ -202,12 +201,12 @@ export async function applyPullRequestHandback({
   if (previous && headSha && previous.headSha === headSha) return PR_HANDBACK.NONE;
 
   const attempts = previous?.attempts || 0;
-  const { canEdit, reason: writeAccess } = resolvePullRequestWriteAccess(pr);
+  const { reason: writeAccess } = resolvePullRequestWriteAccess(pr);
   const disposition = resolveHandbackDisposition({
     reviewOutcome,
     notMergeReady,
     downgraded,
-    canEdit,
+    writeAccess,
     remediationExhausted: attempts >= MAX_PR_REMEDIATION_ATTEMPTS,
   });
   if (disposition === PR_HANDBACK.NONE) return PR_HANDBACK.NONE;
@@ -233,9 +232,6 @@ export async function applyPullRequestHandback({
         headSha,
         headRefName: pr.headRefName,
         authorLogin: login,
-        // Where that head branch lives when the PR came from a fork — the
-        // remediation worktree has no `origin/<branch>` to attach to otherwise.
-        forkHead: forkHeadFromGithubPr(pr),
       },
       writeAccess,
       reason,

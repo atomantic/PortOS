@@ -1461,6 +1461,7 @@ describe('handing back a PR the coordinator could not merge', () => {
   const assignCalls = () => execGhMock.mock.calls
     .filter(([args]) => args[0] === 'pr' && args[1] === 'edit' && args.includes('--add-assignee'));
 
+  const SAME_REPO = { isCrossRepository: false };
   const WRITABLE_FORK = { isCrossRepository: true, maintainerCanModify: true };
   const LOCKED_FORK = { isCrossRepository: true, maintainerCanModify: false };
 
@@ -1472,15 +1473,15 @@ describe('handing back a PR the coordinator could not merge', () => {
     });
   });
 
-  it('sends blocking findings to a remediation agent when the fork branch is writable', async () => {
-    installDefaultGhMock({ pr: pullRequest(WRITABLE_FORK) });
+  it('sends blocking findings to a remediation agent on a same-repository branch', async () => {
+    installDefaultGhMock({ pr: pullRequest(SAME_REPO) });
 
     const result = await run(decision());
 
     expect(result).toMatchObject({ reviewed: 1, merged: 0, handedBack: 1 });
     expect(spawnPrRemediationFollowUpMock).toHaveBeenCalledWith(expect.objectContaining({
       repoFullName: 'o/r',
-      writeAccess: 'fork-maintainer-modifiable',
+      writeAccess: 'own-repo',
       pullRequest: expect.objectContaining({ number: 7, authorLogin: 'contributor' }),
     }));
     // The agent owns it now — assigning the contributor too would put the PR in
@@ -1491,8 +1492,8 @@ describe('handing back a PR the coordinator could not merge', () => {
     ]);
   });
 
-  it('assigns the opener when the contributor did not allow maintainer edits', async () => {
-    installDefaultGhMock({ pr: pullRequest(LOCKED_FORK) });
+  it.each([WRITABLE_FORK, LOCKED_FORK])('assigns a fork to its opener regardless of write access (%j)', async fork => {
+    installDefaultGhMock({ pr: pullRequest(fork) });
 
     const result = await run(decision());
 
@@ -1507,7 +1508,7 @@ describe('handing back a PR the coordinator could not merge', () => {
   // An agent told to "implement the feedback" needs feedback it can implement.
   // The posted review here asks the contributor to restate its findings.
   it('assigns the opener rather than an agent when findings could not be anchored', async () => {
-    installDefaultGhMock({ pr: pullRequest(WRITABLE_FORK) });
+    installDefaultGhMock({ pr: pullRequest(SAME_REPO) });
 
     await run(decision({
       verdict: 'approve',
@@ -1519,7 +1520,7 @@ describe('handing back a PR the coordinator could not merge', () => {
   });
 
   it('leaves a deferred review with its opener', async () => {
-    installDefaultGhMock({ pr: pullRequest(WRITABLE_FORK) });
+    installDefaultGhMock({ pr: pullRequest(SAME_REPO) });
 
     await run(decision({ verdict: 'defer', findings: [] }));
 
@@ -1528,7 +1529,7 @@ describe('handing back a PR the coordinator could not merge', () => {
   });
 
   it('sends an approved PR with failing CI to a remediation agent', async () => {
-    installDefaultGhMock({ pr: pullRequest({ ...WRITABLE_FORK, statusCheckRollup: [{ conclusion: 'FAILURE' }] }) });
+    installDefaultGhMock({ pr: pullRequest({ ...SAME_REPO, statusCheckRollup: [{ conclusion: 'FAILURE' }] }) });
 
     const result = await run(decision({ verdict: 'approve', findings: [] }));
 
@@ -1536,6 +1537,15 @@ describe('handing back a PR the coordinator could not merge', () => {
     expect(spawnPrRemediationFollowUpMock).toHaveBeenCalledWith(expect.objectContaining({
       reason: expect.stringContaining('CI is failing'),
     }));
+  });
+
+  it('hands failing hosted CI on a writable fork back without dispatching local repair', async () => {
+    installDefaultGhMock({ pr: pullRequest({ ...WRITABLE_FORK, statusCheckRollup: [{ conclusion: 'FAILURE' }] }) });
+
+    await run(decision({ verdict: 'approve', findings: [] }));
+
+    expect(spawnPrRemediationFollowUpMock).not.toHaveBeenCalled();
+    expect(assignCalls()).toHaveLength(1);
   });
 
   // The scheduled sweep re-observes the same PR. Without the per-revision
@@ -1547,7 +1557,7 @@ describe('handing back a PR the coordinator could not merge', () => {
         prHandbacks: [{ number: 7, headSha: 'a'.repeat(40), disposition: 'remediate', attempts: 1 }],
       },
     });
-    installDefaultGhMock({ pr: pullRequest(WRITABLE_FORK) });
+    installDefaultGhMock({ pr: pullRequest(SAME_REPO) });
 
     const result = await run(decision());
 
@@ -1564,7 +1574,7 @@ describe('handing back a PR the coordinator could not merge', () => {
         prHandbacks: [{ number: 7, headSha: 'c'.repeat(40), disposition: 'remediate', attempts: MAX_PR_REMEDIATION_ATTEMPTS }],
       },
     });
-    installDefaultGhMock({ pr: pullRequest(WRITABLE_FORK) });
+    installDefaultGhMock({ pr: pullRequest(SAME_REPO) });
 
     await run(decision());
 
@@ -1574,7 +1584,7 @@ describe('handing back a PR the coordinator could not merge', () => {
 
   it('falls back to the opener when the remediation task could not be queued', async () => {
     spawnPrRemediationFollowUpMock.mockResolvedValue({ status: PR_REMEDIATION_SPAWN.FAILED, task: null });
-    installDefaultGhMock({ pr: pullRequest(WRITABLE_FORK) });
+    installDefaultGhMock({ pr: pullRequest(SAME_REPO) });
 
     await run(decision());
 
@@ -1600,7 +1610,7 @@ describe('handing back a PR the coordinator could not merge', () => {
       status: PR_REMEDIATION_SPAWN.ALREADY_QUEUED,
       task: { id: 'sys-existing', duplicate: true },
     });
-    installDefaultGhMock({ pr: pullRequest(WRITABLE_FORK) });
+    installDefaultGhMock({ pr: pullRequest(SAME_REPO) });
 
     await run(decision());
 
@@ -1618,7 +1628,7 @@ describe('handing back a PR the coordinator could not merge', () => {
   // re-spawns an agent for a PR one is already working.
   it('merges its ledger entry onto a peer pass\' write instead of replacing it', async () => {
     const peer = { number: 99, headSha: 'd'.repeat(40), disposition: 'remediate', attempts: 1 };
-    installDefaultGhMock({ pr: pullRequest(WRITABLE_FORK) });
+    installDefaultGhMock({ pr: pullRequest(SAME_REPO) });
     // Land the peer entry mid-pass: after this pass seeded its tracker, before
     // it reaches its own end-of-pass write.
     spawnPrRemediationFollowUpMock.mockImplementation(async () => {
@@ -1641,7 +1651,7 @@ describe('handing back a PR the coordinator could not merge', () => {
         approvedPullRequests: [{
           number: 7,
           headSha: 'a'.repeat(40),
-          contentFingerprint: screenedPullRequestFingerprint(pullRequest(WRITABLE_FORK), DIFF),
+          contentFingerprint: screenedPullRequestFingerprint(pullRequest(SAME_REPO), DIFF),
           authorLogin: 'contributor',
           url: 'https://github.com/o/r/pull/7',
           ciPolicy: 'required',
@@ -1651,7 +1661,7 @@ describe('handing back a PR the coordinator could not merge', () => {
       },
     });
     installDefaultGhMock({
-      pr: pullRequest({ ...WRITABLE_FORK, statusCheckRollup: [] }),
+      pr: pullRequest({ ...SAME_REPO, statusCheckRollup: [] }),
       reviews: [[{ user: { login: 'owner' }, commit_id: 'a'.repeat(40), state: 'APPROVED' }]],
     });
 
