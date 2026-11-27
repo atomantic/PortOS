@@ -1,9 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import Pipeline from './Pipeline';
 
 const listPipelineSeriesSummaries = vi.fn();
+const deletePipelineSeries = vi.fn();
 const listUniverseNames = vi.fn();
 const getUniverse = vi.fn();
 const listLooms = vi.fn();
@@ -12,7 +13,7 @@ const listAuthors = vi.fn();
 vi.mock('../services/apiPipeline.js', () => ({
   listPipelineSeriesSummaries: (...a) => listPipelineSeriesSummaries(...a),
   createPipelineSeries: vi.fn(),
-  deletePipelineSeries: vi.fn(),
+  deletePipelineSeries: (...a) => deletePipelineSeries(...a),
   generateSeriesTitleLogo: vi.fn(),
   generateSeriesConcepts: vi.fn(),
 }));
@@ -57,7 +58,7 @@ function renderPage() {
   );
 }
 
-describe('Pipeline series list — mobile layout', () => {
+describe('Pipeline series index', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     listPipelineSeriesSummaries.mockResolvedValue([SERIES]);
@@ -108,6 +109,42 @@ describe('Pipeline series list — mobile layout', () => {
     expect(actions).toHaveClass('shrink-0');
     expect(actions).toHaveClass('flex-wrap');
     expect(actions.parentElement).toBe(row);
+  });
+
+  it('offers a retry after the universe list fails and shows the recovered options', async () => {
+    listUniverseNames.mockRejectedValueOnce(new Error('Offline'))
+      .mockResolvedValueOnce([{ id: 'u-a', name: 'World A' }]);
+    renderPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'New Series' }));
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('Could not load universes — Offline');
+    expect(screen.queryByText(/No universes yet/)).toBeNull();
+
+    fireEvent.click(within(alert).getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByRole('option', { name: 'World A' })).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('restores a failed deletion without resurrecting another deleted series', async () => {
+    const otherSeries = { id: 'series-2', name: 'Second Series' };
+    listPipelineSeriesSummaries.mockResolvedValue([SERIES, otherSeries]);
+    let rejectDelete;
+    deletePipelineSeries
+      .mockImplementationOnce(() => new Promise((_, reject) => { rejectDelete = reject; }))
+      .mockResolvedValueOnce(undefined);
+    renderPage();
+
+    for (const { name } of [SERIES, otherSeries]) {
+      fireEvent.click(await screen.findByRole('button', { name: `Delete series ${name}` }));
+      const confirm = screen.getByRole('group', { name: `Confirm delete series ${name}` });
+      fireEvent.click(within(confirm).getByRole('button', { name: 'Delete' }));
+      expect(screen.queryByRole('link', { name: new RegExp(name) })).toBeNull();
+    }
+
+    await act(async () => rejectDelete(new Error('Delete failed')));
+    expect(await screen.findByRole('link', { name: /Example Series/ })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /Second Series/ })).toBeNull();
   });
 
   it('directs an empty series form to the Create universes page', async () => {
