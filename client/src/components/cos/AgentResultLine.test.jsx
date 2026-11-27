@@ -1,6 +1,6 @@
 import { render, screen } from '@testing-library/react';
 import { expect, it } from 'vitest';
-import AgentResultLine, { ReleasePublicationLine, SecurityScanEvidence } from './AgentResultLine';
+import AgentResultLine, { deriveAgentResultState, ReleasePublicationLine, SecurityScanEvidence } from './AgentResultLine';
 
 it('separates clean execution, assessment persistence and delivery validation', () => {
   const agent = { result: { success: true, validationPassed: false, auditAssessment: { status: 'persistence-failed' } } };
@@ -66,6 +66,29 @@ it('shows runner observations during execution without requiring an agent comple
   expect(screen.getByText('Security scanner (runner observed): interrupted')).toBeInTheDocument();
   expect(screen.getByText('Process cleanup: unconfirmed')).toBeInTheDocument();
   expect(screen.queryByText('Completed successfully')).not.toBeInTheDocument();
+});
+
+it('renders scanner preflight counts when no last error is available', () => {
+  const view = render(<SecurityScanEvidence scanner={{ status: 'completed', preflight: { rejectedRequests: 2 } }} />);
+  expect(screen.getByText('Input rejections: 2')).toBeInTheDocument();
+  view.rerender(<SecurityScanEvidence scanner={{ status: 'completed', preflight: { rejectedRequests: 2, lastError: null } }} />);
+  expect(screen.getByText('Input rejections: 2')).toBeInTheDocument();
+});
+
+it('uses the muted tone when publication is verified but synchronization is not', () => {
+  const { container } = render(<ReleasePublicationLine
+    publication={{ status: 'verified' }}
+    synchronization={{ status: 'pending' }}
+  />);
+  expect(screen.getByText('Published — synchronization pending')).toHaveClass('text-port-text-muted');
+  expect(container.querySelector('.text-port-success')).toBeNull();
+});
+
+it('derives a view model without changing the agent record', () => {
+  const agent = { result: { success: true }, metadata: { releasePublication: { status: 'verified' } } };
+  const state = deriveAgentResultState(agent);
+  expect(state).toMatchObject({ hasResult: true, executionSuccess: true, tone: 'text-port-text-muted' });
+  expect(agent.result).toEqual({ success: true });
 });
 
 it('shows the committed scanner baseline separately from later audit success', () => {
