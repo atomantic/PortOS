@@ -1,16 +1,12 @@
 import { useRunwayCatalog } from '../../hooks/useRunwayCatalog.js';
 import { useFalImageCatalog } from '../../hooks/useFalImageCatalog.js';
+import RunwayModelSelect from '../imageGen/RunwayModelSelect';
 import RunwayCatalogStatus from '../imageGen/RunwayCatalogStatus.jsx';
 import FalCatalogStatus from '../imageGen/FalCatalogStatus.jsx';
 /**
- * Media settings — the per-provider sections (External SD API, Local
- * runtimes, Codex CLI, Grok CLI, Agy CLI, fal.ai). Every field is read from
- * and written to the shared `useSettingsForm` the Media drawer owns; the
- * probes and catalogs a section needs (local models, the Codex provider's
- * model list, `agy models`) live here so an unopened section never pays for
- * them. Always mounted: the Local section is lazily mounted on first visit
- * and then kept mounted (hidden) so a running install stream survives a tab
- * switch — see the comment on `localMounted`.
+ * Provider sections read and write the shared settings form owned by the
+ * Media drawer. The Local section mounts on first visit and stays mounted
+ * so a running install stream survives a tab switch.
  */
 
 import { useState, useEffect, useCallback, useId } from 'react';
@@ -62,19 +58,10 @@ const INPUT_CLASS = 'w-full bg-port-bg border border-port-border rounded-lg px-3
 const SECTION_CLASS = 'bg-port-card border border-port-border rounded-xl p-6 space-y-4';
 const FIELD_LABEL_CLASS = 'block text-xs font-medium text-gray-400 mb-1';
 
-export default function ImageGenProviderSections({ mediaTab, setMediaTab, form, parallelBounds, falCredential, higgsfieldCredential, googleCredential, runwayCredential, localRuntime, onStatusRecheck }) {
-  const runwayCatalog = useRunwayCatalog(mediaTab === 'runway');
-  const falCatalog = useFalImageCatalog(mediaTab === 'fal');
+export default function ImageGenProviderSections({ mediaTab, setMediaTab, form, parallelBounds = PARALLEL_FALLBACK, falCredential, higgsfieldCredential, googleCredential, runwayCredential, localRuntime, onStatusRecheck }) {
   const { values, set } = form;
   const {
-    mode, sdapiUrl, pythonPath, localModelId, localVideoModelId,
-    codexEnabled, codexPath, codexModel, codexEffort, codexParallelLimit,
-    grokEnabled, grokPath, grokAspectRatio, grokImageParallelLimit, grokVideoParallelLimit,
-    agyEnabled, agyPath, agyModel, agyImageParallelLimit,
-    runwayImageParallelLimit, runwayVideoParallelLimit,
-    falEnabled, falModel, falImageParallelLimit, falVideoParallelLimit,
-    higgsfieldEnabled, higgsfieldModel, higgsfieldImageParallelLimit, higgsfieldVideoParallelLimit,
-    googleEnabled, googleModel, googleProjectId, googleLocation, googleImageParallelLimit, googleVideoParallelLimit,
+    mode, sdapiUrl, pythonPath, localModelId, localVideoModelId, codexEnabled, codexModel, agyEnabled,
   } = values;
   const localConfigured = isLocalImageConfigured({ pythonPath, modelId: localModelId });
   // Disabling a provider while it is the active backend would leave the saved
@@ -154,12 +141,6 @@ export default function ImageGenProviderSections({ mediaTab, setMediaTab, form, 
     codexModel.trim(),
     (id) => ({ id }),
   );
-  // Raw string held while the user is typing in the parallel-limit input.
-  // Clamping is deferred to onBlur so multi-digit entry isn't blocked; the
-  // draft follows the form value whenever a load or a save clamp moves it.
-  const [parallelLimitDraft, setParallelLimitDraft] = useState(String(codexParallelLimit));
-  useEffect(() => { setParallelLimitDraft(String(codexParallelLimit)); }, [codexParallelLimit]);
-
   // Probe only while the Agy tab is actually open — the list spawns `agy models`
   // server-side, so an unopened tab must not pay for a child process.
   const {
@@ -168,33 +149,6 @@ export default function ImageGenProviderSections({ mediaTab, setMediaTab, form, 
     loading: agyModelsLoading,
     refresh: refreshAgyModels,
   } = useAgyModels(mediaTab === 'agy' && agyEnabled);
-
-  // Stable ids for label/input associations
-  const codexPathId = useId();
-  const codexModelId = useId();
-  const codexEffortId = useId();
-  const codexParallelId = useId();
-  const grokPathId = useId();
-  const grokRatioId = useId();
-  const grokImageParallelId = useId();
-  const grokVideoParallelId = useId();
-  const agyPathId = useId();
-  const agyModelId = useId();
-  const agyModelsListId = useId();
-  const agyImageParallelId = useId();
-  const runwayImageParallelId = useId();
-  const runwayVideoParallelId = useId();
-  const falModelId = useId();
-  const falImageParallelId = useId();
-  const falVideoParallelId = useId();
-  const higgsfieldModelId = useId();
-  const higgsfieldImageParallelId = useId();
-  const higgsfieldVideoParallelId = useId();
-  const googleModelId = useId();
-  const googleProjectFieldId = useId();
-  const googleLocationFieldId = useId();
-  const googleImageParallelId = useId();
-  const googleVideoParallelId = useId();
 
   return (
     <>
@@ -221,7 +175,7 @@ export default function ImageGenProviderSections({ mediaTab, setMediaTab, form, 
           <p className="text-xs text-gray-500">
             Pick a Python 3.10+ interpreter — PortOS auto-detects the configured local runtimes and can install
             missing packages directly. HF model weights stream into the standard <code>~/.cache/huggingface</code>
-            and are surfaced in <a href="/models/media" className="text-port-accent hover:underline">{getNavPageForPath('/models/media')?.breadcrumb || 'its management page'}</a>.
+            and are surfaced in <Link to="/models/media" className="text-port-accent hover:underline">{getNavPageForPath('/models/media')?.breadcrumb || 'its management page'}</Link>.
           </p>
           <div className="bg-port-bg border border-port-border rounded-lg p-3 text-xs text-gray-400">
             <span className="font-medium text-gray-300">Parallel limit:</span> Local model lanes stay at their memory-governed limit (1 render at a time) to protect system memory and GPU stability.
@@ -270,7 +224,7 @@ export default function ImageGenProviderSections({ mediaTab, setMediaTab, form, 
             form, deck cards, sprite references, pipeline visuals, character sheets and
             FableLoom. A model picked on one of those surfaces still wins for that render.
             Most models download weights on first use; MOSS requires its separate download action. Check what&apos;s already cached in{' '}
-            <a href="/models/media" className="text-port-accent hover:underline">{getNavPageForPath('/models/media')?.breadcrumb || 'its management page'}</a>.
+            <Link to="/models/media" className="text-port-accent hover:underline">{getNavPageForPath('/models/media')?.breadcrumb || 'its management page'}</Link>.
           </p>
           {localModels?.length === 0 && (
             <p role="status" className="text-xs text-port-warning">
@@ -299,9 +253,9 @@ export default function ImageGenProviderSections({ mediaTab, setMediaTab, form, 
             <p className="text-xs text-gray-500">
               Used by local video renders that do not choose a model. A model selected for a
               render still wins. Weights download on first use; check the{' '}
-              <a href="/models/media" className="text-port-accent hover:underline">
+              <Link to="/models/media" className="text-port-accent hover:underline">
                 {getNavPageForPath('/models/media')?.breadcrumb || 'media models page'}
-              </a>{' '}for cached models.
+              </Link>{' '}for cached models.
             </p>
             {videoModelContextFailed && (
               <p role="status" className="text-xs text-port-warning">Could not load local video models.</p>
@@ -319,96 +273,16 @@ export default function ImageGenProviderSections({ mediaTab, setMediaTab, form, 
       {/* Codex CLI config — the toggle that enables the option lives here.
           Codex appears as a backend tile only after the user flips this on. */}
       {mediaTab === 'codex' && (
-      <div className={SECTION_CLASS}>
-        <div className="flex items-center gap-2 text-white">
-          <Terminal size={18} />
-          <h2 className="text-lg font-semibold">Codex CLI Imagegen</h2>
-        </div>
-        <p className="text-xs text-gray-500">
-          Route image generation through the Codex CLI's built-in
-          <code className="text-gray-400"> image_gen </code> tool — invoked headlessly with a
-          <code className="text-gray-400"> $imagegen </code> prompt. Uses your logged-in Codex session, no
-          OPENAI_API_KEY required. Not every Codex plan exposes
-          <code className="text-gray-400"> image_gen </code>; if yours doesn't, leave this off.
-        </p>
-        <label className="flex items-center gap-3 cursor-pointer">
-          <input type="checkbox" checked={codexEnabled} onChange={toggleProvider('codexEnabled', IMAGE_GEN_MODE.CODEX)} className="rounded" />
-          <span className="text-sm text-gray-300">Enable Codex Imagegen</span>
-        </label>
-        {codexEnabled && (
-          <div className="space-y-3 pl-6 border-l-2 border-port-border">
-            <FormField label="Codex binary path (optional)" labelClassName={FIELD_LABEL_CLASS}>
-              <input
-                id={codexPathId}
-                type="text"
-                value={codexPath}
-                onChange={(e) => set('codexPath', e.target.value)}
-                className={INPUT_CLASS}
-                placeholder="codex (uses $PATH)"
-              />
-              <p className="text-xs text-gray-500 mt-1">Leave empty to invoke <code>codex</code> from $PATH.</p>
-            </FormField>
-            <FormField label="Model override (optional)" labelClassName={FIELD_LABEL_CLASS}>
-              <select
-                id={codexModelId}
-                value={codexModel.trim()}
-                onChange={(e) => set('codexModel', e.target.value)}
-                className={INPUT_CLASS}
-              >
-                <option value="">Default ({CODEX_IMAGEGEN_DEFAULT_MODEL})</option>
-                {codexModelOptions.map(({ id }) => (
-                  <option key={id} value={id}>{id}</option>
-                ))}
-              </select>
-              {codexModelsState === 'error' && (
-                <ListLoadError what="your Codex provider's models" error={codexModelsError} onRetry={retryCodexModels} className="mt-1" />
-              )}
-              <p className="text-xs text-gray-500 mt-1">Passed as <code>codex exec -m &lt;model&gt;</code>. Leave on Default for the cheap shipped model (<code>{CODEX_IMAGEGEN_DEFAULT_MODEL}</code>). Models come from your Codex provider.</p>
-            </FormField>
-            <FormField label="Reasoning effort (optional)" labelClassName={FIELD_LABEL_CLASS}>
-              <select
-                id={codexEffortId}
-                value={codexEffort}
-                onChange={(e) => set('codexEffort', e.target.value)}
-                className={INPUT_CLASS}
-              >
-                <option value="">Default ({CODEX_IMAGEGEN_DEFAULT_EFFORT})</option>
-                {codexEffortLevels.map((lvl) => (
-                  <option key={lvl} value={lvl}>{lvl}</option>
-                ))}
-              </select>
-              <p className="text-xs text-gray-500 mt-1">Passed as <code>codex exec -c model_reasoning_effort=&lt;level&gt;</code>. Lower effort is cheaper; leave on the shipped default (<code>{CODEX_IMAGEGEN_DEFAULT_EFFORT}</code>){codexEffortLevels[0] !== CODEX_IMAGEGEN_DEFAULT_EFFORT ? <> or drop to <code>{codexEffortLevels[0]}</code> for the cheapest possible renders</> : null}. The levels offered depend on the model above.</p>
-            </FormField>
-            <FormField label="Parallel render limit" labelClassName={FIELD_LABEL_CLASS}>
-              <input
-                id={codexParallelId}
-                type="number"
-                min={parallelBounds.min}
-                max={parallelBounds.max}
-                step={1}
-                value={parallelLimitDraft}
-                onChange={(e) => setParallelLimitDraft(e.target.value)}
-                onBlur={() => {
-                  const clamped = clampParallel(parallelLimitDraft, parallelBounds);
-                  set('codexParallelLimit', clamped);
-                  setParallelLimitDraft(String(clamped));
-                }}
-                className="w-24 bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent"
-              />
-              <p className="text-xs text-gray-500 mt-1">
-                How many renders each cloud provider (Codex, Grok, Agy, …) runs in parallel; providers never wait on each other. Default <code>{formatCount(parallelBounds.default)}</code>.
-                Higher values let large batches finish faster, subject to your provider&apos;s rate limits, and increase simultaneous usage.
-                {codexParallelLimit > 5 && (
-                  <span className="block mt-1 text-port-warning">
-                    ⚠️ {formatCount(codexParallelLimit)} concurrent renders can burn credits quickly during a long batch. Watch usage.
-                  </span>
-                )}
-              </p>
-            </FormField>
-            <CleanersToggles mode={IMAGE_GEN_MODE.CODEX} form={form} />
-          </div>
-        )}
-      </div>
+        <CodexSection
+          form={form}
+          parallelBounds={parallelBounds}
+          toggleProvider={toggleProvider}
+          codexEffortLevels={codexEffortLevels}
+          codexModelOptions={codexModelOptions}
+          codexModelsState={codexModelsState}
+          codexModelsError={codexModelsError}
+          retryCodexModels={retryCodexModels}
+        />
       )}
 
       {/* Grok Build CLI config — mirrors the Codex section's enable-gate
@@ -417,196 +291,347 @@ export default function ImageGenProviderSections({ mediaTab, setMediaTab, form, 
           model/effort knobs, so it's just the binary path + a default aspect
           ratio + the cleaner toggles. */}
       {mediaTab === 'grok' && (
-      <div className={SECTION_CLASS}>
-        <div className="flex items-center gap-2 text-white">
-          <Sparkles size={18} />
-          <h2 className="text-lg font-semibold">Grok CLI Imagegen</h2>
-        </div>
-        <p className="text-xs text-gray-500">
-          Route image generation through the Grok Build CLI's built-in
-          <code className="text-gray-400"> image_gen </code> tool (and
-          <code className="text-gray-400"> image_edit </code> for image-to-image) — invoked headlessly.
-          Uses your logged-in Grok session, no XAI_API_KEY required. Not every Grok plan includes
-          image generation; if yours doesn't, leave this off.
-        </p>
-        <label className="flex items-center gap-3 cursor-pointer">
-          <input type="checkbox" checked={grokEnabled} onChange={toggleProvider('grokEnabled', IMAGE_GEN_MODE.GROK)} className="rounded" />
-          <span className="text-sm text-gray-300">Enable Grok Imagegen</span>
-        </label>
-        {grokEnabled && (
-          <div className="space-y-3 pl-6 border-l-2 border-port-border">
-            <FormField label="Grok binary path (optional)" labelClassName={FIELD_LABEL_CLASS}>
-              <input
-                id={grokPathId}
-                type="text"
-                value={grokPath}
-                onChange={(e) => set('grokPath', e.target.value)}
-                className={INPUT_CLASS}
-                placeholder="grok (uses $PATH)"
-              />
-              <p className="text-xs text-gray-500 mt-1">Leave empty to invoke <code>grok</code> from $PATH.</p>
-            </FormField>
-            <FormField label="Default aspect ratio (optional)" labelClassName={FIELD_LABEL_CLASS}>
-              <select
-                id={grokRatioId}
-                value={grokAspectRatio}
-                onChange={(e) => set('grokAspectRatio', e.target.value)}
-                className={INPUT_CLASS}
-              >
-                <option value="">Auto (from requested size)</option>
-                {GROK_ASPECT_RATIOS.map((r) => (
-                  <option key={r} value={r}>{r}</option>
-                ))}
-              </select>
-              <p className="text-xs text-gray-500 mt-1">
-                Applied when a render doesn't specify dimensions. A render's width/height maps to the nearest supported ratio automatically.
-              </p>
-            </FormField>
-            <ParallelLimitField
-              id={grokImageParallelId}
-              label="Parallel image render limit"
-              value={grokImageParallelLimit}
-              onChange={(v) => set('grokImageParallelLimit', v)}
-              bounds={parallelBounds}
-              helpText="How many image renders Grok runs at once. Default 1."
-              warningText={`${formatCount(grokImageParallelLimit)} concurrent renders can burn credits quickly during a long batch.`}
-            />
-            <ParallelLimitField
-              id={grokVideoParallelId}
-              label="Parallel video render limit"
-              value={grokVideoParallelLimit}
-              onChange={(v) => set('grokVideoParallelLimit', v)}
-              bounds={parallelBounds}
-              helpText="How many video renders Grok runs at once. Default 1."
-              warningText={`${formatCount(grokVideoParallelLimit)} concurrent video renders can burn credits or hit rate limits quickly.`}
-            />
-            <CleanersToggles mode={IMAGE_GEN_MODE.GROK} form={form} />
-          </div>
-        )}
-      </div>
+        <GrokSection
+          form={form}
+          parallelBounds={parallelBounds}
+          toggleProvider={toggleProvider}
+        />
       )}
 
       {mediaTab === 'agy' && (
-      <div className={SECTION_CLASS}>
-        <div className="flex items-center gap-2 text-white">
-          <Terminal size={18} />
-          <h2 className="text-lg font-semibold">Agy CLI Imagegen</h2>
-        </div>
-        <p className="text-xs text-gray-500">
-          Route text-to-image generation through Antigravity's built-in
-          <code className="text-gray-400"> generate_image </code> tool. Agy runs in an isolated scratch
-          directory and PortOS imports only the directed image output. Image editing is not supported.
-        </p>
-        <label className="flex items-center gap-3 cursor-pointer">
-          <input type="checkbox" checked={agyEnabled} onChange={toggleProvider('agyEnabled', IMAGE_GEN_MODE.AGY)} className="rounded" />
-          <span className="text-sm text-gray-300">Enable Agy Imagegen</span>
-        </label>
-        {agyEnabled && (
-          <div className="space-y-3 pl-6 border-l-2 border-port-border">
-            <FormField label="Agy binary path (optional)" labelClassName={FIELD_LABEL_CLASS}>
-              <input
-                id={agyPathId}
-                type="text"
-                value={agyPath}
-                onChange={(e) => set('agyPath', e.target.value)}
-                className={INPUT_CLASS}
-                placeholder="agy (uses $PATH)"
-              />
-            </FormField>
-            <div className="flex items-end justify-between gap-3 mb-1">
-              <FormField label="Agent model (drives the session — not the image model)" labelClassName="block text-xs font-medium text-gray-400" className="flex-1">
-                <input
-                  id={agyModelId}
-                  list={agyModelsListId}
-                  type="text"
-                  value={agyModel}
-                  onChange={(e) => set('agyModel', e.target.value)}
-                  className={INPUT_CLASS}
-                  placeholder={`${AGY_IMAGEGEN_DEFAULT_MODEL} (default)`}
-                />
-              </FormField>
-              <button
-                type="button"
-                onClick={refreshAgyModels}
-                disabled={agyModelsLoading}
-                className="text-xs text-port-accent hover:underline disabled:opacity-50"
-              >
-                {agyModelsLoading ? <BrailleSpinner text="Loading…" /> : 'Refresh models'}
-              </button>
-            </div>
-            <div>
-              <datalist id={agyModelsListId}>
-                {agyModels.map((modelId) => <option key={modelId} value={modelId} />)}
-              </datalist>
-              {agyModelsError && <p role="status" className="text-xs text-port-warning mt-1">{agyModelsError}. You can still enter a custom model id.</p>}
-              {/* This is the model `agy --model` runs the SESSION on — the agent that
-                  calls the built-in generate_image tool. Agy exposes no knob for the
-                  underlying image model (generate_image takes Prompt / ImageName /
-                  AspectRatio / ImagePaths and nothing else — schema re-dumped from a
-                  live session 2026-07-30, agy 1.1.8), so there is no imagen-* option to
-                  pick here — the image model is fixed server-side (see the read-only
-                  row below and AGY_IMAGEGEN_IMAGE_MODEL). An id outside `agy models`
-                  makes agy exit non-zero before generating, which is why the list is a
-                  live probe. */}
-              {!agyModelsError && (
-                <p className="text-xs text-gray-500 mt-1">
-                  The agent model Agy runs the session on — it drives the built-in{' '}
-                  <code className="text-gray-400">generate_image</code> tool. Leave empty to
-                  use the cheap default (<code className="text-gray-400">{AGY_IMAGEGEN_DEFAULT_MODEL}</code>).
-                  Renders can pin a different agent model per queue item on the Image Gen page.
-                </p>
-              )}
-            </div>
-            <div>
-              <span className="block text-xs font-medium text-gray-400 mb-1">Image model</span>
-              <p className="text-sm text-gray-300">
-                <code className="text-gray-300">{AGY_IMAGEGEN_IMAGE_MODEL}</code>{' '}
-                <span className="text-xs text-gray-500">
-                  — chosen by Antigravity server-side; not selectable through the CLI
-                  (no tool parameter, no <code>--model</code> id, prompt requests are ignored —
-                  agy will claim it honored one, but the pixels come out identical).
-                </span>
-              </p>
-            </div>
-            <ParallelLimitField
-              id={agyImageParallelId}
-              label="Parallel image render limit"
-              value={agyImageParallelLimit}
-              onChange={(v) => set('agyImageParallelLimit', v)}
-              bounds={parallelBounds}
-              helpText="How many image renders Agy runs at once. Default 1."
-              warningText={`${formatCount(agyImageParallelLimit)} concurrent renders can hit CLI session limits.`}
-            />
-            <CleanersToggles mode={IMAGE_GEN_MODE.AGY} form={form} />
-          </div>
-        )}
-      </div>
+        <AgySection
+          form={form}
+          parallelBounds={parallelBounds}
+          toggleProvider={toggleProvider}
+          agyModels={agyModels}
+          agyModelsError={agyModelsError}
+          agyModelsLoading={agyModelsLoading}
+          refreshAgyModels={refreshAgyModels}
+        />
       )}
 
       {mediaTab === 'runway' && (
-        <div className={SECTION_CLASS}>
-          <h2 className="text-lg font-semibold text-white">Runway Imagegen</h2>
-          <p className="text-xs text-gray-400">Uses the Runway credential from <Link to="/settings/credentials" className="text-port-accent hover:underline">Settings → Credentials</Link>, shared with video generation.</p>
-          <p className="text-xs text-gray-400">{runwayCredential == null ? 'Checking credential…' : runwayCredential.configured ? 'Runway credential configured.' : 'Add a Runway credential to render.'}</p>
-          <p className="text-xs text-gray-400">{RUNWAY_IMAGE_DISCLOSURE.summary} <a href={RUNWAY_IMAGE_DISCLOSURE.termsUrl} target="_blank" rel="noreferrer" className="text-port-accent hover:underline">Runway’s terms</a> and moderation apply. {RUNWAY_IMAGE_DISCLOSURE.billing}</p>
-          <label className="flex items-center gap-3 cursor-pointer"><input type="checkbox" checked={values.runwayEnabled} onChange={toggleProvider('runwayEnabled', IMAGE_GEN_MODE.RUNWAY)} /><span>Enable Runway Imagegen</span></label>
-          <FormField label="Default model" labelClassName={FIELD_LABEL_CLASS}>
-            <select value={values.runwayModel} onChange={(e) => { set('runwayModel', e.target.value); set('runwayResolution', getRunwayImageModel(e.target.value).defaultResolution); }} className={INPUT_CLASS}>
-              {!runwayCatalog.imageModels.some((m) => m.id === values.runwayModel) && <option value={values.runwayModel}>{values.runwayModel} (unavailable)</option>}
-              {runwayCatalog.imageModels.map((model) => <option key={model.id} value={model.id}>{model.label}{model.minReferences ? ' (requires a reference)' : ''}</option>)}
+        <RunwaySection
+          form={form}
+          parallelBounds={parallelBounds}
+          toggleProvider={toggleProvider}
+          credential={runwayCredential}
+        />
+      )}
+      {mediaTab === 'fal' && (
+        <FalSection
+          form={form}
+          parallelBounds={parallelBounds}
+          toggleProvider={toggleProvider}
+          credential={falCredential}
+          onOpenDefaults={() => setMediaTab('defaults')}
+        />
+      )}
+
+      {mediaTab === 'higgsfield' && (
+        <HiggsfieldSection
+          form={form}
+          parallelBounds={parallelBounds}
+          toggleProvider={toggleProvider}
+          credential={higgsfieldCredential}
+          onOpenDefaults={() => setMediaTab('defaults')}
+        />
+      )}
+
+      {mediaTab === 'google' && (
+        <GoogleSection
+          form={form}
+          parallelBounds={parallelBounds}
+          toggleProvider={toggleProvider}
+          credential={googleCredential}
+          onOpenDefaults={() => setMediaTab('defaults')}
+        />
+      )}
+    </>
+  );
+}
+
+function CodexSection({ form, parallelBounds, toggleProvider, codexEffortLevels, codexModelOptions, codexModelsState, codexModelsError, retryCodexModels }) {
+  const { set } = form;
+  const { codexEnabled, codexPath, codexModel, codexEffort, codexParallelLimit } = form.values;
+
+  return (
+    <ProviderSection title="Codex CLI Imagegen" icon={Terminal}>
+      <p className="text-xs text-gray-500">
+        Route image generation through the Codex CLI's built-in
+        <code className="text-gray-400"> image_gen </code> tool — invoked headlessly with a
+        <code className="text-gray-400"> $imagegen </code> prompt. Uses your logged-in Codex session, no
+        OPENAI_API_KEY required. Not every Codex plan exposes
+        <code className="text-gray-400"> image_gen </code>; if yours doesn't, leave this off.
+      </p>
+      <label className="flex items-center gap-3 cursor-pointer">
+        <input type="checkbox" checked={codexEnabled} onChange={toggleProvider('codexEnabled', IMAGE_GEN_MODE.CODEX)} className="rounded" />
+        <span className="text-sm text-gray-300">Enable Codex Imagegen</span>
+      </label>
+      {codexEnabled && (
+        <div className="space-y-3 pl-6 border-l-2 border-port-border">
+          <FormField label="Codex binary path (optional)" labelClassName={FIELD_LABEL_CLASS}>
+            <input
+              type="text"
+              value={codexPath}
+              onChange={(e) => set('codexPath', e.target.value)}
+              className={INPUT_CLASS}
+              placeholder="codex (uses $PATH)"
+            />
+            <p className="text-xs text-gray-500 mt-1">Leave empty to invoke <code>codex</code> from $PATH.</p>
+          </FormField>
+          <FormField label="Model override (optional)" labelClassName={FIELD_LABEL_CLASS}>
+            <select
+              value={codexModel.trim()}
+              onChange={(e) => set('codexModel', e.target.value)}
+              className={INPUT_CLASS}
+            >
+              <option value="">Default ({CODEX_IMAGEGEN_DEFAULT_MODEL})</option>
+              {codexModelOptions.map(({ id }) => (
+                <option key={id} value={id}>{id}</option>
+              ))}
             </select>
+            {codexModelsState === 'error' && (
+              <ListLoadError what="your Codex provider's models" error={codexModelsError} onRetry={retryCodexModels} className="mt-1" />
+            )}
+            <p className="text-xs text-gray-500 mt-1">Passed as <code>codex exec -m &lt;model&gt;</code>. Leave on Default for the cheap shipped model (<code>{CODEX_IMAGEGEN_DEFAULT_MODEL}</code>). Models come from your Codex provider.</p>
+          </FormField>
+          <FormField label="Reasoning effort (optional)" labelClassName={FIELD_LABEL_CLASS}>
+            <select
+              value={codexEffort}
+              onChange={(e) => set('codexEffort', e.target.value)}
+              className={INPUT_CLASS}
+            >
+              <option value="">Default ({CODEX_IMAGEGEN_DEFAULT_EFFORT})</option>
+              {codexEffortLevels.map((lvl) => (
+                <option key={lvl} value={lvl}>{lvl}</option>
+              ))}
+            </select>
+            <p className="text-xs text-gray-500 mt-1">Passed as <code>codex exec -c model_reasoning_effort=&lt;level&gt;</code>. Lower effort is cheaper; leave on the shipped default (<code>{CODEX_IMAGEGEN_DEFAULT_EFFORT}</code>){codexEffortLevels[0] !== CODEX_IMAGEGEN_DEFAULT_EFFORT ? <> or drop to <code>{codexEffortLevels[0]}</code> for the cheapest possible renders</> : null}. The levels offered depend on the model above.</p>
+          </FormField>
+          <ParallelLimitField
+            value={codexParallelLimit}
+            onChange={(v) => set('codexParallelLimit', v)}
+            bounds={parallelBounds}
+            helpText={<>How many renders each cloud provider (Codex, Grok, Agy, …) runs in parallel; providers never wait on each other. Default <code>{formatCount(parallelBounds.default)}</code>. Higher values let large batches finish faster, subject to your provider&apos;s rate limits, and increase simultaneous usage.</>}
+            warningText={`${formatCount(codexParallelLimit)} concurrent renders can burn credits quickly during a long batch. Watch usage.`}
+          />
+          <CleanersToggles mode={IMAGE_GEN_MODE.CODEX} form={form} />
+        </div>
+      )}
+    </ProviderSection>
+  );
+}
+
+function GrokSection({ form, parallelBounds, toggleProvider }) {
+  const { set } = form;
+  const { grokEnabled, grokPath, grokAspectRatio, grokImageParallelLimit, grokVideoParallelLimit } = form.values;
+
+  return (
+    <ProviderSection title="Grok CLI Imagegen">
+      <p className="text-xs text-gray-500">
+        Route image generation through the Grok Build CLI's built-in
+        <code className="text-gray-400"> image_gen </code> tool (and
+        <code className="text-gray-400"> image_edit </code> for image-to-image) — invoked headlessly.
+        Uses your logged-in Grok session, no XAI_API_KEY required. Not every Grok plan includes
+        image generation; if yours doesn't, leave this off.
+      </p>
+      <label className="flex items-center gap-3 cursor-pointer">
+        <input type="checkbox" checked={grokEnabled} onChange={toggleProvider('grokEnabled', IMAGE_GEN_MODE.GROK)} className="rounded" />
+        <span className="text-sm text-gray-300">Enable Grok Imagegen</span>
+      </label>
+      {grokEnabled && (
+        <div className="space-y-3 pl-6 border-l-2 border-port-border">
+          <FormField label="Grok binary path (optional)" labelClassName={FIELD_LABEL_CLASS}>
+            <input
+              type="text"
+              value={grokPath}
+              onChange={(e) => set('grokPath', e.target.value)}
+              className={INPUT_CLASS}
+              placeholder="grok (uses $PATH)"
+            />
+            <p className="text-xs text-gray-500 mt-1">Leave empty to invoke <code>grok</code> from $PATH.</p>
+          </FormField>
+          <FormField label="Default aspect ratio (optional)" labelClassName={FIELD_LABEL_CLASS}>
+            <select
+              value={grokAspectRatio}
+              onChange={(e) => set('grokAspectRatio', e.target.value)}
+              className={INPUT_CLASS}
+            >
+              <option value="">Auto (from requested size)</option>
+              {GROK_ASPECT_RATIOS.map((r) => (
+                <option key={r} value={r}>{r}</option>
+              ))}
+            </select>
+            <p className="text-xs text-gray-500 mt-1">
+              Applied when a render doesn't specify dimensions. A render's width/height maps to the nearest supported ratio automatically.
+            </p>
+          </FormField>
+          <ParallelLimitField
+            label="Parallel image render limit"
+            value={grokImageParallelLimit}
+            onChange={(v) => set('grokImageParallelLimit', v)}
+            bounds={parallelBounds}
+            helpText="How many image renders Grok runs at once. Default 1."
+            warningText={`${formatCount(grokImageParallelLimit)} concurrent renders can burn credits quickly during a long batch.`}
+          />
+          <ParallelLimitField
+            label="Parallel video render limit"
+            value={grokVideoParallelLimit}
+            onChange={(v) => set('grokVideoParallelLimit', v)}
+            bounds={parallelBounds}
+            helpText="How many video renders Grok runs at once. Default 1."
+            warningText={`${formatCount(grokVideoParallelLimit)} concurrent video renders can burn credits or hit rate limits quickly.`}
+          />
+          <CleanersToggles mode={IMAGE_GEN_MODE.GROK} form={form} />
+        </div>
+      )}
+    </ProviderSection>
+  );
+}
+
+function AgySection({ form, parallelBounds, toggleProvider, agyModels, agyModelsError, agyModelsLoading, refreshAgyModels }) {
+  const { set } = form;
+  const { agyEnabled, agyPath, agyModel, agyImageParallelLimit } = form.values;
+  const agyModelsListId = useId();
+
+  return (
+    <ProviderSection title="Agy CLI Imagegen" icon={Terminal}>
+      <p className="text-xs text-gray-500">
+        Route text-to-image generation through Antigravity's built-in
+        <code className="text-gray-400"> generate_image </code> tool. Agy runs in an isolated scratch
+        directory and PortOS imports only the directed image output. Image editing is not supported.
+      </p>
+      <label className="flex items-center gap-3 cursor-pointer">
+        <input type="checkbox" checked={agyEnabled} onChange={toggleProvider('agyEnabled', IMAGE_GEN_MODE.AGY)} className="rounded" />
+        <span className="text-sm text-gray-300">Enable Agy Imagegen</span>
+      </label>
+      {agyEnabled && (
+        <div className="space-y-3 pl-6 border-l-2 border-port-border">
+          <FormField label="Agy binary path (optional)" labelClassName={FIELD_LABEL_CLASS}>
+            <input
+              type="text"
+              value={agyPath}
+              onChange={(e) => set('agyPath', e.target.value)}
+              className={INPUT_CLASS}
+              placeholder="agy (uses $PATH)"
+            />
+          </FormField>
+          <div className="flex items-end justify-between gap-3 mb-1">
+            <FormField label="Agent model (drives the session — not the image model)" labelClassName="block text-xs font-medium text-gray-400" className="flex-1">
+              <input
+                list={agyModelsListId}
+                type="text"
+                value={agyModel}
+                onChange={(e) => set('agyModel', e.target.value)}
+                className={INPUT_CLASS}
+                placeholder={`${AGY_IMAGEGEN_DEFAULT_MODEL} (default)`}
+              />
+            </FormField>
+            <button
+              type="button"
+              onClick={refreshAgyModels}
+              disabled={agyModelsLoading}
+              className="text-xs text-port-accent hover:underline disabled:opacity-50"
+            >
+              {agyModelsLoading ? <BrailleSpinner text="Loading…" /> : 'Refresh models'}
+            </button>
+          </div>
+          <div>
+            <datalist id={agyModelsListId}>
+              {agyModels.map((modelId) => <option key={modelId} value={modelId} />)}
+            </datalist>
+            {agyModelsError && <p role="status" className="text-xs text-port-warning mt-1">{agyModelsError}. You can still enter a custom model id.</p>}
+            {/* This is the model `agy --model` runs the SESSION on — the agent that
+                calls the built-in generate_image tool. Agy exposes no knob for the
+                underlying image model (generate_image takes Prompt / ImageName /
+                AspectRatio / ImagePaths and nothing else — schema re-dumped from a
+                live session 2026-07-30, agy 1.1.8), so there is no imagen-* option to
+                pick here — the image model is fixed server-side (see the read-only
+                row below and AGY_IMAGEGEN_IMAGE_MODEL). An id outside `agy models`
+                makes agy exit non-zero before generating, which is why the list is a
+                live probe. */}
+            {!agyModelsError && (
+              <p className="text-xs text-gray-500 mt-1">
+                The agent model Agy runs the session on — it drives the built-in{' '}
+                <code className="text-gray-400">generate_image</code> tool. Leave empty to
+                use the cheap default (<code className="text-gray-400">{AGY_IMAGEGEN_DEFAULT_MODEL}</code>).
+                Renders can pin a different agent model per queue item on the Image Gen page.
+              </p>
+            )}
+          </div>
+          <div>
+            <span className="block text-xs font-medium text-gray-400 mb-1">Image model</span>
+            <p className="text-sm text-gray-300">
+              <code className="text-gray-300">{AGY_IMAGEGEN_IMAGE_MODEL}</code>{' '}
+              <span className="text-xs text-gray-500">
+                — chosen by Antigravity server-side; not selectable through the CLI
+                (no tool parameter, no <code>--model</code> id, prompt requests are ignored —
+                agy will claim it honored one, but the pixels come out identical).
+              </span>
+            </p>
+          </div>
+          <ParallelLimitField
+            label="Parallel image render limit"
+            value={agyImageParallelLimit}
+            onChange={(v) => set('agyImageParallelLimit', v)}
+            bounds={parallelBounds}
+            helpText="How many image renders Agy runs at once. Default 1."
+            warningText={`${formatCount(agyImageParallelLimit)} concurrent renders can hit CLI session limits.`}
+          />
+          <CleanersToggles mode={IMAGE_GEN_MODE.AGY} form={form} />
+        </div>
+      )}
+    </ProviderSection>
+  );
+}
+
+function RunwaySection({ form, parallelBounds, toggleProvider, credential }) {
+  const { values, set } = form;
+  const { runwayEnabled, runwayModel: runwayModelId, runwayResolution, runwayImageParallelLimit, runwayVideoParallelLimit, runwayDeleteAfterDownload } = values;
+  const runwayCatalog = useRunwayCatalog(runwayEnabled);
+  const runwayModel = getRunwayImageModel(runwayModelId);
+
+  return (
+    <ProviderSection title="Runway Imagegen">
+      <p className="text-xs text-gray-400">Uses the Runway credential from <Link to="/settings/credentials" className="text-port-accent hover:underline">Settings → Credentials</Link>, shared with video generation.</p>
+      <ProviderCredentialBanner
+        credential={credential}
+        checking="Checking Runway credential"
+        configured="Runway credential configured."
+        missing="Add a Runway credential to render."
+      />
+      <p className="text-xs text-gray-400">{RUNWAY_IMAGE_DISCLOSURE.summary} <a href={RUNWAY_IMAGE_DISCLOSURE.termsUrl} target="_blank" rel="noreferrer" className="text-port-accent hover:underline">Runway’s terms</a> and moderation apply. {RUNWAY_IMAGE_DISCLOSURE.billing}</p>
+      <label className="flex items-center gap-3 cursor-pointer">
+        <input type="checkbox" checked={runwayEnabled} onChange={toggleProvider('runwayEnabled', IMAGE_GEN_MODE.RUNWAY)} className="rounded" />
+        <span className="text-sm text-gray-300">Enable Runway Imagegen</span>
+      </label>
+      {runwayEnabled && (
+        <div className="space-y-3 pl-6 border-l-2 border-port-border">
+          <FormField label="Default model" labelClassName={FIELD_LABEL_CLASS}>
+            <RunwayModelSelect
+              ariaLabel="Default model"
+              value={runwayModelId}
+              onChange={(model) => {
+                const selected = getRunwayImageModel(model);
+                if (!selected) return;
+                set('runwayModel', selected.id);
+                set('runwayResolution', selected.defaultResolution);
+              }}
+              defaultLabel={null}
+              className={INPUT_CLASS}
+            />
           </FormField>
           <FormField label="Resolution" labelClassName={FIELD_LABEL_CLASS}>
-            <select value={values.runwayResolution} onChange={(e) => set('runwayResolution', e.target.value)} className={INPUT_CLASS}>
-              {Object.keys(getRunwayImageModel(values.runwayModel)?.ratios || {}).map((resolution) => (
+            <select value={runwayResolution} onChange={(e) => set('runwayResolution', e.target.value)} className={INPUT_CLASS}>
+              {Object.keys(runwayModel?.ratios || {}).map((resolution) => (
                 <option key={resolution} value={resolution}>
-                  {resolution === 'auto' ? 'Match requested aspect ratio' : resolution.replace(':', ' × ')}{getRunwayImageModel(values.runwayModel)?.credits[resolution] != null ? ` · ${formatCount(getRunwayImageModel(values.runwayModel).credits[resolution])} credits` : ''}
+                  {resolution === 'auto' ? 'Match requested aspect ratio' : resolution.replace(':', ' × ')}{runwayModel?.credits[resolution] != null ? ` · ${formatCount(runwayModel.credits[resolution])} credits` : ''}
                 </option>
               ))}
             </select>
           </FormField>
           <ParallelLimitField
-            id={runwayImageParallelId}
             label="Parallel image render limit"
             value={runwayImageParallelLimit}
             onChange={(v) => set('runwayImageParallelLimit', v)}
@@ -615,7 +640,6 @@ export default function ImageGenProviderSections({ mediaTab, setMediaTab, form, 
             warningText={`${formatCount(runwayImageParallelLimit)} concurrent renders can burn Runway credits quickly.`}
           />
           <ParallelLimitField
-            id={runwayVideoParallelId}
             label="Parallel video render limit"
             value={runwayVideoParallelLimit}
             onChange={(v) => set('runwayVideoParallelLimit', v)}
@@ -625,259 +649,262 @@ export default function ImageGenProviderSections({ mediaTab, setMediaTab, form, 
           />
           <RunwayCatalogStatus catalog={runwayCatalog} />
           <CleanersToggles mode={IMAGE_GEN_MODE.RUNWAY} form={form} />
-          <DeleteAfterDownloadToggle label="Delete from Runway after download" detail="Once a render is saved here, remove the rendered asset from Runway (image and video renders). Irreversible: the output can't be re-fetched from Runway afterward. Runway keeps its request history log, including the input prompt and input image. A failed delete is logged and never fails the render." checked={values.runwayDeleteAfterDownload} onChange={(v) => set('runwayDeleteAfterDownload', v)} />
+          <DeleteAfterDownloadToggle label="Delete from Runway after download" detail="Once a render is saved here, remove the rendered asset from Runway (image and video renders). Irreversible: the output can't be re-fetched from Runway afterward. Runway keeps its request history log, including the input prompt and input image. A failed delete is logged and never fails the render." checked={runwayDeleteAfterDownload} onChange={(v) => set('runwayDeleteAfterDownload', v)} />
         </div>
       )}
-      {mediaTab === 'fal' && (
-      <div className={SECTION_CLASS}>
-        <div className="flex items-center gap-2 text-white">
-          <Sparkles size={18} />
-          <h2 className="text-lg font-semibold">fal.ai Imagegen</h2>
-        </div>
-        <p className="text-xs text-gray-500">
-          Render through fal.ai&rsquo;s hosted image models. Featured models are listed first, and the
-          picker also offers every text-to-image and image-to-image model fal.ai currently lists.
-          Both endpoints of a known family stay selectable. Edit and Refine, and an Image Gen
-          render that already has a source image, lead with Nano Banana Pro edit and Seedream 4.5 edit.
-          A render with reference or source images still uses that family&rsquo;s edit endpoint when the
-          text model is pinned, so a mood board keeps conditioning. Every render is billed to your
-          fal.ai account. Curated models record
-          an estimated cost; other listed models are priced by fal.ai.
-        </p>
-        {/* Key presence comes from the shared credential inventory — the key
-            itself is write-only and lives on the Defaults tab with the fal.ai
-            video key it is shared with. */}
-        {falCredential == null ? (
-          <div className="text-xs text-gray-500"><BrailleSpinner text="Checking fal.ai key" /></div>
-        ) : falCredential.configured ? (
-          <div className="flex items-center gap-2 text-xs text-port-success">
-            <Check size={14} />
-            <span>fal.ai API key configured (shared with the fal.ai video backend)</span>
-          </div>
-        ) : (
-          <div className="flex flex-wrap items-center gap-2 text-xs text-port-warning">
-            <AlertTriangle size={14} />
-            <span>No fal.ai API key — set it under the Defaults tab (fal.ai API key, shared with Video Gen) first.</span>
-            <button type="button" onClick={() => setMediaTab('defaults')} className="text-port-accent hover:underline">
-              Open Defaults
-            </button>
-          </div>
-        )}
-        <label className="flex items-center gap-3 cursor-pointer">
-          <input type="checkbox" checked={falEnabled} onChange={toggleProvider('falEnabled', IMAGE_GEN_MODE.FAL)} className="rounded" />
-          <span className="text-sm text-gray-300">Enable fal.ai Imagegen</span>
-        </label>
-        {falEnabled && (
-          <div className="space-y-3 pl-6 border-l-2 border-port-border">
-            <FormField label="Default model" labelClassName={FIELD_LABEL_CLASS}>
-              <FalModelSelect
-                id={falModelId}
-                value={falModel}
-                onChange={(v) => set('falModel', v || '')}
-                defaultLabel={`${falImageFamily(FAL_IMAGE_DEFAULT_MODEL)?.label} (default)`}
-                className={INPUT_CLASS}
-              />
-            </FormField>
-            <p className="text-xs text-gray-500">
-              Prices on curated models are fal.ai&rsquo;s published rates (Nano Banana charges more at 4K; FLUX.2 bills
-              output plus reference megapixels). A listed model outside that set has no PortOS price.
-              Renders can pick a different model per queue item on the Image Gen page, and each surface
-              can pin one under Defaults.
-            </p>
-            <FalCatalogStatus catalog={falCatalog} />
-            <ParallelLimitField
-              id={falImageParallelId}
-              label="Parallel image render limit"
-              value={falImageParallelLimit}
-              onChange={(v) => set('falImageParallelLimit', v)}
-              bounds={parallelBounds}
-              helpText="How many image renders fal.ai runs at once. Default 1."
-              warningText={`${formatCount(falImageParallelLimit)} concurrent renders can burn fal credits quickly.`}
-            />
-            <ParallelLimitField
-              id={falVideoParallelId}
-              label="Parallel video render limit"
-              value={falVideoParallelLimit}
-              onChange={(v) => set('falVideoParallelLimit', v)}
-              bounds={parallelBounds}
-              helpText="How many video renders fal.ai runs at once. Default 1."
-              warningText={`${formatCount(falVideoParallelLimit)} concurrent video renders can burn fal credits quickly.`}
-            />
-            <CleanersToggles mode={IMAGE_GEN_MODE.FAL} form={form} />
-          </div>
-        )}
-        <DeleteAfterDownloadToggle label="Delete from fal.ai after download" detail="Once a render is saved here, remove its stored payloads and output files from fal.ai (image and video renders). Irreversible: the output can't be re-fetched from fal.ai afterward. A failed delete is logged and never fails the render." checked={values.falDeleteAfterDownload} onChange={(v) => set('falDeleteAfterDownload', v)} />
-      </div>
-      )}
+    </ProviderSection>
+  );
+}
 
-      {mediaTab === 'higgsfield' && (
-      <div className={SECTION_CLASS}>
-        <div className="flex items-center gap-2 text-white">
-          <Sparkles size={18} />
-          <h2 className="text-lg font-semibold">Higgsfield Imagegen</h2>
-        </div>
-        <p className="text-xs text-gray-500">
-          Render through Higgsfield&rsquo;s hosted image models. Renders with reference images go to the
-          model&rsquo;s edit endpoint where it has one. Prompt-rewrite options are always sent off.
-          Higgsfield publishes no per-image prices, so the gallery leaves cost unknown; your Higgsfield
-          console shows the real charge.
-        </p>
-        {higgsfieldCredential == null ? (
-          <div className="text-xs text-gray-500"><BrailleSpinner text="Checking Higgsfield key" /></div>
-        ) : higgsfieldCredential.configured ? (
-          <div className="flex items-center gap-2 text-xs text-port-success">
-            <Check size={14} />
-            <span>Higgsfield API key configured (shared with the Higgsfield video backend)</span>
-          </div>
-        ) : (
-          <div className="flex flex-wrap items-center gap-2 text-xs text-port-warning">
-            <AlertTriangle size={14} />
-            <span>No Higgsfield API key — set it under the Defaults tab (Higgsfield API key, shared with Video Gen) first.</span>
-            <button type="button" onClick={() => setMediaTab('defaults')} className="text-port-accent hover:underline">
-              Open Defaults
-            </button>
-          </div>
-        )}
-        <label className="flex items-center gap-3 cursor-pointer">
-          <input type="checkbox" checked={higgsfieldEnabled} onChange={toggleProvider('higgsfieldEnabled', IMAGE_GEN_MODE.HIGGSFIELD)} className="rounded" />
-          <span className="text-sm text-gray-300">Enable Higgsfield Imagegen</span>
-        </label>
-        {higgsfieldEnabled && (
-          <div className="space-y-3 pl-6 border-l-2 border-port-border">
-            <FormField label="Default model" labelClassName={FIELD_LABEL_CLASS}>
-              <HiggsfieldModelSelect
-                id={higgsfieldModelId}
-                value={higgsfieldModel}
-                onChange={(v) => set('higgsfieldModel', v || '')}
-                defaultLabel={`${higgsfieldImageFamily(HIGGSFIELD_IMAGE_DEFAULT_MODEL)?.label} (default)`}
-                className={INPUT_CLASS}
-              />
-            </FormField>
-            <ParallelLimitField
-              id={higgsfieldImageParallelId}
-              label="Parallel image render limit"
-              value={higgsfieldImageParallelLimit}
-              onChange={(v) => set('higgsfieldImageParallelLimit', v)}
-              bounds={parallelBounds}
-              helpText="How many image renders Higgsfield runs at once. Default 1."
-              warningText={`${formatCount(higgsfieldImageParallelLimit)} concurrent renders can spend Higgsfield credit quickly.`}
-            />
-            <ParallelLimitField
-              id={higgsfieldVideoParallelId}
-              label="Parallel video render limit"
-              value={higgsfieldVideoParallelLimit}
-              onChange={(v) => set('higgsfieldVideoParallelLimit', v)}
-              bounds={parallelBounds}
-              helpText="How many video renders Higgsfield runs at once. Default 1."
-              warningText={`${formatCount(higgsfieldVideoParallelLimit)} concurrent video renders can spend Higgsfield credit quickly.`}
-            />
-            <CleanersToggles mode={IMAGE_GEN_MODE.HIGGSFIELD} form={form} />
-          </div>
-        )}
-        <DeleteAfterDownloadToggle label="Delete from Higgsfield after download" detail="Once a render is saved here, delete its request data and outputs from Higgsfield (image and video renders). Irreversible: the output can't be re-fetched from Higgsfield afterward. A failed delete is logged and never fails the render." checked={values.higgsfieldDeleteAfterDownload} onChange={(v) => set('higgsfieldDeleteAfterDownload', v)} />
-      </div>
-      )}
+function FalSection({ form, parallelBounds, toggleProvider, credential, onOpenDefaults }) {
+  const { values, set } = form;
+  const { falEnabled, falModel, falImageParallelLimit, falVideoParallelLimit } = values;
+  const falCatalog = useFalImageCatalog();
 
-      {mediaTab === 'google' && (
-      <div className={SECTION_CLASS}>
-        <div className="flex items-center gap-2 text-white">
-          <Sparkles size={18} />
-          <h2 className="text-lg font-semibold">Google Imagegen</h2>
-        </div>
-        <p className="text-xs text-gray-500">
-          Render through Google Cloud Agent Platform: the Gemini image models (Nano Banana) take reference images,
-          Imagen 4 is text-to-image. Imagen&rsquo;s prompt rewrite is sent off. Prices shown are Google list
-          prices; your Google Cloud billing console shows the real charge.
-        </p>
-        {googleCredential == null ? (
-          <div className="text-xs text-gray-500"><BrailleSpinner text="Checking Google credential" /></div>
-        ) : googleCredential.configured ? (
-          <div className="flex items-center gap-2 text-xs text-port-success">
-            <Check size={14} />
-            <span>Google credential configured (shared with the Google video backend)</span>
-          </div>
-        ) : (
-          <div className="flex flex-wrap items-center gap-2 text-xs text-port-warning">
-            <AlertTriangle size={14} />
-            <span>No Google credential — paste an API key or service account JSON under the Defaults tab first.</span>
-            <button type="button" onClick={() => setMediaTab('defaults')} className="text-port-accent hover:underline">
-              Open Defaults
-            </button>
-          </div>
-        )}
-        <div className="grid gap-3 grid-cols-[repeat(auto-fit,minmax(min(100%,14rem),20rem))]">
-          <FormField label="Google Cloud project" labelClassName={FIELD_LABEL_CLASS}>
-            <input
-              id={googleProjectFieldId}
-              type="text"
-              value={googleProjectId}
-              onChange={(e) => set('googleProjectId', e.target.value)}
-              placeholder="From the service account key"
-              autoComplete="off"
+  return (
+    <ProviderSection title="fal.ai Imagegen">
+      <p className="text-xs text-gray-500">
+        Render through fal.ai&rsquo;s hosted image models. Featured models are listed first, and the
+        picker also offers every text-to-image and image-to-image model fal.ai currently lists.
+        Both endpoints of a known family stay selectable. Edit and Refine, and an Image Gen
+        render that already has a source image, lead with Nano Banana Pro edit and Seedream 4.5 edit.
+        A render with reference or source images still uses that family&rsquo;s edit endpoint when the
+        text model is pinned, so a mood board keeps conditioning. Every render is billed to your
+        fal.ai account. Curated models record
+        an estimated cost; other listed models are priced by fal.ai.
+      </p>
+      {/* Key presence comes from the shared credential inventory — the key
+          itself is write-only and lives on the Defaults tab with the fal.ai
+          video key it is shared with. */}
+      <ProviderCredentialBanner
+        credential={credential}
+        checking="Checking fal.ai key"
+        configured="fal.ai API key configured (shared with the fal.ai video backend)"
+        missing="No fal.ai API key — set it under the Defaults tab (fal.ai API key, shared with Video Gen) first."
+        onOpenDefaults={onOpenDefaults}
+      />
+      <label className="flex items-center gap-3 cursor-pointer">
+        <input type="checkbox" checked={falEnabled} onChange={toggleProvider('falEnabled', IMAGE_GEN_MODE.FAL)} className="rounded" />
+        <span className="text-sm text-gray-300">Enable fal.ai Imagegen</span>
+      </label>
+      {falEnabled && (
+        <div className="space-y-3 pl-6 border-l-2 border-port-border">
+          <FormField label="Default model" labelClassName={FIELD_LABEL_CLASS}>
+            <FalModelSelect
+              value={falModel}
+              onChange={(v) => set('falModel', v || '')}
+              defaultLabel={`${falImageFamily(FAL_IMAGE_DEFAULT_MODEL)?.label} (default)`}
               className={INPUT_CLASS}
             />
           </FormField>
-          <FormField label="Region" labelClassName={FIELD_LABEL_CLASS}>
-            <input
-              id={googleLocationFieldId}
-              type="text"
-              value={googleLocation}
-              onChange={(e) => set('googleLocation', e.target.value)}
-              placeholder="us-central1"
-              autoComplete="off"
+          <p className="text-xs text-gray-500">
+            Prices on curated models are fal.ai&rsquo;s published rates (Nano Banana charges more at 4K; FLUX.2 bills
+            output plus reference megapixels). A listed model outside that set has no PortOS price.
+            Renders can pick a different model per queue item on the Image Gen page, and each surface
+            can pin one under Defaults.
+          </p>
+          <FalCatalogStatus catalog={falCatalog} />
+          <ParallelLimitField
+            label="Parallel image render limit"
+            value={falImageParallelLimit}
+            onChange={(v) => set('falImageParallelLimit', v)}
+            bounds={parallelBounds}
+            helpText="How many image renders fal.ai runs at once. Default 1."
+            warningText={`${formatCount(falImageParallelLimit)} concurrent renders can burn fal credits quickly.`}
+          />
+          <ParallelLimitField
+            label="Parallel video render limit"
+            value={falVideoParallelLimit}
+            onChange={(v) => set('falVideoParallelLimit', v)}
+            bounds={parallelBounds}
+            helpText="How many video renders fal.ai runs at once. Default 1."
+            warningText={`${formatCount(falVideoParallelLimit)} concurrent video renders can burn fal credits quickly.`}
+          />
+          <CleanersToggles mode={IMAGE_GEN_MODE.FAL} form={form} />
+        </div>
+      )}
+      <DeleteAfterDownloadToggle label="Delete from fal.ai after download" detail="Once a render is saved here, remove its stored payloads and output files from fal.ai (image and video renders). Irreversible: the output can't be re-fetched from fal.ai afterward. A failed delete is logged and never fails the render." checked={values.falDeleteAfterDownload} onChange={(v) => set('falDeleteAfterDownload', v)} />
+    </ProviderSection>
+  );
+}
+
+function HiggsfieldSection({ form, parallelBounds, toggleProvider, credential, onOpenDefaults }) {
+  const { values, set } = form;
+  const { higgsfieldEnabled, higgsfieldModel, higgsfieldImageParallelLimit, higgsfieldVideoParallelLimit } = values;
+
+  return (
+    <ProviderSection title="Higgsfield Imagegen">
+      <p className="text-xs text-gray-500">
+        Render through Higgsfield&rsquo;s hosted image models. Renders with reference images go to the
+        model&rsquo;s edit endpoint where it has one. Prompt-rewrite options are always sent off.
+        Higgsfield publishes no per-image prices, so the gallery leaves cost unknown; your Higgsfield
+        console shows the real charge.
+      </p>
+      <ProviderCredentialBanner
+        credential={credential}
+        checking="Checking Higgsfield key"
+        configured="Higgsfield API key configured (shared with the Higgsfield video backend)"
+        missing="No Higgsfield API key — set it under the Defaults tab (Higgsfield API key, shared with Video Gen) first."
+        onOpenDefaults={onOpenDefaults}
+      />
+      <label className="flex items-center gap-3 cursor-pointer">
+        <input type="checkbox" checked={higgsfieldEnabled} onChange={toggleProvider('higgsfieldEnabled', IMAGE_GEN_MODE.HIGGSFIELD)} className="rounded" />
+        <span className="text-sm text-gray-300">Enable Higgsfield Imagegen</span>
+      </label>
+      {higgsfieldEnabled && (
+        <div className="space-y-3 pl-6 border-l-2 border-port-border">
+          <FormField label="Default model" labelClassName={FIELD_LABEL_CLASS}>
+            <HiggsfieldModelSelect
+              value={higgsfieldModel}
+              onChange={(v) => set('higgsfieldModel', v || '')}
+              defaultLabel={`${higgsfieldImageFamily(HIGGSFIELD_IMAGE_DEFAULT_MODEL)?.label} (default)`}
               className={INPUT_CLASS}
             />
           </FormField>
+          <ParallelLimitField
+            label="Parallel image render limit"
+            value={higgsfieldImageParallelLimit}
+            onChange={(v) => set('higgsfieldImageParallelLimit', v)}
+            bounds={parallelBounds}
+            helpText="How many image renders Higgsfield runs at once. Default 1."
+            warningText={`${formatCount(higgsfieldImageParallelLimit)} concurrent renders can spend Higgsfield credit quickly.`}
+          />
+          <ParallelLimitField
+            label="Parallel video render limit"
+            value={higgsfieldVideoParallelLimit}
+            onChange={(v) => set('higgsfieldVideoParallelLimit', v)}
+            bounds={parallelBounds}
+            helpText="How many video renders Higgsfield runs at once. Default 1."
+            warningText={`${formatCount(higgsfieldVideoParallelLimit)} concurrent video renders can spend Higgsfield credit quickly.`}
+          />
+          <CleanersToggles mode={IMAGE_GEN_MODE.HIGGSFIELD} form={form} />
         </div>
-        <p className="text-xs text-gray-500">
-          With a service account key, a blank project uses the key&rsquo;s own project. With an API key, a blank project
-          means Agent Platform express mode, which serves the Nano Banana models only; Imagen and Veo need the project.
-          The region applies to Imagen and Veo; the Gemini image models always run on the global endpoint.
-        </p>
-        <label className="flex items-center gap-3 cursor-pointer">
-          <input type="checkbox" checked={googleEnabled} onChange={toggleProvider('googleEnabled', IMAGE_GEN_MODE.GOOGLE)} className="rounded" />
-          <span className="text-sm text-gray-300">Enable Google Imagegen</span>
-        </label>
-        {googleEnabled && (
-          <div className="space-y-3 pl-6 border-l-2 border-port-border">
-            <FormField label="Default model" labelClassName={FIELD_LABEL_CLASS}>
-              <GoogleModelSelect
-                id={googleModelId}
-                value={googleModel}
-                onChange={(v) => set('googleModel', v || '')}
-                defaultLabel={`${googleImageFamily(GOOGLE_IMAGE_DEFAULT_MODEL)?.label} (default)`}
-                className={INPUT_CLASS}
-              />
-            </FormField>
-            <ParallelLimitField
-              id={googleImageParallelId}
-              label="Parallel image render limit"
-              value={googleImageParallelLimit}
-              onChange={(v) => set('googleImageParallelLimit', v)}
-              bounds={parallelBounds}
-              helpText="How many image renders Google runs at once. Default 1."
-              warningText={`${formatCount(googleImageParallelLimit)} concurrent renders can spend Google Cloud credit quickly.`}
-            />
-            <CleanersToggles mode={IMAGE_GEN_MODE.GOOGLE} form={form} />
-          </div>
-        )}
-        <ParallelLimitField
-          id={googleVideoParallelId}
-          label="Parallel video render limit"
-          value={googleVideoParallelLimit}
-          onChange={(v) => set('googleVideoParallelLimit', v)}
-          bounds={parallelBounds}
-          helpText="How many Veo renders run at once. Default 1."
-          warningText={`${formatCount(googleVideoParallelLimit)} concurrent Veo renders can spend Google Cloud credit quickly.`}
-        />
-      </div>
       )}
-    </>
+      <DeleteAfterDownloadToggle label="Delete from Higgsfield after download" detail="Once a render is saved here, delete its request data and outputs from Higgsfield (image and video renders). Irreversible: the output can't be re-fetched from Higgsfield afterward. A failed delete is logged and never fails the render." checked={values.higgsfieldDeleteAfterDownload} onChange={(v) => set('higgsfieldDeleteAfterDownload', v)} />
+    </ProviderSection>
+  );
+}
+
+function GoogleSection({ form, parallelBounds, toggleProvider, credential, onOpenDefaults }) {
+  const { set } = form;
+  const { googleEnabled, googleModel, googleProjectId, googleLocation, googleImageParallelLimit, googleVideoParallelLimit } = form.values;
+
+  return (
+    <ProviderSection title="Google Imagegen">
+      <p className="text-xs text-gray-500">
+        Render through Google Cloud Agent Platform: the Gemini image models (Nano Banana) take reference images,
+        Imagen 4 is text-to-image. Imagen&rsquo;s prompt rewrite is sent off. Prices shown are Google list
+        prices; your Google Cloud billing console shows the real charge.
+      </p>
+      <ProviderCredentialBanner
+        credential={credential}
+        checking="Checking Google credential"
+        configured="Google credential configured (shared with the Google video backend)"
+        missing="No Google credential — paste an API key or service account JSON under the Defaults tab first."
+        onOpenDefaults={onOpenDefaults}
+      />
+      <div className="grid gap-3 grid-cols-[repeat(auto-fit,minmax(min(100%,14rem),20rem))]">
+        <FormField label="Google Cloud project" labelClassName={FIELD_LABEL_CLASS}>
+          <input
+            type="text"
+            value={googleProjectId}
+            onChange={(e) => set('googleProjectId', e.target.value)}
+            placeholder="From the service account key"
+            autoComplete="off"
+            className={INPUT_CLASS}
+          />
+        </FormField>
+        <FormField label="Region" labelClassName={FIELD_LABEL_CLASS}>
+          <input
+            type="text"
+            value={googleLocation}
+            onChange={(e) => set('googleLocation', e.target.value)}
+            placeholder="us-central1"
+            autoComplete="off"
+            className={INPUT_CLASS}
+          />
+        </FormField>
+      </div>
+      <p className="text-xs text-gray-500">
+        With a service account key, a blank project uses the key&rsquo;s own project. With an API key, a blank project
+        means Agent Platform express mode, which serves the Nano Banana models only; Imagen and Veo need the project.
+        The region applies to Imagen and Veo; the Gemini image models always run on the global endpoint.
+      </p>
+      <label className="flex items-center gap-3 cursor-pointer">
+        <input type="checkbox" checked={googleEnabled} onChange={toggleProvider('googleEnabled', IMAGE_GEN_MODE.GOOGLE)} className="rounded" />
+        <span className="text-sm text-gray-300">Enable Google Imagegen</span>
+      </label>
+      {googleEnabled && (
+        <div className="space-y-3 pl-6 border-l-2 border-port-border">
+          <FormField label="Default model" labelClassName={FIELD_LABEL_CLASS}>
+            <GoogleModelSelect
+              value={googleModel}
+              onChange={(v) => set('googleModel', v || '')}
+              defaultLabel={`${googleImageFamily(GOOGLE_IMAGE_DEFAULT_MODEL)?.label} (default)`}
+              className={INPUT_CLASS}
+            />
+          </FormField>
+          <ParallelLimitField
+            label="Parallel image render limit"
+            value={googleImageParallelLimit}
+            onChange={(v) => set('googleImageParallelLimit', v)}
+            bounds={parallelBounds}
+            helpText="How many image renders Google runs at once. Default 1."
+            warningText={`${formatCount(googleImageParallelLimit)} concurrent renders can spend Google Cloud credit quickly.`}
+          />
+          <ParallelLimitField
+            label="Parallel video render limit"
+            value={googleVideoParallelLimit}
+            onChange={(v) => set('googleVideoParallelLimit', v)}
+            bounds={parallelBounds}
+            helpText="How many Veo renders run at once. Default 1."
+            warningText={`${formatCount(googleVideoParallelLimit)} concurrent Veo renders can spend Google Cloud credit quickly.`}
+          />
+          <CleanersToggles mode={IMAGE_GEN_MODE.GOOGLE} form={form} />
+        </div>
+      )}
+    </ProviderSection>
+  );
+}
+
+function ProviderSection({ title, icon: Icon = Sparkles, children }) {
+  return (
+    <div className={SECTION_CLASS}>
+      <div className="flex items-center gap-2 text-white">
+        <Icon size={18} />
+        <h2 className="text-lg font-semibold">{title}</h2>
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function ProviderCredentialBanner({ credential, checking, configured, missing, onOpenDefaults }) {
+  if (credential == null) {
+    return <div className="text-xs text-gray-500"><BrailleSpinner text={checking} /></div>;
+  }
+  if (credential.configured) {
+    return (
+      <div className="flex items-center gap-2 text-xs text-port-success">
+        <Check size={14} />
+        <span>{configured}</span>
+      </div>
+    );
+  }
+  return (
+    <div className="flex flex-wrap items-center gap-2 text-xs text-port-warning">
+      <AlertTriangle size={14} />
+      <span>{missing}</span>
+      {onOpenDefaults && (
+        <button type="button" onClick={onOpenDefaults} className="text-port-accent hover:underline">
+          Open Defaults
+        </button>
+      )}
+    </div>
   );
 }
 
 function ParallelLimitField({
-  id,
   label = 'Parallel render limit',
   value,
   onChange,
@@ -896,7 +923,6 @@ function ParallelLimitField({
   return (
     <FormField label={label} labelClassName={FIELD_LABEL_CLASS}>
       <input
-        id={id}
         type="number"
         min={bounds.min}
         max={bounds.max}

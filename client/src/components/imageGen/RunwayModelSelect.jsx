@@ -4,7 +4,7 @@ export default function RunwayModelSelect({ value, onChange, ariaLabel = 'Runway
   const { imageModels } = useRunwayCatalog();
   return (
     <select aria-label={ariaLabel} {...props} value={value || ''} onChange={(e) => onChange(e.target.value || null)}>
-      <option value="">{defaultLabel}</option>
+      {defaultLabel != null && <option value="">{defaultLabel}</option>}
       {value && !imageModels.some((m) => m.id === value) && <option value={value}>{value} (unavailable)</option>}
       {imageModels.map((model) => (
         <option key={model.id} value={model.id}>
