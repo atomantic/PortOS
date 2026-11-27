@@ -6,6 +6,7 @@
 
 import { z } from 'zod';
 import { nonEmptyString } from './sharedSchemas.js';
+import { MAX_AVATAR_WAV_BYTES } from './uploadLimits.js';
 
 export const voicePiperFetchBodySchema = z.object({ voice: nonEmptyString });
 
@@ -14,7 +15,6 @@ export const voiceAvatarCommandSchema = z.object({
   acceptTerms: z.literal(true).optional(),
 }).strict();
 
-export const avatarAudioLimit = 2 * 1024 * 1024;
 export const voiceAvatarWaveSchema = z.custom(wav => Buffer.isBuffer(wav) && wav.length >= 44 &&
-  wav.length <= avatarAudioLimit && wav.toString('ascii', 0, 4) === 'RIFF' &&
+  wav.length <= MAX_AVATAR_WAV_BYTES && wav.toString('ascii', 0, 4) === 'RIFF' &&
   wav.toString('ascii', 8, 12) === 'WAVE', 'Expected PCM WAV audio.');

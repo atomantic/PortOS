@@ -3,7 +3,8 @@ import express, { Router } from 'express';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import { getAvatarStatus, manageAvatar, renderAvatar } from '../services/voice/avatarRuntime.js';
-import { avatarAudioLimit, voiceAvatarCommandSchema, voiceAvatarWaveSchema } from '../lib/voiceValidation.js';
+import { MAX_AVATAR_WAV_BYTES } from '../lib/uploadLimits.js';
+import { voiceAvatarCommandSchema, voiceAvatarWaveSchema } from '../lib/voiceValidation.js';
 import { avatarError } from '../services/voice/avatarWorker.js';
 
 const router = Router();
@@ -15,7 +16,7 @@ router.post('/runtime', asyncHandler(async (req, res) => {
   }
   res.json(await manageAvatar(action));
 }));
-router.post('/frames', express.raw({ type: 'audio/wav', limit: avatarAudioLimit, inflate: false }), asyncHandler(async (req, res) => {
+router.post('/frames', express.raw({ type: 'audio/wav', limit: MAX_AVATAR_WAV_BYTES, inflate: false }), asyncHandler(async (req, res) => {
   const wav = validateRequest(voiceAvatarWaveSchema, req.body);
   const stop = new AbortController();
   const close = () => stop.abort();
