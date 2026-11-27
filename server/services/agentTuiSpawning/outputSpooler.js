@@ -9,11 +9,12 @@ import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js'
  *  2. Raw PTY bytes → the append-only `raw.txt` disk spool (no ANSI strip, no
  *     line semantics) that `analyzeAgentFailure` reads on failure.
  *
- * Parsed status uses a 250ms window; raw recovery output uses a 1s window.
- * Each publication durably registers and releases admission journals, whose
- * synchronous flushes block the server loop even though the append is async.
- * Raw output is not the live shell stream; batching it more coarsely reduces
- * that overhead, while finalization still drains immediately.
+ * Parsed status uses a 250ms window; raw recovery output uses a 5s window.
+ * Each publication durably registers and releases a backup admission lease,
+ * whose synchronous flushes block the server loop (several milliseconds per
+ * lease on macOS, for every running agent) even though the append is async.
+ * Raw output is not the live shell stream; batching it coarsely reduces that
+ * overhead, while finalization and startup failure still flush immediately.
  */
 
 import { appendFile, writeFile } from 'fs/promises';
@@ -26,7 +27,7 @@ import { trackPrivateRecording } from '../../lib/privacyRecording.js';
 // Status updates stay responsive; raw recovery output can tolerate a longer
 // batching window. Neither timer delays an explicit final drain.
 const OUTPUT_FLUSH_INTERVAL_MS = 250;
-const RAW_FLUSH_INTERVAL_MS = 1000;
+const RAW_FLUSH_INTERVAL_MS = 5000;
 
 /**
  * Create a per-run transcript write failure reporter. Logs the first failure
@@ -157,10 +158,10 @@ export function createOutputSpooler({ agentId, outputFile, rawFile, prompt = '' 
   // (node-pty's internal StringDecoder handles multi-byte boundaries before
   // we see chunks), so queueing strings here is sufficient — no Buffer
   // bookkeeping needed. pendingRawChunks holds whatever arrives during the
-  // 1s debounce window AND while an appendFile is in-flight (the next
+  // debounce window AND while an appendFile is in-flight (the next
   // scheduleRawFlush is gated by rawFlushing); join() runs once per flush
   // tick, so peak in-memory raw data is bounded by one debounce-plus-IO
-  // window of TUI output (typically hundreds of KB on a chatty agent).
+  // window of TUI output (typically a few MB on a chatty agent).
   const writeRawBatch = (batch, truncate, final) => withRuntimeFileTurn(rawFile, async () => {
     const next = rawRecording.prepare(batch, final, truncate ? RAW_SPOOL_MAX_BYTES : Infinity);
     const batchBytes = Buffer.byteLength(next.output);

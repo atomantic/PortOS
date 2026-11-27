@@ -1241,6 +1241,9 @@ export async function forgetInstanceUsage(instanceId) {
 // Files whose fingerprint invalidates the category's checksum cache. The
 // instances file is in the set because the manifest is keyed by this instance's
 // ID — a re-identified machine must re-checksum even when no counter moved.
-export const USAGE_CHECKSUM_PATHS = [USAGE_FILE, PEER_USAGE_FILE, PROVIDER_QUOTAS_FILE, TRANSCRIPT_USAGE_FILE, PROVIDERS_FILE, IMAGE_RECEIPTS_DIR, dataPath('instances.json')];
+export const USAGE_CHECKSUM_PATHS = [USAGE_FILE, PEER_USAGE_FILE, PROVIDER_QUOTAS_FILE, TRANSCRIPT_USAGE_FILE, PROVIDERS_FILE, dataPath('instances.json')];
+// Receipts are published once and never edited (one per render, thousands of
+// them), the same directory stat the image projection itself is keyed on.
+export const USAGE_CHECKSUM_DIR_STATS = [IMAGE_RECEIPTS_DIR];
 
 export { PEER_USAGE_FILE };

@@ -4,10 +4,16 @@ import { mkdir, readFile, readdir, rename, symlink, truncate, unlink, writeFile 
 import { join } from 'path';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 
-const state = vi.hoisted(() => ({ project: null, jobs: [], spawns: [], outputSizes: [], duringPass: null, failPass: null, realEncode: false, saveError: null, missingFfmpeg: false, cleanupError: false, observerError: null, openedFiles: [] }));
+const state = vi.hoisted(() => ({ project: null, jobs: [], spawns: [], outputSizes: [], duringPass: null, failPass: null, realEncode: false, saveError: null, missingFfmpeg: false, cleanupError: false, observerError: null, openedFiles: [], reads: 0 }));
 vi.mock('fs/promises', async original => {
   const actual = await original();
-  return { ...actual, open: async (...args) => { const file = await actual.open(...args); state.openedFiles.push(file); return file; }, rm: async (path, options) => {
+  return { ...actual, open: async (...args) => {
+    const file = await actual.open(...args);
+    const createReadStream = file.createReadStream.bind(file);
+    file.createReadStream = options => { state.reads += 1; return createReadStream(options); };
+    state.openedFiles.push(file);
+    return file;
+  }, rm: async (path, options) => {
     if (state.cleanupError && String(path).includes('sharing-work-')) throw new Error('Synthetic cleanup I/O error');
     return actual.rm(path, options);
   } };
@@ -165,6 +171,23 @@ describe('private sharing export workflow', () => {
     expect(enqueueJob).toHaveBeenCalledTimes(2);
     const firstArgs = state.spawns[0];
     expect(firstArgs).toEqual(expect.arrayContaining(['-threads', '2', '-r', '60', '-protocol_whitelist', 'file,pipe', '-f', 'mov']));
+  });
+
+  it('reads an unchanged render once, and again only when its bytes change', async () => {
+    await runExport('00000000-0000-4000-8000-000000000009');
+    // Both files are past the window in which a coarse timestamp could hide a rewrite.
+    vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + 60_000 });
+    try {
+      await sharing.getSharingCopy('mv-example');
+      state.reads = 0;
+      expect((await sharing.getSharingCopy('mv-example')).copy).not.toBeNull();
+      const { file } = await sharing.sharingCopyDownload('mv-example');
+      await file.close();
+      expect(state.reads).toBe(0);
+      await writeFile(join(PATHS.videos, 'final-example.mp4'), 'changed final fixture');
+      expect((await sharing.getSharingCopy('mv-example')).copy).toBeNull();
+      expect(state.reads).toBe(1);
+    } finally { vi.useRealTimers(); }
   });
 
   it('retries an oversized encode with a smaller budget and refuses any still oversized result', async () => {
