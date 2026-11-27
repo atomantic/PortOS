@@ -41,9 +41,9 @@ describe('getDrillTutorial', () => {
     expect(getDrillTutorial({ type: 'digit-span', config: { direction: 'forward' } }).goal).toContain('order');
   });
 
-  it('gives choice-mode reaction-time copy that mentions the lit box', () => {
+  it('describes the visible GO cue in choice-mode reaction time', () => {
     const t = getDrillTutorial({ type: 'reaction-time', config: { mode: 'choice' } });
-    expect(t.steps.join(' ')).toMatch(/box/i);
+    expect(t.steps.join(' ')).toContain('marked GO');
   });
 
   it('returns null for an unknown or missing drill type', () => {

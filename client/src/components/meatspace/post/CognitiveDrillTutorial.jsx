@@ -148,11 +148,11 @@ export function getDrillTutorial(drill) {
     case 'reaction-time': {
       const choice = cfg.mode === 'choice';
       return {
-        goal: choice ? 'React to the box that lights up — as fast as you can.' : 'React the instant the signal fires.',
+        goal: choice ? 'React to the box marked GO as fast as you can.' : 'React the instant the signal fires.',
         steps: choice
           ? [
-            'Wait while the boxes stay dim.',
-            'At a random moment, one box lights up green.',
+            'Wait for the target to appear.',
+            'At a random moment, the choices appear and one is marked GO.',
             'Press that box’s number immediately — don’t jump early or it counts as a false start.',
           ]
           : [
@@ -160,7 +160,7 @@ export function getDrillTutorial(drill) {
             'At a random moment it turns green and reads “GO!”.',
             'Press Space (or tap) the instant it does — don’t jump early or it counts as a false start.',
           ],
-        controls: choice ? 'Number keys, or tap the lit box.' : 'Space / Enter, or tap.',
+        controls: choice ? 'Number keys, or tap the box marked GO.' : 'Space / Enter, or tap.',
       };
     }
     case 'task-switching':
