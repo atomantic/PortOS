@@ -7,7 +7,7 @@ import { connect, createServer as tcpServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { rootCertificates } from 'node:tls';
-import { promisify } from 'node:util';
+import { inspect, promisify } from 'node:util';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { createArtifactHttpTransport } from './artifactHttpTransport.js';
 import { partialPathFor, streamResumableDownload } from './downloadPreflight.js';
@@ -32,7 +32,7 @@ prompt = no
 [dn]
 CN = artifact.invalid
 [extensions]
-subjectAltName = DNS:artifact.invalid, DNS:localhost, IP:127.0.0.1
+subjectAltName = DNS:artifact.invalid, DNS:localhost, IP:127.0.0.1, IP:2001:db8::7
 basicConstraints = critical,CA:TRUE
 `);
   execFileSync('openssl', [
@@ -68,12 +68,16 @@ async function listen(server) {
 }
 
 async function readBytes(socket, length) {
-  let chunk = socket.read(length);
-  while (!chunk) {
+  const bytes = Buffer.alloc(length);
+  for (let offset = 0; offset < length;) {
+    const chunk = socket.read(Math.min(length - offset, socket.readableLength));
+    if (chunk) {
+      offset += chunk.copy(bytes, offset);
+      continue;
+    }
     await once(socket, 'readable');
-    chunk = socket.read(length);
   }
-  return chunk;
+  return bytes;
 }
 
 function relay(socket, port, handshakeReply) {
@@ -85,11 +89,25 @@ function relay(socket, port, handshakeReply) {
   socket.on('close', () => origin.destroy());
 }
 
-async function negotiate(socket, originPort, targets) {
+async function selectMethod(socket, credentials) {
   const [version, count] = await readBytes(socket, 2);
   const methods = await readBytes(socket, count);
-  if (version !== 5 || !methods.includes(0)) throw new Error('Expected SOCKS5 with no authentication');
-  socket.write(Buffer.from([5, 0]));
+  expect(version).toBe(5);
+  expect([...methods]).toEqual(credentials ? [0, 2] : [0]);
+  socket.write(Buffer.from([5, credentials ? 2 : 0]));
+  if (credentials) {
+    const [authVersion, usernameLength] = await readBytes(socket, 2);
+    const username = await readBytes(socket, usernameLength);
+    const [passwordLength] = await readBytes(socket, 1);
+    const password = await readBytes(socket, passwordLength);
+    expect(authVersion).toBe(1);
+    expect(username.toString()).toBe(credentials.username);
+    expect(password.toString()).toBe(credentials.password);
+    socket.write(Buffer.from([1, 0]));
+  }
+}
+
+async function readTarget(socket) {
   const [replyVersion, command, , addressType] = await readBytes(socket, 4);
   if (replyVersion !== 5 || command !== 1) throw new Error('Expected SOCKS5 CONNECT');
   let hostname;
@@ -104,7 +122,12 @@ async function negotiate(socket, originPort, targets) {
     throw new Error('Unexpected SOCKS5 address type');
   }
   const port = (await readBytes(socket, 2)).readUInt16BE();
-  targets.push({ addressType, hostname, port });
+  return { addressType, hostname, port };
+}
+
+async function negotiate(socket, originPort, targets) {
+  await selectMethod(socket);
+  targets.push(await readTarget(socket));
   relay(socket, originPort, Buffer.from([5, 0, 0, 1, 127, 0, 0, 1, 0, 0]));
 }
 
@@ -186,6 +209,65 @@ it('resolves SOCKS5 destinations locally and honours NO_PROXY before opening the
   expect(targets).toHaveLength(1);
   expect(targets[0].port).toBe(originPort);
   expect([1, 4]).toContain(targets[0].addressType);
+});
+
+const credentials = { username: 'fixture@é', password: 'secret:/🔒' };
+const proxyUserInfo = [credentials.username, credentials.password].map(encodeURIComponent).join(':');
+
+it.each([
+  ['socks5', '127.0.0.1', 1, '127.0.0.1', [4, ...Buffer.alloc(16)]],
+  ['socks5h', '[2001:db8::7]', 4, '20010db8000000000000000000000007', [3, 4, ...Buffer.from('bind')]],
+])('authenticates over %s and reads the full proxy reply before TLS', async (protocol, host, addressType, hostname, bound) => {
+  const originPort = await listen(httpsServer(tls, (_req, res) => res.end('fixture')));
+  const targets = [];
+  const proxyPort = await listen(tcpServer(async socket => {
+    try {
+      await selectMethod(socket, credentials);
+      targets.push(await readTarget(socket));
+      socket.write(Buffer.from([5, 0, 0]));
+      relay(socket, originPort, Buffer.from([...bound, 0, 0]));
+    } catch {
+      socket.destroy();
+    }
+  }));
+  const transport = await createArtifactHttpTransport({
+    ALL_PROXY: protocol + '://' + proxyUserInfo + '@127.0.0.1:' + proxyPort,
+    SSL_CERT_FILE: caFile,
+  });
+  const response = await transport('https://' + host + ':' + originPort, {});
+  expect(response.ok).toBe(true);
+  await response.body.cancel();
+  expect(targets).toEqual([{ addressType, hostname, port: originPort }]);
+});
+
+it.each([
+  ['an unsupported address type', [5, 0, 0, 2, 0, 0], false],
+  ['a nonzero reserved byte', [5, 0, 1, 1, 127, 0, 0, 1, 0, 0], false],
+  ['a truncated bound address', [5, 0, 0, 4, 1], true],
+])('rejects %s without leaking the proxy credentials', async (_description, bytes, truncated) => {
+  const targets = [];
+  const proxy = tcpServer(async socket => {
+    try {
+      await selectMethod(socket, credentials);
+      targets.push(await readTarget(socket));
+      socket.resume();
+      if (truncated) socket.end(Buffer.from(bytes));
+      else socket.write(Buffer.from(bytes));
+    } catch {
+      socket.destroy();
+    }
+  });
+  const proxyPort = await listen(proxy);
+  const transport = await createArtifactHttpTransport({ ALL_PROXY: 'socks5h://' + proxyUserInfo + '@127.0.0.1:' + proxyPort });
+  const socketClosed = once(proxy, 'connection').then(([socket]) => once(socket, 'close'));
+  const error = await transport('https://artifact.invalid', {}).catch(error => error);
+  expect(error).toEqual(new Error('Could not establish the SOCKS5 artifact tunnel.'));
+  const details = inspect(error, { showHidden: true, depth: null });
+  expect(details).not.toContain(credentials.username);
+  expect(details).not.toContain(credentials.password);
+  expect(details).not.toContain(proxyUserInfo);
+  await socketClosed;
+  expect(targets).toEqual([{ addressType: 3, hostname: 'artifact.invalid', port: 443 }]);
 });
 
 it('rejects unsupported or malformed proxies before reaching the origin', async () => {
