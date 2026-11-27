@@ -6,8 +6,11 @@ import { errorMiddleware } from '../lib/errorHandler.js';
 // Stub voice tool side-effects — the palette dispatches them, but we only
 // want to verify routing and whitelisting here.
 vi.mock('../services/brain.js', () => ({
-  captureThought: vi.fn(async () => ({ inboxLog: { id: 'inbox-1' }, message: 'ok' })),
-  getInboxLog: vi.fn(async () => []),
+  captureThought: vi.fn(async () => ({ inboxLog: { id: 'inbox-1' }, message: 'ok' }))
+}));
+vi.mock('../services/brainStorage.js', async (importOriginal) => ({
+  ...await importOriginal(),
+  getInboxLog: vi.fn(async () => [])
 }));
 vi.mock('../services/meatspace/meatspaceAlcohol.js', () => ({
   logDrink: vi.fn(async () => ({ standardDrinks: 1, dayTotal: 1 })),

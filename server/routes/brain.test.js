@@ -9,77 +9,72 @@ const recordUserAction = vi.hoisted(() => vi.fn(async () => ({ id: 'evt' })));
 vi.mock('../services/userActions.js', () => ({ recordUserAction }));
 
 vi.mock('../services/brain.js', () => ({
-  // Capture & Inbox
   captureThought: vi.fn(),
+  resolveReview: vi.fn(),
+  fixClassification: vi.fn(),
+  retryClassification: vi.fn(),
+  deleteMemoryEntry: vi.fn(),
+  runDailyDigest: vi.fn(),
+  runWeeklyReview: vi.fn()
+}));
+vi.mock('../services/brainStorage.js', async (importOriginal) => ({
+  ...await importOriginal(),
   getInboxLog: vi.fn(),
   getInboxPage: vi.fn(),
   getInboxLogById: vi.fn(),
   getInboxLogCounts: vi.fn(),
-  resolveReview: vi.fn(),
-  fixClassification: vi.fn(),
-  retryClassification: vi.fn(),
   getEntityPage: vi.fn(),
   toMemoryListItem: vi.fn((m) => m),
-  // People
   getPeople: vi.fn(),
   getPersonById: vi.fn(),
   createPerson: vi.fn(),
   updatePerson: vi.fn(),
   deletePerson: vi.fn(),
-  // Projects
   getProjects: vi.fn(),
   getProjectById: vi.fn(),
   createProject: vi.fn(),
   updateProject: vi.fn(),
   deleteProject: vi.fn(),
-  // Ideas
   getIdeas: vi.fn(),
   getIdeaById: vi.fn(),
   createIdea: vi.fn(),
   updateIdea: vi.fn(),
   deleteIdea: vi.fn(),
-  // Admin
   getAdminItems: vi.fn(),
   getAdminById: vi.fn(),
   createAdminItem: vi.fn(),
   updateAdminItem: vi.fn(),
   deleteAdminItem: vi.fn(),
-  // Memories
   getMemoryEntries: vi.fn(),
   getMemoryEntryById: vi.fn(),
   createMemoryEntry: vi.fn(),
   updateMemoryEntry: vi.fn(),
-  deleteMemoryEntry: vi.fn(),
-  // Digest & Review
   getLatestDigest: vi.fn(),
   getDigests: vi.fn(),
-  runDailyDigest: vi.fn(),
   getLatestReview: vi.fn(),
   getReviews: vi.fn(),
-  runWeeklyReview: vi.fn(),
-  // Settings & Summary
   loadMeta: vi.fn(),
   updateMeta: vi.fn(),
   getSummary: vi.fn(),
-  // Links
   getLinks: vi.fn(),
   getLinksPage: vi.fn(),
   listLinkIds: vi.fn(),
   getLinkById: vi.fn(),
   getLinkByUrl: vi.fn(),
-  createLinkFromUrl: vi.fn(),
-  cloneRepoInBackground: vi.fn(),
   updateLink: vi.fn(),
   reorderLinks: vi.fn(),
   deleteLink: vi.fn(),
-  // Buckets
   getBuckets: vi.fn(),
   getBucketById: vi.fn(),
   createBucket: vi.fn(),
-  createBucketAppended: vi.fn(),
   updateBucket: vi.fn(),
   reorderBuckets: vi.fn(),
-  deleteBucket: vi.fn(),
+  deleteBucket: vi.fn()
+}));
+vi.mock('../services/brainLinks.js', () => ({
+  createLinkFromUrl: vi.fn(),
+  cloneRepoInBackground: vi.fn(),
+  createBucketAppended: vi.fn(),
   deleteBucketAndUnlinkChildren: vi.fn()
 }));
 
@@ -156,6 +151,8 @@ vi.mock('../services/brainJournal.js', () => ({
 
 // Import mocked modules
 import * as brainService from '../services/brain.js';
+import * as brainStorage from '../services/brainStorage.js';
+import * as brainLinks from '../services/brainLinks.js';
 import * as ideaLoomLists from '../services/idealoomLists.js';
 import * as ideaLoomObsidian from '../services/idealoomObsidian.js';
 import { scheduleAutoSync } from '../services/idealoomAutoSync.js';
@@ -187,7 +184,7 @@ describe('Brain Routes', () => {
       const response = await request(app).get('/api/brain/ideas/idealoom/settings');
       expect(response.status).toBe(200);
       expect(response.body.enabled).toBe(false);
-      expect(brainService.getIdeaById).not.toHaveBeenCalled();
+      expect(brainStorage.getIdeaById).not.toHaveBeenCalled();
     });
 
     it('validates local list CRUD input and preserves native Brain ideas', async () => {
@@ -195,7 +192,7 @@ describe('Brain Routes', () => {
       const created = await request(app).post('/api/brain/ideas/idealoom/lists').send(listInput);
       expect(created.status).toBe(201);
       expect(ideaLoomLists.createList).toHaveBeenCalledWith({ ...listInput, status: 'draft' });
-      expect(brainService.createIdea).not.toHaveBeenCalled();
+      expect(brainStorage.createIdea).not.toHaveBeenCalled();
 
       const rejected = await request(app).post('/api/brain/ideas/idealoom/lists').send({ ...listInput, ideas: [''] });
       expect(rejected.status).toBe(400);
@@ -209,7 +206,7 @@ describe('Brain Routes', () => {
       expect(read.status).toBe(200);
       expect(read.body).toEqual(stored);
       expect(ideaLoomLists.getList).toHaveBeenCalledWith(LIST_ID);
-      expect(brainService.getIdeaById).not.toHaveBeenCalled();
+      expect(brainStorage.getIdeaById).not.toHaveBeenCalled();
 
       ideaLoomLists.updateList.mockResolvedValue({ ...stored, title: 'Renamed' });
       const updated = await request(app)
@@ -217,7 +214,7 @@ describe('Brain Routes', () => {
         .send({ title: 'Renamed' });
       expect(updated.status).toBe(200);
       expect(ideaLoomLists.updateList).toHaveBeenCalledWith(LIST_ID, { title: 'Renamed' });
-      expect(brainService.updateIdea).not.toHaveBeenCalled();
+      expect(brainStorage.updateIdea).not.toHaveBeenCalled();
 
       // deleteList resolving true is what makes this a 204 rather than a 404 —
       // the service must report whether the record actually existed.
@@ -225,7 +222,7 @@ describe('Brain Routes', () => {
       const removed = await request(app).delete(`/api/brain/ideas/idealoom/lists/${LIST_ID}`);
       expect(removed.status).toBe(204);
       expect(ideaLoomLists.deleteList).toHaveBeenCalledWith(LIST_ID);
-      expect(brainService.deleteIdea).not.toHaveBeenCalled();
+      expect(brainStorage.deleteIdea).not.toHaveBeenCalled();
     });
 
     it('answers 404 for an unknown id on every id-addressed route', async () => {
@@ -393,8 +390,8 @@ describe('Brain Routes', () => {
         { id: 'inbox-002', status: 'needs_review' }
       ];
       const mockCounts = { total: 2, filed: 1, needs_review: 1 };
-      brainService.getInboxLog.mockResolvedValue(mockEntries);
-      brainService.getInboxLogCounts.mockResolvedValue(mockCounts);
+      brainStorage.getInboxLog.mockResolvedValue(mockEntries);
+      brainStorage.getInboxLogCounts.mockResolvedValue(mockCounts);
 
       const response = await request(app).get('/api/brain/inbox');
 
@@ -404,12 +401,12 @@ describe('Brain Routes', () => {
     });
 
     it('should pass filters to service', async () => {
-      brainService.getInboxLog.mockResolvedValue([]);
-      brainService.getInboxLogCounts.mockResolvedValue({});
+      brainStorage.getInboxLog.mockResolvedValue([]);
+      brainStorage.getInboxLogCounts.mockResolvedValue({});
 
       await request(app).get('/api/brain/inbox?status=needs_review&limit=50');
 
-      expect(brainService.getInboxLog).toHaveBeenCalledWith(
+      expect(brainStorage.getInboxLog).toHaveBeenCalledWith(
         expect.objectContaining({ status: 'needs_review', limit: 50 })
       );
     });
@@ -417,16 +414,16 @@ describe('Brain Routes', () => {
 
   describe('GET /api/brain/inbox/:id', () => {
     it('should return inbox entry by ID', async () => {
-      brainService.getInboxLogById.mockResolvedValue({ id: 'inbox-001', capturedText: 'Test' });
+      brainStorage.getInboxLogById.mockResolvedValue({ id: 'inbox-001', capturedText: 'Test' });
 
       const response = await request(app).get('/api/brain/inbox/inbox-001');
 
       expect(response.status).toBe(200);
-      expect(brainService.getInboxLogById.mock.calls[0][0]).toBe('inbox-001');
+      expect(brainStorage.getInboxLogById.mock.calls[0][0]).toBe('inbox-001');
     });
 
     it('should return 404 if not found', async () => {
-      brainService.getInboxLogById.mockResolvedValue(null);
+      brainStorage.getInboxLogById.mockResolvedValue(null);
 
       const response = await request(app).get('/api/brain/inbox/inbox-999');
 
@@ -514,7 +511,7 @@ describe('Brain Routes', () => {
 
   describe('GET /api/brain/people', () => {
     it('should return all people as a raw array when no pagination params are passed', async () => {
-      brainService.getPeople.mockResolvedValue([
+      brainStorage.getPeople.mockResolvedValue([
         { id: 'people-001', name: 'John' },
         { id: 'people-002', name: 'Jane' }
       ]);
@@ -527,7 +524,7 @@ describe('Brain Routes', () => {
     });
 
     it('should return a bounded envelope when limit/offset are passed', async () => {
-      brainService.getPeople.mockResolvedValue([
+      brainStorage.getPeople.mockResolvedValue([
         { id: 'people-001', name: 'John' },
         { id: 'people-002', name: 'Jane' },
         { id: 'people-003', name: 'Jim' }
@@ -545,7 +542,7 @@ describe('Brain Routes', () => {
     });
 
     it('should treat limit=0 as a pagination request and clamp to the default limit', async () => {
-      brainService.getPeople.mockResolvedValue([
+      brainStorage.getPeople.mockResolvedValue([
         { id: 'people-001', name: 'John' },
         { id: 'people-002', name: 'Jane' }
       ]);
@@ -563,16 +560,16 @@ describe('Brain Routes', () => {
 
   describe('GET /api/brain/people/:id', () => {
     it('should return person by ID', async () => {
-      brainService.getPersonById.mockResolvedValue({ id: 'people-001', name: 'John' });
+      brainStorage.getPersonById.mockResolvedValue({ id: 'people-001', name: 'John' });
 
       const response = await request(app).get('/api/brain/people/people-001');
 
       expect(response.status).toBe(200);
-      expect(brainService.getPersonById.mock.calls[0][0]).toBe('people-001');
+      expect(brainStorage.getPersonById.mock.calls[0][0]).toBe('people-001');
     });
 
     it('should return 404 if not found', async () => {
-      brainService.getPersonById.mockResolvedValue(null);
+      brainStorage.getPersonById.mockResolvedValue(null);
 
       const response = await request(app).get('/api/brain/people/people-999');
 
@@ -582,7 +579,7 @@ describe('Brain Routes', () => {
 
   describe('POST /api/brain/people', () => {
     it('should create a person', async () => {
-      brainService.createPerson.mockResolvedValue({
+      brainStorage.createPerson.mockResolvedValue({
         id: 'people-001',
         name: 'John Doe',
         context: 'Work colleague'
@@ -607,18 +604,18 @@ describe('Brain Routes', () => {
 
   describe('PUT /api/brain/people/:id', () => {
     it('should update a person', async () => {
-      brainService.updatePerson.mockResolvedValue({ id: 'people-001', name: 'John Updated' });
+      brainStorage.updatePerson.mockResolvedValue({ id: 'people-001', name: 'John Updated' });
 
       const response = await request(app)
         .put('/api/brain/people/people-001')
         .send({ name: 'John Updated' });
 
       expect(response.status).toBe(200);
-      expect(brainService.updatePerson.mock.calls[0][0]).toBe('people-001');
+      expect(brainStorage.updatePerson.mock.calls[0][0]).toBe('people-001');
     });
 
     it('should return 404 if not found', async () => {
-      brainService.updatePerson.mockResolvedValue(null);
+      brainStorage.updatePerson.mockResolvedValue(null);
 
       const response = await request(app)
         .put('/api/brain/people/people-999')
@@ -630,16 +627,16 @@ describe('Brain Routes', () => {
 
   describe('DELETE /api/brain/people/:id', () => {
     it('should delete a person', async () => {
-      brainService.deletePerson.mockResolvedValue(true);
+      brainStorage.deletePerson.mockResolvedValue(true);
 
       const response = await request(app).delete('/api/brain/people/people-001');
 
       expect(response.status).toBe(204);
-      expect(brainService.deletePerson.mock.calls[0][0]).toBe('people-001');
+      expect(brainStorage.deletePerson.mock.calls[0][0]).toBe('people-001');
     });
 
     it('should return 404 if not found', async () => {
-      brainService.deletePerson.mockResolvedValue(false);
+      brainStorage.deletePerson.mockResolvedValue(false);
 
       const response = await request(app).delete('/api/brain/people/people-999');
 
@@ -653,7 +650,7 @@ describe('Brain Routes', () => {
 
   describe('GET /api/brain/projects', () => {
     it('should return all projects', async () => {
-      brainService.getProjects.mockResolvedValue([
+      brainStorage.getProjects.mockResolvedValue([
         { id: 'proj-001', name: 'Project A' }
       ]);
 
@@ -666,7 +663,7 @@ describe('Brain Routes', () => {
 
   describe('POST /api/brain/projects', () => {
     it('should create a project', async () => {
-      brainService.createProject.mockResolvedValue({
+      brainStorage.createProject.mockResolvedValue({
         id: 'proj-001',
         name: 'New Project',
         status: 'active'
@@ -695,7 +692,7 @@ describe('Brain Routes', () => {
 
   describe('GET /api/brain/ideas', () => {
     it('should return all ideas', async () => {
-      brainService.getIdeas.mockResolvedValue([
+      brainStorage.getIdeas.mockResolvedValue([
         { id: 'idea-001', title: 'Great Idea' }
       ]);
 
@@ -708,7 +705,7 @@ describe('Brain Routes', () => {
 
   describe('POST /api/brain/ideas', () => {
     it('should create an idea', async () => {
-      brainService.createIdea.mockResolvedValue({
+      brainStorage.createIdea.mockResolvedValue({
         id: 'idea-001',
         title: 'New Idea',
         oneLiner: 'A brief description'
@@ -737,7 +734,7 @@ describe('Brain Routes', () => {
 
   describe('GET /api/brain/admin', () => {
     it('should return all admin items', async () => {
-      brainService.getAdminItems.mockResolvedValue([
+      brainStorage.getAdminItems.mockResolvedValue([
         { id: 'admin-001', title: 'Renew license' }
       ]);
 
@@ -750,7 +747,7 @@ describe('Brain Routes', () => {
 
   describe('POST /api/brain/admin', () => {
     it('should create an admin item', async () => {
-      brainService.createAdminItem.mockResolvedValue({
+      brainStorage.createAdminItem.mockResolvedValue({
         id: 'admin-001',
         title: 'Renew license',
         status: 'open'
@@ -779,7 +776,7 @@ describe('Brain Routes', () => {
 
   describe('GET /api/brain/memories', () => {
     it('should return all memories', async () => {
-      brainService.getMemoryEntries.mockResolvedValue([
+      brainStorage.getMemoryEntries.mockResolvedValue([
         { id: 'mem-001', title: 'Morning jog' },
         { id: 'mem-002', title: 'Dinner with family' }
       ]);
@@ -792,7 +789,7 @@ describe('Brain Routes', () => {
     });
 
     it('should return a bounded envelope when limit/offset are passed', async () => {
-      brainService.getMemoryEntries.mockResolvedValue([
+      brainStorage.getMemoryEntries.mockResolvedValue([
         { id: 'mem-001', title: 'Morning jog' },
         { id: 'mem-002', title: 'Dinner with family' },
         { id: 'mem-003', title: 'Late-night idea' }
@@ -808,7 +805,7 @@ describe('Brain Routes', () => {
 
   describe('GET /api/brain/memories/:id', () => {
     it('should return memory by ID', async () => {
-      brainService.getMemoryEntryById.mockResolvedValue({
+      brainStorage.getMemoryEntryById.mockResolvedValue({
         id: 'mem-001',
         title: 'Morning jog',
         content: 'Ran 5k in the park',
@@ -819,11 +816,11 @@ describe('Brain Routes', () => {
       const response = await request(app).get('/api/brain/memories/mem-001');
 
       expect(response.status).toBe(200);
-      expect(brainService.getMemoryEntryById.mock.calls[0][0]).toBe('mem-001');
+      expect(brainStorage.getMemoryEntryById.mock.calls[0][0]).toBe('mem-001');
     });
 
     it('should return 404 if not found', async () => {
-      brainService.getMemoryEntryById.mockResolvedValue(null);
+      brainStorage.getMemoryEntryById.mockResolvedValue(null);
 
       const response = await request(app).get('/api/brain/memories/mem-999');
 
@@ -833,7 +830,7 @@ describe('Brain Routes', () => {
 
   describe('POST /api/brain/memories', () => {
     it('should create a memory', async () => {
-      brainService.createMemoryEntry.mockResolvedValue({
+      brainStorage.createMemoryEntry.mockResolvedValue({
         id: 'mem-001',
         title: 'Morning jog',
         content: 'Ran 5k in the park',
@@ -860,7 +857,7 @@ describe('Brain Routes', () => {
 
   describe('PUT /api/brain/memories/:id', () => {
     it('should update a memory', async () => {
-      brainService.updateMemoryEntry.mockResolvedValue({
+      brainStorage.updateMemoryEntry.mockResolvedValue({
         id: 'mem-001',
         title: 'Morning jog updated',
         content: 'Ran 10k today'
@@ -871,11 +868,11 @@ describe('Brain Routes', () => {
         .send({ title: 'Morning jog updated' });
 
       expect(response.status).toBe(200);
-      expect(brainService.updateMemoryEntry.mock.calls[0][0]).toBe('mem-001');
+      expect(brainStorage.updateMemoryEntry.mock.calls[0][0]).toBe('mem-001');
     });
 
     it('should return 404 if not found', async () => {
-      brainService.updateMemoryEntry.mockResolvedValue(null);
+      brainStorage.updateMemoryEntry.mockResolvedValue(null);
 
       const response = await request(app)
         .put('/api/brain/memories/mem-999')
@@ -910,7 +907,7 @@ describe('Brain Routes', () => {
 
   describe('GET /api/brain/digest/latest', () => {
     it('should return latest digest', async () => {
-      brainService.getLatestDigest.mockResolvedValue({
+      brainStorage.getLatestDigest.mockResolvedValue({
         id: 'digest-001',
         digestText: 'Today summary...'
       });
@@ -924,7 +921,7 @@ describe('Brain Routes', () => {
 
   describe('GET /api/brain/digests', () => {
     it('should return digest history', async () => {
-      brainService.getDigests.mockResolvedValue([
+      brainStorage.getDigests.mockResolvedValue([
         { id: 'digest-001' },
         { id: 'digest-002' }
       ]);
@@ -936,11 +933,11 @@ describe('Brain Routes', () => {
     });
 
     it('should pass limit parameter', async () => {
-      brainService.getDigests.mockResolvedValue([]);
+      brainStorage.getDigests.mockResolvedValue([]);
 
       await request(app).get('/api/brain/digests?limit=5');
 
-      expect(brainService.getDigests).toHaveBeenCalledWith(5);
+      expect(brainStorage.getDigests).toHaveBeenCalledWith(5);
     });
   });
 
@@ -962,7 +959,7 @@ describe('Brain Routes', () => {
 
   describe('GET /api/brain/review/latest', () => {
     it('should return latest weekly review', async () => {
-      brainService.getLatestReview.mockResolvedValue({
+      brainStorage.getLatestReview.mockResolvedValue({
         id: 'review-001',
         reviewText: 'Weekly summary...'
       });
@@ -976,7 +973,7 @@ describe('Brain Routes', () => {
 
   describe('GET /api/brain/reviews', () => {
     it('should return review history', async () => {
-      brainService.getReviews.mockResolvedValue([{ id: 'review-001' }]);
+      brainStorage.getReviews.mockResolvedValue([{ id: 'review-001' }]);
 
       const response = await request(app).get('/api/brain/reviews');
 
@@ -1007,7 +1004,7 @@ describe('Brain Routes', () => {
 
   describe('GET /api/brain/settings', () => {
     it('should return brain settings', async () => {
-      brainService.loadMeta.mockResolvedValue({
+      brainStorage.loadMeta.mockResolvedValue({
         confidenceThreshold: 0.6,
         dailyDigestTime: '09:00',
         defaultProvider: 'lmstudio'
@@ -1022,7 +1019,7 @@ describe('Brain Routes', () => {
 
   describe('PUT /api/brain/settings', () => {
     it('should update brain settings', async () => {
-      brainService.updateMeta.mockResolvedValue({
+      brainStorage.updateMeta.mockResolvedValue({
         confidenceThreshold: 0.8,
         dailyDigestTime: '10:00'
       });
@@ -1032,7 +1029,7 @@ describe('Brain Routes', () => {
         .send({ confidenceThreshold: 0.8, dailyDigestTime: '10:00' });
 
       expect(response.status).toBe(200);
-      expect(brainService.updateMeta).toHaveBeenCalledWith(
+      expect(brainStorage.updateMeta).toHaveBeenCalledWith(
         expect.objectContaining({ confidenceThreshold: 0.8 })
       );
     });
@@ -1040,7 +1037,7 @@ describe('Brain Routes', () => {
 
   describe('GET /api/brain/summary', () => {
     it('should return brain summary', async () => {
-      brainService.getSummary.mockResolvedValue({
+      brainStorage.getSummary.mockResolvedValue({
         peopleCount: 5,
         projectsCount: 3,
         ideasCount: 10,
@@ -1496,7 +1493,7 @@ describe('Brain Routes', () => {
 
   describe('GET /api/brain/buckets', () => {
     it('returns buckets sorted by order', async () => {
-      brainService.getBuckets.mockResolvedValue([
+      brainStorage.getBuckets.mockResolvedValue([
         { id: 'b2', name: 'Second', order: 1 },
         { id: 'b1', name: 'First', order: 0 }
       ]);
@@ -1508,17 +1505,17 @@ describe('Brain Routes', () => {
 
   describe('POST /api/brain/buckets', () => {
     it('delegates to createBucketAppended with the validated fields', async () => {
-      brainService.createBucketAppended.mockImplementation(async (data) => ({ id: 'b3', order: 2, ...data }));
+      brainLinks.createBucketAppended.mockImplementation(async (data) => ({ id: 'b3', order: 2, ...data }));
       const res = await request(app).post('/api/brain/buckets').send({ name: 'Disney' });
       expect(res.status).toBe(201);
-      expect(brainService.createBucketAppended).toHaveBeenCalledWith({ name: 'Disney', color: undefined, icon: undefined });
+      expect(brainLinks.createBucketAppended).toHaveBeenCalledWith({ name: 'Disney', color: undefined, icon: undefined });
       expect(res.body.name).toBe('Disney');
     });
 
     it('rejects an empty name with 400', async () => {
       const res = await request(app).post('/api/brain/buckets').send({ name: '' });
       expect(res.status).toBe(400);
-      expect(brainService.createBucketAppended).not.toHaveBeenCalled();
+      expect(brainLinks.createBucketAppended).not.toHaveBeenCalled();
     });
 
     it('rejects an invalid color with 400', async () => {
@@ -1532,19 +1529,19 @@ describe('Brain Routes', () => {
       const id3 = '33333333-3333-4333-8333-333333333333';
       const id1 = '11111111-1111-4111-8111-111111111111';
       const id2 = '22222222-2222-4222-8222-222222222222';
-      brainService.reorderBuckets.mockResolvedValue([]);
-      brainService.getBuckets.mockResolvedValue([]);
+      brainStorage.reorderBuckets.mockResolvedValue([]);
+      brainStorage.getBuckets.mockResolvedValue([]);
       const res = await request(app)
         .post('/api/brain/buckets/reorder')
         .send({ ids: [id3, id1, id2] });
       expect(res.status).toBe(200);
-      expect(brainService.reorderBuckets).toHaveBeenCalledTimes(1);
-      expect(brainService.reorderBuckets).toHaveBeenCalledWith([
+      expect(brainStorage.reorderBuckets).toHaveBeenCalledTimes(1);
+      expect(brainStorage.reorderBuckets).toHaveBeenCalledWith([
         { id: id3, order: 0 },
         { id: id1, order: 1 },
         { id: id2, order: 2 },
       ]);
-      expect(brainService.updateBucket).not.toHaveBeenCalled();
+      expect(brainStorage.updateBucket).not.toHaveBeenCalled();
     });
   });
 
@@ -1558,25 +1555,25 @@ describe('Brain Routes', () => {
         { id: idB, bucketId: bucket, bucketOrder: 0 },
         { id: idA, bucketId: bucket, bucketOrder: 1 }
       ];
-      brainService.listLinkIds.mockResolvedValue([idA, idB]);
-      brainService.reorderLinks.mockResolvedValue(updates.map(u => ({ ...u, url: 'x' })));
+      brainStorage.listLinkIds.mockResolvedValue([idA, idB]);
+      brainStorage.reorderLinks.mockResolvedValue(updates.map(u => ({ ...u, url: 'x' })));
       const res = await request(app).post('/api/brain/links/reorder').send({ updates });
       expect(res.status).toBe(200);
       // One atomic call (not N concurrent updateLink PUTs).
-      expect(brainService.reorderLinks).toHaveBeenCalledTimes(1);
-      expect(brainService.reorderLinks).toHaveBeenCalledWith(updates);
-      expect(brainService.updateLink).not.toHaveBeenCalled();
+      expect(brainStorage.reorderLinks).toHaveBeenCalledTimes(1);
+      expect(brainStorage.reorderLinks).toHaveBeenCalledWith(updates);
+      expect(brainStorage.updateLink).not.toHaveBeenCalled();
       expect(res.body.links).toHaveLength(2);
     });
 
     it('rejects an empty or malformed batch', async () => {
       const res = await request(app).post('/api/brain/links/reorder').send({ updates: [] });
       expect(res.status).toBe(400);
-      expect(brainService.reorderLinks).not.toHaveBeenCalled();
+      expect(brainStorage.reorderLinks).not.toHaveBeenCalled();
     });
 
     it('rejects the whole batch (no write) when any id is unknown', async () => {
-      brainService.listLinkIds.mockResolvedValue([idA]); // idB no longer exists
+      brainStorage.listLinkIds.mockResolvedValue([idA]); // idB no longer exists
       const res = await request(app).post('/api/brain/links/reorder').send({
         updates: [
           { id: idA, bucketId: bucket, bucketOrder: 0 },
@@ -1584,31 +1581,31 @@ describe('Brain Routes', () => {
         ]
       });
       expect(res.status).toBe(404);
-      expect(brainService.reorderLinks).not.toHaveBeenCalled();
+      expect(brainStorage.reorderLinks).not.toHaveBeenCalled();
     });
 
     it('is matched before /links/:id so "reorder" is not treated as an id', async () => {
-      brainService.listLinkIds.mockResolvedValue([idA]);
-      brainService.reorderLinks.mockResolvedValue([]);
+      brainStorage.listLinkIds.mockResolvedValue([idA]);
+      brainStorage.reorderLinks.mockResolvedValue([]);
       const res = await request(app)
         .post('/api/brain/links/reorder')
         .send({ updates: [{ id: idA, bucketId: bucket, bucketOrder: 0 }] });
       expect(res.status).toBe(200);
-      expect(brainService.reorderLinks).toHaveBeenCalledTimes(1);
+      expect(brainStorage.reorderLinks).toHaveBeenCalledTimes(1);
     });
   });
 
   describe('PUT /api/brain/buckets/:id', () => {
     it('updates an existing bucket', async () => {
-      brainService.getBucketById.mockResolvedValue({ id: 'b1', name: 'Old' });
-      brainService.updateBucket.mockResolvedValue({ id: 'b1', name: 'New' });
+      brainStorage.getBucketById.mockResolvedValue({ id: 'b1', name: 'Old' });
+      brainStorage.updateBucket.mockResolvedValue({ id: 'b1', name: 'New' });
       const res = await request(app).put('/api/brain/buckets/b1').send({ name: 'New' });
       expect(res.status).toBe(200);
       expect(res.body.name).toBe('New');
     });
 
     it('returns 404 for an unknown bucket', async () => {
-      brainService.getBucketById.mockResolvedValue(null);
+      brainStorage.getBucketById.mockResolvedValue(null);
       const res = await request(app).put('/api/brain/buckets/missing').send({ name: 'X' });
       expect(res.status).toBe(404);
     });
@@ -1616,27 +1613,27 @@ describe('Brain Routes', () => {
 
   describe('DELETE /api/brain/buckets/:id', () => {
     it('delegates to deleteBucketAndUnlinkChildren and returns its result', async () => {
-      brainService.getBucketById.mockResolvedValue({ id: 'b1', name: 'Disney' });
-      brainService.deleteBucketAndUnlinkChildren.mockResolvedValue({ deleted: true, unassigned: 2 });
+      brainStorage.getBucketById.mockResolvedValue({ id: 'b1', name: 'Disney' });
+      brainLinks.deleteBucketAndUnlinkChildren.mockResolvedValue({ deleted: true, unassigned: 2 });
 
       const res = await request(app).delete('/api/brain/buckets/b1');
       expect(res.status).toBe(200);
       expect(res.body).toEqual({ deleted: true, unassigned: 2 });
-      expect(brainService.deleteBucketAndUnlinkChildren).toHaveBeenCalledWith('b1');
+      expect(brainLinks.deleteBucketAndUnlinkChildren).toHaveBeenCalledWith('b1');
     });
 
     it('returns 404 for an unknown bucket', async () => {
-      brainService.getBucketById.mockResolvedValue(null);
+      brainStorage.getBucketById.mockResolvedValue(null);
       const res = await request(app).delete('/api/brain/buckets/missing');
       expect(res.status).toBe(404);
-      expect(brainService.deleteBucketAndUnlinkChildren).not.toHaveBeenCalled();
+      expect(brainLinks.deleteBucketAndUnlinkChildren).not.toHaveBeenCalled();
     });
   });
 
   describe('POST /api/brain/links', () => {
     it('delegates creation to the shared service with the validated options', async () => {
-      brainService.getLinkByUrl.mockResolvedValue(null);
-      brainService.createLinkFromUrl.mockImplementation(async (url, opts) => ({ id: 'l9', url, ...opts }));
+      brainStorage.getLinkByUrl.mockResolvedValue(null);
+      brainLinks.createLinkFromUrl.mockImplementation(async (url, opts) => ({ id: 'l9', url, ...opts }));
       const res = await request(app)
         .post('/api/brain/links')
         .send({
@@ -1645,7 +1642,7 @@ describe('Brain Routes', () => {
           bucketId: '11111111-1111-4111-8111-111111111111'
         });
       expect(res.status).toBe(201);
-      expect(brainService.createLinkFromUrl).toHaveBeenCalledWith(
+      expect(brainLinks.createLinkFromUrl).toHaveBeenCalledWith(
         'https://www.example.com/parks',
         expect.objectContaining({
           note: 'Share this with the team',
@@ -1655,10 +1652,10 @@ describe('Brain Routes', () => {
     });
 
     it('409s on a duplicate URL without creating anything', async () => {
-      brainService.getLinkByUrl.mockResolvedValue({ id: 'l1' });
+      brainStorage.getLinkByUrl.mockResolvedValue({ id: 'l1' });
       const res = await request(app).post('/api/brain/links').send({ url: 'https://example.com' });
       expect(res.status).toBe(409);
-      expect(brainService.createLinkFromUrl).not.toHaveBeenCalled();
+      expect(brainLinks.createLinkFromUrl).not.toHaveBeenCalled();
     });
   });
 });

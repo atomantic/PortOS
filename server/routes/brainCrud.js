@@ -7,6 +7,7 @@
 
 import { Router } from 'express';
 import * as brainService from '../services/brain.js';
+import * as brainStorage from '../services/brainStorage.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import { partialWithoutDefaults } from '../lib/zodCompat.js';
@@ -28,7 +29,7 @@ async function handleEntityList(req, res, { type, fetchLegacy, fallbackKey }) {
   const isCursorOrSearch = req.query.cursor !== undefined || req.query.search !== undefined;
   if (isCursorOrSearch) {
     const query = validateRequest(entityQuerySchema, req.query);
-    const result = await brainService.getEntityPage(type, query);
+    const result = await brainStorage.getEntityPage(type, query);
     return res.json({
       [fallbackKey]: result.items,
       items: result.items,
@@ -60,13 +61,13 @@ async function handleEntityList(req, res, { type, fetchLegacy, fallbackKey }) {
 router.get('/people', asyncHandler(async (req, res) => {
   await handleEntityList(req, res, {
     type: 'people',
-    fetchLegacy: () => brainService.getPeople(),
+    fetchLegacy: () => brainStorage.getPeople(),
     fallbackKey: 'people'
   });
 }));
 
 router.get('/people/:id', asyncHandler(async (req, res) => {
-  const person = await brainService.getPersonById(req.params.id);
+  const person = await brainStorage.getPersonById(req.params.id);
   if (!person) {
     throw new ServerError('Person not found', { status: 404, code: 'NOT_FOUND' });
   }
@@ -75,13 +76,13 @@ router.get('/people/:id', asyncHandler(async (req, res) => {
 
 router.post('/people', asyncHandler(async (req, res) => {
   const data = validateRequest(peopleInputSchema, req.body);
-  const person = await brainService.createPerson(data);
+  const person = await brainStorage.createPerson(data);
   res.status(201).json(person);
 }));
 
 router.put('/people/:id', asyncHandler(async (req, res) => {
   const data = validateRequest(peopleInputSchema.partial(), req.body);
-  const person = await brainService.updatePerson(req.params.id, data);
+  const person = await brainStorage.updatePerson(req.params.id, data);
   if (!person) {
     throw new ServerError('Person not found', { status: 404, code: 'NOT_FOUND' });
   }
@@ -89,7 +90,7 @@ router.put('/people/:id', asyncHandler(async (req, res) => {
 }));
 
 router.delete('/people/:id', asyncHandler(async (req, res) => {
-  const deleted = await brainService.deletePerson(req.params.id);
+  const deleted = await brainStorage.deletePerson(req.params.id);
   if (!deleted) {
     throw new ServerError('Person not found', { status: 404, code: 'NOT_FOUND' });
   }
@@ -105,14 +106,14 @@ router.get('/projects', asyncHandler(async (req, res) => {
     type: 'projects',
     fetchLegacy: (query) => {
       const status = query.status;
-      return brainService.getProjects(status ? { status } : undefined);
+      return brainStorage.getProjects(status ? { status } : undefined);
     },
     fallbackKey: 'projects'
   });
 }));
 
 router.get('/projects/:id', asyncHandler(async (req, res) => {
-  const project = await brainService.getProjectById(req.params.id);
+  const project = await brainStorage.getProjectById(req.params.id);
   if (!project) {
     throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
   }
@@ -121,13 +122,13 @@ router.get('/projects/:id', asyncHandler(async (req, res) => {
 
 router.post('/projects', asyncHandler(async (req, res) => {
   const data = validateRequest(projectInputSchema, req.body);
-  const project = await brainService.createProject(data);
+  const project = await brainStorage.createProject(data);
   res.status(201).json(project);
 }));
 
 router.put('/projects/:id', asyncHandler(async (req, res) => {
   const data = validateRequest(partialWithoutDefaults(projectInputSchema), req.body);
-  const project = await brainService.updateProject(req.params.id, data);
+  const project = await brainStorage.updateProject(req.params.id, data);
   if (!project) {
     throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
   }
@@ -135,7 +136,7 @@ router.put('/projects/:id', asyncHandler(async (req, res) => {
 }));
 
 router.delete('/projects/:id', asyncHandler(async (req, res) => {
-  const deleted = await brainService.deleteProject(req.params.id);
+  const deleted = await brainStorage.deleteProject(req.params.id);
   if (!deleted) {
     throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
   }
@@ -151,14 +152,14 @@ router.get('/ideas', asyncHandler(async (req, res) => {
     type: 'ideas',
     fetchLegacy: (query) => {
       const status = query.status;
-      return brainService.getIdeas(status ? { status } : undefined);
+      return brainStorage.getIdeas(status ? { status } : undefined);
     },
     fallbackKey: 'ideas'
   });
 }));
 
 router.get('/ideas/:id', asyncHandler(async (req, res) => {
-  const idea = await brainService.getIdeaById(req.params.id);
+  const idea = await brainStorage.getIdeaById(req.params.id);
   if (!idea) {
     throw new ServerError('Idea not found', { status: 404, code: 'NOT_FOUND' });
   }
@@ -167,13 +168,13 @@ router.get('/ideas/:id', asyncHandler(async (req, res) => {
 
 router.post('/ideas', asyncHandler(async (req, res) => {
   const data = validateRequest(ideaInputSchema, req.body);
-  const idea = await brainService.createIdea(data);
+  const idea = await brainStorage.createIdea(data);
   res.status(201).json(idea);
 }));
 
 router.put('/ideas/:id', asyncHandler(async (req, res) => {
   const data = validateRequest(partialWithoutDefaults(ideaInputSchema), req.body);
-  const idea = await brainService.updateIdea(req.params.id, data);
+  const idea = await brainStorage.updateIdea(req.params.id, data);
   if (!idea) {
     throw new ServerError('Idea not found', { status: 404, code: 'NOT_FOUND' });
   }
@@ -181,7 +182,7 @@ router.put('/ideas/:id', asyncHandler(async (req, res) => {
 }));
 
 router.delete('/ideas/:id', asyncHandler(async (req, res) => {
-  const deleted = await brainService.deleteIdea(req.params.id);
+  const deleted = await brainStorage.deleteIdea(req.params.id);
   if (!deleted) {
     throw new ServerError('Idea not found', { status: 404, code: 'NOT_FOUND' });
   }
@@ -197,14 +198,14 @@ router.get('/admin', asyncHandler(async (req, res) => {
     type: 'admin',
     fetchLegacy: (query) => {
       const status = query.status;
-      return brainService.getAdminItems(status ? { status } : undefined);
+      return brainStorage.getAdminItems(status ? { status } : undefined);
     },
     fallbackKey: 'admin'
   });
 }));
 
 router.get('/admin/:id', asyncHandler(async (req, res) => {
-  const item = await brainService.getAdminById(req.params.id);
+  const item = await brainStorage.getAdminById(req.params.id);
   if (!item) {
     throw new ServerError('Admin item not found', { status: 404, code: 'NOT_FOUND' });
   }
@@ -213,13 +214,13 @@ router.get('/admin/:id', asyncHandler(async (req, res) => {
 
 router.post('/admin', asyncHandler(async (req, res) => {
   const data = validateRequest(adminInputSchema, req.body);
-  const item = await brainService.createAdminItem(data);
+  const item = await brainStorage.createAdminItem(data);
   res.status(201).json(item);
 }));
 
 router.put('/admin/:id', asyncHandler(async (req, res) => {
   const data = validateRequest(partialWithoutDefaults(adminInputSchema), req.body);
-  const item = await brainService.updateAdminItem(req.params.id, data);
+  const item = await brainStorage.updateAdminItem(req.params.id, data);
   if (!item) {
     throw new ServerError('Admin item not found', { status: 404, code: 'NOT_FOUND' });
   }
@@ -227,7 +228,7 @@ router.put('/admin/:id', asyncHandler(async (req, res) => {
 }));
 
 router.delete('/admin/:id', asyncHandler(async (req, res) => {
-  const deleted = await brainService.deleteAdminItem(req.params.id);
+  const deleted = await brainStorage.deleteAdminItem(req.params.id);
   if (!deleted) {
     throw new ServerError('Admin item not found', { status: 404, code: 'NOT_FOUND' });
   }
@@ -241,13 +242,13 @@ router.delete('/admin/:id', asyncHandler(async (req, res) => {
 router.get('/memories', asyncHandler(async (req, res) => {
   await handleEntityList(req, res, {
     type: 'memories',
-    fetchLegacy: () => brainService.getMemoryEntries(),
+    fetchLegacy: () => brainStorage.getMemoryEntries(),
     fallbackKey: 'memories'
   });
 }));
 
 router.get('/memories/:id', asyncHandler(async (req, res) => {
-  const memory = await brainService.getMemoryEntryById(req.params.id);
+  const memory = await brainStorage.getMemoryEntryById(req.params.id);
   if (!memory) {
     throw new ServerError('Memory not found', { status: 404, code: 'NOT_FOUND' });
   }
@@ -256,13 +257,13 @@ router.get('/memories/:id', asyncHandler(async (req, res) => {
 
 router.post('/memories', asyncHandler(async (req, res) => {
   const data = validateRequest(memoryInputSchema, req.body);
-  const memory = await brainService.createMemoryEntry(data);
+  const memory = await brainStorage.createMemoryEntry(data);
   res.status(201).json(memory);
 }));
 
 router.put('/memories/:id', asyncHandler(async (req, res) => {
   const data = validateRequest(memoryInputSchema.partial(), req.body);
-  const memory = await brainService.updateMemoryEntry(req.params.id, data);
+  const memory = await brainStorage.updateMemoryEntry(req.params.id, data);
   if (!memory) {
     throw new ServerError('Memory not found', { status: 404, code: 'NOT_FOUND' });
   }

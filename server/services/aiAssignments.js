@@ -1,6 +1,6 @@
 import { getSettings, updateSettings } from './settings.js';
 import { getProviderById, getSelectableProviders, isOllamaBackedProvider, setActiveProvider, updateProvider } from './provider/providers.js';
-import * as brainService from './brain.js';
+import * as brainStorage from './brainStorage.js';
 import * as universeService from './universeBuilder.js';
 import * as storyBuilderService from './storyBuilder.js';
 import * as pipelineSeriesService from './pipeline/series.js';
@@ -463,7 +463,7 @@ const socialAgentKeys = ['default', 'content', 'engagement'];
 const recordHandlers = [
   {
     id: 'brain.default',
-    load: () => brainService.loadMeta().catch(() => null),
+    load: () => brainStorage.loadMeta().catch(() => null),
     collect: (meta, id) => meta ? [{
       id,
       area: 'Brain',
@@ -473,7 +473,7 @@ const recordHandlers = [
       model: meta.defaultModel,
       link: '/brain/config',
     }] : [],
-    update: ({ providerId, model }) => brainService.updateMeta({ defaultProvider: providerId, defaultModel: model }),
+    update: ({ providerId, model }) => brainStorage.updateMeta({ defaultProvider: providerId, defaultModel: model }),
   },
   ...worldRecordHandlers,
   {

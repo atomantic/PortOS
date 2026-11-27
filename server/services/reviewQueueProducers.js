@@ -177,7 +177,7 @@ const PRODUCERS = [
     async gather(limit = REVIEW_QUEUE_SOURCE_READ_LIMIT) {
       // Inbox entries the auto-classifier couldn't place — they need a human
       // to pick a destination.
-      return brain.getInboxLog({ status: 'needs_review', limit });
+      return brainStorage.getInboxLog({ status: 'needs_review', limit });
     },
     map(entry) {
       const text = (entry.capturedText || '').trim();

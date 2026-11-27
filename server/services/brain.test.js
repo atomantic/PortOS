@@ -195,11 +195,15 @@ import {
   updateInboxEntry,
   deleteInboxEntry,
   deleteMemoryEntry,
-  recoverStuckClassifications,
+  recoverStuckClassifications
+} from './brain.js';
+import {
   recoverInterruptedRepoClones,
   createLinkFromUrl,
-  cloneRepoInBackground
-} from './brain.js';
+  cloneRepoInBackground,
+  createBucketAppended,
+  deleteBucketAndUnlinkChildren
+} from './brainLinks.js';
 
 describe('brain service', () => {
   beforeEach(() => {
@@ -1781,33 +1785,11 @@ describe('brain service', () => {
   });
 
   // ===========================================================================
-  // Re-exported storage functions
-  // ===========================================================================
-
-  describe('re-exported storage functions', () => {
-    it('should re-export loadMeta from storage', async () => {
-      const { loadMeta } = await import('./brain.js');
-      expect(loadMeta).toBe(storage.loadMeta);
-    });
-
-    it('should re-export getSummary from storage', async () => {
-      const { getSummary } = await import('./brain.js');
-      expect(getSummary).toBe(storage.getSummary);
-    });
-
-    it('should re-export reorderBuckets from storage', async () => {
-      const { reorderBuckets } = await import('./brain.js');
-      expect(reorderBuckets).toBe(storage.reorderBuckets);
-    });
-  });
-
-  // ===========================================================================
   // Bucket orchestration (next-order append + delete-with-unlink)
   // ===========================================================================
 
   describe('createBucketAppended', () => {
     it('appends after the highest existing order and applies defaults', async () => {
-      const { createBucketAppended } = await import('./brain.js');
       storage.getBuckets.mockResolvedValue([{ id: 'b1', order: 0 }, { id: 'b2', order: 4 }]);
       storage.createBucket.mockImplementation(async (data) => ({ id: 'b3', ...data }));
 
@@ -1818,7 +1800,6 @@ describe('brain service', () => {
     });
 
     it('starts at order 0 when no buckets exist', async () => {
-      const { createBucketAppended } = await import('./brain.js');
       storage.getBuckets.mockResolvedValue([]);
       storage.createBucket.mockImplementation(async (data) => ({ id: 'b1', ...data }));
 
@@ -1830,7 +1811,6 @@ describe('brain service', () => {
 
   describe('deleteBucketAndUnlinkChildren', () => {
     it('unassigns only the bucket\'s links, then deletes the bucket', async () => {
-      const { deleteBucketAndUnlinkChildren } = await import('./brain.js');
       storage.getLinks.mockResolvedValue([
         { id: 'l1', bucketId: 'b1' },
         { id: 'l2', bucketId: 'b2' },

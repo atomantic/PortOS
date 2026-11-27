@@ -5,7 +5,7 @@
  */
 
 import { Router } from 'express';
-import * as brainService from '../services/brain.js';
+import * as brainStorage from '../services/brainStorage.js';
 import { getProviderById } from '../services/provider/providers.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
@@ -19,7 +19,7 @@ const router = Router();
  * Get brain settings
  */
 router.get('/settings', asyncHandler(async (req, res) => {
-  const settings = await brainService.loadMeta();
+  const settings = await brainStorage.loadMeta();
   res.json(settings);
 }));
 
@@ -29,7 +29,7 @@ router.get('/settings', asyncHandler(async (req, res) => {
  */
 router.put('/settings', asyncHandler(async (req, res) => {
   const data = validateRequest(settingsUpdateInputSchema, req.body);
-  const currentSettings = await brainService.loadMeta();
+  const currentSettings = await brainStorage.loadMeta();
 
   // Validate provider and model if provided
   if (data.defaultProvider || data.defaultModel) {
@@ -63,7 +63,7 @@ router.put('/settings', asyncHandler(async (req, res) => {
     }
   }
 
-  const settings = await brainService.updateMeta(data);
+  const settings = await brainStorage.updateMeta(data);
   res.json(settings);
 }));
 
@@ -72,7 +72,7 @@ router.put('/settings', asyncHandler(async (req, res) => {
  * Get brain data summary for dashboard
  */
 router.get('/summary', asyncHandler(async (req, res) => {
-  const summary = await brainService.getSummary();
+  const summary = await brainStorage.getSummary();
   res.json(summary);
 }));
 

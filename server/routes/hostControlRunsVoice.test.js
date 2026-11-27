@@ -38,8 +38,11 @@ vi.mock('../services/provider/providers.js', () => ({
 }));
 vi.mock('../services/visionCli.js', () => ({ describeImageViaCli: vi.fn() }));
 vi.mock('../services/brain.js', () => ({
-  captureThought: vi.fn(async () => ({ inboxLog: { id: 'example-inbox' } })),
-  getInboxLog: vi.fn(async () => []),
+  captureThought: vi.fn(async () => ({ inboxLog: { id: 'example-inbox' } }))
+}));
+vi.mock('../services/brainStorage.js', async (importOriginal) => ({
+  ...await importOriginal(),
+  getInboxLog: vi.fn(async () => [])
 }));
 vi.mock('../services/imageGen/index.js', async () => ({
   ...await vi.importActual('../lib/generationModes.js'),
