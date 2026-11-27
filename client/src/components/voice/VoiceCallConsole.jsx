@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { AudioLines, Mic, MicOff, PhoneOff, Play, ScanFace, Send, Square } from 'lucide-react';
-import VoiceCallPortrait from './VoiceCallPortrait';
+import AvatarRuntimeSettings from './AvatarRuntimeSettings';
 import VoiceCallGenerativePortrait from './VoiceCallGenerativePortrait';
+import { useAvatarRuntime } from './useAvatarRuntime';
 import { useAvatarMode } from './useAvatarMode';
 import { safeReadStorage, safeWriteStorage } from '../../lib/safeStorage';
 
@@ -38,7 +39,8 @@ export default function VoiceCallConsole({
 }) {
   const [avatar, setAvatar] = useState(() => safeReadStorage(DISPLAY_KEY) !== 'audio');
   const generativeAvatar = useAvatarMode();
-  const Portrait = generativeAvatar ? VoiceCallGenerativePortrait : VoiceCallPortrait;
+  const { data, error, updateData, refetch } = useAvatarRuntime(avatar);
+  const runningAvatar = generativeAvatar && !error && data?.supported && data.phase === 'running';
   const caption = interimTranscript || history.at(-1)?.text;
   const openMic = handsFree || !canChangeMicMode;
   const micText = capturing ? (openMic ? 'Close mic' : 'Send voice') : (openMic ? 'Open mic' : 'Talk');
@@ -60,10 +62,14 @@ export default function VoiceCallConsole({
         </p>
       </header>
 
+      {avatar && <AvatarRuntimeSettings data={data} error={error} updateData={updateData} refetch={refetch} />}
+
       <div className="relative isolate grid min-h-52 grid-rows-[minmax(9rem,1fr)_auto] overflow-hidden rounded-xl border border-port-border bg-port-bg p-3 sm:min-h-64">
         <div aria-hidden="true" className="pointer-events-none absolute inset-0 -z-10 bg-[repeating-linear-gradient(transparent_0px,transparent_3px,currentColor_4px)] text-port-accent opacity-[0.08]" />
         <div className="min-w-0 place-self-center">
-          {avatar ? <Portrait speaking={stage === 'speaking'} /> : <AudioLines aria-hidden="true" size={64} className="text-port-accent" />}
+          {avatar
+            ? <VoiceCallGenerativePortrait key={runningAvatar ? 'animated' : 'still'} running={runningAvatar} />
+            : <AudioLines aria-hidden="true" size={64} className="text-port-accent" />}
         </div>
         <p aria-hidden="true" className="line-clamp-2 min-h-12 break-words rounded-md border-l-2 border-port-accent bg-port-card px-3 py-2 text-sm">
           {caption || 'Ready when you are.'}
