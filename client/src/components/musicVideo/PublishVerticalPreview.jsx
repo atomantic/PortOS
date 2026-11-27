@@ -168,6 +168,8 @@ export default function PublishVerticalPreview({
                     if (videoRef.current) setTimeSec(videoRef.current.currentTime || 0);
                     paintBackdrop();
                   }}
+                  onPlay={() => setPlaying(true)}
+                  onPause={() => setPlaying(false)}
                   onEnded={() => setPlaying(false)}
                   onError={() => setMediaError('Could not load the final render video for preview.')}
                 />

@@ -61,4 +61,22 @@ describe('PublishVerticalPreview', () => {
     );
     expect(screen.getByText(/16:9 master already draws overlay lyrics/i)).toBeTruthy();
   });
+
+  it('syncs playing state with native video play and pause events', () => {
+    render(
+      <PublishVerticalPreview
+        project={baseProject}
+        span="full"
+        frame={baseFrame}
+        onSpanChange={vi.fn()}
+        onFrameChange={vi.fn()}
+      />,
+    );
+    const video = screen.getByLabelText('Framed vertical preview');
+    expect(screen.getByLabelText('Play vertical preview')).toBeTruthy();
+    fireEvent.play(video);
+    expect(screen.getByLabelText('Pause vertical preview')).toBeTruthy();
+    fireEvent.pause(video);
+    expect(screen.getByLabelText('Play vertical preview')).toBeTruthy();
+  });
 });

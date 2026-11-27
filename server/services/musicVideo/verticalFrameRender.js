@@ -110,6 +110,24 @@ export async function renderVerticalFramedVideo({
         else done(new Error(`Framed vertical encode failed (${code}): ${stderr.trim() || 'ffmpeg error'}`));
       });
 
+      const waitForDrain = () => new Promise((resolve) => {
+        if (settled || signal?.aborted || proc.stdin.destroyed || proc.stdin.writableEnded) {
+          resolve();
+          return;
+        }
+        const finish = () => {
+          proc.stdin.off('drain', finish);
+          proc.stdin.off('close', finish);
+          proc.stdin.off('error', finish);
+          signal?.removeEventListener('abort', finish);
+          resolve();
+        };
+        proc.stdin.once('drain', finish);
+        proc.stdin.once('close', finish);
+        proc.stdin.once('error', finish);
+        signal?.addEventListener('abort', finish, { once: true });
+      });
+
       const totalFrames = Math.max(1, Math.ceil(spanSec * FOOTER_FPS));
       const feedFrames = async () => {
         for (let i = 0; i < totalFrames; i++) {
@@ -129,7 +147,7 @@ export async function renderVerticalFramedVideo({
           const raw = await sharp(Buffer.from(svg)).ensureAlpha().raw().toBuffer();
           if (settled || signal?.aborted) break;
           if (!proc.stdin.write(raw)) {
-            await new Promise((r) => proc.stdin.once('drain', r));
+            await waitForDrain();
           }
           if (onProgress && (i % 6 === 0 || i === totalFrames - 1)) {
             onProgress((i + 1) / totalFrames);

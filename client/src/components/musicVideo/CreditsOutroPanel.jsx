@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Clapperboard, Plus, RotateCcw, X } from 'lucide-react';
 import useMounted from '../../hooks/useMounted.js';
 import { getMusicVideoCreditsPrefill } from '../../services/apiMusicVideo.js';
@@ -54,10 +54,12 @@ function TextField({ id, label, value, placeholder = '', list, onCommit, multili
   );
 }
 
-function CreditsAppearance({ project, credits, id, commit }) {
+function CreditsAppearance({ project, credits, id, commit, onColorEdit, onColorCommit }) {
   const shotStills = (project?.scenes || [])
     .filter((s) => s?.referenceImageId && /\.(?:png|jpe?g|webp)$/i.test(s.referenceImageId))
     .map((s, idx) => ({ id: s.referenceImageId, label: `Shot ${(s.order ?? idx) + 1}${s.label ? ` · ${s.label}` : ''}` }));
+  const bgId = credits.backgroundImageId || '';
+  const hasMissingBg = Boolean(bgId) && !shotStills.some((shot) => shot.id === bgId);
   return (
     <fieldset className="min-w-0 space-y-2 border-t border-port-border pt-2">
       <legend className="text-xs text-port-text-muted">Appearance</legend>
@@ -68,11 +70,12 @@ function CreditsAppearance({ project, credits, id, commit }) {
             {CREDITS_OUTRO_STYLES.map((value) => <option key={value} value={value}>{STYLE_LABELS[value]}</option>)}
           </select>
         </div>
-        {shotStills.length > 0 && (
+        {(shotStills.length > 0 || hasMissingBg) && (
           <div className="min-w-0">
             <label htmlFor={id('bg-image')} className="mb-0.5 block text-xs text-port-text-muted">Background still</label>
-            <select id={id('bg-image')} value={credits.backgroundImageId || ''} onChange={(e) => commit({ backgroundImageId: e.target.value || null })} className={`${FIELD} w-full`}>
+            <select id={id('bg-image')} value={bgId} onChange={(e) => commit({ backgroundImageId: e.target.value || null })} className={`${FIELD} w-full`}>
               <option value="">None (solid / styled backdrop)</option>
+              {hasMissingBg && <option value={bgId}>Current still ({bgId})</option>}
               {shotStills.map((shot) => <option key={`${shot.label}-${shot.id}`} value={shot.id}>{shot.label}</option>)}
             </select>
           </div>
@@ -101,7 +104,9 @@ function CreditsAppearance({ project, credits, id, commit }) {
           <div key={key}>
             <label htmlFor={id(key)} className="mb-0.5 block text-xs text-port-text-muted">{label}</label>
             <input id={id(key)} type="color" value={credits[key] || CREDITS_OUTRO_COLORS[key]}
-              onChange={(e) => commit({ [key]: e.target.value })} className="h-11 w-16 rounded border border-port-border bg-port-bg p-1" />
+              onChange={(e) => onColorEdit({ [key]: e.target.value })}
+              onBlur={onColorCommit}
+              className="h-11 w-16 rounded border border-port-border bg-port-bg p-1" />
           </div>
         ))}
       </div>
@@ -156,24 +161,53 @@ function CreditsSocials({ socials, id, onChange }) {
  */
 export default function CreditsOutroPanel({ project, onEditLocal, onSave, showPreview = false }) {
   const [filling, setFilling] = useState(false);
-  // A refill still in flight when this editor closes is dropped: a reopened
-  // editor is not locked by it, so its answer must not overwrite later edits.
+  // A refill still in flight when this editor closes, switches projects, or starts a newer
+  // refill is dropped so stale responses cannot overwrite later edits or unlock a newer fill.
   const mounted = useMounted();
+  const prefillGenerationRef = useRef(0);
+  const pendingColorRef = useRef(null);
+  const flushPendingColor = () => {
+    const pending = pendingColorRef.current;
+    if (!pending) return;
+    pendingColorRef.current = null;
+    pending.save({ creditsOutro: pending.credits });
+  };
+  useEffect(() => {
+    prefillGenerationRef.current += 1;
+    setFilling(false);
+    return () => {
+      prefillGenerationRef.current += 1;
+      flushPendingColor();
+    };
+  }, [project.id]);
   const credits = normalizeCreditsOutro(project.creditsOutro);
   const on = !!credits?.enabled;
   const save = (next) => {
+    pendingColorRef.current = null;
     onEditLocal({ creditsOutro: next });
     return onSave({ creditsOutro: next });
   };
   const commit = (patch) => save(normalizeCreditsOutro({ ...(credits || CREDITS_OUTRO_DEFAULTS), ...patch }));
+  // Color pickers fire onChange on every drag tick; update the live preview locally and persist once on blur
+  // (or when closing / switching projects, using the save handler captured for that project).
+  const editColor = (patch) => {
+    const next = normalizeCreditsOutro({ ...(credits || CREDITS_OUTRO_DEFAULTS), ...patch });
+    pendingColorRef.current = { credits: next, save: onSave };
+    onEditLocal({ creditsOutro: next });
+  };
   const fill = (keep = {}) => {
+    const generation = ++prefillGenerationRef.current;
     setFilling(true);
     // A failed lookup is reported (not silent) and changes nothing.
     return getMusicVideoCreditsPrefill(project.id)
-      .then((res) => (mounted.current ? save(normalizeCreditsOutro({ ...res.credits, ...keep, enabled: true })) : null))
+      .then((res) => (mounted.current && prefillGenerationRef.current === generation
+        ? save(normalizeCreditsOutro({ ...res.credits, ...keep, enabled: true }))
+        : null))
       // The request and the board's save report their own failures; neither may leave the controls disabled.
       .catch(() => null)
-      .finally(() => { if (mounted.current) setFilling(false); });
+      .finally(() => {
+        if (mounted.current && prefillGenerationRef.current === generation) setFilling(false);
+      });
   };
   const toggle = (enabled) => (enabled && !credits ? fill() : commit({ enabled }));
   const lines = credits?.lines || [];
@@ -223,7 +257,7 @@ export default function CreditsOutroPanel({ project, onEditLocal, onSave, showPr
               </select>
             </div>
           </div>
-          <CreditsAppearance project={project} credits={credits} commit={commit} id={id} />
+          <CreditsAppearance project={project} credits={credits} commit={commit} onColorEdit={editColor} onColorCommit={flushPendingColor} id={id} />
           <fieldset className="min-w-0 space-y-1">
             <legend className="mb-0.5 text-xs text-port-text-muted">Credit blocks</legend>
             <p className="text-xs text-port-text-muted">Give each block an optional heading and your own text. In Grid, each block gets its own cell.</p>

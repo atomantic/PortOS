@@ -107,6 +107,7 @@ export default function PublishAssetsCard({ project, publishKit }) {
             </label>
             {publishKit.verticalMode === 'framed' && publishKit.verticalFrame && (
               <PublishVerticalPreview
+                key={`${project?.id || ''}:${project?.renderHistoryId || ''}`}
                 project={project}
                 span={publishKit.verticalSpan || 'full'}
                 frame={publishKit.verticalFrame}
