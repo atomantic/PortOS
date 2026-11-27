@@ -473,14 +473,6 @@ describe('doc code pointers', () => {
   });
 });
 
-/** Records that name an endpoint which does not (or does not yet) exist, on purpose. */
-const DELIBERATE_NON_ROUTES = [
-  { file: 'docs/features/openclaw-operator-chat.md', method: 'POST', path: '/api/openclaw/sessions', reason: 'proposed but not built' },
-  { file: 'docs/features/openclaw-operator-chat.md', method: 'GET', path: '/api/openclaw/jobs', reason: 'proposed but not built' },
-  { file: 'docs/features/openclaw-operator-chat.md', method: 'GET', path: '/api/openclaw/subagents', reason: 'proposed but not built' },
-  { file: 'docs/features/openclaw-operator-chat.md', method: 'POST', path: '/api/openclaw/context/compose', reason: 'proposed but not built' },
-];
-
 const MENTION = /(?<![\w/])(GET|POST|PUT|PATCH|DELETE)(\s*\/\s*(?:GET|POST|PUT|PATCH|DELETE))*\s+`?(\/api\/[^\s`<>]+)/g;
 
 const PLACEHOLDER = /[*{}[\]]/;
@@ -499,8 +491,6 @@ const findMentions = (file, text) => {
 
 const isRoutable = ({ method, path }) => liveOperations.has(`${method} ${normalizePath(path)}`);
 
-const isAllowed = (m) => DELIBERATE_NON_ROUTES.some((a) => a.file === m.file && a.method === m.method && a.path === m.path);
-
 describe('endpoint mentions in docs name a route the server mounts', () => {
   const mentions = () => documentationFindings().mentions;
   it('parses a meaningful number of mentions', () => {
@@ -511,25 +501,9 @@ describe('endpoint mentions in docs name a route the server mounts', () => {
 
   it('names no method/path pair that no router declares', () => {
     const drift = mentions()
-      .filter((m) => !isRoutable(m) && !isAllowed(m))
+      .filter((m) => !isRoutable(m))
       .map((m) => `${m.file}:${m.line} ${m.method} ${m.path}`);
-    expect(drift, [
-      'These docs name a method/path no router declares. Fix the mention, or — if the doc deliberately',
-      'records a removed/proposed endpoint — add it to DELIBERATE_NON_ROUTES with a reason.',
-      'The live inventory is GET /api/api-docs/catalog.json (or buildApiRouteCatalog()).',
-    ].join('\n')).toEqual([]);
-  });
-
-  it('keeps every allowlist entry honest', () => {
-    const stale = DELIBERATE_NON_ROUTES.flatMap((a) => {
-      if (!a.reason) return [`${a.file} ${a.method} ${a.path}: missing reason`];
-      if (isRoutable(a)) return [`${a.file} ${a.method} ${a.path}: now routable — drop the entry`];
-      if (!mentions().some((m) => isAllowed(m) && m.file === a.file && m.method === a.method && m.path === a.path)) {
-        return [`${a.file} ${a.method} ${a.path}: mention no longer present — drop the entry`];
-      }
-      return [];
-    });
-    expect(stale).toEqual([]);
+    expect(drift, 'Check documented operations against the live inventory at GET /api/api-docs/catalog.json.').toEqual([]);
   });
 
   it('skips slash shorthand and brace/glob placeholders', () => {

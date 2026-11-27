@@ -12,7 +12,7 @@
  *   3. `ANTHROPIC_AUTH_TOKEN` must be non-empty (the SDK rejects an empty one before a request leaves the box; SGLang accepts any value unless started with `--api-key`).
  *      It ships in `secretEnvVars` as migration 284 did for Claude Ollama: a blank field is indistinguishable from an ambient override.
  *
- * Tool calls need SGLang's tool-call-parser flag on the serve line (`parserFlagsFor('sglang')` in server/lib/qwenAgentParsers.js, docs/features/sglang-qwen38.md); without it calls come back as raw text.
+ * Tool calls need SGLang's tool-call-parser flag on the serve line (`parserFlagsFor('sglang')` in server/lib/qwenAgentParsers.js, docs/features/local-llm-runtimes.md#sglang-on-hopper-or-blackwell); without it calls come back as raw text.
  * The model name carries NO `[1m]` suffix: native context is 262,144 and claiming the 1M beta without raising `--context-length` would mis-cap the window.
  *
  * Two deliberate divergences from the Claude Ollama pair:

@@ -3,7 +3,7 @@
  *
  * Sibling of `lib/vllmQwenProject.js` with the same hard rule: **a readiness check only reads directory entries**; it never runs docker, contacts a registry, or reads a weight file
  * (`docker compose up -d` in an unprepared directory would start the multi-GB download PortOS promises never to start on its own).
- * Difference: SGLang publishes an official image and no compose project, so the launch line is PortOS's own (`lib/sglangQwenRecipe.js` generates the `docker-compose.yml`; `docs/features/sglang-qwen38.md`
+ * Difference: SGLang publishes an official image and no compose project, so the launch line is PortOS's own (`lib/sglangQwenRecipe.js` generates the `docker-compose.yml`; `docs/features/local-llm-runtimes.md#sglang-on-hopper-or-blackwell`
  * carries it verbatim), and refusals point at that doc rather than a `git clone`.
  *
  * `hasWeights` is tri-state: `true` (a Qwen model dir was found), `false` (every candidate root readable, none held one), `null` (no candidate root could be read). Start treats anything but `true` as
@@ -39,7 +39,7 @@ const resolveHome = (env) =>
 /** The directory name the feature doc uses, inside whichever home holds it. */
 export const SGLANG_PROJECT_LEAF = 'sglang-qwen38';
 
-/** Where `docs/features/sglang-qwen38.md` tells the operator to create it. */
+/** Where `docs/features/local-llm-runtimes.md#sglang-on-hopper-or-blackwell` tells the operator to create it. */
 export const sglangDefaultProjectDir = (env = process.env) => join(resolveHome(env), SGLANG_PROJECT_LEAF);
 
 /**
@@ -185,10 +185,10 @@ export async function inspectSglangQwenProject(env = process.env, envPath = PORT
  */
 export function sglangStartBlockedReason(project) {
   if (!project?.hasProject) {
-    return `no SGLang project directory was found at ${project?.dir}. Create it (or set ${SGLANG_PROJECT_DIR_ENV}), save the docker-compose.yml from docs/features/sglang-qwen38.md into it, and pull the weights once — PortOS never downloads the image or the ~20 GB of weights.`;
+    return `no SGLang project directory was found at ${project?.dir}. Create it (or set ${SGLANG_PROJECT_DIR_ENV}), save the docker-compose.yml from docs/features/local-llm-runtimes.md#sglang-on-hopper-or-blackwell into it, and pull the weights once — PortOS never downloads the image or the ~20 GB of weights.`;
   }
   if (!project.composeFile) {
-    return `${project.dir} exists but holds no docker-compose file. Save the one from docs/features/sglang-qwen38.md there — it carries the verified launch line, including the tool-call and reasoning parsers an agent cannot work without.`;
+    return `${project.dir} exists but holds no docker-compose file. Save the one from docs/features/local-llm-runtimes.md#sglang-on-hopper-or-blackwell there — it carries the verified launch line, including the tool-call and reasoning parsers an agent cannot work without.`;
   }
   if (project.hasWeights === false) {
     return 'the compose file is in place but no Qwen weights are cached yet. Download them in a terminal first — starting compose now would pull roughly 20 GB, which PortOS will not do for you.';

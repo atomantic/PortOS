@@ -36,7 +36,7 @@
  * OMIT H200's 32k prefill overrides rather than inventing a number for a cell
  * nobody has measured here — SGLang's own defaults are the honest answer, and
  * `verified: false` says so on the record. Operator bring-up on real Blackwell
- * hardware is expected to refine them (see `docs/features/sglang-qwen38.md`).
+ * hardware is expected to refine them (see `docs/features/local-llm-runtimes.md#sglang-on-hopper-or-blackwell`).
  *
  * Speculative overlays (EAGLE/MTP, DSPARK, DFLASH2) are deliberately absent from
  * every default. DFLASH2 in particular needs an SGLang newer than the pinned
@@ -243,10 +243,10 @@ export function sglangUnsupportedReason({ platform = process.platform, status, g
     return 'No NVIDIA GPU was detected on this host, so there is no card to give the SGLang container.';
   }
   if (status === 'unknown') {
-    return 'PortOS could not read this host\'s NVIDIA GPUs (`nvidia-smi` is installed but would not answer), so it cannot tell whether the SGLang recipe fits this card. Fix the driver — or start the container yourself following docs/features/sglang-qwen38.md — rather than reading this as "no GPU".';
+    return 'PortOS could not read this host\'s NVIDIA GPUs (`nvidia-smi` is installed but would not answer), so it cannot tell whether the SGLang recipe fits this card. Fix the driver — or start the container yourself following docs/features/local-llm-runtimes.md#sglang-on-hopper-or-blackwell — rather than reading this as "no GPU".';
   }
   if (status === 'available' && !(Array.isArray(gpus) ? gpus : []).some((gpu) => sglangCellForGpu(gpu))) {
-    return 'The SGLang Qwen3.8-27B cookbook publishes no recipe for this card. Ampere 24 GB (RTX 3090) is served by the vLLM container instead — see docs/features/qwen38-rtx3090.md.';
+    return 'The SGLang Qwen3.8-27B cookbook publishes no recipe for this card. Ampere 24 GB (RTX 3090) is served by the vLLM container instead — see docs/features/local-llm-runtimes.md#vllm-on-rtx-3090.';
   }
   return null;
 }
@@ -327,7 +327,7 @@ const yamlList = (items, indent) => items.map((item) => `${indent}- ${item}`).jo
  * than taken as an argument, so the host mapping and the server's bind address
  * cannot drift into disagreeing about which port the container answers on.
  *
- * `docs/features/sglang-qwen38.md` embeds this verbatim for the H200 cell, and
+ * `docs/features/local-llm-runtimes.md#sglang-on-hopper-or-blackwell` embeds this verbatim for the H200 cell, and
  * `sglangQwenRecipe.test.js` fails if the doc and this function drift.
  *
  * @param {ReturnType<typeof buildSglangQwenRecipe>} recipe

@@ -175,7 +175,7 @@ describe('sglangUnsupportedReason', () => {
     const reason = sglangUnsupportedReason({
       platform: 'linux', status: 'available', gpus: [{ computeCap: '8.6', vramGb: 24 }],
     });
-    expect(reason).toMatch(/qwen38-rtx3090/);
+    expect(reason).toMatch(/local-llm-runtimes\.md#vllm-on-rtx-3090/);
   });
 
   it('allows a supported card', () => {
@@ -218,8 +218,8 @@ describe('sglangComposeYaml', () => {
   // One source of truth: the operator copies this file out of the feature doc,
   // so a launch-line change that never reaches the doc ships a compose file
   // missing the flag it was made for.
-  it('is embedded verbatim in docs/features/sglang-qwen38.md', () => {
-    const doc = readFileSync(join(repoRoot, 'docs/features/sglang-qwen38.md'), 'utf-8')
+  it('is embedded verbatim in docs/features/local-llm-runtimes.md', () => {
+    const doc = readFileSync(join(repoRoot, 'docs/features/local-llm-runtimes.md'), 'utf-8')
       .replace(/\r\n/g, '\n');
     const block = doc.match(/```yaml\n([\s\S]*?)```/)?.[1];
     expect(block).toBe(yaml);

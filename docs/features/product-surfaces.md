@@ -49,7 +49,7 @@ Manage local applications, terminal environments, system resources, and develope
 | **Quota Burn Automation** | `/devtools/quota-burn` | Autonomous batch worker designed to consume subscription-backed AI CLI quotas (Claude Code, Codex, Grok, Antigravity) before reset windows expire. | [QUOTA-BURN.md](../QUOTA-BURN.md) |
 | **Workspace Contexts** | `/workspace-contexts` | Fast workspace switcher restoring working Git branches, active shell sessions, task queues, and editor state. | — |
 | **API Explorer** | `/api-reference/catalog` | Native HTTP catalog, OpenAPI Internal/Exposed inventory, Socket.IO event catalog, and Agent Tools MCP semantic tool catalog. | [API.md](../API.md), [API Tool Contract](../API_TOOL_CONTRACT.md) |
-| **Autofixer & Self-Healing** | `/settings/autofixer` | Background watchdog detecting PM2 process crash loops and executing self-healing diagnostic repair loops. | [Autofixer](./autofixer.md), [Error Handling](./error-handling.md) |
+| **Autofixer & Self-Healing** | `/settings/autofixer` | Background watchdog detecting PM2 process crash loops and executing self-healing diagnostic repair loops. | [Autofixer](./autofixer.md) |
 
 ---
 
@@ -60,21 +60,21 @@ Submit tasks, manage durable autonomous agents, schedule recurring automations, 
 | Surface / Page | Route(s) | Key Capabilities & Workflows | Related Guides |
 |---|---|---|---|
 | **Chief of Staff Tasks** | `/cos/tasks` | Task dispatch queue, priority scheduling (HIGH, MEDIUM, LOW), auto-execution vs user approval gates, task context preparation, and learning ETAs. | [Chief of Staff](./chief-of-staff.md) |
-| **Agent Runs & Feedback** | `/cos/agents` | Live streaming agent output, token counts, transcript inspection, and durable rating/feedback collection for continuous learning. | [Agent Runner](./cos-agent-runner.md) |
+| **Agent Runs & Feedback** | `/cos/agents` | Live streaming agent output, token counts, transcript inspection, and durable rating/feedback collection for continuous learning. | [Chief of Staff](./chief-of-staff.md) |
 | **Schedule Timeline & Workflows** | `/cos/workflow`, `/cos/schedule` | Visual Gantt-style schedule editor showing launch order, task dependencies, concurrency limits, and cron schedules. | [Chief of Staff](./chief-of-staff.md) |
 | **Operational Briefings & Digest** | `/cos/briefing`, `/cos/digest` | Morning briefings of operational signals, system alerts, pending approvals, and end-of-day accomplishment rollups. | [GOALS_OPERATIONAL.md](../GOALS_OPERATIONAL.md) |
-| **CoS Health & Diagnostics** | `/cos/health`, `/cos/jobs` | Agent runner daemon health, PM2 worker telemetry, background maintenance jobs, and queue diagnostics. | [Agent Runner](./cos-agent-runner.md) |
+| **CoS Health & Diagnostics** | `/cos/health`, `/cos/jobs` | Agent runner daemon health, PM2 worker telemetry, background maintenance jobs, and queue diagnostics. | [Chief of Staff](./chief-of-staff.md) |
 | **Learning** | `/cos/learning` | Task duration models, success rate metrics, and category learning curves. | — |
-| **Persistent Mind** | `/cos/mind` | Resident long-term conversational AI agent with persistent context memory, annotation support, and continuous system oversight. | [Agent Tools (MCP)](./agent-context.md), [Memory System](./memory-system.md) |
+| **Persistent Mind** | `/cos/mind` | Resident long-term conversational AI agent with persistent context memory, annotation support, and continuous system oversight. | [Agent Tools (MCP)](./agent-context.md), [Persistent Mind](./persistent-mind-continuous-play.md) |
 | **Mind Tools Governance** | `/cos/mind?panel=tools` | Fine-grained tool permission controls, MCP context disclosure settings (metadata-only vs redacted summaries), and semantic action grants. | [Agent Tools (MCP)](./agent-context.md), [Agent Skills](./agent-skills.md) |
 | **Feature Agents** | `/feature-agents` | Durable, specialized agents assigned to specific feature domains or managed codebases. | — |
-| **Review Hub** | `/review` | Centralized triage inbox for agent-generated diffs, pull request reviews, approval requests, and code quality findings. | [Review Queue Contract](./review-queue.md) |
+| **Review Hub** | `/review` | Centralized triage inbox for agent-generated diffs, pull request reviews, approval requests, and code quality findings. | — |
 | **Social Agents** | `/agents` | Autonomous agent personas for managing external social communications and community presence. | — |
 | **AI Providers & Model Runner** | `/ai` | Multi-provider configuration supporting CLI agents (Claude Code, Codex, Antigravity, OpenCode), cloud APIs (OpenAI, Anthropic, Gemini, Grok), and local endpoints (Ollama, LM Studio, vLLM, SGLang). | [Claude on Ollama](./claude-ollama.md) |
 | **Fleet LLM Setup** | `/ai/fleet` | Connect this install to a dedicated model server on a PortOS peer. Configure providers to send requests directly to that host. | [Dedicated LLM Host](./fleet-llm-host.md) |
 | **Prompt Manager** | `/prompts` | Reusable prompt template library, variable substitution engine, prompt versioning, and auto-upgrade migrations. | [Prompt Manager](./prompt-manager.md) |
 | **Runs & Run Events Ledger** | `/cos/runs`, `/cos/run-events` | Comprehensive ledger of past and in-flight AI runs, lifecycle event replay, and orphaned process recovery. | — |
-| **Code Reviewers** | `/settings/code-reviewers` | Configure reviewer chains, model settings, and when a review stops. Enable goal-fidelity review to check whether completed agent work meets the original task and route confirmed gaps for follow-up. | [Chief of Staff](./chief-of-staff.md), [Review Queue](./review-queue.md) |
+| **Code Reviewers** | `/settings/code-reviewers` | Configure reviewer chains, model settings, and when a review stops. Enable goal-fidelity review to check whether completed agent work meets the original task and route confirmed gaps for follow-up. | [Chief of Staff](./chief-of-staff.md) |
 
 ---
 
@@ -89,7 +89,7 @@ An end-to-end creative production suite for authors, worldbuilders, filmmakers, 
 | **Writers Room** | `/writers-room` | Focused Markdown prose studio: version history, structural analysis, emotional roadmaps, and timed sprint exercises ("write for 10"). | [Writers Room](./writers-room.md) |
 | **Writers Room Guide** | `/writers-room/guide` | Craft reference guide: word count standards (flash fiction to epic novel), length targets, and narrative pacing rules. | [Writers Room](./writers-room.md) |
 | **Authors Management** | `/authors` | Author personas, bylines, pen names, distinct literary writing styles, and cover metadata. | — |
-| **FableLoom** | `/fableloom` | Interactive branching fiction engine: visual story graph editor, choice tree logic, intent routing, and node-based reader. | [FableLoom](./fableloom.md) |
+| **FableLoom** | `/fableloom` | Interactive branching fiction engine: visual story graph editor, choice tree logic, intent routing, and node-based reader. | — |
 | **Manuscript Importer** | `/importer` | Ingests external manuscripts, screenplays, novels, and comic scripts to extract characters, locations, lore, and structural scenes. | — |
 | **Series Pipeline** | `/pipeline` | Multi-issue/episode production tracking, comic script staging, storyboard generation, and visual prompt conditioning. | — |
 | **Editorial Checks** | `/pipeline/editorial-checks` | Deterministic and LLM-assisted linting for exposition dumps, character naming collisions, pacing flaws, and continuity drift. | — |
@@ -141,10 +141,10 @@ Capture thoughts, build personal memory graphs, model your identity and taste, p
 | **Activity Timeline** | `/timeline` | Unified chronological human activity ledger aggregating events from iMessage, Signal, WhatsApp, Spotify, Discord, YouTube, and Calendar. | — |
 | **Tribe Relationship Manager** | `/tribe` | Dunbar-number social network management, relationship health scores, care cadence reminders, and contact resolution. | — |
 | **Multi-Scale Calendar** | `/calendar/*` | Time management across Agenda, Day, Week, Month, and Lifetime perspectives, periodic reflection reviews, external sync (iCal/CalDAV/Google), and a one-click **Join meeting** action on event details for Google Calendar events that carry a conference link. | — |
-| **Digital Twin Profile & Identity** | `/digital-twin/overview`, `/digital-twin/identity`, `/digital-twin/autobiography`, `/digital-twin/personas`, `/digital-twin/taste`, `/digital-twin/goals` | Core identity attributes, autobiography, dynamic personas (professional, casual, creative), quantified aesthetic taste, and personal goals. | [Digital Twin](./digital-twin.md), [Identity System](./identity-system.md) |
+| **Digital Twin Profile & Identity** | `/digital-twin/overview`, `/digital-twin/identity`, `/digital-twin/autobiography`, `/digital-twin/personas`, `/digital-twin/taste`, `/digital-twin/goals` | Core identity attributes, autobiography, dynamic personas (professional, casual, creative), quantified aesthetic taste, and personal goals. | [Digital Twin](./digital-twin.md) |
 | **Twin Presence & Avatars** | `/digital-twin/appearance`, `/digital-twin/avatar-bio`, `/digital-twin/voice` | Visual appearance reference photos, live avatar bios (HeyGen, Tavus, Simli, ElevenLabs), and comparative spoken-vs-written voice fingerprinting. | [Digital Twin](./digital-twin.md) |
-| **Personality & Assessment** | `/digital-twin/personality`, `/digital-twin/test` | Big Five (OCEAN) quantitative trait scoring, values hierarchy, model sycophancy comparison radar, and automated behavioral test suites. | [Digital Twin](./digital-twin.md), [Soul System](./soul-system.md) |
-| **Knowledge Sources & Interviews** | `/digital-twin/documents`, `/digital-twin/interview`, `/digital-twin/enrich`, `/digital-twin/import`, `/digital-twin/accounts` | Soul document manager (`SOUL.md`, `VALUES.md`), interactive AI-driven life interviews, enrichment questionnaires, and external data imports (Goodreads, Spotify, Letterboxd, iCal). | [Soul System](./soul-system.md) |
+| **Personality & Assessment** | `/digital-twin/personality`, `/digital-twin/test` | Big Five (OCEAN) quantitative trait scoring, values hierarchy, model sycophancy comparison radar, and automated behavioral test suites. | [Digital Twin](./digital-twin.md) |
+| **Knowledge Sources & Interviews** | `/digital-twin/documents`, `/digital-twin/interview`, `/digital-twin/enrich`, `/digital-twin/import`, `/digital-twin/accounts` | Soul document manager (`SOUL.md`, `VALUES.md`), interactive AI-driven life interviews, enrichment questionnaires, and external data imports (Goodreads, Spotify, Letterboxd, iCal). | [Digital Twin](./digital-twin.md) |
 | **Ask Yourself & Character Chat** | `/ask`, `/character` | Conversational reflection interface allowing you to chat directly with your modeled digital twin or authored characters. | [Digital Twin](./digital-twin.md) |
 | **Legacy Bundle & Time Capsule** | `/digital-twin/legacy`, `/digital-twin/time-capsule`, `/digital-twin/export` | Portable, self-contained legacy archive bundle, time capsule snapshots, and PDF summaries. | [Digital Twin](./digital-twin.md) |
 | **Privacy Center Overview** | `/privacy/overview` | PII exposure summary, personal data inventory, and strict machine-local isolation gates. | [Privacy Center](./privacy-center.md), [Privacy ADR](../decisions/2026-08-08-privacy-records-machine-local.md) |
@@ -152,7 +152,7 @@ Capture thoughts, build personal memory graphs, model your identity and taste, p
 | **Organizations Registry** | `/privacy/organizations` | Catalog of third-party institutions holding personal data, tracking data retention policies and account numbers. | [Privacy Center](./privacy-center.md) |
 | **Changes Workflow** | `/privacy/changes` | Change-of-address and contact update tracking matrix across all registered organizations. | [Privacy Center](./privacy-center.md) |
 | **Data Brokers Registry** | `/privacy/brokers` | Removal tracking and opt-out status for people-search sites and data aggregators (CCPA/GDPR). | [Privacy Center](./privacy-center.md) |
-| **Cross-Domain Insights & Goals** | `/insights/*`, `/goals/list`, `/goals/tree` | Correlation engine linking genetics, chronotype, lifestyle, aesthetic taste, and hierarchical goal trees with alignment scorecards. | [Identity System](./identity-system.md) |
+| **Cross-Domain Insights & Goals** | `/insights/*`, `/goals/list`, `/goals/tree` | Correlation engine linking genetics, chronotype, lifestyle, aesthetic taste, and hierarchical goal trees with alignment scorecards. | [Digital Twin](./digital-twin.md) |
 | **Health & Biomarkers (MeatSpace)** | `/meatspace/*` | Personal vitals, blood biomarker panels, lifestyle tracking, biological age computation, substance logging (alcohol, nicotine), and 23andMe genomic marker analysis (117 curated SNPs across 32 categories). | [POST](./post.md) |
 | **Clinician Health Export** | `/meatspace/export` | Generation of doctor-ready clinical PDF health summaries. | — |
 | **MortalLoom Sync** | `/settings/mortalloom` | Longevity modeling and iCloud HealthKit synchronization. | — |
@@ -204,9 +204,9 @@ Local AI model acceleration, multi-machine peer federation, storage classificati
 
 | Surface / Area | Route(s) | Key Capabilities & Workflows | Related Guides |
 |---|---|---|---|
-| **Local LLM Runtimes** | `/models/llms-runtimes` | Manage Ollama, LM Studio, llama-server, MTPLX, Slotstream, Splash, and mkserve. Find vLLM and SGLang setup in AI Providers. | [MTPLX](./mtplx.md), [Slotstream](./slotstream.md), [Splash](./splash.md), [mkserve](./mkserve.md) |
+| **Local LLM Runtimes** | `/models/llms-runtimes` | Manage Ollama, LM Studio, llama-server, MTPLX, Slotstream, Splash, and mkserve. Find vLLM and SGLang setup in AI Providers. | [MTPLX](./local-llm-runtimes.md#mtplx-on-apple-silicon), [Slotstream](./slotstream.md), [Splash](./splash.md), [mkserve](./mkserve.md) |
 | **Model Library** | `/models/llms` | The Ollama / LM Studio weights catalog — find, install, compare, and remove models — plus the Abuse Guard classifier at `/models/llms/abuse`. | [Claude on Ollama](./claude-ollama.md) |
-| **Speculative Decoding** | `/models/llms-runtimes` | Accelerated token generation using DSpark, DFlash 2, and MTPLX speculative drafting pairs. | [DFlash2 & DSpark](./dflash2.md), [MTPLX](./mtplx.md), [RTX 3090 vLLM](./qwen38-rtx3090.md), [SGLang Qwen](./sglang-qwen38.md) |
+| **Speculative Decoding** | `/models/llms-runtimes` | Accelerated token generation using DSpark, DFlash 2, and MTPLX speculative drafting pairs. | [DFlash2 & DSpark](./local-llm-runtimes.md#speculative-decoding-in-llama-server), [MTPLX](./local-llm-runtimes.md#mtplx-on-apple-silicon), [RTX 3090 vLLM](./local-llm-runtimes.md#vllm-on-rtx-3090), [SGLang Qwen](./local-llm-runtimes.md#sglang-on-hopper-or-blackwell) |
 | **Embeddings Management** | `/models/embeddings` | Local text embedding models (Nomic, Ollama) and pgvector semantic index configuration. | [STORAGE.md](../STORAGE.md) |
 | **LoRAs** | `/models/loras` (`/models/training` redirects here) | Supported LoRA adapter discovery and inference management, Civitai downloads, and removal of retired LoRA training datasets and runs. LoRA training is retired. | [Data Maintenance](../DATA_MAINTENANCE.md) |
 | **Media Models Storage** | `/models/media` | Hugging Face cache management and storage inspection for image/video diffusion models. | — |

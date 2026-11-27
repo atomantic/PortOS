@@ -42,7 +42,7 @@ export function parserFlagsFor(runtime) {
   ];
 }
 
-/** The vLLM `EXTRA_ARGS` value: the string form of `parserFlagsFor('vllm')`, appended to `vllm serve` by the syv-ai compose start script. Written into `.env` by the guided install (#4767) and documented in `docs/features/qwen38-rtx3090.md` (`qwenAgentParsers.test.js` asserts the doc quotes exactly this). */
+/** The vLLM `EXTRA_ARGS` value: the string form of `parserFlagsFor('vllm')`, appended to `vllm serve` by the syv-ai compose start script. Written into `.env` by the guided install (#4767) and documented in `docs/features/local-llm-runtimes.md#vllm-on-rtx-3090` (`qwenAgentParsers.test.js` asserts the doc quotes exactly this). */
 export function vllmExtraArgs() {
   return parserFlagsFor('vllm').join(' ');
 }

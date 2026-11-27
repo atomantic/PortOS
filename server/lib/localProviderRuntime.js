@@ -71,7 +71,7 @@ export const LOCAL_RUNTIMES = Object.freeze({
     defaultBaseUrl: opencodeLocalBaseUrl('vllm'),
     // No Models page: weights and the compose project are an operator-owned prepare step.
     manageUrl: LOCAL_RUNTIME_MANAGE_URLS.vllm,
-    docsUrl: 'https://github.com/atomantic/PortOS/blob/main/docs/features/qwen38-rtx3090.md',
+    docsUrl: 'https://github.com/atomantic/PortOS/blob/main/docs/features/local-llm-runtimes.md#vllm-on-rtx-3090',
     modelsHint: 'Clone syv-ai/qwen38-27b-rtx3090 and run its prepare step once — or let the checklist do it, which is the only path that spends the ~30 GB.',
     // Overrides `providerReadiness`'s model-cache prose: what is missing is a whole compose project, not a checkpoint.
     setupStateDetail: Object.freeze({
@@ -89,8 +89,8 @@ export const LOCAL_RUNTIMES = Object.freeze({
     defaultBaseUrl: opencodeLocalBaseUrl('sglang'),
     // No Models page: weights are an operator-owned download.
     manageUrl: LOCAL_RUNTIME_MANAGE_URLS.sglang,
-    docsUrl: 'https://github.com/atomantic/PortOS/blob/main/docs/features/sglang-qwen38.md',
-    modelsHint: 'Save the compose file from docs/features/sglang-qwen38.md and download the weights once — PortOS never pulls the image or the ~20 GB of weights.',
+    docsUrl: 'https://github.com/atomantic/PortOS/blob/main/docs/features/local-llm-runtimes.md#sglang-on-hopper-or-blackwell',
+    modelsHint: 'Save the compose file from docs/features/local-llm-runtimes.md#sglang-on-hopper-or-blackwell and download the weights once — PortOS never pulls the image or the ~20 GB of weights.',
     // One container, one checkpoint; the recipe picks the repo from the card class.
     servesOneModel: true,
   }),
@@ -138,7 +138,7 @@ export const LOCAL_RUNTIMES = Object.freeze({
     defaultBaseUrl: opencodeLocalBaseUrl('mtplx'),
     // No model CATALOG in PortOS, but Models → Runtimes owns its server (install, checkpoint, start/stop); the checklist's one-click setup (`services/localRuntimeSetup.js`) still runs in place.
     manageUrl: LOCAL_RUNTIME_MANAGE_URLS.mtplx,
-    docsUrl: 'https://github.com/atomantic/PortOS/blob/main/docs/features/mtplx.md',
+    docsUrl: 'https://github.com/atomantic/PortOS/blob/main/docs/features/local-llm-runtimes.md#mtplx-on-apple-silicon',
     modelsHint: 'Point the server at the Qwen MTP checkpoint you want, or let the checklist fetch MTPLX\'s default one when nothing is cached.',
     // MTPLX names the served model after the loaded checkpoint, so nothing to rename.
     servesOneModel: true,

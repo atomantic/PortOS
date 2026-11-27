@@ -14,7 +14,7 @@ import RuntimeLogDisclosure from './RuntimeLogDisclosure.jsx';
  * remove. A download is never implicit — it moves tens of gigabytes and only
  * runs from a button that says so — but it IS in the app, because sending the
  * user to a terminal for the one step in the middle of a managed lifecycle is a
- * dead end (PRD NR-9). See `docs/features/mtplx.md`.
+ * dead end (PRD NR-9). See `docs/features/local-llm-runtimes.md`.
  */
 
 const btnClass = 'flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-lg transition-colors disabled:opacity-50';
