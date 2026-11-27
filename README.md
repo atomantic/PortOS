@@ -151,7 +151,7 @@ PortOS/
 ├── autofixer/           # Crash detection and repair worker
 ├── data/                # Your runtime data (not committed)
 ├── data.reference/      # Seed files for new installs and migrations
-├── docs/                # Guides, ADRs, design plans, screenshots
+├── docs/                # Guides, ADRs, screenshots
 ├── lib/slashdo/         # Submodule providing /do:* agent commands
 ├── scripts/             # Setup, migration, and maintenance scripts
 └── ecosystem.config.cjs # PM2 apps + the canonical PORTS map

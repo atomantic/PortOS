@@ -50,6 +50,18 @@ Scaffold a new project from template:
 - Register in PortOS
 - Start with PM2
 
+## Update a managed app
+
+**Update app** fetches the configured `portos.runtimeBranch` or origin's default branch. PortOS attempts a fast-forward first, then a rebase with autostash. Commit work to create a recovery point and preserve untracked files separately before updating. Submodule updates follow the revisions pinned by the parent repository. Branch, pull, or autostash conflicts stop the update before its lifecycle commands and restart. Review the reported conflict and any CoS resolution task before retrying.
+
+After a successful pull, PortOS runs the first available lifecycle in this order.
+
+1. **Update Command** in **Apps → Edit → Commands**.
+2. The package script `portos:update` for Node or Bun apps.
+3. The repository's executable `update.sh` or Windows `update.ps1`.
+
+Use that lifecycle to install dependencies, run migrations, or build the app. PortOS then restarts the app's configured PM2 processes. For the PortOS app itself, its conventional script follows the [detached self-update flow](../SELF_UPDATE.md#every-portos-update-goes-through-the-detached-launcher).
+
 ## API Endpoints
 
 | Route | Description |

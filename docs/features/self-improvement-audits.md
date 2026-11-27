@@ -111,6 +111,12 @@ The Quality tab plans and scores the same 16 audit domains that CoS Schedule con
 | `design-usability` | Design and usability | `ux`, `design-usability` | file |  |
 | `documentation-content` | Documentation and product copy | `documentation`, `documentation-content` | file |  |
 
+## Deep audits
+
+Select **Deep** to spend more time investigating the selected checks, including callers, dependencies, and failure paths. A batch runs one agent per check in sequence. **File issues** and **Audit and fix** still determine delivery. The run summary records scope, findings, validation, delivery, and any untested areas.
+
+Use **Archive run history** to hide inactive run history while keeping its evidence. **View archived runs** and **Restore run history** make it visible again. Historical certification runs remain available as evidence.
+
 ## Upgrading earlier schedules
 
 Saved settings on retired audit IDs are folded into their corresponding domains. A
