@@ -1,5 +1,6 @@
 import { emitToOperatorsOn } from './socketIo.js';
 import { messageLogError } from '../lib/messageLogError.js';
+import { ServerError } from '../lib/errorHandler.js';
 import { sendViaForAccountType } from '../lib/messageTransport.js';
 import { planDelivery } from '../lib/messageBrowserCompose.js';
 import { getDraft, claimDraftForSend, finishDraftSend, releaseDraftSend } from './messageDrafts.js';
@@ -47,6 +48,13 @@ export async function sendDraft(draftId, io) {
     const prepared = await prepareBrowserDelivery(account, draft);
     if (prepared.refusal) return prepared.refusal;
     delivery = prepared.delivery;
+    if (account.type === 'outlook' && draft.replyToMessageId) {
+      // A draft can be edited and re-approved while its reply target is loading.
+      validateClaim = claimed => {
+        const planned = planDelivery(account.type, claimed, delivery.replyTarget);
+        if (!planned.ok) throw new ServerError(planned.error, { status: planned.status, code: planned.code });
+      };
+    }
   } else if (draft.replyToMessageId) {
     const { getMessage } = await import('./messageSync.js');
     const { prepareGmailReply, assertGmailReplyDraft } = await import('./messageGmailSync.js');

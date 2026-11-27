@@ -20,6 +20,7 @@
 import { readOutlookMessageRow } from './messageBrowserIdentity.js';
 import { MESSAGE_SELECTOR_DEFAULTS, resolveComposeSelectors } from './messageSelectorDefaults.js';
 import { normalizeEmail } from './messageRecipientEmail.js';
+import { matchesReplySubject, REPLY_SUBJECT_MISMATCH_MESSAGE } from './messageReplySubject.js';
 
 // What the page says when a send went through / was refused. Matched against NEW
 // live-region text only (anything already on screen before the click is ignored).
@@ -80,6 +81,9 @@ export function planDelivery(accountType, draft, replyTarget = null) {
     // Outlook replies are located by the provider's row id; a title match is a guess about whose mail to answer.
     if (!isTeams && !replyTarget.providerRowId) {
       return refuse(409, 'REPLY_TARGET_UNIDENTIFIABLE', 'This message has no provider identity yet — sync the account and retry');
+    }
+    if (!isTeams && !matchesReplySubject(draft.subject, replyTarget.subject)) {
+      return refuse(422, 'OUTLOOK_REPLY_SUBJECT_MISMATCH', REPLY_SUBJECT_MISMATCH_MESSAGE);
     }
   }
 
