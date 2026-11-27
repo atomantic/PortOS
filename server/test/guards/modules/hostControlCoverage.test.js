@@ -57,10 +57,6 @@ const OPEN_WRITES = {
   // Opt-in public API (lib/apiRegistry.js): the router requires host control
   // while the operator has not exposed it.
   'POST /api/voice/public/synthesize': 'exposed-api',
-  // Outside /api: the A1111-compatible surface gates Codex/Grok/Antigravity
-  // backends in its handler (#11138); options is a read over POST.
-  'POST /sdapi/v1/options': 'exposed-api',
-  'POST /sdapi/v1/txt2img': 'exposed-api',
 };
 
 const catalog = () => getApiRouteCatalog().routes;

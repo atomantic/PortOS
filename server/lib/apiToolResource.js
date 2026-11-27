@@ -88,9 +88,8 @@ const inputSchemaFor = (operation, path) => {
     type: 'object',
     properties: { ...properties, ...bodyProperties },
     ...(allRequired.length > 0 ? { required: allRequired } : {}),
-    // `additionalProperties` rides along from a passthrough body contract (the
-    // A1111 txt2img schema is deliberately open); closed otherwise so a model
-    // doesn't invent arguments.
+    // A passthrough body contract can allow extra properties. Other contracts
+    // default to closed so a model doesn't invent arguments.
     additionalProperties: bodyIsObject ? (body.additionalProperties ?? false) : false,
   };
 };

@@ -207,7 +207,7 @@ describe('server-owned prefixes vs the client router', () => {
 });
 
 describe('server/index.js route registration order', () => {
-  // `mountAssetRoutes` installs a terminating 404 on /api and /sdapi, so
+  // `mountAssetRoutes` installs a terminating 404 on /api, so
   // registration order became load-bearing: a router added BELOW the call is
   // shadowed by that 404 and never runs. Nothing else reads this file any
   // more — the drift guard reads the tables — so this is what catches it.
@@ -216,7 +216,7 @@ describe('server/index.js route registration order', () => {
   it('registers every API router above the terminators', () => {
     const mountIndex = source.indexOf('mountAssetRoutes(app)');
     expect(mountIndex).toBeGreaterThan(0);
-    const apiMounts = [...source.matchAll(/app\.use\(\s*'(\/(?:api|sdapi)[^']*)'/g)];
+    const apiMounts = [...source.matchAll(/app\.use\(\s*'(\/api[^']*)'/g)];
     // A refactor to non-literal mounts would leave the regex matching nothing
     // and the assertion below vacuously true.
     expect(apiMounts.length).toBeGreaterThan(20);

@@ -143,9 +143,8 @@ async function generateAdmittedImage(params) {
   const s = await getSettings();
   const requestedMode = params?.mode;
   const mode = requestedMode || cfg(s).mode || DEFAULT_MODE;
-  // Param normalization: A1111 clients (and the /sdapi/v1/txt2img bridge)
-  // send `cfgScale`; local mflux reads `guidance`. Map cfgScale -> guidance
-  // when guidance is not explicitly set so both spellings work in both modes.
+  // The external backend uses `cfgScale`, while local mflux reads `guidance`.
+  // Map cfgScale to guidance when the caller didn't explicitly set guidance.
   const normalized = { ...params };
   if (normalized.guidance == null && normalized.cfgScale != null) {
     normalized.guidance = normalized.cfgScale;

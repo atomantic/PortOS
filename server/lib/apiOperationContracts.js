@@ -6,7 +6,6 @@
  */
 
 import {
-  sdapiTxt2imgBodySchema,
   voiceSynthesizeBodySchema,
   zodToOpenApiSchema,
 } from './apiContractSchemas.js';
@@ -275,81 +274,6 @@ export const API_OPERATION_CONTRACTS = Object.freeze({
       description: 'Discover available TTS engines and the configured default voice per engine.',
       responses: { 200: { description: 'Engine list and defaults', content: { 'application/json': { schema: { type: 'object' } } } } },
       'x-portos-tool': { name: 'voice.list-engines', version: 1, policy: { privacy: 'internal', sideEffect: 'read', async: false } },
-    },
-  },
-  '/sdapi/v1/txt2img': {
-    post: {
-      summary: 'Generate an image',
-      description: 'AUTOMATIC1111-compatible text-to-image generation through the active PortOS image provider.',
-      requestBody: jsonBody(sdapiTxt2imgBodySchema),
-      responses: {
-        200: { description: 'Generated images in AUTOMATIC1111 response format' },
-        400: { description: 'Invalid generation payload', 'x-portos-error-codes': ['VALIDATION_ERROR'] },
-        403: { description: 'A1111 API exposure is disabled' },
-        500: { description: 'Generation failed or its output could not be read', 'x-portos-error-codes': ['GEN_FAILED', 'GEN_OUTPUT_MISSING'] },
-        504: { description: 'Generation timed out', 'x-portos-error-codes': ['GEN_TIMEOUT'] },
-      },
-      'x-portos-tool': {
-        name: 'image.generate', version: 1,
-        policy: { privacy: 'personal', sideEffect: 'local-compute', async: true },
-      },
-    },
-  },
-  '/sdapi/v1/sd-models': {
-    get: {
-      summary: 'List image models',
-      responses: {
-        200: { description: 'Model catalog', content: { 'application/json': { schema: { type: 'array', items: { type: 'object' } } } } },
-        403: { description: 'A1111 API exposure is disabled' },
-      },
-      'x-portos-tool': { name: 'image.list-models', version: 1, policy: { privacy: 'internal', sideEffect: 'read', async: false } },
-    },
-  },
-  '/sdapi/v1/samplers': {
-    get: {
-      summary: 'List samplers',
-      responses: {
-        200: { description: 'Sampler list', content: { 'application/json': { schema: { type: 'array', items: { type: 'object' } } } } },
-        403: { description: 'A1111 API exposure is disabled' },
-      },
-      'x-portos-tool': { name: 'image.list-samplers', version: 1, policy: { privacy: 'internal', sideEffect: 'read', async: false } },
-    },
-  },
-  '/sdapi/v1/options': {
-    get: {
-      summary: 'Read active image options',
-      responses: {
-        200: { description: 'Active model and options', content: { 'application/json': { schema: { type: 'object' } } } },
-        403: { description: 'A1111 API exposure is disabled' },
-      },
-      'x-portos-tool': { name: 'image.get-options', version: 1, policy: { privacy: 'internal', sideEffect: 'read', async: false } },
-    },
-    post: {
-      summary: 'Acknowledge image options',
-      description: 'Compatibility endpoint. PortOS does not switch its underlying model from this request.',
-      responses: {
-        200: { description: 'Acknowledgement' },
-        403: { description: 'A1111 API exposure is disabled' },
-      },
-    },
-  },
-  '/sdapi/v1/progress': {
-    get: {
-      summary: 'Read generation progress',
-      responses: {
-        200: { description: 'Current generation progress or idle state', content: { 'application/json': { schema: { type: 'object' } } } },
-        403: { description: 'A1111 API exposure is disabled' },
-      },
-      'x-portos-tool': { name: 'image.get-progress', version: 1, policy: { privacy: 'internal', sideEffect: 'read', async: false } },
-    },
-  },
-  '/sdapi/v1/portos/video-models': {
-    get: {
-      summary: 'List PortOS video models',
-      responses: {
-        200: { description: 'Video model catalog and default' },
-        403: { description: 'A1111 API exposure is disabled' },
-      },
     },
   },
   '/api/cos/tools': {

@@ -21,6 +21,7 @@ const apiAccessEntrySchema = z.object({
 
 export const apiAccessSettingsSchema = z.object({
   voice: apiAccessEntrySchema.optional(),
+  // Older settings and clients may still carry flags for the retired inbound API.
   sdapi: apiAccessEntrySchema.optional(),
 }).strict();
 

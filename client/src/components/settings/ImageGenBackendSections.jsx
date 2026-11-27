@@ -151,8 +151,7 @@ export default function ImageGenBackendSections({ mediaTab, form, credentials })
         </div>
         <p className="text-xs text-gray-500">
           PortOS can either talk to a remote AUTOMATIC1111 / Forge server or run image
-          generation with local Python runtimes, including mflux and diffusers. You can also
-          expose this PortOS as an A1111-compatible endpoint for other tailnet boxes.
+          generation with local Python runtimes, including mflux and diffusers.
         </p>
         <div className={`grid grid-cols-1 sm:grid-cols-2 ${tiles.length > 2 ? 'lg:grid-cols-3' : ''} gap-3`}>
           {tiles.map(({ mode: tileMode, icon: Icon, label, blurb }) => (

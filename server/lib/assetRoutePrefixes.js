@@ -38,6 +38,7 @@ export const ASSET_ROUTE_PREFIXES = [
 export const SERVER_OWNED_PREFIXES = [
   { prefix: '/data', spaPaths: ['/data'] },
   { prefix: '/api', spaPaths: [] },
+  // Keep requests for the retired inbound SDAPI from falling through to the SPA.
   { prefix: '/sdapi', spaPaths: [] },
   // Same-origin Eidoverse iframe mount (reverse-proxied while the host is active).
   { prefix: '/eidoverse-host', spaPaths: [] },

@@ -5,10 +5,8 @@ const settingsWith = (apiAccess) => ({ apiAccess });
 
 describe('apiRegistry', () => {
   describe('API_REGISTRY shape', () => {
-    it('declares voice and sdapi with required fields', () => {
-      const ids = API_REGISTRY.map((a) => a.id);
-      expect(ids).toContain('voice');
-      expect(ids).toContain('sdapi');
+    it('declares voice with required fields', () => {
+      expect(API_REGISTRY.map((entry) => entry.id)).toContain('voice');
       for (const entry of API_REGISTRY) {
         expect(typeof entry.id).toBe('string');
         expect(typeof entry.label).toBe('string');
@@ -20,7 +18,7 @@ describe('apiRegistry', () => {
       }
     });
 
-    it('defaults both APIs to not-exposed + passwordless', () => {
+    it('defaults registered APIs to not-exposed + passwordless', () => {
       for (const entry of API_REGISTRY) {
         expect(entry.defaults.exposed).toBe(false);
         expect(entry.defaults.requireAuth).toBe(false);
@@ -63,20 +61,6 @@ describe('apiRegistry', () => {
       expect(isRegistryPublic(s, '/api/voice/config')).toBe(false);
       expect(isRegistryPublic(s, '/api/voice/whisper')).toBe(false);
       expect(isRegistryPublic(s, '/api/voice/test')).toBe(false);
-    });
-
-    it('opens sdapi when exposed+passwordless', () => {
-      const s = settingsWith({ sdapi: { exposed: true, requireAuth: false } });
-      expect(isRegistryPublic(s, '/sdapi/v1/txt2img')).toBe(true);
-    });
-
-    it('resolves each API independently', () => {
-      const s = settingsWith({
-        voice: { exposed: true, requireAuth: false },
-        sdapi: { exposed: false, requireAuth: false },
-      });
-      expect(isRegistryPublic(s, '/api/voice/public/synthesize')).toBe(true);
-      expect(isRegistryPublic(s, '/sdapi/v1/txt2img')).toBe(false);
     });
 
     it('returns false for non-string path', () => {

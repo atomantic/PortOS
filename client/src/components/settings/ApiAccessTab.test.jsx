@@ -24,10 +24,6 @@ beforeEach(() => {
         id: 'voice', label: 'Voice / TTS', description: 'Text-to-speech synthesis.', publicBase: '/api/voice/public',
         example: { method: 'POST', path: '/api/voice/public/synthesize', body: { text: 'Hello from PortOS' }, output: 'speech.wav' },
       },
-      {
-        id: 'sdapi', label: 'Image Gen (A1111-compatible)', description: 'Text-to-image generation.', publicBase: '/sdapi/v1',
-        example: { method: 'POST', path: '/sdapi/v1/txt2img', body: { prompt: 'a neon city' } },
-      },
     ],
   });
   updateSettings.mockResolvedValue({});
@@ -78,12 +74,9 @@ describe('ApiAccessTab', () => {
     await act(async () => { resolveRetry(saved); });
     expect(await screen.findByText('Voice / TTS')).toBeTruthy();
     expect(screen.queryByRole('alert')).toBeNull();
-    const exposure = screen.getAllByLabelText('Expose on the network');
-    const auth = screen.getAllByLabelText('Require auth (password)');
-    expect(exposure[0]).toBeChecked();
-    expect(exposure[1]).toBeChecked();
-    expect(auth[0]).toBeChecked();
-    expect(auth[1]).not.toBeChecked();
+    const exposure = screen.getByLabelText('Expose on the network');
+    expect(exposure).toBeChecked();
+    expect(screen.getByLabelText('Require auth (password)')).toBeChecked();
     expect(screen.getByLabelText('Enable local MCP context')).toBeChecked();
     expect(screen.getByLabelText('Disclosure profile')).toHaveValue('summary');
     expect(screen.getByLabelText('Brain')).toBeChecked();
@@ -91,9 +84,9 @@ describe('ApiAccessTab', () => {
     expect(screen.getByLabelText('Navigation')).not.toBeChecked();
     expect(screen.getByLabelText('Allow semantic PortOS updates')).toBeChecked();
 
-    fireEvent.click(exposure[1]);
+    fireEvent.click(exposure);
     await waitFor(() => expect(updateSettings).toHaveBeenCalledWith({
-      apiAccess: { ...saved.apiAccess, sdapi: { ...saved.apiAccess.sdapi, exposed: false } },
+      apiAccess: { ...saved.apiAccess, voice: { ...saved.apiAccess.voice, exposed: false } },
     }, { silent: true }));
     await waitFor(() => expect(screen.getByLabelText('Enable local MCP context')).toBeEnabled());
     fireEvent.click(screen.getByLabelText('Allow semantic PortOS reads'));
@@ -102,19 +95,20 @@ describe('ApiAccessTab', () => {
     }, { silent: true }));
   });
 
-  it('renders a card per registry API with current state', async () => {
-    getSettings.mockResolvedValue({ apiAccess: { voice: { exposed: true, requireAuth: false }, sdapi: { exposed: false, requireAuth: false } } });
+  it('renders voice exposure settings while hiding retired SDAPI controls', async () => {
+    getSettings.mockResolvedValue({
+      apiAccess: {
+        voice: { exposed: true, requireAuth: false },
+        sdapi: { exposed: true, requireAuth: false },
+      },
+    });
     await renderTab();
-    expect(screen.getByText('Voice / TTS')).toBeTruthy();
-    expect(screen.getByText('Image Gen (A1111-compatible)')).toBeTruthy();
-    // voice exposed + no auth → a "passwordless" status chip is present
-    // ("passwordless" also appears in the intro copy, hence getAllByText);
-    // sdapi not exposed → "not exposed".
-    expect(screen.getAllByText('passwordless').length).toBeGreaterThan(0);
-    expect(screen.getByText('not exposed')).toBeTruthy();
+    expect(screen.getByLabelText('Expose on the network')).toBeChecked();
+    expect(screen.getByLabelText('Require auth (password)')).not.toBeChecked();
+    expect(screen.queryByText('Image Gen (A1111-compatible)')).toBeNull();
   });
 
-  it('CONTRACT: toggling one API preserves the other API\'s persisted flags', async () => {
+  it('CONTRACT: toggling voice preserves retired SDAPI settings', async () => {
     // The server PUT /api/settings shallow-merges top-level keys, so the client
     // MUST send the full apiAccess map. Toggling voice must not wipe sdapi.
     getSettings.mockResolvedValue({
@@ -126,8 +120,7 @@ describe('ApiAccessTab', () => {
     await renderTab();
 
     // Toggle voice's "Expose on the network" on.
-    const exposeToggles = screen.getAllByLabelText(/Expose on the network/i);
-    fireEvent.click(exposeToggles[0]); // first card = voice
+    fireEvent.click(screen.getByLabelText('Expose on the network'));
 
     await waitFor(() => expect(updateSettings).toHaveBeenCalled());
     const sentBody = updateSettings.mock.calls[0][0];
@@ -137,23 +130,22 @@ describe('ApiAccessTab', () => {
   });
 
   it('CONTRACT: disables ALL toggles while a save is in flight (serialize saves)', async () => {
-    // Overlapping saves could let an older full-snapshot PUT land last and
-    // clobber a newer toggle. While one save is pending, every toggle (this
-    // card's and the other card's) must be disabled so saves serialize.
-    getSettings.mockResolvedValue({
-      apiAccess: { voice: { exposed: false, requireAuth: false }, sdapi: { exposed: false, requireAuth: false } },
-    });
+    getSettings.mockResolvedValue({ apiAccess: { voice: { exposed: true, requireAuth: false } } });
     let resolveSave;
     updateSettings.mockReturnValue(new Promise((res) => { resolveSave = res; }));
     await renderTab();
 
-    const exposeToggles = screen.getAllByLabelText(/Expose on the network/i);
-    fireEvent.click(exposeToggles[0]); // start voice save (never resolves yet)
+    const exposure = screen.getByLabelText('Expose on the network');
+    const requireAuth = screen.getByLabelText('Require auth (password)');
+    const agentContext = screen.getByLabelText('Enable local MCP context');
+    expect(requireAuth).toBeEnabled();
+    expect(agentContext).toBeEnabled();
+    fireEvent.click(requireAuth);
 
-    // While the voice save is in flight, the OTHER card's expose toggle is disabled.
     await waitFor(() => {
-      const toggles = screen.getAllByLabelText(/Expose on the network/i);
-      expect(toggles[1].disabled).toBe(true);
+      expect(exposure).toBeDisabled();
+      expect(requireAuth).toBeDisabled();
+      expect(agentContext).toBeDisabled();
     });
 
     // Let the save settle inside act() so the post-save setState (clearing the
@@ -162,7 +154,7 @@ describe('ApiAccessTab', () => {
   });
 
   it('reverts optimistic state when the save fails', async () => {
-    getSettings.mockResolvedValue({ apiAccess: { voice: { exposed: false, requireAuth: false }, sdapi: { exposed: false, requireAuth: false } } });
+    getSettings.mockResolvedValue({ apiAccess: { voice: { exposed: false, requireAuth: false } } });
     updateSettings.mockRejectedValue(new Error('boom'));
     await renderTab();
     const exposeToggles = screen.getAllByLabelText(/Expose on the network/i);
@@ -178,8 +170,7 @@ describe('ApiAccessTab', () => {
   it('falls back to defaults (not-exposed) when apiAccess is absent', async () => {
     getSettings.mockResolvedValue({});
     await renderTab();
-    // Both cards show "not exposed".
-    expect(screen.getAllByText('not exposed').length).toBe(2);
+    expect(screen.getByText('not exposed')).toBeTruthy();
   });
 
   it('persists registry settings by settingsKey instead of display id', async () => {

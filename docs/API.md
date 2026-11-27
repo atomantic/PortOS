@@ -36,7 +36,7 @@ Building a native companion client? See [COMPANION_APP_API.md](./COMPANION_APP_A
 
 PortOS can execute host commands and read private files. Keep administration, APIs, sockets and sidecars on the owner’s private network. Public tunnels, proxies and forwarding are unsupported, including with a password or TLS.
 
-Instance password authentication is off by default. When enabled it normally gates `/api/*`, `/data/*` and `/sdapi/*`. Sign in with `POST /api/auth/login` for an operator session. PortOS-spawned agents use their delegated `PORTOS_API_TOKEN` as a Bearer credential. An HTTP Basic or scoped peer credential does not grant operator authority.
+Instance password authentication is off by default. When enabled it normally gates `/api/*` and `/data/*`. Sign in with `POST /api/auth/login` for an operator session. PortOS-spawned agents use their delegated `PORTOS_API_TOKEN` as a Bearer credential. An HTTP Basic or scoped peer credential does not grant operator authority.
 
 Host-control operations include API writes, commands, sensitive reads declared by `HOST_CONTROL_GET_ROUTES` and corresponding Socket.IO events. They require an operator session or, with authentication off, a genuine local connection. Other callers receive `403 HOST_CONTROL_FORBIDDEN`. Public auth and health routes, peer federation, the managed visitor broker and opt-in exposed APIs have their own admission rules. For remote operator work over the private network, set an instance password and sign in. See the [host-control security model](../PRD.md#host-control-security-model).
 

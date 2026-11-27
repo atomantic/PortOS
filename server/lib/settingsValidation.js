@@ -418,6 +418,7 @@ export const settingsSlicePartialSchemas = Object.freeze({
   'imageGen.runway': imageGenRunwaySettingsSchema.strict(),
   'imageGen.higgsfield': imageGenHiggsfieldSettingsSchema.strict(),
   'imageGen.google': imageGenGoogleSettingsSchema.strict(),
+  // Keep accepting the retired inbound API's settings slice from older clients.
   'imageGen.expose': z.object({ a1111: z.boolean().optional() }).strict(),
   renderDefaults: renderDefaultsSettingsSchema,
   videoGen: videoGenSettingsSchema.pick({

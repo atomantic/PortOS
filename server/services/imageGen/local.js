@@ -555,9 +555,7 @@ async function finalizeLocalSuccess(render) {
   // `outputPath` so the queue/route can read the finished bytes; `path`
   // stays null so nothing treats it as a gallery URL.
   const result = { filename, seed: actualSeed, path: publicPath, outputPath, ...(meta.executionProvenance ? { executionProvenance: meta.executionProvenance } : {}) };
-  // Include `seed` so /sdapi/v1/txt2img can surface the actual seed used
-  // (mflux generates a random one if the client didn't pass one). Emit the
-  // gallery `completed` (which drives the media-asset index + peer-sync
+  // Emit the gallery `completed` (which drives the media-asset index + peer-sync
   // hooks) ONLY for a gallery target — a temp render must not be indexed or
   // federated. The queue's own `completed` handler still fires off the
   // return value below, so the job settles either way.

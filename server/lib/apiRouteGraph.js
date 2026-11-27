@@ -48,7 +48,7 @@ const ROUTER_DECL_RE = /\b(?:const|let)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:express\.)
 const DEFAULT_EXPORT_RE = /\bexport\s+default\s+([A-Za-z_$][\w$]*)\s*;?/;
 const ROUTE_DECL_RE = /\b([A-Za-z_$][\w$]*)\.(get|post|put|patch|delete|head|options|all)\(\s*(['"])([^'"\n]*)\3/g;
 const ROUTER_USE_RE = /\b([A-Za-z_$][\w$]*)\.use\(\s*(?:(['"])([^'"\n]*)\2\s*,\s*)?([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)\s*\)/g;
-const APP_MOUNT_RE = /\bapp\.use\(\s*(['"])(\/(?:api|sdapi)[^'"\n]*)\1\s*,\s*([A-Za-z_$][\w$]*)(?:\s*\([^;]*?\))?\s*\)/g;
+const APP_MOUNT_RE = /\bapp\.use\(\s*(['"])(\/api[^'"\n]*)\1\s*,\s*([A-Za-z_$][\w$]*)(?:\s*\([^;]*?\))?\s*\)/g;
 const COMPOSED_ROUTER_RE = /^([A-Za-z_$][\w$]*)\.routes\.([A-Za-z_$][\w$]*)$/;
 const RETURN_COMPOSED_ROUTER_RE = /\breturn\s+([A-Za-z_$][\w$]*\.routes\.[A-Za-z_$][\w$]*)\s*;/;
 

@@ -88,8 +88,7 @@ const routeSource = (req) => ({ route: `${req.baseUrl}${req.route?.path ?? ''}`,
 
 router.get('/style-presets', (_req, res) => res.json(STYLE_PRESETS));
 
-// JSON callers (SDAPI bridge, avatar route, the Imagine page's old payload
-// shape) skip the parser entirely; FormData callers get req.file + string
+// JSON callers skip the multipart parser. FormData callers get req.file + string
 // req.body that coerceFormFields() converts before Zod validation.
 // Only the formats mflux can decode — keep this in sync with the extension
 // allowlist below so the route never silently relabels (e.g. HEIC) bytes

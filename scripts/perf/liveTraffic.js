@@ -89,7 +89,7 @@ export function createEndpointRedactor({ origin, pages = [], catalog = getApiRou
     if (path === '/socket.io' || path.startsWith('/socket.io/')) return '/socket.io/';
     if (path.startsWith('/assets/')) return '/assets/:asset';
     if (path.startsWith('/data/')) return '/data/:asset';
-    if (/^\/(?:api|sdapi)(?:\/|$)/.test(path)) {
+    if (/^\/api(?:\/|$)/.test(path)) {
       const verb = String(method).toUpperCase() === 'HEAD' ? 'GET' : String(method).toUpperCase();
       let best = null;
       for (const route of routes) {
@@ -99,7 +99,7 @@ export function createEndpointRedactor({ origin, pages = [], catalog = getApiRou
       }
       if (best) return best.route.path;
       const mount = mounts.find(prefix => path === prefix || path.startsWith(prefix + '/'));
-      return (mount || (path.startsWith('/sdapi') ? '/sdapi' : '/api')) + '/:unmatched';
+      return (mount || '/api') + '/:unmatched';
     }
     if (knownPages.has(path)) return path;
     return /^\/[^/]+\.[a-z0-9]+$/i.test(path) ? '/:static' : '/:page';

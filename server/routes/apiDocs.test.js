@@ -27,10 +27,14 @@ describe('GET /api/api-docs/openapi.json', () => {
     expect(res.body.info.version).not.toBe('0.0.0'); // real package.json version
   });
 
-  it('documents voice paths once exposed', async () => {
-    store = { apiAccess: { voice: { exposed: true, requireAuth: false } } };
+  it('documents voice paths and ignores retired exposure settings', async () => {
+    store = {
+      apiAccess: { voice: { exposed: true, requireAuth: false }, sdapi: { exposed: true, requireAuth: false } },
+      imageGen: { expose: { a1111: true } },
+    };
     const res = await request(buildApp()).get('/api/api-docs/openapi.json');
     expect(res.status).toBe(200);
+    expect(Object.keys(res.body.paths).some((path) => path.startsWith('/sdapi/'))).toBe(false);
     expect(res.body.paths['/api/voice/public/synthesize']).toBeDefined();
     expect(res.body.paths['/api/voice/public/synthesize'].post.security).toEqual([]);
   });
@@ -45,6 +49,7 @@ describe('GET /api/api-docs/openapi.json', () => {
     const res = await request(buildApp()).get('/api/api-docs/internal/openapi.json');
     expect(res.status).toBe(200);
     expect(res.body.paths['/api/cos/mind/tools'].get).toBeDefined();
+    expect(Object.keys(res.body.paths).some((path) => path.startsWith('/sdapi/'))).toBe(false);
     const works = res.body.paths['/api/writers-room/works'].get;
     expect(works.parameters.find(param => param.name === 'limit').schema.maximum).toBe(100);
     expect(works.parameters.some(param => param.name === 'cursor')).toBe(true);
@@ -58,7 +63,7 @@ describe('GET /api/api-docs/openapi.json', () => {
     expect(res.status).toBe(200);
     expect(res.body.stats.operations).toBeGreaterThan(2000);
     expect(res.body.operations[0].contractStatus).toMatch(/modeled|generated/);
-    expect(res.body.externallyExposableApis.map((entry) => entry.id)).toEqual(['voice', 'sdapi']);
+    expect(res.body.externallyExposableApis.map((entry) => entry.id)).toEqual(['voice']);
   });
 
   it('documents weight downloads as POST mutations alongside read-only GET status', async () => {
@@ -95,7 +100,9 @@ describe('GET /api/api-docs/openapi.json', () => {
     expect(res.status).toBe(200);
     expect(res.body.type).toBe('portos_tool_resource');
     expect(res.body.source.version).toBe('3.0.3');
-    expect(res.body.tools).toHaveLength(8);
+    expect(res.body.tools.map((tool) => tool.name)).toEqual([
+      'voice.synthesize', 'voice.list-voices', 'voice.list-engines',
+    ]);
     expect(res.body.errors.some((error) => error.code === 'VALIDATION_ERROR')).toBe(true);
   });
 });

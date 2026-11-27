@@ -291,7 +291,7 @@ const normalizePath = (path) => path
   .replace(/\/+$/, '') || '/';
 
 /** Endpoint cells are written relative to `/api` unless they name the mount themselves. */
-const absolutePath = (path) => (path.startsWith('/api/') || path.startsWith('/sdapi/') ? path : `/api${path}`);
+const absolutePath = (path) => (path.startsWith('/api/') ? path : `/api${path}`);
 
 /** `| METHOD | \`/path\` | ... |` rows of the peer-probe contract table. */
 const documentedOperations = [...section(PROBE_HEADING, ERROR_HEADING).matchAll(/^\|\s*(GET|POST|PUT|PATCH|DELETE)\s*\|\s*`([^`]+)`/gm)]

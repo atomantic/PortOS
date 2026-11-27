@@ -218,7 +218,6 @@ const importerRoutes = createLazyRouter(() => import('./routes/importer.js'));
 const storyBuilderRoutes = createLazyRouter(() => import('./routes/storyBuilder.js'));
 const imageVideoModelsRoutes = createLazyRouter(() => import('./routes/imageVideoModels.js'));
 const lorasRoutes = createLazyRouter(() => import('./routes/loras.js'));
-const sdapiRoutes = createLazyRouter(() => import('./routes/sdapi.js'));
 const midiRuntimeRoutes = createLazyRouter(() => import('./routes/midiRuntime.js'));
 
 const __filename = fileURLToPath(import.meta.url);
@@ -529,9 +528,6 @@ app.use('/api/story-builder', storyBuilderRoutes);
 app.use('/api/image-video/models', imageVideoModelsRoutes);
 app.use('/api/loras', lorasRoutes);
 app.use('/api/data-maintenance', dataMaintenanceRoutes);
-// AUTOMATIC1111-compatible surface for tailnet clients — gated by
-// settings.imageGen.expose.a1111 so it returns 403 unless the user opted in.
-app.use('/sdapi/v1', sdapiRoutes);
 app.use('/api/openclaw', openclawRoutes);
 app.use('/api/sharing', sharingRoutes);
 app.use('/api/rounds', roundsRoutes);
@@ -547,9 +543,8 @@ app.use('/api/moa-presets', moaPresetRoutes);
 // an extensionless `/data/…` or a mistyped `/api/…` can no longer fall through
 // to the SPA fallback below and be answered with index.html and a 200 (#4688).
 // Both lists live in lib/assetRoutePrefixes.js, which `server/test/guards/repo/dev-proxy-drift.test.js`
-// reads as data. NOTE: this call installs a terminating 404 on `/api` and
-// `/sdapi` too, so every router above must stay above — one added BELOW it is
-// shadowed and never runs. That guard test holds the ordering.
+// reads as data. This call also terminates unmatched API requests, so API
+// routers must be registered before it. The drift guard holds that ordering.
 mountAssetRoutes(app);
 
 // Serve built client UI (production mode — no Vite dev server needed)
