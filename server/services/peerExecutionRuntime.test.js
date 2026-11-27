@@ -22,7 +22,30 @@ vi.mock('../lib/db.js', () => ({
   query: vi.fn(),
 }));
 
+vi.mock('./peerExecutionLedger.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, createPeerExecutionLedger: vi.fn(actual.createPeerExecutionLedger) };
+});
+
+import { createPeerExecutionLedger } from './peerExecutionLedger.js';
 import { initializePeerExecution, peerExecutionRuntime, _getPeerExecutionWatcher } from './peerExecutionRuntime.js';
+
+it('retries failed composition and shares both the pending and successful attempts', async () => {
+  vi.resetModules();
+  const { peerExecutionRuntime: getRuntime } = await import('./peerExecutionRuntime.js');
+  const error = new Error('Transient composition failure');
+  vi.mocked(createPeerExecutionLedger).mockImplementationOnce(() => { throw error; });
+
+  const failed = getRuntime();
+  expect(getRuntime()).toBe(failed);
+  await expect(failed).rejects.toBe(error);
+
+  const retry = getRuntime();
+  expect(retry).not.toBe(failed);
+  expect(getRuntime()).toBe(retry);
+  await expect(retry).resolves.toHaveProperty('kick', expect.any(Function));
+  expect(getRuntime()).toBe(retry);
+});
 
 describe('peerExecutionRuntime watcher', () => {
   it('attaches an error listener to watcher and re-arms on receiver.kick()', async () => {
