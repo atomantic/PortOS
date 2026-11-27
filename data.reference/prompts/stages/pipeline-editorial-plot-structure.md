@@ -96,10 +96,8 @@ reconcile your dropped-thread findings against this list.
 {{/plotlineMap}}
 
 {{#sceneMap}}
-## Scene segmentation
-
-The reverse outline below segments the manuscript into scenes (with the recorded
-setting, POV character, and characters present). Use it to attribute pacing,
+{{> scene-segmentation-note }}
+Use it to attribute pacing,
 stakes, and progression findings to a scene and its issue; judge the structure
 itself from the prose. The map may be absent or trimmed to fit the provider window,
 so a missing map entry is never proof that a scene lacks a turn.
@@ -109,11 +107,7 @@ so a missing map entry is never proof that a scene lacks a turn.
 ```
 {{/sceneMap}}
 
-## Manuscript
-
-The manuscript is stitched from the drafted issues. Section headers attribute
-each chunk to an issue (e.g. `# Issue 3 — Title (prose)`). Use the issue number
-in each header to attribute every finding to its `issueNumber`.
+{{> editorial-manuscript-preamble }}
 
 ```
 {{manuscript}}
@@ -164,14 +158,7 @@ plot is well-structured — an active protagonist, clear escalating stakes, a ta
 middle, purposeful scene progression, and every thread resolved — return an empty
 `findings` array. Do not invent structural problems where the story is sound.
 
-## Output contract
-
-Return ONLY valid JSON matching this shape — no prose, no markdown fence, no
-commentary:
-
-```json
-{
-  "findings": [
+{{> editorial-findings-contract }}
     {
       "severity": "high|medium|low",
       "issueNumber": 4,

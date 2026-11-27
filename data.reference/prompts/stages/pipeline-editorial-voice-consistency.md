@@ -45,11 +45,8 @@ not just narration that drifts from the other issues.
 ```
 {{/intendedVoice}}
 
-## Manuscript
-
-The manuscript is stitched from the drafted issues. Section headers attribute
-each chunk to an issue (e.g. `# Issue 3 — Title (prose)`). Use the issue number
-in each header to attribute every finding to its `issueNumber`. A "setup so far"
+{{> editorial-manuscript-preamble }}
+A "setup so far"
 digest above (when present) carries the narrative-tone fingerprint of issues in
 earlier parts no longer in the text below — judge a later issue's narration
 against those carried fingerprints, not only against what is visible here.
@@ -78,14 +75,7 @@ low. If the narration holds a consistent voice (or every shift is one the story
 earns), return an empty `findings` array — do not invent drift where the voice is
 steady.
 
-## Output contract
-
-Return ONLY valid JSON matching this shape — no prose, no markdown fence, no
-commentary:
-
-```json
-{
-  "findings": [
+{{> editorial-findings-contract }}
     {
       "severity": "high|medium|low",
       "issueNumber": 3,

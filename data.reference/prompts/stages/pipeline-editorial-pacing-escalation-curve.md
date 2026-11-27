@@ -46,10 +46,8 @@ real curve against the prose.
 {{/intensityTally}}
 
 {{#sceneMap}}
-## Scene segmentation
-
-The reverse outline below segments the manuscript into scenes (with the recorded
-setting, POV character, and characters present). Use it to attribute an
+{{> scene-segmentation-note }}
+Use it to attribute an
 escalation finding to a scene and its issue; judge the curve itself from the prose.
 
 ```
@@ -57,11 +55,7 @@ escalation finding to a scene and its issue; judge the curve itself from the pro
 ```
 {{/sceneMap}}
 
-## Manuscript
-
-The manuscript is stitched from the drafted issues. Section headers attribute
-each chunk to an issue (e.g. `# Issue 3 — Title (prose)`). Use the issue number
-in each header to attribute every finding to its `issueNumber`.
+{{> editorial-manuscript-preamble }}
 
 ```
 {{manuscript}}
@@ -96,14 +90,7 @@ builds well — intensity rising issue over issue toward a late peak, with healt
 breather valleys — return an empty `findings` array. Do not invent a pacing
 problem where the escalation is sound.
 
-## Output contract
-
-Return ONLY valid JSON matching this shape — no prose, no markdown fence, no
-commentary:
-
-```json
-{
-  "findings": [
+{{> editorial-findings-contract }}
     {
       "severity": "high|medium|low",
       "issueNumber": 2,

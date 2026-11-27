@@ -66,14 +66,7 @@ each panel. Use the page number to attribute every finding.
 {{pageLayout}}
 ```
 
-## Output contract
-
-Return ONLY valid JSON matching this shape — no prose, no markdown fence, no
-commentary:
-
-```json
-{
-  "findings": [
+{{> editorial-findings-contract }}
     {
       "severity": "high|medium|low",
       "location": "string — where (e.g. 'Page 4')",

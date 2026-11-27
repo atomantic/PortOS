@@ -45,11 +45,7 @@ character name is unmodeled. Surface each named character you find (still exclud
 places, organizations, brands, and bare honorifics).
 {{/knownCharacters}}
 
-## Manuscript
-
-The manuscript is stitched from the drafted issues. Section headers attribute
-each chunk to an issue (e.g. `# Issue 3 — Title (prose)`). Use the issue number
-in each header to attribute every finding to its `issueNumber`.
+{{> editorial-manuscript-preamble }}
 
 ```
 {{manuscript}}
@@ -75,14 +71,7 @@ are places/orgs/brands/honorifics), return an empty `findings` array. Do not inv
 names the prose doesn't use, and do not flag a name just because it is rare — only
 because it is UNMODELED.
 
-## Output contract
-
-Return ONLY valid JSON matching this shape — no prose, no markdown fence, no
-commentary:
-
-```json
-{
-  "findings": [
+{{> editorial-findings-contract }}
     {
       "severity": "high|medium|low",
       "issueNumber": 3,

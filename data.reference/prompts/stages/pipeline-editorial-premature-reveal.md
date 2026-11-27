@@ -80,14 +80,7 @@ Be specific and cite the text. If no gated fact leaks early, return an empty
 `findings` array — do not invent issues, and do not flag legitimate
 foreshadowing.
 
-## Output contract
-
-Return ONLY valid JSON matching this shape — no prose, no markdown fence, no
-commentary:
-
-```json
-{
-  "findings": [
+{{> editorial-findings-contract }}
     {
       "severity": "high|medium|low",
       "issueNumber": 2,

@@ -56,11 +56,8 @@ findings just to match it.
 ```
 {{/authoredCliffhangers}}
 
-## Manuscript
-
-The manuscript is stitched from the drafted issues. Section headers attribute each
-chunk to an issue (e.g. `# Issue 3 — Title (prose)`). Use the issue number in each
-header to attribute every finding to its `issueNumber`, and to find each chapter's
+{{> editorial-manuscript-preamble }}
+Use the section headers to find each chapter's
 ending (the prose just before the next issue header, or the end of the text).
 
 ```
@@ -75,14 +72,7 @@ number, explain how the ending settles instead of pulling forward, and suggest t
 unresolved beat to end on. If every chapter ends on an open beat (and only the
 terminal chapter resolves), return an empty `findings` array — do not invent issues.
 
-## Output contract
-
-Return ONLY valid JSON matching this shape — no prose, no markdown fence, no
-commentary:
-
-```json
-{
-  "findings": [
+{{> editorial-findings-contract }}
     {
       "severity": "high|medium|low",
       "issueNumber": 3,

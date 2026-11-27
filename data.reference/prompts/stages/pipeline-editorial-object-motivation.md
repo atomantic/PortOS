@@ -21,11 +21,7 @@ support it.
 {{objects}}
 ```
 
-## Manuscript
-
-The manuscript is stitched from the drafted issues. Each section begins with a
-header like `# Issue 3 — Title (prose)`; use the issue number in that header to
-attribute each finding to its `issueNumber`.
+{{> editorial-manuscript-preamble }}
 
 ```
 {{manuscript}}
@@ -46,14 +42,7 @@ story is actively building toward.
 Be specific and cite the text. If every object interaction is well-motivated,
 return an empty `findings` array — do not invent issues.
 
-## Output contract
-
-Return ONLY valid JSON matching this shape — no prose, no markdown fence, no
-commentary:
-
-```json
-{
-  "findings": [
+{{> editorial-findings-contract }}
     {
       "severity": "high|medium|low",
       "issueNumber": 3,

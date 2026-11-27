@@ -55,11 +55,7 @@ emotion, agency-removal, or asserted insight at a pivotal beat where showing
 would clearly raise the stakes, and `high` only when a key emotional turn is
 flatly narrated with no dramatization at all.
 
-## Manuscript
-
-The manuscript is stitched from the drafted issues. Section headers attribute
-each chunk to an issue (e.g. `# Issue 3 — Title (prose)`). Use the issue number
-in each section header to attribute every finding to its `issueNumber`.
+{{> editorial-manuscript-preamble }}
 
 ```
 {{manuscript}}
@@ -77,14 +73,7 @@ beat of subtext) — without rewriting the whole passage for the author.
 Be specific and cite the text. If the prose already dramatizes its emotions and
 interiority, return an empty `findings` array — do not invent problems.
 
-## Output contract
-
-Return ONLY valid JSON matching this shape — no prose, no markdown fence, no
-commentary:
-
-```json
-{
-  "findings": [
+{{> editorial-findings-contract }}
     {
       "severity": "high|medium|low",
       "issueNumber": 3,

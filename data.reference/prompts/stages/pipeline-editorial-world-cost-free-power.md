@@ -39,11 +39,7 @@ FIRST introduction of a power whose costs the story is clearly still unfolding.
 {{worldRules}}
 {{/worldRules}}
 
-## Manuscript
-
-The manuscript is stitched from the drafted issues. Section headers attribute
-each chunk to an issue (e.g. `# Issue 3 — Title (prose)`). Use the issue number
-in each header to attribute every finding to its `issueNumber`.
+{{> editorial-manuscript-preamble }}
 
 ```
 {{manuscript}}
@@ -61,14 +57,7 @@ power `high`; a smaller scene-level one `medium` or `low`.
 Be specific and cite the text. If every decisive use pays its established price,
 return an empty `findings` array — do not invent issues.
 
-## Output contract
-
-Return ONLY valid JSON matching this shape — no prose, no markdown fence, no
-commentary:
-
-```json
-{
-  "findings": [
+{{> editorial-findings-contract }}
     {
       "severity": "high|medium|low",
       "issueNumber": 5,
