@@ -276,7 +276,7 @@ export const LOCAL_RUNTIME_DESCRIPTORS = {
       requirement: 'Requires macOS 26 or later and an Apple M5 Max with at least 36 GiB of unified memory.',
       download: 'Downloads about 19 GiB of Inkling 2 Mini weights, plus the runtime and its Python environment.',
       repair: 'Clear and rebuild the mkserve engine cache using the checkpoint already on this machine.',
-      provider: 'When it is ready, add an OpenAI-compatible provider using the endpoint and model ID shown here.',
+      provider: 'When it is ready, enable an existing mkserve preset under AI Providers.',
     },
     toRow: bundleRow,
   },

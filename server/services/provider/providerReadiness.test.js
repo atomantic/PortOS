@@ -616,7 +616,7 @@ describe.each([
     readInstall.mockReturnValue(installation);
     try {
       const readiness = await getProviderReadinessMap([{ ...provider, type: 'api' }], {
-        findCommand: () => null, probe: unreachable(), readWeights: async () => 'ready',
+        findCommand: (command, resolve) => command === 'slotstream' ? resolve() : null, probe: unreachable(), readWeights: async () => 'ready',
       });
       expect(readiness[kind]).toMatchObject({ kind, standby: true, ready: false, setup: { action: 'start' } });
       expect(checkById(readiness[kind], 'runtime')).toMatchObject({ ok: true, detail: expect.stringContaining('installed locally') });
@@ -631,7 +631,7 @@ describe.each([
     readInstall.mockReturnValue(null);
     try {
       const readiness = await getProviderReadiness({ ...provider, type: 'api' }, {
-        findCommand: () => '/usr/local/bin/unmanaged', probe: unreachable(),
+        findCommand: (command, resolve) => command === 'slotstream' ? resolve() : '/usr/local/bin/unmanaged', probe: unreachable(),
       });
       expect(readiness).toMatchObject({ kind, standby: false, setup: { action: 'install-start' } });
       expect(checkById(readiness, 'runtime').ok).toBe(false);
