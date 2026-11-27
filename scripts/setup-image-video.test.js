@@ -1307,6 +1307,10 @@ describe('Wan 2.2 CUDA hash-pinned installation', () => {
     for (const block of blocks) expect(block).toMatch(/--hash=sha256:[0-9a-f]{64}/);
     const pins = requirements.map((line) => line.replace(/\s*\\$/, ''));
     for (const pin of direct) expect(pins).toContain(pin);
+    expect(pins.some((pin) => pin.startsWith('av=='))).toBe(false);
+    for (const backend of ['imageio==', 'imageio-ffmpeg==']) {
+      expect(pins.some((pin) => pin.startsWith(backend))).toBe(true);
+    }
     expect(pins.find((pin) => pin.startsWith('torch=='))).toMatch(/\+cu126$/);
     expect(pins.find((pin) => pin.startsWith('torchvision=='))).toMatch(/\+cu126$/);
     expect(lock.includes('nvidia-cuda-runtime-cu12==')).toBe(target === 'linux');

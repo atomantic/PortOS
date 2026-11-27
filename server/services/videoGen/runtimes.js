@@ -305,6 +305,8 @@ try:
  current = current and all(m.version(name) == version for name, version in pins)
 except m.PackageNotFoundError:
  current = False
+# Repair syncs away the retired PyAV wheel. Wan exports via ImageIO's FFmpeg plugin.
+current = current and next(m.distributions(name='av'), None) is None
 sys.exit(0 if current else 78)
 `, join(PATHS.root, 'scripts', 'ml', 'requirements', `requirements-wan22-cuda-${process.platform === 'win32' ? 'windows' : 'linux'}.lock.txt`)],
     importProbe: 'import torch, hf_xet; from diffusers import AutoencoderKLWan, WanPipeline; assert torch.cuda.is_available(), "no CUDA device"',

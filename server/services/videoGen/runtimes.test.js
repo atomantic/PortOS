@@ -84,7 +84,7 @@ describe('retired runtime filtering', () => {
 describe('Wan 2.2 CUDA locked currency', () => {
   const python = resolveTestPython();
 
-  it.skipIf(!python)('checks transitive metadata, missing packages, Python minor and Conda before declaring a runtime current', () => {
+  it.skipIf(!python)('checks locked metadata, retired PyAV and the Python base before declaring the runtime current', () => {
     const root = mkdtempSync(join(tmpdir(), 'portos-cuda-currency-'));
     try {
       const lock = join(root, 'runtime.lock.txt');
@@ -104,7 +104,7 @@ describe('Wan 2.2 CUDA locked currency', () => {
       writeFileSync(join(direct, 'METADATA'), 'Name: portos-currency-direct\nVersion: 1.0\n');
       const metadata = join(transitive, 'METADATA');
       writeFileSync(metadata, 'Name: portos-currency-transitive\nVersion: 2.0\n');
-      const probe = (version = '3.11', base = root) => spawnSync(python, ['-c', `
+      const probe = (version = '3.11', base = root) => spawnSync(python, ['-I', '-S', '-c', `
 import importlib.metadata, re, sys
 from pathlib import Path
 sys.path.insert(0, sys.argv[2])
@@ -113,6 +113,13 @@ sys.base_prefix = sys.argv[4]
 ${BYOV_RUNTIME_INFO.wan22_cuda.currencyProbeArgs[1]}`, lock, root, version, base], { encoding: 'utf8', timeout: 10000 });
 
       expect(probe().status).toBe(0);
+      const retired = join(root, 'av-18.1.0.dist-info');
+      mkdirSync(retired);
+      writeFileSync(join(retired, 'METADATA'), 'Name: av\nVersion: 18.1.0\n');
+      expect(probe().status).toBe(78);
+      rmSync(retired, { recursive: true });
+      expect(probe().status).toBe(0);
+
       writeFileSync(metadata, 'Name: portos-currency-transitive\nVersion: 1.0\n');
       expect(probe().status).toBe(78);
       rmSync(transitive, { recursive: true });
