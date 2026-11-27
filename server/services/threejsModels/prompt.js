@@ -10,6 +10,7 @@ import {
   GENERAL_FAMILY_ID,
   THREEJS_MODEL_FAMILY_IDS,
 } from '../../lib/threejsModelFamilies.js';
+export { THREEJS_REFERENCE_ROLES, MAX_THREEJS_REFERENCE_IMAGES } from '../../lib/threejsModelReferenceLimits.js';
 
 const geometryContract = `
 Allowed geometry definitions:
@@ -238,9 +239,6 @@ Prefer a short, legible set: a "deploy" clip and its "retract" mirror explain a 
 than eight speculative ones. Author each clip against the model's assembled pose — sequence one
 starts from exactly the "position"/"rotationDegrees"/"scale" the part carries in "parts".
 `;
-
-export const THREEJS_REFERENCE_ROLES = ['front', 'side', 'back', 'top', 'turnaround-sheet', 'close-up'];
-export const MAX_THREEJS_REFERENCE_IMAGES = 5;
 
 // Empty string for no references, so a model without them keeps the exact
 // prompt it always had. Images are attached in this same order after the primary.

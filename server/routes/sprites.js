@@ -15,8 +15,34 @@ import { paginationQuerySchema, isPaginationRequested, paginateArray } from '../
 import { unlink } from 'fs/promises';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
-import { spriteImportRequestSchema, spriteRecordUpdateSchema, spriteCreateSchema, spriteReferenceGenerateSchema, spriteReferenceLockSchema, spriteReferenceUnlockSchema, spriteForkSchema, spriteTrackGenerateSchema, spriteTrackApproveSchema, spriteTrackReopenSchema, spriteTrackParamsSchema, spriteAnimationTrackCreateSchema, spriteAnimationTrackUpdateSchema, spriteWalkGenerateSchema, spriteWalkApproveSchema, spriteWalkReopenSchema, spriteWalkUnlockSchema, spriteWalkPostprocessSchema, spriteWalkTargetSchema, spriteWalkSourceFramesParamsSchema, spriteWalkTrimSchema, spritePublishBindingSchema, spriteAtlasCompileSchema, spriteAtlasPublishSchema, spriteAssetDeleteSchema } from '../lib/spriteValidation.js';
-import { z } from 'zod';
+import {
+  spriteImportRequestSchema,
+  spriteRecordUpdateSchema,
+  spriteCreateSchema,
+  spriteReferenceGenerateSchema,
+  spriteReferenceLockSchema,
+  spriteReferenceUnlockSchema,
+  spriteForkSchema,
+  spriteTrackGenerateSchema,
+  spriteTrackApproveSchema,
+  spriteTrackReopenSchema,
+  spriteTrackParamsSchema,
+  spriteAnimationTrackCreateSchema,
+  spriteAnimationTrackUpdateSchema,
+  spriteWalkGenerateSchema,
+  spriteWalkApproveSchema,
+  spriteWalkReopenSchema,
+  spriteWalkUnlockSchema,
+  spriteWalkPostprocessSchema,
+  spriteWalkTargetSchema,
+  spriteWalkSourceFramesParamsSchema,
+  spriteWalkTrimSchema,
+  spriteAtlasCompileSchema,
+  spriteAtlasPublishSchema,
+  spriteAssetDeleteSchema,
+  spriteAssetPromptQuerySchema,
+  spritePublishBindingBodySchema,
+} from '../lib/spriteValidation.js';
 import { optionalUploadFields } from '../lib/multipart.js';
 import {
   listRecords, getRecordWithAssets, createCharacter, deleteRecord,
@@ -255,7 +281,7 @@ router.get('/:id', asyncHandler(async (req, res) => {
 // no prompt provenance (imports, manifests). Two path segments, so it never
 // collides with the single-segment `/:id` GET above.
 router.get('/:id/asset-prompt', asyncHandler(async (req, res) => {
-  const { path } = validateRequest(z.object({ path: z.string().min(1) }), req.query);
+  const { path } = validateRequest(spriteAssetPromptQuerySchema, req.query);
   res.json(await resolveSpriteAssetPrompt(req.params.id, path));
 }));
 
@@ -443,7 +469,7 @@ router.post('/:id/atlas/compile', asyncHandler(async (req, res) => {
 // path anchoring are validated here so a bad binding fails at save time, not
 // at publish time.
 router.put('/:id/publish-binding', asyncHandler(async (req, res) => {
-  const { binding } = validateRequest(z.object({ binding: spritePublishBindingSchema }), req.body);
+  const { binding } = validateRequest(spritePublishBindingBodySchema, req.body);
   res.json(await setPublishBinding(req.params.id, binding));
 }));
 

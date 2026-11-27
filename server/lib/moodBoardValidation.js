@@ -8,6 +8,8 @@ import { GENERATION_METADATA_LIMITS } from './pngMetadata.js';
 import { isValidKey, parseKey } from './mediaItemKey.js';
 import { MAX_IMAGE_EDGE, MAX_IMAGE_PIXELS } from './imageLimits.js';
 import { QUEUEABLE_IMAGE_MODES } from './generationModes.js';
+import { influencesSchema, lockedSchema } from './universeBuilderValidation.js';
+import { STYLE_NOTES_MAX } from './universeBibleLimits.js';
 
 // =============================================================================
 // MOOD BOARD SCHEMAS (issue #911)
@@ -268,3 +270,33 @@ export const moodBoardGenerateSchema = z.object({
 }).strict().refine((v) => !v.render.mode || QUEUEABLE_IMAGE_MODES.includes(v.render.mode), {
   message: 'Choose a queueable image backend', path: ['render', 'mode'],
 });
+
+// Board → universe style synthesis (#4188 Phase 4). Stateless like
+// /analyze-style-reference: the client sends the universe's CURRENT style
+// context (draft values — possibly unsaved), the server reads the board and
+// returns a proposal + diff. Persistence happens only through the universe's
+// queued-write adopt endpoint after the user reviews the diff.
+export const synthesizeStyleSchema = z.object({
+  styleNotes: z.string().trim().max(STYLE_NOTES_MAX).optional().default(''),
+  influences: influencesSchema.optional().default({ embrace: [], avoid: [] }),
+  locked: lockedSchema.optional().default({}),
+  providerId: z.string().trim().max(80).optional(),
+  model: z.string().trim().max(200).optional(),
+}).strict();
+
+// Board-level composite prompt. Reads the per-item analyses already stored on
+// the board (prompt-from-media), distills one still-image prompt, and persists
+// it as `board.style`. The page then renders that prompt as the poster.
+export const composePromptSchema = z.object({
+  providerId: z.string().trim().max(128).optional(),
+  model: z.string().trim().max(256).optional(),
+  effort: z.string().trim().max(64).optional(),
+}).strict();
+
+// Background analyze job: prompt-from-media over un-analyzed pins, then compose
+// the board style. Survives the page unmounting; progress follows the
+// `mood-board:analyze` socket event and GET restores it on return.
+export const analyzeSchema = composePromptSchema.extend({
+  providerId: z.string().trim().min(1).max(128),
+  render: moodBoardItemRenderSchema.optional(),
+}).strict();

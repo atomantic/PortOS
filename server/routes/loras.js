@@ -7,9 +7,20 @@
  * these endpoints exclusively so it can also surface Civitai metadata.
  */
 
+import {
+  forceQuerySchema,
+  suggestionsQuerySchema,
+  searchQuerySchema,
+  videoSearchQuerySchema,
+  authPostSchema,
+  installSchema,
+  installPreflightSchema,
+  hfInstallStreamSchema,
+  byCharacterSchema,
+  patchSchema,
+} from '../lib/lorasValidation.js';
 import { Router } from 'express';
 import { paginationQuerySchema, isPaginationRequested, paginateArray, parsePagination } from '../lib/queryValidation.js';
-import { z } from 'zod';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { deepMerge, isPlainObject } from '../lib/objects.js';
 import { validateRequest } from '../lib/validateRequest.js';
@@ -28,20 +39,13 @@ import { getSuggestions, searchLorasInFamily } from '../services/civitaiSuggesti
 import { getVideoSuggestions, searchVideoLoras } from '../services/videoLoraSuggestions.js';
 import { findLorasByCharacter } from '../services/characterLoraResolver.js';
 import { getSettings, updateSettingsWith } from '../services/settings.js';
-import { RUNNER_FAMILIES, VIDEO_LORA_FAMILIES } from '../lib/runners.js';
-import { HF_LORA_FAMILIES } from '../lib/huggingfaceLora.js';
 import { openSseStream } from '../lib/sseDownload.js';
-import { emptyToUndefined } from '../lib/zodCompat.js';
 
 const router = Router();
 
 // `?force=1` / `?force=true` busts a server-side cache. Shared by the suggestions
 // refresh and the LoRA effect re-check so the two can't drift on what counts.
 const forceRequested = (query) => query.force === '1' || query.force === 'true';
-
-// `force` is read as a raw string; `limit`/`offset` keep parsePagination's lenient fallback.
-const forceQuerySchema = z.object({ force: z.string().optional() });
-const suggestionsQuerySchema = paginationQuerySchema.merge(forceQuerySchema);
 
 // Backward-compatible by default: returns the full LoRA array. When a client
 // passes `limit`/`offset`, the response becomes the bounded
@@ -71,18 +75,6 @@ router.get('/suggestions', asyncHandler(async (req, res) => {
   res.json({ ...civitai, video });
 }));
 
-// Live keyword search + cursor pagination within one runner family. Backs the
-// per-category search box and "Load more" button on /models/loras. Uncached —
-// results are query/cursor-specific. `query` blank = top ranking for that
-// family (so "Load more" with no keyword just pages the leaderboard).
-const searchQuerySchema = z.object({
-  runner: z.enum(Object.values(RUNNER_FAMILIES)),
-  // emptyToUndefined: a blank box (`query=`) is a valid "top ranking" request,
-  // not a validation error — coerce '' → undefined before the optional check.
-  query: z.preprocess(emptyToUndefined, z.string().max(120).optional()),
-  cursor: z.preprocess(emptyToUndefined, z.string().max(512).optional()),
-  limit: z.coerce.number().int().min(1).max(50).optional(),
-});
 router.get('/search', asyncHandler(async (req, res) => {
   const { runner, query, cursor, limit } = validateRequest(searchQuerySchema, req.query);
   res.json(await searchLorasInFamily({
@@ -93,22 +85,6 @@ router.get('/search', asyncHandler(async (req, res) => {
   }));
 }));
 
-// Live keyword/author/repository search across all of HuggingFace for video
-// LoRAs (LTX-Video / MiniMax H3) — backs the video search box + family filter
-// + "Load more" pagination on /models/loras (#6500). Short-cached server-side
-// per (family, query, author, cursor) since each page fans out one metadata
-// fetch per candidate repo. `family` omitted/'all' searches both families.
-// `cursor` is opaque — always the previous page's `nextCursor`, never built
-// by the client.
-const videoSearchQuerySchema = z.object({
-  family: z.enum([...Object.values(VIDEO_LORA_FAMILIES), 'all']).optional(),
-  query: z.preprocess(emptyToUndefined, z.string().max(120).optional()),
-  author: z.preprocess(emptyToUndefined, z.string().max(120).optional()),
-  // HF's opaque Link-header cursor is a base64-ish query blob — longer than a
-  // Civitai cursor, so it gets its own generous-but-bounded cap.
-  cursor: z.preprocess(emptyToUndefined, z.string().max(2048).optional()),
-  limit: z.coerce.number().int().min(1).max(24).optional(),
-});
 router.get('/search/video', asyncHandler(async (req, res) => {
   const { family, query, author, cursor, limit } = validateRequest(videoSearchQuerySchema, req.query);
   res.json(await searchVideoLoras({
@@ -135,7 +111,6 @@ router.get('/auth/civitai', asyncHandler(async (_req, res) => {
   });
 }));
 
-const authPostSchema = z.object({ apiKey: z.string().min(1).max(256) });
 router.post('/auth/civitai', asyncHandler(async (req, res) => {
   const { apiKey } = validateRequest(authPostSchema, req.body);
   // Shared deepMerge so future civitai sub-fields don't get clobbered by
@@ -164,32 +139,12 @@ router.delete('/auth/civitai', asyncHandler(async (_req, res) => {
   res.json({ hasKey: envActive, source: envActive ? 'env' : 'none' });
 }));
 
-const installSchema = z.object({
-  url: z.string().min(1).max(1024),
-  // Optional one-shot key override — useful if the user wants to test a
-  // restricted LoRA without persisting their key in Settings yet.
-  apiKey: z.string().min(1).max(256).optional(),
-});
-
 router.post('/install', asyncHandler(async (req, res) => {
   const data = validateRequest(installSchema, req.body);
   const sidecar = await installFromCivitai(data);
   res.status(201).json(sidecar);
 }));
 
-// Confirm-step disk preflight for a LoRA install. `source` picks Civitai vs
-// HuggingFace; the URL is the same shape the install endpoints already take.
-// `family`/`file` are the same optional overrides the HF install stream takes —
-// a caller that already knows them (the curated video quick-install cards)
-// forwards them so the previewed file matches what installFromHuggingface
-// will actually pick, rather than re-guessing from the bare URL.
-const installPreflightSchema = z.object({
-  url: z.string().min(1).max(1024),
-  source: z.enum(['civitai', 'huggingface']).optional().default('civitai'),
-  apiKey: z.string().min(1).max(256).optional(),
-  family: z.enum(HF_LORA_FAMILIES).optional(),
-  file: z.string().min(1).max(512).regex(/\.safetensors$/i).optional(),
-});
 router.post('/install/preflight', asyncHandler(async (req, res) => {
   const data = validateRequest(installPreflightSchema, req.body);
   const preview = data.source === 'huggingface'
@@ -198,23 +153,6 @@ router.post('/install/preflight', asyncHandler(async (req, res) => {
   res.json(preview);
 }));
 
-// Install an image or video LoRA from a HuggingFace repo (Flux.2 Klein,
-// fal / Lightricks LTX, MiniMax H3), streaming byte-level download `progress` frames (SSE-encoded) so the form can
-// show a percentage instead of a static "Downloading…" (matching the image/video
-// model download badge UX). POST, not GET: this endpoint mutates state (downloads
-// + writes a LoRA), and the client reads the stream body with fetch() (not
-// EventSource), so url/family ride in the JSON body — a state-changing GET would
-// be reachable by a top-level cross-origin navigation carrying a SameSite=Lax
-// session cookie (CSRF), which authGate's Origin check can't see. The HF token
-// always comes from settings/env, never the request. Terminal frames:
-// `{type:'complete', sidecar}` or `{type:'error', message, code}` — the client
-// re-uses `code` (e.g. HF_UNKNOWN_FAMILY) to drive the inline family-confirm
-// retry, exactly as the plain POST path's thrown error does.
-const hfInstallStreamSchema = z.object({
-  url: z.string().min(1).max(1024),
-  family: z.enum(HF_LORA_FAMILIES).optional(),
-  file: z.string().min(1).max(512).regex(/\.safetensors$/i).optional(),
-});
 router.post('/install/huggingface/stream', asyncHandler(async (req, res) => {
   const data = validateRequest(hfInstallStreamSchema, req.body);
   const { send, safeEnd } = openSseStream(res);
@@ -250,12 +188,6 @@ router.post('/install/huggingface/stream', asyncHandler(async (req, res) => {
   safeEnd();
 }));
 
-// The Catalog character reads its installed adapters here. Declare this
-// before the generic filename route.
-const byCharacterSchema = z.object({
-  entryId: z.preprocess(emptyToUndefined, z.string().max(128).optional()),
-  ingredientId: z.preprocess(emptyToUndefined, z.string().max(128).optional()),
-}).refine((q) => q.entryId || q.ingredientId, { message: 'entryId or ingredientId required' });
 router.get('/by-character', asyncHandler(async (req, res) => {
   const { entryId, ingredientId } = validateRequest(byCharacterSchema, req.query);
   res.json(await findLorasByCharacter({ entryId: entryId || null, ingredientId: ingredientId || null }));
@@ -278,16 +210,6 @@ router.post('/:filename/effect', asyncHandler(async (req, res) => {
   const force = forceRequested(validateRequest(forceQuerySchema, req.query));
   res.json(await probeLoraEffect(req.params.filename, { force }));
 }));
-
-const patchSchema = z.object({
-  // Only user-editable fields. Civitai-derived blocks (`civitai`, `file`,
-  // `runnerFamily`, `triggerWords`) are not patchable through this surface
-  // — the user would have to delete + reinstall to refresh those.
-  name: z.string().min(1).max(200).optional(),
-  description: z.string().max(2000).optional(),
-  recommendedScale: z.number().min(0).max(2).optional(),
-  notes: z.string().max(2000).optional(),
-});
 
 router.patch('/:filename', asyncHandler(async (req, res) => {
   const patch = validateRequest(patchSchema, req.body);

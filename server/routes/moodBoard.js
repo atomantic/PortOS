@@ -9,16 +9,27 @@
 
 import { Router } from 'express';
 import { isPaginationRequested, paginateArray } from '../lib/queryValidation.js';
-import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
-import { moodBoardCreateSchema, moodBoardUpdateSchema, moodBoardItemCreateSchema, moodBoardItemUpdateSchema, moodBoardPinterestLinkSchema, moodBoardXPostImportSchema, moodBoardCollageSchema, moodBoardExtractFramesSchema, moodBoardItemRenderSchema, moodBoardGenerateSchema } from '../lib/moodBoardValidation.js';
+import {
+  moodBoardCreateSchema,
+  moodBoardUpdateSchema,
+  moodBoardItemCreateSchema,
+  moodBoardItemUpdateSchema,
+  moodBoardPinterestLinkSchema,
+  moodBoardXPostImportSchema,
+  moodBoardCollageSchema,
+  moodBoardExtractFramesSchema,
+  moodBoardItemRenderSchema,
+  moodBoardGenerateSchema,
+  synthesizeStyleSchema,
+  composePromptSchema,
+  analyzeSchema,
+} from '../lib/moodBoardValidation.js';
 import { moodBoardCombineSchema, moodBoardListQuerySchema } from '../lib/moodBoardValidation.js';
-import { influencesSchema, lockedSchema } from '../lib/universeBuilderValidation.js';
 import { synthesizeBoardStyle } from '../services/moodBoardStyleSynthesis.js';
 import { composeBoardPrompt } from '../services/moodBoardCompositeStyle.js';
 import { startAnalyzeJob, getAnalyzeJob } from '../services/moodBoard/analyzeJob.js';
-import { STYLE_NOTES_MAX } from '../services/universeBuilder.js';
 import {
   listBoards,
   listBoardNames,
@@ -124,18 +135,6 @@ router.delete('/:id/items/:itemId', asyncHandler(async (req, res) => {
   res.json(board);
 }));
 
-// Board → universe style synthesis (#4188 Phase 4). Stateless like
-// /analyze-style-reference: the client sends the universe's CURRENT style
-// context (draft values — possibly unsaved), the server reads the board and
-// returns a proposal + diff. Persistence happens only through the universe's
-// queued-write adopt endpoint after the user reviews the diff.
-const synthesizeStyleSchema = z.object({
-  styleNotes: z.string().trim().max(STYLE_NOTES_MAX).optional().default(''),
-  influences: influencesSchema.optional().default({ embrace: [], avoid: [] }),
-  locked: lockedSchema.optional().default({}),
-  providerId: z.string().trim().max(80).optional(),
-  model: z.string().trim().max(200).optional(),
-}).strict();
 router.post('/:id/synthesize-style', asyncHandler(async (req, res) => {
   const body = validateRequest(synthesizeStyleSchema, req.body ?? {});
   const board = await getBoard(req.params.id);
@@ -143,21 +142,6 @@ router.post('/:id/synthesize-style', asyncHandler(async (req, res) => {
   res.json(await synthesizeBoardStyle({ board, ...body }));
 }));
 
-// Board-level composite prompt. Reads the per-item analyses already stored on
-// the board (prompt-from-media), distills one still-image prompt, and persists
-// it as `board.style`. The page then renders that prompt as the poster.
-const composePromptSchema = z.object({
-  providerId: z.string().trim().max(128).optional(),
-  model: z.string().trim().max(256).optional(),
-  effort: z.string().trim().max(64).optional(),
-}).strict();
-// Background analyze job: prompt-from-media over un-analyzed pins, then compose
-// the board style. Survives the page unmounting; progress follows the
-// `mood-board:analyze` socket event and GET restores it on return.
-const analyzeSchema = composePromptSchema.extend({
-  providerId: z.string().trim().min(1).max(128),
-  render: moodBoardItemRenderSchema.optional(),
-}).strict();
 router.post('/:id/analyze', asyncHandler(async (req, res) => {
   const body = validateRequest(analyzeSchema, req.body ?? {});
   const board = await getBoard(req.params.id);
