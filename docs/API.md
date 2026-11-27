@@ -16,10 +16,8 @@ Open **Dev Tools → API Explorer** on your PortOS instance to browse the live r
 - [Internal OpenAPI](http://localhost:5555/api/api-docs/internal/openapi.json) for every mounted HTTP operation
 - [Exposed OpenAPI](http://localhost:5555/api/api-docs/openapi.json) for APIs enabled in Settings
 
-For the bridge between these HTTP/event inventories and model-facing tools,
-see [API and MCP Unified Tool Contract](./API_TOOL_CONTRACT.md). It records
-the shipped semantic registry, MCP context/action schemas, authority matrix,
-and the current-vs-proposed boundary.
+See [API and MCP tools](./API_TOOL_CONTRACT.md) for semantic tool discovery,
+context scope, calls and caller authority.
 
 - `GET /api/api-docs/catalog.json` — searchable metadata for every mounted HTTP operation.
 - `GET /api/api-docs/events.json` — searchable Socket.IO event inventory.
@@ -66,6 +64,16 @@ credentials, local paths, or build identity to these responses.
 
 The separate `/federation/media/v1` surface is already versioned and has its
 own wire contract in [FEDERATED_MEDIA_PROVIDERS.md](./FEDERATED_MEDIA_PROVIDERS.md).
+
+## Media gallery compatibility
+
+`GET /api/image-gen/gallery` without paging or filter keys returns a legacy
+array. Pass `limit` (1–200) and `offset` for `{ items, total, limit, offset }`;
+`total` counts matches even when the requested page is empty.
+Use `media=true` for image and video records as `{ kind, data }`.
+Use an exact filename to resolve a deep-linked preview or
+`POST /api/image-gen/gallery/lookup` to resolve a list of up to 200 filenames.
+The API Explorer supplies the live filter and action schemas.
 
 ## Error Responses
 

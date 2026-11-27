@@ -96,7 +96,7 @@ ordinary application role. Keep that role's existing privileges.
   shaping, or emitted events as applicable. Keep the underlying behavior in
   service tests. Prefer a real service when it is cheap and isolated.
 - Name the regression a test catches. Keep repository-wide scans in the
-  [structural guard runners](docs/CI_HIDDEN_CONTENT_GATE.md#guard-selection-and-registration).
+  [structural guard runners](docs/GITHUB_ACTIONS.md#guard-selection-and-registration).
 
 ## Submit a pull request
 

@@ -24,6 +24,9 @@ Start with the [project overview and quick start](../README.md) or read the [pro
 - [App Wizard](features/app-wizard.md) registers or creates a managed app. [Managed-app visitors](features/managed-visitors.md) covers its separate scoped visitor integration.
 - [Agent skills](features/agent-skills.md) covers discovery, editing and curation.
 - [Chief of Staff](features/chief-of-staff.md) and [peer administration](features/peer-administration.md) cover agent work and federation. [Tailcat peers](features/tailcat-peers.md) explains the private alternative for owned installs that cannot join your tailnet.
+- [PM2 process management](PM2.md) covers starting, stopping and inspecting PortOS processes.
+- [Runtime locks](RUNTIME_LOCKS.md) covers dependency refresh and runtime readiness. [Jev](JEV_SETUP.md) covers local decision scoring setup and recovery.
+- [Containment](CONTAINMENT.md) covers Docker verification. [SuperCollider](SUPERCOLLIDER.md) covers the Music Designer render runtime.
 - [Maintenance scripts](SCRIPTS.md) lists operator commands and when to use them.
 - [Media operation controls](features/media-operation-control.md) covers status and cancellation for active media jobs.
 
@@ -31,6 +34,8 @@ Start with the [project overview and quick start](../README.md) or read the [pro
 
 - [Contributor guide](../CONTRIBUTING.md) covers development setup, conventions, and testing.
 - [Architecture](ARCHITECTURE.md) and [API guide](API.md) explain the codebase and its interfaces.
-- [Hosted CI](GITHUB_ACTIONS.md) and [local pregate](PREGATE.md) explain what runs before and after pushing.
+- [Hosted CI](GITHUB_ACTIONS.md), [local pregate](PREGATE.md) and [test memo](TEST_MEMO.md) explain test selection and pre-push verification.
+- [Dependencies](DEPS.md) lists the packages PortOS uses.
+- [Companion API](COMPANION_APP_API.md) covers native clients. [API and MCP tools](API_TOOL_CONTRACT.md) covers tool discovery and authority.
 - [Versioning and releases](VERSIONING.md) describes the release workflow.
 - [Architecture decisions](decisions/README.md) and [configuration examples](examples/) provide targeted references.

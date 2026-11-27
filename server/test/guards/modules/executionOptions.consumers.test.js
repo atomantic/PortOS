@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { readFile, readdir } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import { REPO_ROOT as root } from '../../../../scripts/lib/guardCorpus.js';
+import inventory from './fixtures/executionOptionsConsumers.json' with { type: 'json' };
 
 async function consumers(directory) {
   const found = [];
@@ -18,9 +19,8 @@ async function consumers(directory) {
 
 describe('execution option consumer inventory', () => {
   it('keeps every shared selection surface in the persistence checklist', async () => {
-    const inventory = await readFile(join(root, 'docs/EXECUTION_OPTIONS.md'), 'utf8');
     const files = await consumers(join(root, 'client/src'));
     expect(files.length).toBeGreaterThan(0);
-    for (const file of files) expect(inventory, file).toContain('`' + file + '`');
+    for (const file of files) expect(inventory, file).toContain(file);
   });
 });

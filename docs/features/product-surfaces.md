@@ -110,7 +110,7 @@ An end-to-end creative production suite for authors, worldbuilders, filmmakers, 
 | **Code Animation** | `/code-animation`, `/code-animation/gallery`, `/code-animation/production` | Generate and preview code-driven animation, then render it to video. Production supports building films across multiple shots. | [Blender Models](./blender-models.md) |
 | **HTML Pages** | `/html-pages`, `/html-pages/runs`, `/html-pages/gallery` | Generate standalone web pages from the same briefs across models and compare the rendered previews side by side. | — |
 | **Decks** | `/decks` | Design playing or tarot cards from a shared style guide. Write or generate each card’s prompt and render cards individually or as a deck. | — |
-| **3D Meshes & Three.js** | `/3d`, `/3d/threejs` | Neural image-to-3D mesh generation (TRELLIS, Pixal3D), Blender models built from Python with checked GLB builds (`/3d/blender/:id`), and procedural Three.js 3D model generation with interactive WebGL preview. | [Three.js Models](../THREEJS_MODELS.md), [Blender Models](./blender-models.md) |
+| **3D Meshes & Three.js** | `/3d`, `/3d/threejs` | Neural image-to-3D mesh generation (TRELLIS, Pixal3D), Blender models built from Python with checked GLB builds (`/3d/blender/:id`), and procedural Three.js 3D model generation with interactive WebGL preview. | [Procedural Three.js](#procedural-threejs), [Blender Models](./blender-models.md) |
 | **Game Studio & Sprites** | `/game`, `/sprites` | 2D game asset creation: 8-directional sprite sheets, animation tracks (walk cycles, idle, actions), atlas compilation, and game asset bundles. | [Sprite Export Contract](./sprite-export-contract.md) |
 | **Music Studio & Designer** | `/music`, `/music/generate` | Local and federated AI music synthesis (Ace-Step, AudioLDM, MusicGen), prompt enrichment, lyric generation, and reference-track style matching. | [Music Renderer Benchmarks](./music-renderer-benchmarks.md), [Federated Media Providers](../FEDERATED_MEDIA_PROVIDERS.md) |
 | **Music Catalog** | `/music/artists`, `/music/albums`, `/music/tracks` | Virtual artist personas with press & submission profiles for festival forms, discographies, album cover art, tracklists, and audio streaming player. | — |
@@ -122,6 +122,23 @@ An end-to-end creative production suite for authors, worldbuilders, filmmakers, 
 | **Sharing & Conflict Resolution** | `/sharing`, `/sharing/duplicates`, `/sharing/conflicts` | Collaborative asset exchange via cloud storage buckets (Google Drive, Dropbox, iCloud, Syncthing) with duplicate reconciliation and conflict recovery journals. | — |
 
 ---
+
+### Procedural Three.js
+
+Select a primary gallery image in **Create → Three.js Models**, then choose
+an image-capable provider and model. Add up to five optional reference views
+with roles. The primary image determines identity and color. Review
+single-view limitations, inspect the assembly with orbit, explode and
+part picking, then refine if needed. Clear the reference list explicitly
+to remove it on refinement. A missing source image or insufficient provider
+attachment capacity stops the request.
+
+PortOS validates declarative scene data before rendering it. Download or
+copy the generated `THREE.Group` factory to reuse the assembly. The exported
+animation player runs from the host's render loop using `update(deltaSeconds)`.
+Scrubbing is silent and playback can deliver cue IDs to an optional host
+callback. For neural mesh installation, use the separate
+[3D runtime profiles](../RUNTIME_LOCKS.md#native-3d-profiles).
 
 ## 4. Personal Knowledge, Life Modeling, Identity, & Health
 
@@ -214,7 +231,7 @@ Local AI model acceleration, multi-machine peer federation, storage classificati
 | **Performance Benchmarks** | `/models/performance` | Automated throughput measurement (tokens/sec, chars/sec, TTFT) across models and engines. | — |
 | **Subscription & AI Usage** | `/devtools/usage` | Check subscription usage and review AI sessions, tokens, and trends by provider or model. | [Federated Usage Metrics](../decisions/2026-09-01-federated-usage-metrics.md) |
 | **LLM Playground** | `/local-llm/playground` | Side-by-side prompt testing, latency benchmarking, and model evaluation. | — |
-| **3D Neural Runtimes** | `/models/3d` | TRELLIS and Pixal3D image-to-3D on-device installation and diagnostics. | [Three.js Models](../THREEJS_MODELS.md) |
+| **3D Neural Runtimes** | `/models/3d` | TRELLIS and Pixal3D image-to-3D on-device installation and diagnostics. | [3D runtime setup](../RUNTIME_LOCKS.md#native-3d-profiles) |
 | **Instances & Peer Federation** | `/instances`, `/settings/sharing` | Multi-install peer federation across Tailscale VPN, capability discovery, and federated media generation offloading. | [FEDERATED_MEDIA_PROVIDERS.md](../FEDERATED_MEDIA_PROVIDERS.md) |
 | **Setup** | `/capabilities` | Check install readiness and see what still needs configuration before using PortOS features. | [Setup Guide](../SETUP.md) |
 | **PostgreSQL Datastore** | `/settings/database` | Mandatory local PostgreSQL datastore with pgvector extension, migrations, and storage classification contract. | [STORAGE.md](../STORAGE.md), [Postgres ADR](../decisions/2026-06-07-postgres-as-primary-datastore.md) |

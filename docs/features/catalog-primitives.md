@@ -1,6 +1,6 @@
 # Catalog creative primitives
 
-HTTP contract details for catalog creative primitives (character, place, object, idea, scene, concept and active custom types) and universe canon. Moved from the API reference; the complete operation list is the API Explorer (`/api-reference/catalog`). Scrap graph commits are in [catalog-ingest.md](./catalog-ingest.md#scrap-graph-commits); shared identity agreements are in [CATALOG_SHARED_IDENTITY.md](../CATALOG_SHARED_IDENTITY.md).
+HTTP contract details for catalog creative primitives (character, place, object, idea, scene, concept and active custom types) and universe canon. Moved from the API reference; the complete operation list is the API Explorer (`/api-reference/catalog`). Scrap graph commits are in [catalog-ingest.md](./catalog-ingest.md#scrap-graph-commits); shared identity agreements are in [Shared catalog identity](#shared-catalog-identity).
 
 ## Ownership, locks and forks
 
@@ -91,3 +91,38 @@ first. `catalog:primitive-changed` refreshes ownership and membership views.
 
 Migration 422 fills blank descriptions from existing image prompts. It
 preserves authored descriptions and locked entries and makes no AI calls.
+
+## Shared catalog identity
+
+A shared identity agreement consolidates same-type ingredients on two
+paired, compatible owners with catalog sharing enabled. The survivor
+keeps its ID and owner. The source ID, original records, histories,
+attachments, references and provenance remain available. Use
+[local consolidation](../CATALOG_LOCAL_MERGE.md) for two records on one owner.
+
+1. Unlock both records. On the survivor owner, preview the pair and
+   resolve differing populated fields before creating the operation.
+2. Import on the source owner. An authorized operator on each side accepts
+   the same plan. Acceptance reserves both records and associations.
+3. Advance on the survivor owner to verify source preparation and commit,
+   then advance on the source to adopt the result. Check each phase
+   separately. On timeout, inspect or retry the same operation.
+
+The coordinator can abort before commitment. A prepared source needs the
+coordinator's durable decision before releasing its reservation. An offline
+owner can leave records reserved through restart and delay catalog sync.
+Do not bypass that reservation in the database. After commitment, use the
+survivor ID and owner for edits and advance the same agreement to refresh a
+stale source projection. Embedded project snapshots retain their context.
+
+To recover, start on the coordinator, prepare on the source and advance on
+both. Recovery refuses if applied records or attachments have since changed.
+
+## Environment greyboxes
+
+Open an Environment's **Greybox** tab and choose a starter or attach a
+Blender layout. Use coarse geometry, figure anchors and saved camera
+shots to preserve placement, scale and framing across shots. Dimensions
+are in metres with the floor at zero. Capture a view as a shot reference,
+or use the Photoreal tab to render through Blender. See the
+[offline sequence command](../SCRIPTS.md#offline-greybox-sequences).

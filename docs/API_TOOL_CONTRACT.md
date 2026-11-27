@@ -1,355 +1,63 @@
-# PortOS API and MCP Unified Tool Contract
+# PortOS API and MCP tools
 
-Status: current implementation audit
-Date: 2026-09-12
+Use the [API guide](API.md) and its generated OpenAPI, AsyncAPI and
+catalog resources to discover live HTTP operations and Socket.IO events.
+The HTTP inventory describes transport. Semantic tools are a governed
+registry of named adapters with closed input schemas and server-derived
+authority.
 
-This document is the implementation-facing bridge between PortOS's exhaustive
-HTTP inventory, the governed semantic registry, Persistent Mind, and Agent
-Tools (MCP). It records the shipped tool contract.
+## Catalogs and callers
 
-## Audit result
+| Surface | Contract |
+| --- | --- |
+| `GET /api/cos/tools` | Scope filter (`all`, `agent`, `mind`, `ui`, `voice`), optional voice intent filter, and `portos`, `openai`, `anthropic` or `mcp` formats. Supports ETag revalidation. |
+| `GET /api/cos/mind/tools` | Persistent Mind capability boundaries, grants, managed apps and available saved recipes |
+| `GET /api/agent-context/manifest` | Agent Tools feature state, profile, scopes, grants, limits and advertised tool schemas |
+| `POST /api/agent-context/mcp` | Stateless Streamable HTTP. Send `Accept: application/json, text/event-stream`. Supports `initialize`, `ping`, `tools/list` and `tools/call`. Notifications receive 202. |
 
-The current source contains:
+Agent Tools accepts only loopback connections and loopback browser
+origins. An enabled PortOS password gate still applies. The read-only
+context handlers expose scoped Navigation, Workspaces, Brain projections
+and Identity-export sections. The manifest supplies the exact schemas
+for `context_profile`, `search_context`, `get_context`, `list_context`
+and `resolve_navigation`. Profiles limit exposed fields and exclude
+credentials, raw personal exports and sensitive local data.
 
-- An HTTP inventory (146 mounted prefixes, 2,138 deduplicated operations, and
-  2,141 route declarations at the time of the audit) derived from the mounted
-  Express routers by `server/lib/apiRouteGraph.js` on first use, then cached
-  for the lifetime of the server process.
-- A Socket.IO inventory derived from server and client call sites on first use,
-  then cached the same way.
-- Provider-neutral semantic tools, filtered by scope: 48 at `mind`, 32 at
-  `agent` and `ui`, 23 at `voice`. The shared core is the 22 semantic
-  adapters inherited from the voice registry (tabulated below); `mind` adds
-  `cos.create-task`, the `issues.list` / `issues.file` forge pair, and the
-  `mind.*` family, while `agent` and `ui` add the `eidoverse.*` family and
-  `user-actions.query`. Read the live count from `getCosToolCatalog({ scope })`
-  rather than from this paragraph.
-- Five read-only context tools on the Agent Tools MCP transport. The MCP
-  transport may additionally advertise the 22 semantic adapters and eligible
-  machine-local saved read recipes when their independent grants are enabled.
+Semantic writes require a caller's existing authority. UI calls use
+the PortOS session and voice uses its existing pipeline controls.
+Persistent Mind and Agent Tools have separate default-off grants.
+A requested catalog scope filters the output and never grants that
+scope. Clients supply a named tool and typed arguments. The server
+derives scope and principal, resolves the adapter, validates arguments
+and checks the active grants before invocation.
 
-The route catalog is the exhaustive HTTP map. Both it and the Socket.IO
-inventory are derived directly from their source declarations, so there is no
-checked-in manifest to regenerate for either. The in-app API Explorer and the
-following endpoints expose both inventories at runtime:
+## Calls and results
 
-| Surface | Endpoint | Contract |
-|---|---|---|
-| HTTP inventory | `GET /api/api-docs/catalog.json` | Searchable route metadata, domains, access classification, side-effect classification, and modeled/generated status. |
-| Internal HTTP spec | `GET /api/api-docs/internal/openapi.json` | OpenAPI 3.0.3 for every mounted HTTP operation. Generated operations have path parameters and a default response; modeled operations add richer contracts. |
-| Public HTTP spec | `GET /api/api-docs/openapi.json` | OpenAPI 3.0.3 for only APIs exposed through Settings → API Access. |
-| Socket.IO inventory | `GET /api/api-docs/events.json` | Searchable event names, direction, and payload-contract status. |
-| Socket.IO spec | `GET /api/api-docs/asyncapi.json` | AsyncAPI 3 document for the Socket.IO transport. |
-| HTTP tool resource | `GET /api/api-docs/tools.min.json` | Minimized provider-neutral records for the operations annotated `x-portos-tool`, with an HTTP binding and declared failure codes. Schemas are JSON Schema, sized for an agent to read whole. |
+The canonical envelope uses `type: "portos_tool_call"`,
+`version: 1`, `requestId`, `name` and `arguments`. Type and version
+default to the current values when omitted. The request ID is required,
+trimmed, at most 200 characters, and accepts letters, digits,
+`.`, `_`, `:` and `-`. The result echoes identifying fields with
+`type: "portos_tool_result"`, `state`, `duplicate`, and either
+`result` or a bounded error. While a process-local idempotency record
+is retained, identical normalized requests replay the result and
+a different request under the same ID returns
+`409 TOOL_IDEMPOTENCY_CONFLICT`. Provider schemas are projections of
+the same catalog.
 
-Neither HTTP route nor Socket.IO event declarations require a regeneration
-step; the server derives and caches both inventories from source.
+## Forge issues and saved recipes
 
-## Endpoint map
+Persistent Mind requires its separate `fileIssues` grant and an allowed
+managed app with a resolved GitHub or GitLab tracker for `issues.list` or
+`issues.file`. Filing requires model and effort dispatch hints and a
+successful tracker read. An incomplete list cannot establish that an
+issue is absent. Check completeness and use paginated, all-state forge
+search for duplicate checks beyond the bounded open-issue list.
 
-### Governed semantic registry
-
-| Method | Endpoint | Request and response behavior |
-|---|---|---|
-| `GET` | `/api/cos/tools` | Query: `scope=all\|agent\|mind\|ui\|voice`, optional `intent` (trimmed, ≤500 characters), and `format=portos\|openai\|anthropic\|mcp`. Mind and agent scopes refresh saved recipe availability. Returns a catalog with an `ETag`; recipe revision/archive/restore changes alter it, and `If-None-Match` returns `304`. |
-
-The semantic registry is not a route proxy. A caller supplies a catalog tool
-name and typed arguments; it cannot supply a URL, route, shell command, SQL
-query, or adapter name. The registry resolves the tool, validates its closed
-input schema, checks scope and capabilities, then invokes a named adapter.
-
-### Agent Tools MCP
-
-| Method | Endpoint | Request and response behavior |
-|---|---|---|
-| `GET` | `/api/agent-context/manifest` | Loopback/origin-checked manifest. It remains readable when the feature is disabled and reports `enabled`, profile, scopes, grants, limits, exclusions, and advertised tool schemas. |
-| `POST` | `/api/agent-context/mcp` | Stateless MCP Streamable HTTP. Requires `Accept: application/json, text/event-stream`; supports `initialize`, `ping`, `tools/list`, and `tools/call`. Notifications receive `202`; unsupported GET/DELETE receive `405`. |
-
-The transport accepts loopback socket addresses only and rejects a non-loopback
-`Origin`. The normal PortOS authentication gate still applies when an instance
-password is configured. Context tools remain read-only. Semantic actions and
-saved recipe invocation are separate default-off grants and execute through
-the same registry as Persistent Mind.
-
-### Persistent Mind authority inventory
-
-`GET /api/cos/mind/tools` remains a separate authority view. It reports the
-Persistent Mind capability schema, boundaries, grant state, managed-app roster,
-and current saved recipe descriptors. Coding-provider catalogs stay on the
-wake-time task prompt, not this settings view.
-It is not the generic semantic catalog. Persistent Mind execution uses the
-same registry internally and has a five-call semantic/tool budget plus a
-five-task-per-turn budget. No new authority is implied by the broader HTTP
-inventory.
-
-## Canonical registry entry
-
-The runtime shape is defined by `server/services/cos/cosToolRegistry.js` and
-`server/lib/cos/cosToolContracts.js`:
-
-```json
-{
-  "type": "portos_tool",
-  "name": "brain.search",
-  "version": 1,
-  "providerName": "brain_search",
-  "aliases": ["brain_search"],
-  "description": "Search the user's brain inbox.",
-  "input_schema": {
-    "type": "object",
-    "required": ["query"],
-    "properties": {
-      "query": {"type": "string"},
-      "limit": {"type": "integer"}
-    },
-    "additionalProperties": false
-  },
-  "output_schema": {"type": "object", "additionalProperties": true},
-  "policy": {
-    "scopes": ["agent", "mind", "ui", "voice"],
-    "requiredCapabilities": ["readPortos"],
-    "sideEffect": "read",
-    "idempotent": true,
-    "async": false,
-    "confirmation": "none"
-  }
-}
-```
-
-The runtime currently uses `write` and `read` as semantic side-effect values;
-the broader design spec's future `local-write`, `external-write`, and
-`process-control` taxonomy is not yet the shipped registry vocabulary.
-`adapter` is an internal field and is not exposed in public catalog responses.
-
-## Shipped semantic tool definitions
-
-The canonical name is stable; the provider name and legacy alias preserve the
-existing voice-tool contract. `readPortos` and `writePortos` are independent
-grants. The input details below summarize the source schemas; the live catalog
-is authoritative for descriptions and JSON Schema.
-
-| Canonical name | Provider/legacy name | Arguments | Side effect |
-|---|---|---|---|
-| `brain.capture` | `brain_capture` | `text`; required | write |
-| `brain.search` | `brain_search` | `query`; optional `limit` | read |
-| `brain.recent` | `brain_list_recent` | optional `limit` | read |
-| `health.log.drink` | `meatspace_log_drink` | `name`; optional `count`, `oz`, `abv` | write |
-| `health.log.nicotine` | `meatspace_log_nicotine` | `product`; optional `count`, `mgPerUnit` | write |
-| `health.today` | `meatspace_summary_today` | none | read |
-| `health.log.weight` | `meatspace_log_weight` | `weight`; optional `unit`, `date` | write |
-| `health.log.workout` | `meatspace_log_workout` | `type`; optional `durationMinutes`, `intensity`, `notes`, `date` | write |
-| `goals.list` | `goal_list` | optional `limit` | read |
-| `goals.update-progress` | `goal_update_progress` | `goalQuery`; `progress` | write |
-| `goals.log-note` | `goal_log_note` | `goalQuery`; `note`; optional `durationMinutes` | write |
-| `system.processes.status` | `pm2_status` | none | read |
-| `feeds.digest` | `feeds_digest` | optional `limit` | read |
-| `feeds.mark-read` | `feeds_mark_read` | optional `query`, `all`, `feedQuery` | write |
-| `journal.append` | `daily_log_append` | `text`; optional `date` | write |
-| `journal.read` | `daily_log_read` | optional `date` | read |
-| `time.now` | `time_now` | none | read |
-| `calendar.today` | `calendar_today` | optional `limit` | read |
-| `calendar.next` | `calendar_next` | none | read |
-| `weather.now` | `weather_now` | optional `lat`, `lon` | read |
-| `cos.agents.status` | `code_agent_status` | none | read |
-| `catalog.search` | `catalog_lookup` | `query`; optional `type`, `limit` | read |
-
-All 22 entries are scope-eligible for `agent`, `ui`, and `voice`; the
-Persistent Mind `mind` scope additionally includes `cos.create-task`,
-`issues.list`, and `issues.file`. None of the three is in the Agent MCP
-catalog. The task tool validates its app, provider, model, effort, mode,
-required checks, tracker, readiness, and landing policy before queueing.
-
-### Forge issues
-
-`issues.list` and `issues.file` are gated on the separate default-off
-`fileIssues` grant and are the queueing lane for an install with no coding
-agent attached. Both re-check the grant after inference and accept only a
-managed app that is in the mind's shared `allowedAppIds` allowlist AND whose
-resolved work tracker is GitHub or GitLab. `issues.file` requires both
-dispatch axes (`model`, `effort`), applies the `persistent-mind` and
-`planner:<model>` attribution labels, accepts only a closed category-label
-vocabulary, and refuses to file when the tracker could not be read — an
-unreadable tracker never reads as an empty backlog. `issues.list` returns open
-issues only, with a local case-insensitive substring `search` and an exact
-`label` filter, plus additive completeness fields: `fetchedCount`,
-`matchedCount`, `returnedCount`, `complete`, `truncated`, and
-`truncationReasons` (`source-limit`, `body-clipped`, `row-limit`,
-`response-budget`). `totalOpen` is the exact open count, or `null` when the
-forge page was capped (200 GitHub / 100 GitLab) and so cannot certify a total.
-Rows are fitted under ~3,500 characters (previews shrink first, then trailing
-rows drop, never below one). Only `complete: true` with zero matches is a
-conclusive negative for that scope; for a duplicate check beyond it, use the
-forge CLI in the app repository with all-state search and pagination. Editing, closing,
-commenting on, assigning, and relabeling an existing issue are out of scope.
-
-### Saved read recipes
-
-Saved `recipe.*` tools come from the versioned Persistent Mind recipe library.
-They are discovered on each Mind/agent catalog read rather than added to the
-static adapter list. The native catalog exposes provenance, active revision,
-underlying canonical read-tool names, availability, and a bounded disabled
-reason. It never exposes definition literals, bindings, revision history, or
-execution results. Provider formats carry only the purpose, invocation schema,
-and a bounded local-recipe revision suffix.
-
-Agent MCP has its own `callToolRecipes` grant; it never inherits Persistent
-Mind's `manageToolRecipes` authority and cannot author, update, archive, or
-restore definitions. An agent recipe must validate entirely against the agent
-scope, requires every underlying semantic grant, refreshes settings before
-each child, and uses at most five child calls even outside a Mind turn. A
-Mind-only primitive therefore remains unavailable to an agent even when the
-recipe author could use it. Normal catalog reads and calls re-resolve the
-active revision, so revocation, archive, restore, and schema drift fail closed.
-
-## MCP context tool definitions
-
-These five tools are advertised from `server/lib/agent/agentContextValidation.js`
-and executed by `server/services/agent/agentContextMcp.js`:
-
-| Tool | Input | Output and requirement |
-|---|---|---|
-| `context_profile` | `{}` | Active profile, enabled scopes, semantic grants, limits, and exclusions. |
-| `search_context` | `{ query: string (1–200), scopes?: unique scope[], limit?: 1–25 }` | Bounded items, `total`, `truncated`, `sourceTruncated`, and `sourceStatus`. |
-| `get_context` | `{ ref: string (1–180) }` | One item or `null`, plus source truncation/status. An unavailable scope returns `item: null`. |
-| `list_context` | `{ scope, cursor?: integer ≥0, limit?: 1–25 }` | Bounded page, `total`, nullable `nextCursor`, truncation, and source status. |
-| `resolve_navigation` | `{ query: string (1–200) }` | A navigation match or `null`; requires the `navigation` scope. |
-
-Context items are limited to Navigation, Workspaces, Brain projections, and
-Identity-export sections. Profiles are `metadata` and `summary`; summaries
-apply high-confidence redaction but are not an anonymization guarantee. The
-transport excludes privacy-vault data, credentials, federation/network and
-machine identity, repository paths and branches, browser/message history,
-health records, and raw personal exports.
-
-## Canonical call and result
-
-The strict call envelope is:
-
-```json
-{
-  "type": "portos_tool_call",
-  "requestId": "example-call-01",
-  "name": "brain.search",
-  "version": 1,
-  "arguments": {"query": "example", "limit": 5}
-}
-```
-
-`requestId` is required, trimmed, limited to 200 characters, and restricted to
-letters, numbers, `.`, `_`, `:`, and `-`. `name` is similarly constrained and
-must resolve to a canonical name, provider name, or legacy alias. Unknown
-fields are rejected. `type` and `version` default to the current values when
-omitted; a future version must be rejected until its compatibility path is
-implemented.
-
-A normalized outcome is shaped as follows:
-
-```json
-{
-  "type": "portos_tool_result",
-  "requestId": "example-call-01",
-  "name": "brain.search",
-  "version": 1,
-  "state": "completed",
-  "duplicate": false,
-  "result": {"ok": true, "count": 0, "hits": [], "summary": "No matches."}
-}
-```
-
-Adapter failures use `state: "failed"` and a bounded `error` string. A
-replayed request with the same canonical tool and normalized arguments returns
-the retained result with `duplicate: true`; a reused request ID with different
-content returns `409 TOOL_IDEMPOTENCY_CONFLICT`. Results and fingerprints are
-process-local and retained only for bounded in-memory windows.
-
-Provider translations are mechanical projections of the same entry:
-
-- OpenAI uses `{ type: "function", function: { name: providerName,
-  description, parameters: input_schema } }`.
-- Anthropic uses `{ name: providerName, description, input_schema }`.
-- MCP uses `name`, `description`, `inputSchema`, `outputSchema`, and standard
-  read-only/destructive/idempotent/open-world annotations.
-
-For a saved recipe, each provider description also carries a bounded
-machine-local origin and active-revision suffix because those formats have no
-native recipe metadata field.
-
-## Authority and bridge
-
-```text
-Persistent Mind ─┐
-Authenticated UI ─┼─> portos_tool_call -> resolve -> validate -> authorize -> adapter
-Agent MCP ───────┘             │
-                               └─> portos_tool_result
-
-Agent MCP context tools ───────> read-only context handlers (separate path)
-REST/OpenAPI route inventory ──> discovery only; raw routes are never tools
-```
-
-| Caller | Server-derived authority | Default | Allowed mutation path |
-|---|---|---|---|
-| Persistent Mind | `scope: mind`, persisted capability grant | off | `cos.create-task`, `issues.file`, semantic writes when separately granted |
-| Agent MCP | `scope: agent`, Agent Tools action and saved-recipe grants | off | semantic writes when separately granted; saved recipes can orchestrate only granted agent-scope reads |
-| HTTP registry | `scope: ui`, PortOS auth context | reads may be anonymous on a passwordless install | writes require an authenticated PortOS session |
-| Voice adapter | existing voice pipeline context | existing voice policy | existing voice-side confirmation/pipeline controls |
-
-The request body cannot claim a scope, principal, or capability. Catalog
-`scope` is a filter, not proof of authority; an `intent` filter only reduces
-the advertised voice subset and never authorizes a call. The public API
-registry remains separate: CoS tools and Agent MCP do not become externally
-exposable merely because they appear in the internal OpenAPI inventory.
-
-## Findings and follow-up boundary
-
-1. **Resolved documentation drift.** The prior unified spec said 2,066 HTTP
-   operations, 23 Persistent Mind tools, 22 semantic tools, and a `cursor`
-   catalog query. The current generated inventory is 2,069 operations; the
-   runtime registry answers per scope (48 at `mind`, 32 at `agent` and `ui`,
-   23 at `voice`) over a shared core of 22 semantic adapters,
-   and the implemented catalog query is `scope`, `intent`, and `format`.
-   The point-in-time spec's implemented-foundation text is corrected in this
-   PR.
-2. **OpenAPI completeness is intentionally staged.** The internal document is
-   exhaustive as an operation inventory, but most operations are marked
-   `generated` and expose only path parameters plus a default response. It
-   must not be used as if every route already had a stable request/response
-   schema. Rich contracts belong in `server/lib/apiOperationContracts.js` and
-   must reuse route Zod schemas.
-3. **Long-running job semantics are not shipped in the registry yet.** The
-   current `cos.create-task` adapter returns a completed tool call whose nested
-   result says `state: "queued"`; there is no `/jobs/:jobId/events`, cancel,
-   confirm, or durable result endpoint. Those routes remain proposed design
-   backlog and must not be advertised by a client generated from this current
-   contract.
-4. **Recipe calls are bounded on both agent surfaces.** Persistent Mind charges
-   every recipe child to its shared five-call turn budget. Agent MCP has no
-   turn loop, so each recipe invocation receives its own five-child budget.
-   This is not a generic HTTP/MCP rate limit; ordinary calls continue to rely
-   on grants, typed adapters, idempotency, and the deployment trust boundary.
-5. **Disabled MCP manifest nuance.** The MCP execution route is blocked while
-   the feature is disabled, but a previously saved semantic action grant can
-   still appear in the readable manifest because advertised semantic tools are
-   derived from action grants independently of `enabled`. This is intentional:
-   the manifest stays readable while disabled and reports `enabled: false`, so
-   the grant state remains inspectable, while execution stays refused
-   (`POST /api/agent-context/mcp` returns 403 `AGENT_CONTEXT_DISABLED`). The
-   manifest is not suppressed.
-
-Evidence anchors for these findings are the route catalog `stats` served by
-`GET /api/api-docs/catalog.json`,
-`VOICE_ADAPTERS` in `server/services/cos/tools/voiceTools.js`, the catalog query
-schema in `server/lib/cos/cosToolContracts.js`, the async task policy in
-`server/services/cos/tools/mindTools.js`, the normalized result path in
-`server/services/cos/cosToolRegistry.js`, and
-`semanticToolsForConfig`/`getManifest` in `server/services/agent/agentContextMcp.js`.
-
-## Validation
-
-- `server/test/guards/modules/apiRouteGraph.test.js` — source-derived HTTP inventory (at audit
-  time 2,138 operations / 2,141 declarations / 146 mounts), coverage of every
-  declaration under `server/routes/`, and representative-route pins.
-- `server/lib/socketEventInventory.test.js` — source-derived Socket.IO inventory,
-  representative-event coverage, direction normalization, and runner-tree exclusion.
-- Focused Vitest execution was attempted but this isolated worktree has no
-  installed `server/node_modules` (`vitest: command not found`). No live
-  database, provider, MCP client, or personal records were used.
+Saved `recipe.*` entries expose their active revision, provenance,
+invocation schema and availability. Agent Tools needs its own
+`callToolRecipes` grant and all underlying agent-scope read grants.
+Recipes cannot extend those grants. Each child rechecks live settings,
+and agent recipes run at most five child calls. Persistent Mind separately
+limits its semantic calls and task creation to five each per turn.
+The live catalog and adapter schemas are authoritative.
