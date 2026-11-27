@@ -16,4 +16,4 @@ Keep the vendored toolkit self-contained. **Never import out to another PortOS m
 - Register host CLI/TUI runners through the toolkit setters. Host-spawned processes must register/unregister external runs. All lifecycle operations consult that registry.
 - Check `isRunCanceledError` before turning failures into verdicts. Preserve cancellation metadata and hooks. Timeout wins over cancellation.
 - Keep prerequisites synchronous and fail open for missing or malformed answers. Mirror timed recovery on every status read.
-- API streaming owns stall/absolute deadlines and terminal metadata. Host backstops use `apiRunAbsoluteTimeoutMs`. See `internal/runTimeouts.js`, `internal/streamTransport.js` and `runner.js`.
+- API streaming owns stall/absolute deadlines and terminal metadata. Host backstops use `apiRunAbsoluteTimeoutMs`. See `internal/runTimeouts.js`, `internal/streamTransport.js` and `internal/apiStreamExecutor.js`.

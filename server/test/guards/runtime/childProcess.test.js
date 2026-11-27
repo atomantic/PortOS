@@ -230,7 +230,7 @@ describe('child_process import guard', () => {
 
   it('keeps windowsHide on every spawn in trees that cannot import the wrapper', () => {
     // Per call site, not per file. A file-level "mentions windowsHide somewhere"
-    // check is the weak form of exactly this rule: aiToolkit/runner.js already
+    // check is the weak form of exactly this rule: aiToolkit/internal/cliExecutor.js already
     // contains the string, so a third spawn added there would never be checked —
     // reintroducing, at smaller scale, the failure mode the wrapper exists to end.
     const offenders = [];

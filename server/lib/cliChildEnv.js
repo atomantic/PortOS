@@ -11,7 +11,7 @@
  * explicit provider `GH_TOKEN` overrides the repo-owner-pinned one) and `extra`
  * above it (TERM/COLORTERM for a PTY). `cliChildEnv.test.js` asserts the order.
  *
- * `lib/aiToolkit/runner.js` is vendored (see `lib/aiToolkit/AGENTS.md`) and keeps its own copy.
+ * `lib/aiToolkit/internal/cliExecutor.js` is vendored (see `lib/aiToolkit/AGENTS.md`) and keeps its own copy.
  */
 
 import { withSpawnCwdEnv } from './spawnCwd.js';
