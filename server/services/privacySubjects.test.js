@@ -148,6 +148,24 @@ describe('deleteSubject', () => {
     expect(eraseMock.mock.invocationCallOrder[0]).toBeLessThan(client.query.mock.invocationCallOrder.at(-1));
   });
 
+  it('scrubs address city and city/state from legacy drafts before deleting the subject', async () => {
+    process.env.PRIVACY_VAULT_KEY = 'b'.repeat(64);
+    const address = (await import('../lib/vaultCrypto.js')).encryptValue('1 Main St, Portland, OR 97201');
+    const client = { query: vi.fn(async sql => {
+      if (sql.includes('SELECT id')) return { rows: [{ id: 's2' }] };
+      if (sql.includes('SELECT type, value_enc')) return { rows: [{ type: 'address', value_enc: address }] };
+      return { rows: [] };
+    }) };
+    withTransactionMock.mockImplementation(fn => fn(client));
+
+    await deleteSubject('s2');
+
+    expect(scrubMock).toHaveBeenCalledWith(['1 Main St, Portland, OR 97201', 'Portland', 'Portland, OR']);
+    expect(client.query).toHaveBeenCalledWith(expect.stringContaining('SELECT type, value_enc'), ['s2', expect.any(Array)]);
+    expect(client.query.mock.invocationCallOrder.find((_, index) => client.query.mock.calls[index][0].includes('DELETE FROM privacy_subjects')))
+      .toBeGreaterThan(client.query.mock.invocationCallOrder.find((_, index) => client.query.mock.calls[index][0].includes('SELECT type, value_enc')));
+  });
+
   it('404s an unknown subject', async () => {
     const client = { query: vi.fn(async () => ({ rows: [] })) };
     withTransactionMock.mockImplementation(fn => fn(client));

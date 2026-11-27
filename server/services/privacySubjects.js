@@ -204,15 +204,15 @@ export async function deleteSubject(id) {
     // Collect ciphertext under the same lock that excludes new FK references
     // before deleting the subject would make these values unrecoverable.
     const { rows } = await client.query(
-      `SELECT value_enc FROM privacy_vault_records WHERE subject_id = $1 AND type <> ALL($2::text[]) FOR UPDATE`,
+      `SELECT type, value_enc FROM privacy_vault_records WHERE subject_id = $1 AND type <> ALL($2::text[]) FOR UPDATE`,
       [id, PRIVACY_SENSITIVE_TYPES],
     );
     if (rows.length > 0) {
       const { scrubRevokedPrivacyFacts } = await import('./privacyPromptScrub.js');
       await scrubRevokedPrivacyFacts(rows.map(row => row.value_enc));
     }
-    const { eraseSubjectDrafts, decryptForScrub } = await import('./privacyDraftErasure.js');
-    await eraseSubjectDrafts(id, decryptForScrub(rows.map(row => row.value_enc)));
+    const { eraseSubjectDrafts, draftScrubNeedlesForRows } = await import('./privacyDraftErasure.js');
+    await eraseSubjectDrafts(id, draftScrubNeedlesForRows(rows));
     await client.query(`DELETE FROM privacy_subjects WHERE id = $1`, [id]);
     console.log(`🗑️ Deleted privacy subject ${id} (vault/orgs/holdings/changes/cases cascaded)`);
     return { ok: true };
