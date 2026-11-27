@@ -318,6 +318,9 @@ export const mediaDdl = [
     // created_at DESC is the gallery/history sort order; kind narrows
     // images-vs-videos. A composite (kind, created_at DESC) serves both.
     `CREATE INDEX IF NOT EXISTS idx_media_assets_kind_created ON media_assets (kind, created_at DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_media_assets_visible_images_created ON media_assets (created_at DESC, media_key ASC) WHERE kind = 'image' AND NOT is_hidden`,
+    `CREATE INDEX IF NOT EXISTS idx_media_assets_visible_image_facets ON media_assets (universe_id, universe_name, entry_category, entry_kind) WHERE kind = 'image' AND NOT is_hidden`,
+    `CREATE INDEX IF NOT EXISTS idx_media_assets_kind_ref ON media_assets (kind, ref)`,
 
     // Code Animation jobs. The searchable gallery fields are mirrored into
     // columns; the full brief/provider/status record lives in JSONB, while the

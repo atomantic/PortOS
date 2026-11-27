@@ -99,20 +99,24 @@ describe('init-db.sql (generated from db/schema)', () => {
   // The operator-action ledger (#5594) and the human-activity timeline (#2150)
   // rely on their dedupe index as the ON CONFLICT idempotency contract, and on
   // the composites (#5715) to keep a source-scoped read off a full happened_at walk.
-  it('human_activity_events keeps its dedupe + composite indexes', () => {
+  it('human_activity_events keeps its dedupe and query indexes', () => {
     expect(asObject(indexes.get('human_activity_events'))).toEqual({
+      idx_human_activity_account_happened: '(account_id, happened_at desc) where account_id is not null',
       idx_human_activity_dedupe: 'unique (source, dedupe_key)',
       idx_human_activity_happened: '(happened_at)',
+      idx_human_activity_happened_id: '(happened_at desc, id desc)',
+      idx_human_activity_participants: 'using gin (participants jsonb_path_ops)',
       idx_human_activity_source_happened: '(source, happened_at desc)',
       idx_human_activity_source_kind_happened: '(source, kind, happened_at desc)',
     });
   });
 
-  it('user_action_events keeps its dedupe index', () => {
+  it('user_action_events keeps its dedupe and query indexes', () => {
     expect([...(indexes.get('user_action_events') ?? new Map()).keys()].sort()).toEqual([
       'idx_user_action_actor_time',
       'idx_user_action_dedupe',
       'idx_user_action_happened',
+      'idx_user_action_happened_id',
       'idx_user_action_type_time',
     ]);
     expect(indexes.get('user_action_events').get('idx_user_action_dedupe')).toMatch(/^unique /);

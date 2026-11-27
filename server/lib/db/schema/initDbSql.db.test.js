@@ -96,6 +96,24 @@ describe.skipIf(!runDb)('generated init-db.sql ↔ ensureSchema catalog', () => 
     });
 
     expect(new Set(fromFile.columns.map((row) => JSON.parse(row).relname)).size, 'schema built no tables').toBeGreaterThan(100);
+    const indexes = new Map(fromBoot.indexes.map((row) => {
+      const { indexname, indexdef } = JSON.parse(row);
+      return [indexname, indexdef];
+    }));
+    expect(indexes.get('idx_media_assets_visible_images_created'))
+      .toContain("ON media_assets USING btree (created_at DESC, media_key) WHERE (((kind)::text = 'image'::text) AND (NOT is_hidden))");
+    expect(indexes.get('idx_media_assets_visible_image_facets'))
+      .toContain("ON media_assets USING btree (universe_id, universe_name, entry_category, entry_kind) WHERE (((kind)::text = 'image'::text) AND (NOT is_hidden))");
+    expect(indexes.get('idx_media_assets_kind_ref')).toContain('ON media_assets USING btree (kind, ref)');
+    expect(indexes.get('idx_human_activity_happened_id'))
+      .toContain('ON human_activity_events USING btree (happened_at DESC, id DESC)');
+    expect(indexes.get('idx_human_activity_participants'))
+      .toContain('ON human_activity_events USING gin (participants jsonb_path_ops)');
+    expect(indexes.get('idx_human_activity_account_happened'))
+      .toContain('ON human_activity_events USING btree (account_id, happened_at DESC) WHERE (account_id IS NOT NULL)');
+    expect(indexes.get('idx_user_action_happened_id'))
+      .toContain('ON user_action_events USING btree (happened_at DESC, id DESC)');
+
     for (const kind of Object.keys(CATALOG_QUERIES)) {
       expect(fromFile[kind], `${kind} differ between init-db.sql and ensureSchema`).toEqual(fromBoot[kind]);
     }
