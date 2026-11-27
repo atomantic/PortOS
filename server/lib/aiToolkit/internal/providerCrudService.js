@@ -3,6 +3,7 @@ import { isCompositeProviderId } from './providerRef.js';
 
 export function createProviderCrudService({
   loadProviders,
+  loadProvidersForWrite,
   saveProviders,
   buildProviderRecord,
   storeProviderRecords,
@@ -66,7 +67,7 @@ export function createProviderCrudService({
     },
 
     async setActiveProvider(id) {
-      const data = await loadProviders();
+      const data = await loadProvidersForWrite();
       if (!data.providers[id]) return null;
       data.activeProvider = id;
       await saveProviders(data);
@@ -74,7 +75,7 @@ export function createProviderCrudService({
     },
 
     async createProvider(providerData) {
-      const data = await loadProviders();
+      const data = await loadProvidersForWrite();
       const provider = buildProviderRecord(data.providers, providerData);
       storeProviderRecords(data, [provider]);
       await saveProviders(data);
@@ -85,7 +86,7 @@ export function createProviderCrudService({
       const split = expandModePair(providerData);
       if (!split) throw new Error('createProviderModes requires a modes declaration');
 
-      const data = await loadProviders();
+      const data = await loadProvidersForWrite();
       const created = split.map(modeData => buildProviderRecord(data.providers, modeData));
       storeProviderRecords(data, created);
       await saveProviders(data);
@@ -93,7 +94,7 @@ export function createProviderCrudService({
     },
 
     async createProviderTuiMode(id, tuiOverrides = {}) {
-      const data = await loadProviders();
+      const data = await loadProvidersForWrite();
       const stored = data.providers[id];
       if (!stored) return null;
       if (stored.type !== 'cli') throw new Error('Only a CLI provider can gain a TUI mode');
@@ -105,7 +106,7 @@ export function createProviderCrudService({
     },
 
     async updateProvider(id, updates, { trackModelRemovals = false } = {}) {
-      const data = await loadProviders();
+      const data = await loadProvidersForWrite();
       const previous = data.providers[id];
       if (!previous) return null;
 
@@ -137,7 +138,7 @@ export function createProviderCrudService({
     },
 
     async applyProviderPatches(patches) {
-      const data = await loadProviders();
+      const data = await loadProvidersForWrite();
       const applied = [];
       for (const [id, updates] of Object.entries(patches || {})) {
         if (!data.providers[id]) continue;
@@ -149,7 +150,7 @@ export function createProviderCrudService({
     },
 
     async deleteProvider(id) {
-      const data = await loadProviders();
+      const data = await loadProvidersForWrite();
       if (!data.providers[id]) return false;
 
       const group = providerModeGroups(Object.values(data.providers)).find(modes => modes.some(mode => mode.id === id));

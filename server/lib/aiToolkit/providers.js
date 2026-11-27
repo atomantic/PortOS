@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from 'node:async_hooks';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { createProviderCrudService } from './internal/providerCrudService.js';
@@ -53,6 +52,8 @@ const readProvider = (provider, providers) => (provider
 export function createProviderService(config = {}) {
   const {
     loadProviders,
+    loadProvidersForWrite,
+    withProvidersWrite,
     saveProviders,
     restoreProvidersFile,
     buildProviderRecord,
@@ -61,22 +62,9 @@ export function createProviderService(config = {}) {
     cachedModelIds,
     resolveCompositeProvider,
   } = createProviderServiceState(config);
-  const writes = new AsyncLocalStorage();
-  let tail = Promise.resolve();
-  const withProviderWrite = (work) => {
-    if (writes.getStore()?.active) return work();
-    const queued = tail.then(() => {
-      const lease = { active: true };
-      return writes.run(lease, async () => {
-        try { return await work(); }
-        finally { lease.active = false; }
-      });
-    });
-    tail = queued.catch(() => {});
-    return queued;
-  };
   const crud = createProviderCrudService({
     loadProviders,
+    loadProvidersForWrite,
     saveProviders,
     buildProviderRecord,
     storeProviderRecords,
@@ -91,22 +79,23 @@ export function createProviderService(config = {}) {
   });
   const catalog = createProviderCatalogService({
     loadProviders,
+    loadProvidersForWrite,
+    withProvidersWrite,
     saveProviders,
     withGatewayApiKey,
     cachedModelIds,
     sampleFile,
     defaultSamplePath: DEFAULT_SAMPLE_PATH,
     cliProbeTimeouts: config.cliProbeTimeouts,
-    withProviderWrite,
   });
   const service = { ...crud, ...catalog };
   for (const name of ['setActiveProvider', 'createProvider', 'createProviderModes', 'createProviderTuiMode',
     'updateProvider', 'applyProviderPatches', 'deleteProvider']) {
     const operation = service[name];
     service[name] = function (...args) {
-      return withProviderWrite(() => operation.apply(service, args));
+      return withProvidersWrite(() => operation.apply(service, args));
     };
   }
-  config.registerProviderRestore?.(restore => withProviderWrite(() => restoreProvidersFile(restore)));
+  config.registerProviderRestore?.(restoreProvidersFile);
   return service;
 }
