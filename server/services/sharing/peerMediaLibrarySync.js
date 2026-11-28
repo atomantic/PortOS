@@ -397,10 +397,11 @@ export async function syncMediaLibraryFromPeer(peer) {
     let stillMissing = missing;
     if (requested > 0) {
       // Reuse the per-record pull worker (in-flight dedup, image-sidecar fetch,
-      // video-thumbnail regen). It swallows per-asset failures, so re-diff disk
-      // rather than treating the pull's resolution as evidence bytes landed.
+      // video-thumbnail regen). It swallows per-asset failures, so re-diff the
+      // missing subset against disk rather than treating the pull's resolution
+      // as evidence bytes landed, avoiding a second full-manifest scan.
       await pullMissingAssetsFromPeer(peer.instanceId, missing);
-      stillMissing = await diffAssetManifestAgainstLocal(manifest.assets, diffOptions);
+      stillMissing = await diffAssetManifestAgainstLocal(missing, diffOptions);
     }
     const pulled = requested - stillMissing.length;
     if (pulled > 0) libraryIndexRepairPending.add(peer.instanceId);
