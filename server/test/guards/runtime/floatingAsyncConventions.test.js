@@ -219,7 +219,7 @@ function scanFiles(files, readSource) {
   return files.flatMap((file) => scanner.findInFile(file).map((hit) => `${relative(REPO_ROOT, file).replaceAll('\\', '/')} ${hit}`));
 }
 
-const files = trackedFiles(SERVER_ROOT, ['*.js', '*.mjs', '*.cjs']).filter((file) => !file.includes('.test.'));
+const files = trackedFiles(SERVER_ROOT, ['*.js', '*.mjs', '*.cjs', ':!*.test.*']);
 
 describe('async calls own their rejections (#12978)', () => {
   it('scans the server tree', () => {

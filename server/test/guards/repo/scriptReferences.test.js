@@ -19,7 +19,7 @@ import { guardCorpus, REPO_ROOT, trackedFiles } from '../../../../scripts/lib/gu
 export const CANDIDATE_SCRIPT = /^scripts\/(?:[^/]+|(?:ml|ops|fixtures|experiments)\/.+)$/;
 export const VITEST_COLLECTED = /\.test\.js$/;
 export const HISTORICAL = /^(?:\.changelog|docs\/decisions|scripts\/migrations)\//;
-const LIKELY_POINTER = /^(?:\.github\/|docs\/|scripts\/|server\/(?:AGENTS\.md$|lib\/|routes\/|services\/)|client\/src\/|package\.json$)/;
+const LIKELY_POINTER = /^(?:\.github\/|docs\/|scripts\/|server\/(?:AGENTS\.md$|lib\/|routes\/|services\/)|package\.json$)/;
 const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 export function isSiblingTest(candidate, file) {
@@ -58,7 +58,7 @@ export function referenceKeys(candidates) {
 }
 
 /** Candidate scripts that no other live tracked file references. */
-export function unreferencedScripts(candidates, corpus) {
+export async function unreferencedScripts(candidates, corpus) {
   const pending = new Set(candidates);
   if (pending.size === 0) return [];
   const keys = referenceKeys(candidates);
@@ -73,20 +73,18 @@ export function unreferencedScripts(candidates, corpus) {
   const likely = [];
   const rest = [];
   for (const path of corpus) {
+    // Tracked symlinks (.claude/commands/do/*) point into lib/slashdo and hold no text of their own.
+    if (!repo.lstat(path)?.isFile()) continue;
     (LIKELY_POINTER.test(path) ? likely : rest).push(path);
   }
-  for (const path of [...likely, ...rest]) {
+  for await (const [path, source] of repo.readSources([...likely, ...rest], { textOnly: true })) {
     // Stop testing the common names once enough owners have a live reference.
     // Rebuild between files and at most logarithmically across the corpus.
     if (canShrink && pending.size <= patternSize / 2) {
       pattern = keyPattern(keys.keys().filter((token) => pending.has(keys.get(token))));
       patternSize = pending.size;
     }
-    // Tracked symlinks (.claude/commands/do/*) point into the lib/slashdo submodule; a symlink holds no text of its own.
-    if (!repo.lstat(path).isFile()) continue;
-    // A binary asset (git's NUL-in-the-first-8000-bytes heuristic) holds no pointer to a script.
-    if (repo.bytes(path).subarray(0, 8000).includes(0)) continue;
-    for (const [, token] of repo.read(path).matchAll(pattern)) {
+    for (const [, token] of source.matchAll(pattern)) {
       const owner = keys.get(token);
       if (pending.has(owner) && owner !== path && !isSiblingTest(owner, path)) {
         pending.delete(owner);
@@ -144,13 +142,13 @@ describe('scripts/ reference guard (#16089, #16909)', () => {
     expect(rootFiles.filter((path) => path.endsWith('.py') || /^scripts\/requirements-.*\.txt$/.test(path))).toEqual([]);
   });
 
-  it('searches fallback files for unresolved scripts and reports orphans', () => {
+  it('searches fallback files for unresolved scripts and reports orphans', async () => {
     const documented = 'scripts/lib-catalog.js'; // Referenced from root AGENTS.md.
     const orphan = 'scripts/fixtures/unreferenced-example.py';
-    expect(unreferencedScripts([documented, orphan], ['docs/SCRIPTS.md', 'AGENTS.md'])).toEqual([orphan]);
+    await expect(unreferencedScripts([documented, orphan], ['docs/SCRIPTS.md', 'AGENTS.md'])).resolves.toEqual([orphan]);
   });
 
-  it('every script is referenced by code, a workflow, package.json or a live doc', () => {
+  it('every script is referenced by code, a workflow, package.json or a live doc', async () => {
     const files = trackedFiles(REPO_ROOT);
     expect(files.length).toBeGreaterThan(100);
     const candidates = files.filter((path) => CANDIDATE_SCRIPT.test(path) && !VITEST_COLLECTED.test(path));
@@ -158,6 +156,6 @@ describe('scripts/ reference guard (#16089, #16909)', () => {
     // scripts/fixtures/** and scripts/experiments/** are covered
     expect(candidates.some((path) => path.startsWith('scripts/fixtures/'))).toBe(true);
     const corpus = files.filter((path) => !HISTORICAL.test(path));
-    expect(unreferencedScripts(candidates, corpus), 'document in docs/SCRIPTS.md or delete').toEqual([]);
+    expect(await unreferencedScripts(candidates, corpus), 'document in docs/SCRIPTS.md or delete').toEqual([]);
   }, 60_000); // An orphan requires searching the whole live corpus.
 });
