@@ -9,6 +9,7 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import { getStageTemplate } from './promptService.js';
 import { atomicWrite, ensureDir, readJSONFileStrict, unreadableStoreError, PATHS } from '../lib/fileUtils.js';
+import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { extractJson } from '../lib/jsonExtract.js';
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
 import { readResponseJson } from '../lib/readResponseJson.js';
@@ -39,7 +40,9 @@ const DEFAULT_CONFIG = {
   fallbackToPatterns: true
 };
 
+const queueConfigWrite = createFileWriteQueue();
 let configCache = null;
+let cacheGeneration = 0;
 
 /**
  * Load classifier configuration
@@ -47,12 +50,14 @@ let configCache = null;
 async function loadConfig() {
   if (configCache) return configCache;
 
+  const generation = cacheGeneration;
   const { ok, value } = await readJSONFileStrict(MEMORY_CONFIG_FILE, null, { allowArray: false });
   if (!ok) {
     // Serve defaults to readers without caching, so a repaired file is picked up.
     console.warn('⚠️ Memory classifier config unreadable, using defaults');
     return DEFAULT_CONFIG;
   }
+  if (generation !== cacheGeneration) return loadConfig();
   configCache = value ? { ...DEFAULT_CONFIG, ...value } : DEFAULT_CONFIG;
   return configCache;
 }
@@ -91,19 +96,30 @@ export async function getConfig() {
  * Update configuration
  */
 export async function updateConfig(updates) {
-  await assertConfigWritable();
-  const config = await loadConfig();
-  const newConfig = { ...config, ...updates };
+  return queueConfigWrite(async () => {
+    await assertConfigWritable();
+    const config = await loadConfig();
+    const newConfig = { ...config, ...updates };
 
-  if (!existsSync(PATHS.data)) {
-    await ensureDir(PATHS.data);
-  }
+    if (!existsSync(PATHS.data)) {
+      await ensureDir(PATHS.data);
+    }
 
-  await atomicWrite(MEMORY_CONFIG_FILE, newConfig);
-  configCache = newConfig;
+    await atomicWrite(MEMORY_CONFIG_FILE, newConfig);
+    cacheGeneration += 1;
+    configCache = newConfig;
 
-  return newConfig;
+    return newConfig;
+  });
 }
+
+export function invalidateCache() {
+  cacheGeneration += 1;
+  configCache = null;
+}
+
+/** Hold config mutations through live backup transfer and cache reconciliation. */
+export const withLiveRestore = (restore) => queueConfigWrite(() => restore(invalidateCache));
 
 /**
  * Load existing active + pending memories as a summary for the LLM prompt.

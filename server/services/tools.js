@@ -10,7 +10,7 @@ import { readdir, unlink } from 'fs/promises';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { atomicWrite, ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js';
-import { createKeyCachedQueue } from '../lib/createKeyCachedQueue.js';
+import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 
 const TOOL_ID_PATTERN = /^[a-zA-Z0-9_-]{1,100}$/;
 
@@ -25,11 +25,12 @@ const toolPath = (id) => {
   return join(PATHS.tools, `${id}.json`);
 };
 
-const queueToolWrite = createKeyCachedQueue();
+const queueToolWrite = createFileWriteQueue();
 
 // Cache the promise so concurrent callers share the load and an invalidated
 // load cannot overwrite the current result when it eventually settles.
 let loadAllPromise = null;
+let cacheGeneration = 0;
 
 async function loadAll() {
   await ensureDir(PATHS.tools);
@@ -42,14 +43,25 @@ async function loadAll() {
   return results.filter(Boolean);
 }
 
-function invalidateCache() {
+export function invalidateCache() {
+  cacheGeneration += 1;
   loadAllPromise = null;
 }
 
+/** Hold tool mutations through live backup transfer and cache reconciliation. */
+export const withLiveRestore = (restore) => queueToolWrite(() => restore(invalidateCache));
+
 export async function getTools() {
   if (loadAllPromise) return loadAllPromise;
-  const loading = loadAll().catch((err) => {
-    if (loadAllPromise === loading) invalidateCache();
+  const generation = cacheGeneration;
+  const loading = loadAll().then((tools) => {
+    if (generation !== cacheGeneration) {
+      if (loadAllPromise === loading) loadAllPromise = null;
+      return getTools();
+    }
+    return tools;
+  }).catch((err) => {
+    if (loadAllPromise === loading) loadAllPromise = null;
     throw err;
   });
   loadAllPromise = loading;
@@ -70,8 +82,8 @@ export async function getEnabledTools() {
 export async function registerTool(config) {
   const id = config.id || randomUUID();
   const path = toolPath(id);
-  // Case variants can refer to the same file on macOS or Windows.
-  return queueToolWrite(id.toLowerCase(), async () => {
+  // Single queue serializes case variants on macOS/Windows and live restores.
+  return queueToolWrite(async () => {
     await ensureDir(PATHS.tools);
     const now = new Date().toISOString();
     const tool = {
@@ -94,7 +106,7 @@ export async function registerTool(config) {
 
 export async function updateTool(id, updates) {
   validateToolId(id);
-  return queueToolWrite(id.toLowerCase(), async () => {
+  return queueToolWrite(async () => {
     const existing = await getTool(id);
     if (!existing) return null;
     const merged = {
@@ -112,7 +124,7 @@ export async function updateTool(id, updates) {
 
 export async function deleteTool(id) {
   const path = toolPath(id);
-  return queueToolWrite(id.toLowerCase(), async () => {
+  return queueToolWrite(async () => {
     await unlink(path).catch(() => null);
     invalidateCache();
     console.log(`🗑️ Tool deleted: ${id}`);

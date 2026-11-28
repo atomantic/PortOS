@@ -6,6 +6,7 @@ import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 const feedbackFile = () => join(PATHS.digitalTwin, 'feedback.json');
 
 let feedbackCache = null;
+let cacheGeneration = 0;
 
 // Peer sync (digital-twin-sync) and local mutators share feedback.json; every
 // read-modify-write runs in this queue against a fresh read so neither side
@@ -30,7 +31,9 @@ export async function readFeedbackFresh() {
 
 export async function loadFeedback() {
   if (feedbackCache) return feedbackCache;
+  const generation = cacheGeneration;
   const fresh = await readFeedbackFresh();
+  if (generation !== cacheGeneration) return loadFeedback();
   // A queued write may have published a newer value while the read was in flight.
   return feedbackCache ??= fresh;
 }
@@ -39,6 +42,7 @@ export async function saveFeedback(data) {
   await ensureDir(PATHS.digitalTwin, { mode: 0o700 });
   data.updatedAt = new Date().toISOString();
   await atomicWrite(feedbackFile(), data, { mode: 0o600, dirMode: 0o700 });
+  cacheGeneration += 1;
   feedbackCache = data;
 }
 
@@ -54,7 +58,16 @@ export function applyFeedbackMerge(mergeFn, readLocal = path => readJSONFile(pat
     if (!changed) return false;
     await ensureDir(PATHS.digitalTwin, { mode: 0o700 });
     await atomicWrite(feedbackFile(), merged, { mode: 0o600, dirMode: 0o700 });
+    cacheGeneration += 1;
     feedbackCache = merged;
     return true;
   });
 }
+
+export function invalidateCache() {
+  cacheGeneration += 1;
+  feedbackCache = null;
+}
+
+/** Hold mutations through live backup transfer and cache reconciliation. */
+export const withLiveRestore = (restore) => queueFeedbackWrite(() => restore(invalidateCache));
