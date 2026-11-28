@@ -25,14 +25,15 @@ const fakeInstall = (size = '32B') => {
   return home;
 };
 
-const fakeChild = () => {
+const fakeChild = ({ autoCloseOnKill = true } = {}) => {
   const child = new EventEmitter();
-  child.stdout = new PassThrough(); child.stderr = new PassThrough(); child.kill = vi.fn();
+  child.stdout = new PassThrough(); child.stderr = new PassThrough();
+  child.kill = vi.fn(() => { if (autoCloseOnKill) child.emit('close', 0); });
   return child;
 };
 
-afterEach(() => {
-  stopRealtimeSidecar();
+afterEach(async () => {
+  await stopRealtimeSidecar();
   for (const dir of roots.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
@@ -123,6 +124,7 @@ describe('ensureRealtimeSidecar', () => {
     await first;
 
     const second = ensureRealtimeSidecar({ home }, { persona: 'Persona B', launch });
+    await vi.waitFor(() => expect(launch).toHaveBeenCalledTimes(2));
     secondChild.stdout.write('{"ready": true}\n');
     await second;
 
@@ -175,6 +177,88 @@ describe('ensureRealtimeSidecar', () => {
       vi.advanceTimersByTime(500);
       expect(child.kill).toHaveBeenCalledWith('SIGTERM');
       expect(realtimeStatus({ home }).running).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('clears the failed sidecar slot on spawn error so a retry can launch cleanly', async () => {
+    const home = fakeInstall();
+    const firstChild = fakeChild();
+    const secondChild = fakeChild();
+    const launch = vi.fn()
+      .mockReturnValueOnce(firstChild)
+      .mockReturnValueOnce(secondChild);
+
+    const failed = ensureRealtimeSidecar({ home }, { persona: 'You are Ada.', launch });
+    firstChild.emit('error', new Error('ENOENT'));
+    await expect(failed).rejects.toThrow(/Could not launch realtime voice: ENOENT/);
+
+    const retried = ensureRealtimeSidecar({ home }, { persona: 'You are Ada.', launch });
+    secondChild.stdout.write('{"ready": true, "port": 5569}\n');
+    await expect(retried).resolves.toMatchObject({
+      url: 'ws://127.0.0.1:5569/',
+      token: expect.stringMatching(/^[0-9a-f]{36}$/),
+    });
+    expect(launch).toHaveBeenCalledTimes(2);
+  });
+
+  it('waits for the previous sidecar to exit before launching a replacement on config change', async () => {
+    const home = fakeInstall('32B');
+    mkdirSync(join(home, 'models-4b'));
+    writeFileSync(join(home, 'models-4b', '.complete'), '');
+    const firstChild = fakeChild({ autoCloseOnKill: false });
+    const secondChild = fakeChild();
+    const launch = vi.fn()
+      .mockReturnValueOnce(firstChild)
+      .mockReturnValueOnce(secondChild);
+
+    const first = ensureRealtimeSidecar({ home, size: '32B' }, { persona: 'You are Ada.', launch });
+    firstChild.stdout.write('{"ready": true, "port": 5569}\n');
+    await first;
+
+    const switched = ensureRealtimeSidecar({ home, size: '4B' }, { persona: 'You are Ada.', launch });
+    await Promise.resolve();
+    expect(firstChild.kill).toHaveBeenCalledWith('SIGTERM');
+    expect(launch).toHaveBeenCalledTimes(1);
+
+    firstChild.emit('close', 0);
+    await vi.waitFor(() => expect(launch).toHaveBeenCalledTimes(2));
+    secondChild.stdout.write('{"ready": true, "port": 5569}\n');
+    await expect(switched).resolves.toMatchObject({
+      url: 'ws://127.0.0.1:5569/',
+      token: expect.stringMatching(/^[0-9a-f]{36}$/),
+    });
+  });
+
+  it('waits for a timed-out sidecar to exit after SIGKILL before launching a retry', async () => {
+    vi.useFakeTimers();
+    try {
+      const home = fakeInstall();
+      const firstChild = fakeChild({ autoCloseOnKill: false });
+      const secondChild = fakeChild();
+      const launch = vi.fn()
+        .mockReturnValueOnce(firstChild)
+        .mockReturnValueOnce(secondChild);
+
+      const first = ensureRealtimeSidecar({ home }, { persona: 'You are Ada.', launch });
+      const firstRejection = expect(first).rejects.toThrow(/did not finish loading/);
+      await vi.advanceTimersByTimeAsync(180_000);
+      await firstRejection;
+      expect(firstChild.kill).toHaveBeenCalledWith('SIGKILL');
+
+      const retried = ensureRealtimeSidecar({ home }, { persona: 'You are Ada.', launch });
+      await Promise.resolve();
+      expect(launch).toHaveBeenCalledTimes(1);
+
+      firstChild.emit('close', 137);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(launch).toHaveBeenCalledTimes(2);
+      secondChild.stdout.write('{"ready": true, "port": 5569}\n');
+      await expect(retried).resolves.toMatchObject({
+        url: 'ws://127.0.0.1:5569/',
+        token: expect.stringMatching(/^[0-9a-f]{36}$/),
+      });
     } finally {
       vi.useRealTimers();
     }

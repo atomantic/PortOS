@@ -19,7 +19,7 @@ Wire protocol (one WebSocket, loopback only, `Authorization: Bearer <token>` or 
 
     PORTOS_REALTIME_TOKEN=T python portos_sophon.py --app ~/.portos/sophon-mac/app --models ~/.portos/sophon-mac/models --port 5569
 """
-import argparse, asyncio, hmac, json, os, re, sys, threading, time, uuid
+import argparse, asyncio, hmac, json, os, re, signal, sys, threading, time, uuid
 from urllib.parse import parse_qs, urlparse
 
 ap = argparse.ArgumentParser()
@@ -286,9 +286,13 @@ async def main():
         if busy["on"]:
             await ws.close(1013, "one conversation at a time"); return
         busy["on"] = True
+        closed = False
         loop = asyncio.get_running_loop(); outq = asyncio.Queue()
 
-        def send_soon(item): loop.call_soon_threadsafe(outq.put_nowait, item)
+        def send_soon(item):
+            if closed: return
+            try: loop.call_soon_threadsafe(outq.put_nowait, item)
+            except RuntimeError: pass
 
         def play(x):
             if x is None: send_soon(json.dumps({"type": "interrupt"})); return
@@ -304,12 +308,15 @@ async def main():
         sess = ToolSession(brain, play, log=log, on_delegate=lambda cid, task: send_soon(json.dumps({"type": "delegate", "call_id": cid, "task": task})))
 
         async def sender():
-            while True:
-                item = await outq.get(); await ws.send(item)
+            try:
+                while True:
+                    item = await outq.get(); await ws.send(item)
+            except (websockets.ConnectionClosed, asyncio.CancelledError):
+                pass
 
         tx = asyncio.ensure_future(sender()); buf = np.zeros(0, np.float32); FR = 320
-        await ws.send(json.dumps({"type": "ready"}))
         try:
+            await ws.send(json.dumps({"type": "ready"}))
             async for m in ws:
                 if isinstance(m, str):
                     try: o = json.loads(m)
@@ -326,13 +333,23 @@ async def main():
         except websockets.ConnectionClosed:
             pass
         finally:
+            closed = True
             with sess.lock:
                 if sess.reply is not None: sess.reply["cancel"] = True
-            tx.cancel(); busy["on"] = False
+            tx.cancel()
+            try: await tx
+            except asyncio.CancelledError: pass
+            busy["on"] = False
+
+    stop_event = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try: loop.add_signal_handler(sig, stop_event.set)
+        except (NotImplementedError, RuntimeError): pass
 
     async with websockets.serve(handle, "127.0.0.1", a.port, max_size=1 << 22):
         print(json.dumps({"ready": True, "port": a.port}), flush=True)
-        await asyncio.Future()
+        await stop_event.wait()
 
 
 if __name__ == "__main__":

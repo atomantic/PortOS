@@ -6,6 +6,7 @@ import { ensureRealtimeSidecar, scheduleRealtimeIdleStop } from './realtimeRunti
 
 const MAX_TASK_CHARS = 2000;
 const MAX_RESULT_CHARS = 1500;
+const READY_TIMEOUT_MS = 15_000;
 // Sidecar events worth showing the call UI; the rest (turn checks, prefill timings) stay in the sidecar.
 const FORWARDED_EVENTS = new Set(['first_audio', 'barge_in', 'reply_start', 'merge_abort', 'error']);
 
@@ -29,7 +30,16 @@ export const realtimePersona = (cfg) => {
  * @param {Function} [args.connect]  WebSocket factory (tests)
  * @param {Function} [args.ensureSidecar]
  */
-export const openRealtimeCall = async ({ cfg, emit, runDelegate, signal, onClose, connect = (url, options) => new WebSocket(url, options), ensureSidecar = ensureRealtimeSidecar }) => {
+export const openRealtimeCall = async ({
+  cfg,
+  emit,
+  runDelegate,
+  signal,
+  onClose,
+  connect = (url, options) => new WebSocket(url, options),
+  ensureSidecar = ensureRealtimeSidecar,
+  readyTimeoutMs = READY_TIMEOUT_MS,
+}) => {
   if (signal?.aborted) return null;
   const { url, token } = await ensureSidecar(cfg.realtime, { persona: realtimePersona(cfg) });
   if (signal?.aborted) {
@@ -39,34 +49,58 @@ export const openRealtimeCall = async ({ cfg, emit, runDelegate, signal, onClose
   const ws = connect(url, token ? { headers: { Authorization: `Bearer ${token}` } } : undefined);
   ws.binaryType = 'nodebuffer';
   let closed = false;
+  let started = false;
   const pending = new Set();
 
   const ready = new Promise((resolve, reject) => {
+    let settled = false;
     const cleanup = () => {
-      ws.off('error', fail);
-      ws.off('close', fail);
+      clearTimeout(readyTimer);
+      ws.off('message', first);
+      ws.off('error', onError);
+      ws.off('close', onCloseBeforeReady);
       signal?.removeEventListener('abort', onAbort);
     };
     const onAbort = () => {
-      cleanup();
+      if (settled) return;
+      settled = true;
       closed = true;
-      ws.close();
+      cleanup();
+      try { ws.close(); } catch { /* socket may already be closed */ }
       scheduleRealtimeIdleStop();
       resolve(false);
     };
     const fail = (err) => {
+      if (settled) return;
+      settled = true;
+      closed = true;
       cleanup();
-      reject(err instanceof Error ? err : new Error('Realtime voice closed before it was ready'));
+      try { ws.close(); } catch { /* socket may already be closed */ }
+      reject(err);
     };
-    ws.once('error', fail);
-    ws.once('close', fail);
-    signal?.addEventListener('abort', onAbort, { once: true });
-    ws.on('message', function first(data, isBinary) {
+    const onError = (err) => fail(err instanceof Error ? err : new Error('Realtime voice connection error'));
+    const onCloseBeforeReady = (_code, reason) => {
+      const detail = reason ? String(reason).trim() : '';
+      fail(new Error(detail ? `Realtime voice closed before it was ready (${detail})` : 'Realtime voice closed before it was ready'));
+    };
+    const readyTimer = setTimeout(() => fail(new Error('Realtime voice timed out before it was ready')), readyTimeoutMs);
+    readyTimer.unref?.();
+    function first(data, isBinary) {
       if (isBinary) return;
       try {
-        if (JSON.parse(String(data)).type === 'ready') { ws.off('message', first); cleanup(); resolve(true); }
+        if (JSON.parse(String(data)).type === 'ready') {
+          if (settled) return;
+          settled = true;
+          started = true;
+          cleanup();
+          resolve(true);
+        }
       } catch { /* not JSON: keep waiting */ }
-    });
+    }
+    ws.once('error', onError);
+    ws.once('close', onCloseBeforeReady);
+    signal?.addEventListener('abort', onAbort, { once: true });
+    ws.on('message', first);
   });
 
   const handleDelegate = async (callId, task) => {
@@ -97,8 +131,9 @@ export const openRealtimeCall = async ({ cfg, emit, runDelegate, signal, onClose
     }
   });
   ws.on('close', () => {
-    if (closed) return;
+    if (!started || closed) return;
     closed = true;
+    scheduleRealtimeIdleStop();
     onClose?.('sidecar-closed');
     emit('voice:realtime:state', { active: false, reason: 'sidecar-closed' });
   });

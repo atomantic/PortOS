@@ -898,6 +898,7 @@ export const registerVoiceHandlers = (socket) => {
         runDelegate: runRealtimeDelegate,
         onClose: () => {
           if (realtimeGeneration !== gen) return;
+          realtimeStarting = false;
           realtime = null;
           if (realtimeCtrl === ctrl) {
             realtimeCtrl = null;
@@ -925,7 +926,6 @@ export const registerVoiceHandlers = (socket) => {
       await startRealtime();
     } catch (err) {
       console.error(`🗣️ voice:realtime:start failed: ${err.message}`);
-      socket.emit('voice:realtime:state', { active: false, error: err.message });
     }
   });
 

@@ -51,13 +51,19 @@ export const startRealtimeCall = async (handlers = {}) => {
   const Ctor = window.AudioContext || window.webkitAudioContext;
   let micCtx;
   let outCtx;
+  let source;
+  let node;
   const url = URL.createObjectURL(new Blob([WORKLET_SOURCE], { type: 'application/javascript' }));
   try {
     micCtx = new Ctor({ sampleRate: MIC_RATE });
     outCtx = new Ctor({ sampleRate: OUT_RATE });
     await micCtx.audioWorklet.addModule(url);
+    source = micCtx.createMediaStreamSource(stream);
+    node = new AudioWorkletNode(micCtx, 'portos-realtime-mic');
+    source.connect(node);
   } catch (err) {
     // Release the microphone and contexts, or the mic indicator stays on after a failed start.
+    source?.disconnect();
     stream.getTracks().forEach((t) => t.stop());
     micCtx?.close().catch(() => {});
     outCtx?.close().catch(() => {});
@@ -65,9 +71,6 @@ export const startRealtimeCall = async (handlers = {}) => {
   } finally {
     URL.revokeObjectURL(url);
   }
-  const source = micCtx.createMediaStreamSource(stream);
-  const node = new AudioWorkletNode(micCtx, 'portos-realtime-mic');
-  source.connect(node);
 
   let pending = new Float32Array(0);
   let live = false;
@@ -105,9 +108,29 @@ export const startRealtimeCall = async (handlers = {}) => {
     playing.add(src);
     src.onended = () => playing.delete(src);
   };
+  let stopped = false;
+  const teardown = ({ emitStop = true } = {}) => {
+    if (stopped) return;
+    stopped = true;
+    live = false;
+    if (emitStop) socket.emit('voice:realtime:stop');
+    for (const [event, fn] of Object.entries(listeners)) socket.off(event, fn);
+    flush();
+    node.port.onmessage = null;
+    source.disconnect();
+    stream.getTracks().forEach((t) => t.stop());
+    micCtx.close().catch(() => {});
+    outCtx.close().catch(() => {});
+  };
   const onState = (state) => {
     live = Boolean(state?.active);
+    if (state?.error || state?.reason === 'sidecar-closed') teardown({ emitStop: false });
     handlers.onState?.(state);
+  };
+  const onDisconnect = () => {
+    if (stopped) return;
+    teardown({ emitStop: false });
+    handlers.onState?.({ active: false, error: 'Connection to PortOS was lost.' });
   };
   const listeners = {
     'voice:realtime:audio': onAudio,
@@ -117,26 +140,15 @@ export const startRealtimeCall = async (handlers = {}) => {
     'voice:realtime:delegate': (data) => handlers.onDelegate?.(data),
     'voice:realtime:result': (data) => handlers.onResult?.(data),
     'voice:realtime:event': (data) => handlers.onEvent?.(data),
+    disconnect: onDisconnect,
   };
   for (const [event, fn] of Object.entries(listeners)) socket.on(event, fn);
   await Promise.all([micCtx.resume(), outCtx.resume()]).catch(() => {});
-  socket.emit('voice:realtime:start');
+  if (!stopped && socket.connected === false) onDisconnect();
+  else if (!stopped) socket.emit('voice:realtime:start');
 
-  let stopped = false;
   return {
-    stop() {
-      if (stopped) return;
-      stopped = true;
-      live = false;
-      socket.emit('voice:realtime:stop');
-      for (const [event, fn] of Object.entries(listeners)) socket.off(event, fn);
-      flush();
-      node.port.onmessage = null;
-      source.disconnect();
-      stream.getTracks().forEach((t) => t.stop());
-      micCtx.close().catch(() => {});
-      outCtx.close().catch(() => {});
-    },
+    stop: () => teardown({ emitStop: true }),
     interrupt() {
       flush();
       socket.emit('voice:realtime:interrupt');

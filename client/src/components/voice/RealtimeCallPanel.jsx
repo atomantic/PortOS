@@ -65,14 +65,26 @@ export default function RealtimeCallPanel({ compact = false }) {
     try {
       const started = await startRealtimeCall({
         onState: (s) => {
-          if (s?.error) { setCall({ phase: 'idle', error: s.error }); handle.current?.stop(); handle.current = null; return; }
+          if (attempt.current !== mine) return;
+          if (s?.error) {
+            attempt.current += 1;
+            setCall({ phase: 'idle', error: s.error });
+            handle.current?.stop();
+            handle.current = null;
+            return;
+          }
           if (s?.loading) setCall({ phase: 'loading', error: '' });
           else if (s?.active) setCall({ phase: 'live', error: '' });
-          else if (s?.reason === 'sidecar-closed') { setCall({ phase: 'idle', error: 'The realtime voice stopped.' }); handle.current?.stop(); handle.current = null; }
+          else if (s?.reason === 'sidecar-closed') {
+            attempt.current += 1;
+            setCall({ phase: 'idle', error: 'The realtime voice stopped.' });
+            handle.current?.stop();
+            handle.current = null;
+          }
         },
-        onReply: ({ text, cancelled }) => caption('assistant', cancelled ? `${text} (interrupted)` : text),
-        onDelegate: ({ task }) => caption('task', task),
-        onResult: ({ text }) => caption('result', text),
+        onReply: ({ text, cancelled }) => { if (attempt.current === mine) caption('assistant', cancelled ? `${text} (interrupted)` : text); },
+        onDelegate: ({ task }) => { if (attempt.current === mine) caption('task', task); },
+        onResult: ({ text }) => { if (attempt.current === mine) caption('result', text); },
       });
       if (attempt.current !== mine) { started.stop(); return; }
       handle.current = started;
