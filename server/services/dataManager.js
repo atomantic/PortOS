@@ -9,6 +9,7 @@ import { parseFilesystemStats, sha256Text } from '../lib/fileCore.js';
 import { PATHS, ensureDir, isTopLevelEntryName, rmGuarded, writeFileGuarded } from '../lib/fileUtils.js';
 import { isPersistentMindScreenshotEntry } from '../lib/persistent/persistentMindAttachmentOwnership.js';
 import { ServerError } from '../lib/errorHandler.js';
+import { mapWithConcurrency } from '../lib/mapWithConcurrency.js';
 import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import { ARCHIVE_FILENAME, CATEGORIES, dataCacheEntry } from './dataManagerCategories.js';
 import { getEidoversePaths } from './eidoverse.js';
@@ -19,6 +20,7 @@ export { CATEGORIES } from './dataManagerCategories.js';
 
 const execFileAsync = promisify(execFile);
 const DATA_DIR = PATHS.data;
+const DETAIL_SCAN_CONCURRENCY = 8;
 
 // Shown for a directory with no CATEGORIES entry. Phrased as an outcome ("we
 // don't know whether removing this is safe") rather than a mechanism ("unknown
@@ -177,6 +179,10 @@ function invalidateOverviewScan() {
   overviewScans.clear();
 }
 
+function allocatedSize(fileStat) {
+  return typeof fileStat.blocks === 'number' ? fileStat.blocks * 512 : fileStat.size;
+}
+
 async function scanDataTree(strict) {
   let rootUnreadable = false;
   const entries = await readdir(DATA_DIR, { withFileTypes: true }).catch((err) => {
@@ -194,7 +200,7 @@ async function scanDataTree(strict) {
   const settled = await Promise.allSettled([
     ...dirs.map(d => getDirSizeAndCount(join(DATA_DIR, d.name), { strict })),
     ...topFiles.map(f => stat(join(DATA_DIR, f.name)).then(
-      st => (typeof st.blocks === 'number' ? st.blocks * 512 : st.size),
+      allocatedSize,
       (err) => {
         if (strict) throw err;
         return 0;
@@ -292,28 +298,38 @@ export async function getCategoryDetail(categoryKey, { measure = false } = {}) {
   const dirPath = join(DATA_DIR, categoryKey);
   if (!existsSync(dirPath)) return null;
 
-  const entries = await readdir(dirPath, { withFileTypes: true }).catch(() => []);
+  const entries = await readdir(dirPath, { withFileTypes: true }).catch((err) => {
+    if (measure && err?.code !== 'ENOENT') throw err;
+    return [];
+  });
 
-  // Parallel: stat files + getDirSizeAndCount for subdirs
-  const itemPromises = entries.map(async (entry) => {
+  const entryResults = await mapWithConcurrency(entries, DETAIL_SCAN_CONCURRENCY, async (entry) => {
     const fullPath = join(dirPath, entry.name);
     const regularType = entry.isDirectory() ? 'directory' : entry.isFile() ? 'file' : null;
     const cacheEntry = categoryKey === 'cache' ? dataCacheEntry(entry.name, regularType) : null;
-    if (entry.isDirectory()) {
-      const { size, fileCount } = await getDirSizeAndCount(fullPath);
-      return { name: entry.name, type: 'directory', size, fileCount, ...cacheEntry };
+    if (regularType === 'directory') {
+      const { size, fileCount } = await getDirSizeAndCount(fullPath, { strict: measure });
+      return { item: { name: entry.name, type: 'directory', size, fileCount, ...cacheEntry }, allocatedBytes: size, fileCount };
     }
-    const fileStat = await stat(fullPath).catch(() => null);
+    const fileStat = await stat(fullPath).catch((err) => {
+      if (measure && regularType === 'file') throw err;
+      return null;
+    });
     return {
-      name: entry.name,
-      type: 'file',
-      size: fileStat?.size || 0,
-      modified: fileStat?.mtime?.toISOString() || null,
-      ...cacheEntry
+      item: {
+        name: entry.name,
+        type: 'file',
+        size: fileStat?.size || 0,
+        modified: fileStat?.mtime?.toISOString() || null,
+        ...cacheEntry
+      },
+      // Match the overview: count regular files and use their allocated bytes.
+      allocatedBytes: measure && regularType === 'file' ? allocatedSize(fileStat) : 0,
+      fileCount: regularType === 'file' ? 1 : 0
     };
   });
 
-  const items = await Promise.all(itemPromises);
+  const items = entryResults.map(({ item }) => item);
   if (categoryKey === 'cache') await Promise.all(items.map(item => describeManagedRuntime(item, dirPath)));
   // Resolve opaque retired training-run folders against retained Postgres records.
   if (categoryKey === 'training-runs' && items.length) {
@@ -344,7 +360,8 @@ export async function getCategoryDetail(categoryKey, { measure = false } = {}) {
   const busy = await resolveCategoryBusy(categoryKey);
 
   const measurement = measure ? {
-    ...await getDirSizeAndCount(dirPath, { strict: true }),
+    size: entryResults.reduce((sum, entry) => sum + entry.allocatedBytes, 0),
+    fileCount: entryResults.reduce((sum, entry) => sum + entry.fileCount, 0),
     disk: await statfs(DATA_DIR).then(parseFilesystemStats).catch(() => null),
   } : undefined;
   return { key: categoryKey, ...categoryMeta(categoryKey), ...busy, totalSize, items, ...(measurement && { measurement }) };
