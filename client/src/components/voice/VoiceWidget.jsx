@@ -19,8 +19,9 @@ import {
   webSpeechSupported, startWebSpeechCapture, stopWebSpeechCapture, isWebSpeechCapturing,
   disposeCaptureOwner, enableVisionCapture, disableVisionCapture, onVisionCaptureEnded,
   onVoiceOutputPrimary, claimVoiceOutput, prepareVoicePlayback,
-  getVoiceVolume, setVoiceVolume, isVoiceMuted, setVoiceMuted, onVoiceAudioPrefs, getVoiceOutputLevel,
+  getVoiceVolume, setVoiceVolume, isVoiceMuted, setVoiceMuted, onVoiceAudioPrefs, getVoiceOutputLevel, getVoiceOutputSpectrum,
 } from '../../services/voiceClient';
+import { updateVoiceConfig } from '../../services/apiVoice';
 import toast from '../ui/Toast';
 import { REALTIME_ACTIVE_EVENT, isRealtimeCallActive } from '../../services/voiceRealtime';
 import {
@@ -38,7 +39,6 @@ import {
 import {
   SFX_EVENT,
   readTransceiverSfx,
-  writeTransceiverSfx,
   isTransceiverSfxStorageEvent,
   playRadioCue,
 } from '../../lib/voiceTransceiverSfx';
@@ -91,8 +91,11 @@ export default function VoiceWidget({ config, claimHeld, consoleHost }) {
   );
   const [llmOverride, setLlmOverride] = useState(null);
   useEffect(() => { setLlmOverride(null); }, [llm?.provider, llm?.model]);
+  const [ttsRateOverride, setTtsRateOverride] = useState(null);
+  useEffect(() => { setTtsRateOverride(null); }, [tts?.rate]);
   const activeLlmProvider = llmOverride?.provider || llm?.provider || 'lmstudio';
   const activeLlmModel = llmOverride?.model || llm?.model || 'auto';
+  const activeTtsRate = ttsRateOverride ?? tts?.rate ?? 1;
   const turnGenerationRef = useRef(0);
   const [stage, setStage] = useState('idle');
   const [history, setHistory] = useState([]);
@@ -128,6 +131,7 @@ export default function VoiceWidget({ config, claimHeld, consoleHost }) {
   const [sfxEnabled, setSfxEnabled] = useState(readTransceiverSfx);
   const { collapsed: sidebarCollapsed, desktop: desktopNav } = useSidebarContext();
   const [level, setLevel] = useState(0);
+  const [spectrum, setSpectrum] = useState(null);
   const [visionEnabled, setVisionEnabled] = useState(false);
   const [isVoiceOutputTab, setIsVoiceOutputTab] = useState(false);
   const scrollRef = useRef(null);
@@ -469,12 +473,12 @@ export default function VoiceWidget({ config, claimHeld, consoleHost }) {
     if (!next) playCue('click', { muted: false });
   }, [audioPrefs.muted, playCue]);
 
-  const handleToggleSfx = useCallback(() => {
-    const next = !sfxEnabled;
-    writeTransceiverSfx(next);
-    setSfxEnabled(next);
-    if (next) playCue('click', { enabled: true });
-  }, [sfxEnabled, playCue]);
+  const handleTtsRateChange = useCallback((nextRate) => {
+    playCue('click');
+    setTtsRateOverride(nextRate);
+    updateVoiceConfig({ tts: { rate: nextRate } }, { silent: true })
+      .catch(() => { if (!disposedRef.current) setTtsRateOverride(null); });
+  }, [playCue]);
 
   const handleSetVisualMode = useCallback((nextMode) => {
     playCue('click');
@@ -498,20 +502,27 @@ export default function VoiceWidget({ config, claimHeld, consoleHost }) {
     if (!ok) toast('Voice: screen sharing was declined or is unavailable.', { icon: '🖥️' });
   }, [visionEnabled]);
 
-  // Poll the VAD RMS level while hands-free is live, or Web Audio output level
-  // while speaking. Idle at rest; deadbanded at 0.002.
-  const pollLevel = (handsFree && stage !== 'idle') || stage === 'speaking';
+  // Sample the VAD RMS level while capturing, or Web Audio output level + FFT
+  // spectrum while speaking. Idle at rest; deadbanded at 0.002.
+  const pollLevel = ACTIVE_STAGES.has(stage) || stage === 'speaking';
   useEffect(() => {
     if (!pollLevel) {
       setLevel(0);
+      setSpectrum(null);
       return undefined;
     }
-    // biome-ignore lint/plugin/lint-no-view-interval: Samples the in-memory VAD/analyser RMS level every 100ms; no I/O.
+    // biome-ignore lint/plugin/lint-no-view-interval: Samples the in-memory VAD/analyser RMS and FFT bins every 100ms; no I/O.
     const id = setInterval(() => {
-      const v = stage === 'speaking'
-        ? (typeof getVoiceOutputLevel === 'function' ? getVoiceOutputLevel() : 0)
-        : getVadLevel();
-      setLevel((prev) => (Math.abs(prev - v) > 0.002 ? v : prev));
+      if (stage === 'speaking') {
+        const v = typeof getVoiceOutputLevel === 'function' ? getVoiceOutputLevel() : 0;
+        const bins = typeof getVoiceOutputSpectrum === 'function' ? getVoiceOutputSpectrum(12) : null;
+        setLevel((prev) => (Math.abs(prev - v) > 0.002 ? v : prev));
+        setSpectrum(bins);
+      } else {
+        const v = getVadLevel();
+        setLevel((prev) => (Math.abs(prev - v) > 0.002 ? v : prev));
+        setSpectrum(null);
+      }
     }, 100);
     return () => clearInterval(id);
   }, [pollLevel, stage]);
@@ -669,9 +680,10 @@ export default function VoiceWidget({ config, claimHeld, consoleHost }) {
     muted: audioPrefs.muted,
     onVolumeChange: handleVolumeChange,
     onToggleMute: handleToggleMute,
-    sfxEnabled,
-    onToggleSfx: handleToggleSfx,
+    ttsRate: activeTtsRate,
+    onTtsRateChange: handleTtsRateChange,
     signalLevel: level,
+    signalSpectrum: spectrum,
     visionEnabled,
     onToggleVision: toggleVision,
     images,

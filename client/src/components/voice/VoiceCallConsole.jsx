@@ -24,18 +24,13 @@ const TABS = ['video', 'brain', 'avatars', 'realtime'];
  * so the handset and log stay above the fold on a phone. Each chip carries its
  * live status and opens one panel at a time; tapping the open chip folds it.
  */
-function StationTabs({ runningAvatar, llmProvider, llmModel, llmResidency, onLlmSaved, agentDefaults, avatarData, avatarError, onUpdateAvatarData, onRefetchAvatar }) {
-  const [tab, setTab] = useState(() => {
-    const saved = safeReadStorage(TAB_KEY);
-    return saved === 'none' ? null : TABS.includes(saved) ? saved : 'video';
-  });
+function StationTabs({ tab, onSelectTab, tuneRequest, runningAvatar, llmProvider, llmModel, llmResidency, onLlmSaved, agentDefaults, avatarData, avatarError, onUpdateAvatarData, onRefetchAvatar }) {
   const [realtimeMounted, setRealtimeMounted] = useState(() => tab === 'realtime');
   const { data: library } = useAvatarLibrary();
   const choose = (next) => {
     const value = tab === next ? null : next;
     if (value === 'realtime') setRealtimeMounted(true);
-    safeWriteStorage(TAB_KEY, value || 'none');
-    setTab(value);
+    onSelectTab(value);
   };
   const videoStatus = runningAvatar ? 'Live' : 'Still portrait';
   const channel = activeChannelOf(library);
@@ -90,7 +85,7 @@ function StationTabs({ runningAvatar, llmProvider, llmModel, llmResidency, onLlm
       )}
       {tab === 'avatars' && (
         <div id="station-panel-avatars">
-          <AvatarChannelsPanel agentDefaults={{ ...agentDefaults, provider: llmProvider, model: llmModel }} />
+          <AvatarChannelsPanel agentDefaults={{ ...agentDefaults, provider: llmProvider, model: llmModel }} tuneRequest={tuneRequest} />
         </div>
       )}
       {realtimeMounted && (
@@ -106,8 +101,22 @@ export default function VoiceCallConsole({
   stage, history, scrollRef, interimTranscript, capturing, handsFree, canChangeMicMode,
   hotkey, draft, onDraft, onSend, onMic, onMode, onInterrupt, onEnd, onClear,
   agentName, voiceLabel, llmProvider, llmModel, onLlmSaved, agentDefaults, volume = 0.85, muted = false, onVolumeChange, onToggleMute,
-  sfxEnabled = true, onToggleSfx, signalLevel = 0, visionEnabled = false, onToggleVision, images,
+  ttsRate = 1, onTtsRateChange, signalLevel = 0, signalSpectrum = null, visionEnabled = false, onToggleVision, images,
 }) {
+  const [stationTab, setStationTab] = useState(() => {
+    const saved = safeReadStorage(TAB_KEY);
+    return saved === 'none' ? null : TABS.includes(saved) ? saved : 'video';
+  });
+  const [tuneRequest, setTuneRequest] = useState(null);
+  const selectStationTab = (next) => {
+    safeWriteStorage(TAB_KEY, next || 'none');
+    setStationTab(next);
+  };
+  const openBrainTab = () => selectStationTab(stationTab === 'brain' ? null : 'brain');
+  const tuneChannel = (index) => {
+    selectStationTab('avatars');
+    setTuneRequest((prev) => ({ index, seq: (prev?.seq ?? 0) + 1 }));
+  };
   const { data, error, updateData, refetch } = useAvatarRuntime(true, { autoStart: true });
   const runningAvatar = Boolean(!error && data?.supported && data.phase === 'running');
   // The on-air channel may run its own LLM; the server reads the same channel.
@@ -168,11 +177,14 @@ export default function VoiceCallConsole({
           muted={muted}
           onVolumeChange={onVolumeChange}
           onToggleMute={onToggleMute}
-          sfxEnabled={sfxEnabled}
-          onToggleSfx={onToggleSfx}
+          ttsRate={ttsRate}
+          onTtsRateChange={onTtsRateChange}
           signalLevel={signalLevel}
+          signalSpectrum={signalSpectrum}
           visionEnabled={visionEnabled}
           onToggleVision={onToggleVision}
+          onOpenBrain={openBrainTab}
+          onTuneChannel={tuneChannel}
           images={images}
         />
       </div>
@@ -180,6 +192,9 @@ export default function VoiceCallConsole({
       {/* Right column: station settings tabs + transmission log */}
       <div className="flex min-w-0 flex-col gap-4">
         <StationTabs
+          tab={stationTab}
+          onSelectTab={selectStationTab}
+          tuneRequest={tuneRequest}
           runningAvatar={runningAvatar}
           llmProvider={llmProvider}
           llmModel={llmModel}

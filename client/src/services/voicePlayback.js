@@ -12,6 +12,7 @@ let audioCtx = null;
 let outputGain = null;
 let outputAnalyser = null;
 let outputAnalyserBuf = null;
+let outputFreqBuf = null;
 
 const VOLUME_KEY = 'portos.voice.volume';
 const MUTED_KEY = 'portos.voice.muted';
@@ -88,6 +89,26 @@ export const getVoiceOutputLevel = () => {
   return 0;
 };
 
+// Live frequency spectrum bins (0..1) of currently-playing assistant TTS output
+// for the transceiver LCD visualizer. Returns null when idle, muted, or unavailable.
+export const getVoiceOutputSpectrum = (bars = 12) => {
+  if (!outputAnalyser || !outputFreqBuf || !isTtsActive() || voiceMuted) return null;
+  if (typeof outputAnalyser.getByteFrequencyData !== 'function') return null;
+  outputAnalyser.getByteFrequencyData(outputFreqBuf);
+  // Focus on the vocal energy band (first ~65% of bins, roughly 0–7 kHz at 22–24 kHz Nyquist).
+  const usable = Math.max(bars, Math.floor(outputFreqBuf.length * 0.65));
+  const step = usable / bars;
+  const out = new Array(bars);
+  for (let i = 0; i < bars; i += 1) {
+    const start = Math.floor(i * step);
+    const end = Math.max(start + 1, Math.floor((i + 1) * step));
+    let sum = 0;
+    for (let j = start; j < end; j += 1) sum += outputFreqBuf[j];
+    out[i] = Math.min(1, (sum / ((end - start) * 255)) * 1.45);
+  }
+  return out;
+};
+
 // One owner for shared playback. Server-turn admission is independent of the
 // two invalidation lifetimes: cancellation retires decode/queue work AND
 // pending synthesis fetches; a new synthetic reply retires only older fetches.
@@ -109,6 +130,7 @@ const ensureOutputGraph = (ctx) => {
   outputGain = null;
   outputAnalyser = null;
   outputAnalyserBuf = null;
+  outputFreqBuf = null;
   if (typeof ctx.createGain !== 'function') return null;
   const gain = ctx.createGain();
   gain._ctx = ctx;
@@ -121,6 +143,7 @@ const ensureOutputGraph = (ctx) => {
     analyser.connect(ctx.destination);
     outputAnalyser = analyser;
     outputAnalyserBuf = new Float32Array(analyser.fftSize);
+    outputFreqBuf = new Uint8Array(analyser.frequencyBinCount);
   } else {
     gain.connect(ctx.destination);
   }

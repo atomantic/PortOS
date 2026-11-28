@@ -24,9 +24,14 @@ function AvatarThumb({ filename, alt, className = '' }) {
     : <img src={portraitUrl} alt={alt} className={`object-cover ${className}`} />;
 }
 
-function ChannelRow({ index, channel, active, avatars, agentDefaults, onSelect, onLabel, onAvatar, onAgent }) {
+function ChannelRow({ index, channel, active, avatars, agentDefaults, tuneRequestSeq = 0, onSelect, onLabel, onAvatar, onAgent }) {
   const [picking, setPicking] = useState(false);
-  const [tuning, setTuning] = useState(false);
+  const [tuning, setTuning] = useState(() => tuneRequestSeq > 0);
+  const [lastTuneSeq, setLastTuneSeq] = useState(tuneRequestSeq);
+  if (tuneRequestSeq !== lastTuneSeq) {
+    setLastTuneSeq(tuneRequestSeq);
+    if (tuneRequestSeq > 0) setTuning(true);
+  }
   const tunedCount = Object.keys(channel.agent || {}).filter((field) => field !== 'model').length;
   const [label, setLabel] = useState(channel.label);
   const [lastSaved, setLastSaved] = useState(channel.label);
@@ -194,7 +199,7 @@ function AvatarCreator({ onCreated }) {
  * Avatars media collection (they federate with it); channel assignments and each
  * channel's agent tuning are this install's own.
  */
-export default function AvatarChannelsPanel({ agentDefaults }) {
+export default function AvatarChannelsPanel({ agentDefaults, tuneRequest = null }) {
   const { data: library, error, updateData } = useAvatarLibrary();
   const [galleryOpen, setGalleryOpen] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(null);
@@ -259,6 +264,7 @@ export default function AvatarChannelsPanel({ agentDefaults }) {
                 active={library.active === index}
                 avatars={avatars}
                 agentDefaults={agentDefaults}
+                tuneRequestSeq={tuneRequest?.index === index ? tuneRequest.seq : 0}
                 onSelect={() => saveAvatarChannels({ active: index }).then(updateData).catch(() => {})}
                 onLabel={(label) => editChannel(index, { label })}
                 onAvatar={(avatar) => editChannel(index, { avatar })}

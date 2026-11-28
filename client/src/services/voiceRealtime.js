@@ -36,6 +36,7 @@ registerProcessor('portos-realtime-mic', RealtimeMic);
 export const REALTIME_ACTIVE_EVENT = 'portos:voice-realtime';
 let activeCalls = 0;
 let liveCall = false;
+const activeStoppers = new Set();
 const broadcast = () => {
   if (typeof window.dispatchEvent === 'function') {
     const active = activeCalls > 0;
@@ -56,6 +57,10 @@ const announceLive = (live) => {
 export const isRealtimeCallConnecting = () => activeCalls > 0 && !liveCall;
 /** True from the moment a realtime call starts (model still loading included) until it ends. */
 export const isRealtimeCallActive = () => activeCalls > 0;
+/** Hang up any active realtime call from an external surface (such as the handset End button). */
+export const stopActiveRealtimeCalls = () => {
+  for (const stop of [...activeStoppers]) stop();
+};
 
 /** Float32 [-1, 1] samples to little-endian PCM16 bytes. */
 export const floatToPcm16 = (samples) => {
@@ -214,6 +219,7 @@ export const startRealtimeCall = async (handlers = {}) => {
     if (stopped) return;
     stopped = true;
     live = false;
+    activeStoppers.delete(externalStop);
     release();
     if (emitStop) socket.emit('voice:realtime:stop');
     for (const [event, fn] of Object.entries(listeners)) socket.off(event, fn);
@@ -226,6 +232,11 @@ export const startRealtimeCall = async (handlers = {}) => {
     micCtx.close().catch(() => {});
     outCtx.close().catch(() => {});
   };
+  const externalStop = () => {
+    teardown({ emitStop: true });
+    handlers.onState?.({ active: false });
+  };
+  activeStoppers.add(externalStop);
   const onState = (state) => {
     markVoiceTiming(`rt.state ${state?.error ? 'error' : state?.loading ? 'loading' : state?.active ? 'live' : (state?.reason || 'off')}`);
     live = Boolean(state?.active);

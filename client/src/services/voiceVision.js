@@ -56,6 +56,17 @@ const clearVisionStream = ({ notify = true } = {}) => {
 // True when a live, user-authorized capture stream is available to grab frames.
 export const isVisionCaptureEnabled = () => !!(visionStream && visionStream.active);
 
+// Active MediaStream for the transceiver's live vision PiP preview, or null when not sharing.
+export const getVisionStream = () => (isVisionCaptureEnabled() ? visionStream : null);
+
+const frameCapturedListeners = new Set();
+// Subscribe to notifications whenever a screen frame is captured and sent to the voice assistant.
+export const onVisionFrameCaptured = (cb) => {
+  if (typeof cb !== 'function') return () => {};
+  frameCapturedListeners.add(cb);
+  return () => frameCapturedListeners.delete(cb);
+};
+
 // Register a callback fired when the capture stream ends (user stops sharing via
 // the browser, or disableVisionCapture runs). Pass null to clear. Returns an
 // unsubscribe fn for symmetry with the other subscribe helpers.
@@ -152,7 +163,9 @@ export const captureVisionFrame = async () => {
   const encoded = encodeScaled(video, video.videoWidth || 1280, video.videoHeight || 720);
   video.pause();
   if (!encoded) return null;
-  return { dataUrl: encoded.dataUrl, signature: frameSignature(encoded.canvas) };
+  const frame = { dataUrl: encoded.dataUrl, signature: frameSignature(encoded.canvas) };
+  for (const fn of frameCapturedListeners) fn(frame);
+  return frame;
 };
 
 // Read an image file the user picked as a scaled JPEG data URL, or null when

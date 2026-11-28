@@ -16,6 +16,7 @@ export {
   setVoiceMuted,
   onVoiceAudioPrefs,
   getVoiceOutputLevel,
+  getVoiceOutputSpectrum,
   prepareVoicePlayback,
   bindVoiceOutputVisualizer,
   onProactiveSpeech,
@@ -38,6 +39,8 @@ export {
 } from './voiceWebSpeech.js';
 export {
   isVisionCaptureEnabled,
+  getVisionStream,
+  onVisionFrameCaptured,
   onVisionCaptureEnded,
   enableVisionCapture,
   disableVisionCapture,

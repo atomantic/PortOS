@@ -6,6 +6,13 @@ import BrailleSpinner from '../BrailleSpinner';
 import { getVoiceStatus, getVoiceConfig, updateVoiceConfig, testTts } from '../../services/apiVoice';
 import { playWav } from '../../services/voiceClient';
 import { readVoiceHidden, writeVoiceHidden } from '../../services/voiceVisibility';
+import {
+  SFX_EVENT,
+  isTransceiverSfxStorageEvent,
+  playRadioCue,
+  readTransceiverSfx,
+  writeTransceiverSfx,
+} from '../../lib/voiceTransceiverSfx';
 import ListLoadError from '../ui/ListLoadError';
 import useMounted from '../../hooks/useMounted';
 import { useInstanceFeatures } from '../../hooks/useInstanceFeatures';
@@ -53,6 +60,7 @@ export function VoiceTab({ showCallLink = true } = {}) {
   const ttsHintId = useId();
   const [testing, setTesting] = useState(false);
   const [widgetHidden, setWidgetHidden] = useState(readVoiceHidden);
+  const [transceiverSfx, setTransceiverSfx] = useState(readTransceiverSfx);
   // Persisted identity the server's /facetime/* routes actually use; form inputs may be ahead of it.
   const [savedFacetime, setSavedFacetime] = useState(null);
   const retryVoicesRef = useRef(null);
@@ -62,6 +70,23 @@ export function VoiceTab({ showCallLink = true } = {}) {
     writeVoiceHidden(next);
     setWidgetHidden(next);
   };
+
+  const toggleTransceiverSfx = (next) => {
+    writeTransceiverSfx(next);
+    setTransceiverSfx(next);
+    if (next) playRadioCue('click', { enabled: true });
+  };
+
+  useEffect(() => {
+    const syncSfx = () => setTransceiverSfx(readTransceiverSfx());
+    const onStorage = (e) => { if (isTransceiverSfxStorageEvent(e)) syncSfx(); };
+    window.addEventListener(SFX_EVENT, syncSfx);
+    window.addEventListener('storage', onStorage);
+    return () => {
+      window.removeEventListener(SFX_EVENT, syncSfx);
+      window.removeEventListener('storage', onStorage);
+    };
+  }, []);
 
   const registerRetryVoices = useCallback((fn) => {
     retryVoicesRef.current = fn;
@@ -214,6 +239,14 @@ export function VoiceTab({ showCallLink = true } = {}) {
               <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-baseline gap-x-3 gap-y-0.5 min-w-0 flex-1">
                 <span className="text-sm text-white">Show floating voice widget</span>
                 <span className="text-xs text-gray-500">(per-browser preference; does not hide the Voice Call screen)</span>
+              </div>
+            </label>
+
+            <label className="flex items-start gap-3 cursor-pointer">
+              <input type="checkbox" checked={transceiverSfx} onChange={(e) => toggleTransceiverSfx(e.target.checked)} className="w-4 h-4 mt-0.5 shrink-0" />
+              <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-baseline gap-x-3 gap-y-0.5 min-w-0 flex-1">
+                <span className="text-sm text-white">Transceiver sound effects (SFX)</span>
+                <span className="text-xs text-gray-500">(radio squelch chirps, roger beeps, and key ticks; defaults on)</span>
               </div>
             </label>
 
