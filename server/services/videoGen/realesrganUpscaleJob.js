@@ -40,6 +40,7 @@ import {
 } from './upscaleJobHelpers.js';
 import { finalizeUpscaleOutput } from './upscaleFfmpeg.js';
 import { planUpscaleHistoryItem } from './upscaleVideo.js';
+import { upscalePlanBlocker } from './upscalePlanBlocker.js';
 import { realesrganArgs, resolveRealesrganInvocation } from './realesrganRuntime.js';
 import {
   DEFAULT_REALESRGAN_MODEL, LTX_UPSCALE_JOB_KIND, REALESRGAN_JOB_MODE, REALESRGAN_MODELS, REALESRGAN_RUNTIME_ID,
@@ -82,21 +83,8 @@ export async function enqueueRealesrganUpscale(historyId, {
   sceneId = null,
 } = {}) {
   const plan = await planUpscaleHistoryItem(historyId, { method: 'realesrgan', realesrganModel });
-  if (plan.alreadyUpscaled) {
-    throw new ServerError('Cannot upscale an already-upscaled video', { status: 400, code: 'ALREADY_UPSCALED' });
-  }
-  if (!plan.runtime.supported) {
-    throw new ServerError(`Real-ESRGAN is not available on this install: ${plan.runtime.reason}`, { status: 501, code: 'UNSUPPORTED_RUNTIME' });
-  }
-  if (!plan.runtime.installed) {
-    throw new ServerError(plan.runtime.reason || 'Install Real-ESRGAN before upscaling with it.', { status: 400, code: 'REALESRGAN_NOT_READY' });
-  }
-  if (!(plan.source.width > 0) || !(plan.source.height > 0) || !(Number(plan.source.fps) > 0)) {
-    throw new ServerError(
-      'The source size or frame rate could not be measured, so the upscale cannot keep its cadence.',
-      { status: 400, code: 'UPSCALE_SOURCE_UNMEASURED' },
-    );
-  }
+  const blocker = upscalePlanBlocker(plan);
+  if (blocker) throw new ServerError(blocker.message, { status: blocker.status, code: blocker.code });
   const item = await getHistoryItem(plan.id);
   if (!item) throw new ServerError('Video not found', { status: 404, code: 'NOT_FOUND' });
   return enqueueJob({

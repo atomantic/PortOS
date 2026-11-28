@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { finalApprovalPatch } from '../../lib/musicVideo/musicVideoFinalApproval.js';
+import { planLtxAlignment } from '../videoGen/upscalePlan.js';
 
 const state = { project: null };
 const updateScene = vi.fn();
@@ -8,11 +9,13 @@ const planUpscaleHistoryItem = vi.fn();
 const enqueueFalSeedvr2Upscale = vi.fn();
 const enqueueTopazUpscale = vi.fn();
 const enqueueRealesrganUpscale = vi.fn();
+const enqueueLtxUpscale = vi.fn();
 const listInFlightSceneJobs = vi.fn(() => []);
 vi.mock('./sceneJobs.js', () => ({ listInFlightSceneJobs }));
 vi.mock('../videoGen/falUpscaleJob.js', () => ({ enqueueFalSeedvr2Upscale }));
 vi.mock('../videoGen/topazJob.js', () => ({ enqueueTopazUpscale }));
 vi.mock('../videoGen/realesrganUpscaleJob.js', () => ({ enqueueRealesrganUpscale }));
+vi.mock('../videoGen/upscaleJob.js', () => ({ enqueueLtxUpscale }));
 const renderSceneClips = vi.fn();
 const upscaleHistoryItem = vi.fn();
 vi.mock('./projects.js', () => ({ updateScene: (...a) => updateScene(...a), appendSceneTakes: (...a) => appendSceneTakes(...a) }));
@@ -25,6 +28,14 @@ const { approveFinal, upgradeApproved } = await import('./finalUpgrade.js');
 const draftShot = (sceneId, approved) => {
   const scene = { sceneId, prompt: `prompt ${sceneId}`, referenceImageId: `img-${sceneId}`, videoHistoryId: `vid-${sceneId}`, takes: [{ takeId: `t-${sceneId}`, kind: 'video', assetId: `vid-${sceneId}`, tier: 'draft' }] };
   return approved ? { ...scene, ...finalApprovalPatch(scene, true).patch } : scene;
+};
+
+const source = { width: 768, height: 512, fps: 24, frameCount: 121 };
+const ltxPlan = {
+  method: 'ltx', source, alignment: planLtxAlignment(source),
+  runtime: { supported: true, installed: true },
+  adapter: { cached: true, label: 'Spatial Upscaler' },
+  baseModel: { cached: true, path: '/cache/base-model' },
 };
 
 beforeEach(() => {
@@ -44,6 +55,7 @@ describe('final upgrade', () => {
     const out = await upgradeApproved('p1', { method: 'upscale', dryRun: true });
     expect(out.shots).toEqual([{ sceneId: 'a', status: 'ready', method: 'upscale', upscaleMethod: 'lanczos', upscaleTargetResolution: '1080p', costUsd: 0 }]);
     expect(out.totalCostUsd).toBe(0);
+    expect(planUpscaleHistoryItem).not.toHaveBeenCalled();
     expect(upscaleHistoryItem).not.toHaveBeenCalled();
     expect(renderSceneClips).not.toHaveBeenCalled();
   });
@@ -65,7 +77,7 @@ describe('final upgrade', () => {
 
   it('prices SeedVR2 per source and forwards the configured target and scene when queued', async () => {
     state.project.videoSettings = { upscaleMethod: 'fal-seedvr2', upscaleTargetResolution: '1440p' };
-    planUpscaleHistoryItem.mockResolvedValue({ runtime: { installed: true }, estimatedCostUsd: 0.4128 });
+    planUpscaleHistoryItem.mockResolvedValue({ method: 'fal-seedvr2', runtime: { installed: true }, estimatedCostUsd: 0.4128 });
     enqueueFalSeedvr2Upscale.mockResolvedValue({ jobId: 'upscale-a', status: 'queued' });
     const plan = await upgradeApproved('p1', { method: 'upscale', dryRun: true });
     expect(plan).toMatchObject({ upscaleMethod: 'fal-seedvr2', upscaleTargetResolution: '1440p', totalCostUsd: 0.4128 });
@@ -85,6 +97,7 @@ describe('final upgrade', () => {
     state.project.videoSettings.upscaleMethod = 'fal-topaz';
     const plan = await upgradeApproved('p1', { method: 'upscale', dryRun: true });
     expect(plan).toMatchObject({ totalCostUsd: null, shots: [{ sceneId: 'a', historyId: 'vid-a', status: 'ready' }] });
+    expect(planUpscaleHistoryItem).not.toHaveBeenCalled();
     const refused = await upgradeApproved('p1', { method: 'upscale' });
     expect(refused.results[0]).toMatchObject({ ok: false, code: 'TOPAZ_QUOTE_REQUIRED' });
     expect(enqueueTopazUpscale).not.toHaveBeenCalled();
@@ -99,6 +112,7 @@ describe('final upgrade', () => {
   it('plans Real-ESRGAN readiness read-only and queues attributed jobs once installed', async () => {
     state.project.videoSettings.upscaleMethod = 'realesrgan';
     planUpscaleHistoryItem.mockResolvedValueOnce({
+      method: 'realesrgan',
       runtime: { supported: true, installed: false, reason: 'Real-ESRGAN (ncnn Vulkan) is not installed on this machine.', installTarget: { version: 'v0.2.5.0', sizeBytes: 51_817_124 } },
     });
     const blocked = await upgradeApproved('p1', { method: 'upscale', dryRun: true });
@@ -109,7 +123,7 @@ describe('final upgrade', () => {
     })]);
     expect(enqueueRealesrganUpscale).not.toHaveBeenCalled();
 
-    planUpscaleHistoryItem.mockResolvedValue({ runtime: { supported: true, installed: true, reason: null } });
+    planUpscaleHistoryItem.mockResolvedValue({ method: 'realesrgan', runtime: { supported: true, installed: true, reason: null }, source });
     enqueueRealesrganUpscale.mockResolvedValue({ jobId: 'realesrgan-a', status: 'queued' });
     const ready = await upgradeApproved('p1', { method: 'upscale', dryRun: true });
     expect(ready.shots).toEqual([expect.objectContaining({ sceneId: 'a', status: 'ready', upscaleMethod: 'realesrgan', costUsd: 0 })]);
@@ -119,6 +133,65 @@ describe('final upgrade', () => {
       realesrganModel: undefined,
       musicVideo: { projectId: 'p1', sceneId: 'a', tier: 'final', selectOnComplete: true },
     });
+  });
+
+  it('blocks Real-ESRGAN if the source cadence cannot be measured', async () => {
+    planUpscaleHistoryItem.mockResolvedValueOnce({
+      method: 'realesrgan',
+      runtime: { supported: true, installed: true, installTarget: { version: 'v0.2.5.0', sizeBytes: 51_817_124 } },
+      source: { ...source, fps: null },
+    });
+    const plan = await upgradeApproved('p1', { method: 'upscale', upscaleMethod: 'realesrgan', dryRun: true });
+    expect(plan.shots).toMatchObject([{
+      sceneId: 'a', status: 'upscale-blocked', reason: expect.stringContaining('frame rate could not be measured'),
+      upscalerSupported: true, upscalerInstallTarget: null,
+    }]);
+  });
+
+  it('blocks SeedVR2 without a cost estimate', async () => {
+    planUpscaleHistoryItem.mockResolvedValueOnce({
+      method: 'fal-seedvr2', runtime: { installed: true }, estimatedCostUsd: null,
+    });
+    const plan = await upgradeApproved('p1', { method: 'upscale', upscaleMethod: 'fal-seedvr2', dryRun: true });
+    expect(plan.shots).toMatchObject([{
+      sceneId: 'a', status: 'upscale-blocked', reason: expect.stringContaining('cost estimate'),
+    }]);
+  });
+
+  it.each([
+    ['runtime', { runtime: { supported: true, installed: false, reason: 'LTX runtime is missing.' } }, 'LTX runtime is missing'],
+    ['hardware', { baseModel: { ...ltxPlan.baseModel, hardwareCompatibility: { state: 'unavailable', reasons: ['Insufficient memory'] } } }, 'Insufficient memory'],
+    ['adapter', { adapter: { ...ltxPlan.adapter, cached: false } }, 'Spatial Upscaler is not downloaded'],
+    ['base model', { baseModel: { cached: false, path: null } }, 'model pack for this backend is not downloaded'],
+    ['alignment', { alignment: { ...ltxPlan.alignment, padWidth: null } }, 'cannot be aligned to the model grid'],
+    ['prior upscale', { alreadyUpscaled: true }, 'Cannot upscale an already-upscaled video'],
+  ])('blocks a local LTX dry run for %s', async (_axis, patch, reason) => {
+    planUpscaleHistoryItem.mockResolvedValueOnce({ ...ltxPlan, ...patch });
+    const plan = await upgradeApproved('p1', { method: 'upscale', upscaleMethod: 'local-ltx25', dryRun: true });
+    expect(planUpscaleHistoryItem).toHaveBeenCalledWith('vid-a', { method: 'ltx' });
+    expect(plan.shots).toMatchObject([{
+      sceneId: 'a', status: 'upscale-blocked', upscaleMethod: 'local-ltx25', reason: expect.stringContaining(reason),
+    }]);
+    expect(enqueueLtxUpscale).not.toHaveBeenCalled();
+  });
+
+  it('marks a ready local LTX clip as ready at zero cost', async () => {
+    planUpscaleHistoryItem.mockResolvedValueOnce(ltxPlan);
+    const plan = await upgradeApproved('p1', { method: 'upscale', upscaleMethod: 'local-ltx25', dryRun: true });
+    expect(plan).toMatchObject({
+      shots: [{ sceneId: 'a', status: 'ready', upscaleMethod: 'local-ltx25', costUsd: 0 }], totalCostUsd: 0,
+    });
+    expect(enqueueLtxUpscale).not.toHaveBeenCalled();
+  });
+
+  it('surfaces a failed source probe as blocked and leaves the remaining shots plannable', async () => {
+    state.project.scenes[1] = draftShot('b', true);
+    planUpscaleHistoryItem.mockRejectedValueOnce(new Error('Video not found')).mockResolvedValueOnce(ltxPlan);
+    const plan = await upgradeApproved('p1', { method: 'upscale', upscaleMethod: 'local-ltx25', dryRun: true });
+    expect(plan.shots).toMatchObject([
+      { sceneId: 'a', status: 'upscale-blocked', reason: 'Video not found' },
+      { sceneId: 'b', status: 'ready' },
+    ]);
   });
 
   it('re-render submits a final-tier clip and leaves the selection alone', async () => {

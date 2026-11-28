@@ -28,6 +28,7 @@ import {
 } from './upscaleJobHelpers.js';
 import { finalizeUpscaleOutput } from './upscaleFfmpeg.js';
 import { planUpscaleHistoryItem } from './upscaleVideo.js';
+import { upscalePlanBlocker } from './upscalePlanBlocker.js';
 import {
   DEFAULT_FAL_SEEDVR2_TARGET_RESOLUTION,
   FAL_SEEDVR2_HISTORY_MODEL_ID,
@@ -58,18 +59,8 @@ export async function enqueueFalSeedvr2Upscale(historyId, {
   musicVideo: shot = null,
 } = {}) {
   const plan = await planUpscaleHistoryItem(historyId, { method: 'fal-seedvr2', targetResolution });
-  if (plan.alreadyUpscaled) {
-    throw new ServerError('Cannot upscale an already-upscaled video', { status: 400, code: 'ALREADY_UPSCALED' });
-  }
-  if (!plan.runtime.installed) {
-    throw new ServerError(
-      plan.runtime.reason || 'Configure FAL_KEY in Settings → Credentials to use fal.ai SeedVR2 upscaling.',
-      { status: 400, code: 'FAL_KEY_MISSING' },
-    );
-  }
-  if (shot && plan.estimatedCostUsd == null) {
-    throw new ServerError('The selected clip could not be measured for a cost estimate.', { status: 422, code: 'UPSCALE_GEOMETRY_UNKNOWN' });
-  }
+  const blocker = upscalePlanBlocker(plan, { requireCost: Boolean(shot) });
+  if (blocker) throw new ServerError(blocker.message, { status: blocker.status, code: blocker.code });
   const item = await getHistoryItem(historyId);
   if (!item) throw new ServerError('Video not found', { status: 404, code: 'NOT_FOUND' });
 

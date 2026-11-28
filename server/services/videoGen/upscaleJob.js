@@ -31,7 +31,6 @@ import { killWithEscalation } from '../../lib/killWithEscalation.js';
 import { safeChildProcessEnv } from '../../lib/processEnv.js';
 import { PYTHON_NOISE_RE } from '../../lib/sseUtils.js';
 import { resolveIcLoraWeightByKey } from '../../lib/icLoraWeights.js';
-import { isHardwareCompatible, hardwareUnavailableReason } from '../../lib/systemCapabilities.js';
 import { hfChildEnv } from '../hfToken.js';
 import { enqueueJob } from '../mediaJobQueue/index.js';
 import { videoGenEvents } from './events.js';
@@ -47,9 +46,10 @@ import { buildArgs } from './renderArgs.js';
 import { runtimeIsCacheOnly, runtimeNeedsProcessGroupKill } from './runtimes.js';
 import { padSourceForUpscale, finalizeUpscaleOutput } from './upscaleFfmpeg.js';
 import { planUpscaleHistoryItem } from './upscaleVideo.js';
+import { ltxUpscaleAdapterBlocker, upscalePlanBlocker } from './upscalePlanBlocker.js';
 import {
   LTX_UPSCALE_JOB_KIND, LTX_UPSCALE_WEIGHT_KEY, UPSCALE_SCALE,
-  ltxAlignmentBlocker, ltxAlignmentIsNoop,
+  ltxAlignmentIsNoop,
 } from './upscalePlan.js';
 
 const MAX_SEED = 2 ** 32 - 1;
@@ -83,69 +83,13 @@ const upscaledPrompt = (prompt) => (prompt ? `${prompt} (2×)` : '(upscaled 2×)
  */
 export async function enqueueLtxUpscale(historyId, attribution = {}) {
   const plan = await planUpscaleHistoryItem(historyId, { method: 'ltx' });
-  if (plan.alreadyUpscaled) {
-    throw new ServerError('Cannot upscale an already-upscaled video', { status: 400, code: 'ALREADY_UPSCALED' });
-  }
-  if (!plan.runtime.supported || !plan.runtime.installed) {
-    throw new ServerError(
-      `Generative upscale is not available on this install: ${plan.runtime.reason}`,
-      { status: 501, code: 'UNSUPPORTED_RUNTIME' },
-    );
-  }
-  // The host gate (#6537), BEFORE the cache checks below: a machine that cannot
-  // run the pack must not be told to download 72 GB of it. `generateVideo.js`
-  // already refuses a plain render here; an upscale renders ABOVE a plain
-  // render's peak, so anything it refuses this must refuse too — same helper on
-  // the same annotation, so the two gates cannot drift. `isHardwareCompatible`
-  // refuses only an explicit `unavailable` verdict, so a requirement this host
-  // could not MEASURE stays allowed rather than becoming a refusal invented from
-  // a missing number, and a plan from an older server (no annotation at all)
-  // queues exactly what it queues today.
-  //
-  // Deliberately NOT the `MODEL_HARDWARE_UNAVAILABLE`/400 those render sites
-  // raise: there, the user CHOSE an incompatible model, so the request is at
-  // fault. The upscale's checkpoint is pinned and not part of the request
-  // (#6511), so nothing the caller sent is wrong — the host simply cannot carry
-  // the method, which is what `UNSUPPORTED_RUNTIME`/501 already means here.
-  if (!isHardwareCompatible(plan.baseModel?.hardwareCompatibility)) {
-    throw new ServerError(
-      `Generative upscale is not available on this install: ${
-        hardwareUnavailableReason(plan.baseModel?.name || 'The LTX-2.5 pack', plan.baseModel?.hardwareCompatibility)}`,
-      { status: 501, code: 'UNSUPPORTED_RUNTIME' },
-    );
-  }
-  // Cache-only resolve (#6508): a `requiresPreDownload` weight never falls back
-  // to a repo id, so an un-cached adapter is a refusal here rather than a
-  // silent multi-hundred-MB pull inside the render.
+  const blocker = upscalePlanBlocker(plan);
+  if (blocker) throw new ServerError(blocker.message, { status: blocker.status, code: blocker.code });
+  // Resolve the adapter path cache-only after planning in case the weight was removed.
   const adapter = await resolveIcLoraWeightByKey(LTX_UPSCALE_WEIGHT_KEY);
   if (!adapter?.path) {
-    throw new ServerError(
-      `${plan.adapter.label} is not downloaded — download it from the model panel before upscaling.`,
-      { status: 400, code: 'IC_LORA_WEIGHT_UNRESOLVED' },
-    );
-  }
-  // The runner is never allowed to resolve its own checkpoint: every LTX loader
-  // falls back to `snapshot_download` for a path it cannot stat, which for this
-  // pack is an unannounced ~68 GB pull inside a render. Resolved here, cache-only,
-  // so a missing pack is a refusal before the GPU is committed.
-  if (!plan.baseModel?.cached || !plan.baseModel.path) {
-    throw new ServerError(
-      plan.baseModel?.reason || 'The LTX-2.5 model pack for this backend is not downloaded.',
-      { status: 400, code: 'UPSCALE_BASE_MODEL_UNRESOLVED' },
-    );
-  }
-  const blocker = ltxAlignmentBlocker(plan.alignment);
-  if (blocker) {
-    throw new ServerError(blocker, { status: 400, code: 'UPSCALE_SOURCE_UNALIGNABLE' });
-  }
-  // The frame rate is not part of the spatial grid, but the plan cannot be
-  // APPLIED without it: it sets the duration of the padded tail and is a
-  // required runner argument. An unmeasured rate is the same refusal.
-  if (!(Number(plan.source.fps) > 0)) {
-    throw new ServerError(
-      'The source frame rate could not be measured, so the padded tail and the render frame rate cannot be set.',
-      { status: 400, code: 'UPSCALE_SOURCE_UNALIGNABLE' },
-    );
+    const missing = ltxUpscaleAdapterBlocker(plan.adapter);
+    throw new ServerError(missing.message, { status: missing.status, code: missing.code });
   }
   // The plan exposes geometry and capability, while the row carries filename and attribution.
   const item = await getHistoryItem(plan.id);
