@@ -80,7 +80,7 @@ function ChannelRow({ index, channel, active, avatars, onSelect, onLabel, onAvat
             aria-label="Use the default portrait"
             aria-pressed={!channel.avatar}
             title="Use the default radio operator portrait"
-            className={`relative aspect-square overflow-hidden rounded-lg border ${!channel.avatar ? 'border-port-accent ring-2 ring-port-accent' : 'border-port-border hover:border-port-accent'}`}
+            className={`relative aspect-square min-h-11 min-w-11 overflow-hidden rounded-lg border ${!channel.avatar ? 'border-port-accent ring-2 ring-port-accent' : 'border-port-border hover:border-port-accent'}`}
           >
             <AvatarThumb filename={null} alt="Default portrait" className="size-full" />
           </button>
@@ -92,7 +92,7 @@ function ChannelRow({ index, channel, active, avatars, onSelect, onLabel, onAvat
               aria-label={`Assign avatar ${position + 1}`}
               aria-pressed={channel.avatar === avatar.filename}
               title="Assign this avatar"
-              className={`relative aspect-square overflow-hidden rounded-lg border ${channel.avatar === avatar.filename ? 'border-port-accent ring-2 ring-port-accent' : 'border-port-border hover:border-port-accent'}`}
+              className={`relative aspect-square min-h-11 min-w-11 overflow-hidden rounded-lg border ${channel.avatar === avatar.filename ? 'border-port-accent ring-2 ring-port-accent' : 'border-port-border hover:border-port-accent'}`}
             >
               <AvatarThumb filename={avatar.filename} alt="Avatar" className="size-full" />
             </button>
@@ -272,7 +272,7 @@ export default function AvatarChannelsPanel() {
                         onClick={() => setConfirmRemove(avatar.filename)}
                         aria-label="Remove avatar from the collection"
                         title="Remove from Avatars (the gallery image stays)"
-                        className="inline-flex min-h-11 items-center justify-center rounded-lg border border-port-border text-port-text-muted hover:border-port-error hover:text-port-error-text"
+                        className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg border border-port-border text-port-text-muted hover:border-port-error hover:text-port-error-text"
                       >
                         <Trash2 size={13} aria-hidden="true" />
                       </button>
