@@ -1,6 +1,3 @@
-# LTX-2.5 CUDA: CPython 3.11, x86_64 windows, CUDA 13.2.
-# LTX source packages: 1.2.0 at d151147788a9284cca791edc6ce898007e727fe6.
-# Regeneration and build bootstrap: docs/RUNTIME_LOCKS.md#ltx-25-cuda.
 --index-url https://pypi.org/simple
 --extra-index-url https://download.pytorch.org/whl/cu132
 
@@ -354,7 +351,7 @@ numpy==2.4.6 \
     --hash=sha256:f3a3570c4a2a16746ac2c31a7c7c7b0c186b95ce902e33db6f28094ed7387dda \
     --hash=sha256:f407cb6b8e9d6d8c626bc73c945db1706035af8fd632295547bf1c9e46d092d6 \
     --hash=sha256:f74a575920ab21fe304421a3fc28793d82e299cae9eccb37084e9fc7f3617c20
-    # via accelerate, ltx-core, openimageio, scipy, torchvision, transformers
+    # via accelerate, ltx-core, openimageio, scipy, transformers
 openimageio==3.2.2.0 \
     --hash=sha256:052b2f031bb41453eba0a97a2a3c6be7a43db597228efad6273355838d14f835 \
     --hash=sha256:1133b6a6c04270398c419804e0d293b2bb3ce2d7607a17724cc45f385036b05b \
@@ -481,7 +478,7 @@ pillow==13.0.0 \
     --hash=sha256:fc481f742ccda20e9ed760b8f978dff50f2a4e9bc253ac167fb0a05b0783ef52 \
     --hash=sha256:ff3fe9eb621fbb9db4c4be33ab946f6bac5f98ab50ca8d3260503653656c961b \
     --hash=sha256:ffea6b2986a797c84b6d1d27d4f43e0b83c73fc16281a930891cd237cf0d08fe
-    # via ltx-pipelines, torchvision, -r scripts/ml/requirements/requirements-ltx25-cuda.txt
+    # via ltx-pipelines, -r scripts/ml/requirements/requirements-ltx25-cuda.txt
 psutil==7.2.2 \
     --hash=sha256:0746f5f8d406af344fd547f1c8daa5f5c33dbc293bb8d6a16d80b4bb88f59372 \
     --hash=sha256:076a2d2f923fd4821644f5ba89f059523da90dc9014e85f8e45a5774ca5bc6f9 \
@@ -865,38 +862,12 @@ torch==2.14.1+cu132 \
     --hash=sha256:f03cc9616b356ecc24edf66dd21ecc96e31e87342a6fd80960428b7fe4866e24 \
     --hash=sha256:f9a7336a67a7a4a29cb568adecc8aef2b9cbb6bbd1d0efc2a52b9e8f7b5fb66b \
     --hash=sha256:fe2730eb5199a680d389045d1871762a1a296c48457869c3788574272e3b21c6
-    # via accelerate, ltx-core, torchaudio, torchvision, -r scripts/ml/requirements/requirements-ltx25-cuda.txt
+    # via accelerate, ltx-core, torchaudio, -r scripts/ml/requirements/requirements-ltx25-cuda.txt
 torchaudio==2.11.1+cu132 \
     --hash=sha256:0fe03185cf2f6e0492c622bcce6222b2492646c8e651f98ff3c1b3e8544b1aee \
     --hash=sha256:7b0e2a7f61c3a9bbeae0c3ef3bf944695bc4be760d74f85af92f85035e38c9d8 \
     --hash=sha256:c3a9228e74828810bc7afcf6cc3df5bd8f6557ba07fc73d14d66c981b221b3ab
     # via ltx-core, -r scripts/ml/requirements/requirements-ltx25-cuda.txt
-torchvision==0.29.1+cu132 \
-    --hash=sha256:05013c2718b25d6019f4a01fbcafca84553247e0591201aa24b1e11fdc63d0ad \
-    --hash=sha256:09392871165e65def144cf681a67693c4d46b59a6cdbe4cd94ee4ec0cce1db78 \
-    --hash=sha256:15a69f48dbc3a880b8350fb0c992e1f3b1430d8d7a4081e6545196203f1893b4 \
-    --hash=sha256:45250cd6c7771342e3b190cc29a1d14b6dac1226825f8328fdf413ae5445426f \
-    --hash=sha256:59c9a3cbb66598167f4aa2f84204acd51ddebdcd7eca1543ebba1d371593bb69 \
-    --hash=sha256:5f72df255bfae09492ebc778332e73451f8dfcc0e2d7a0bdb72651cbcbffbe5f \
-    --hash=sha256:6bd72f3837d667ab0cf18b4ba936b8f7a997fdacffb7ab5fca797f8e31b00054 \
-    --hash=sha256:744681ff25fad9f1299a3bbbbea48bd3f59c6748aba7279624ec62a9dc9d7256 \
-    --hash=sha256:7ba4f6e93b75161ba2c6b7bd080e14398fc3939a0725df3802ba3e61b7abafd2 \
-    --hash=sha256:902a012641cf8ca4353616cfd35f16b7756378f8c8052018f87276b6d74c7d21 \
-    --hash=sha256:90b787adbf04b00484c90f7dc48429857a7602eae82f2ef709081743043851b4 \
-    --hash=sha256:9287bbfe240f6ac656f94deb7d06960dd7c02d5b7cd194ec7312dd9328c58eb2 \
-    --hash=sha256:928e8c8796263976f079431e5fb5425d2658349dd6a35dc92784949405da1a94 \
-    --hash=sha256:a0fa73ce7c263ac533d669bfb986e37e4a887014926e2d1a520bc4aefb055906 \
-    --hash=sha256:a4d175e81abaa1b3ea43cab09e1eb66409c9ca8a51d810bb492660d2f7c5bd4b \
-    --hash=sha256:a55b10a7a0af8bebc8d3dc9a8c3b87b24486bec87ad3f41698e5de0a774fa8a8 \
-    --hash=sha256:ab3a154cd653a1eafea784c2c73767abf274b8863979dedb9720cc517b61ba99 \
-    --hash=sha256:acf84555407e401cec51eb33ac0a79b867e585e3997e7724f87fe4c5eccb2f5a \
-    --hash=sha256:b05ad9e70830a5182c4e7c737d6a7f0752ef9b825ba452abf639677c4d80a667 \
-    --hash=sha256:d2f541145d691147691d17eb0c0fa2cd39952ce06714463bf9a56b56068bfe7e \
-    --hash=sha256:fa9f736052a7350575a64079150932da6d130d6cb6a704956162df40b3c7e4e9 \
-    --hash=sha256:fd950b8d448cebdb13c2c4fbcdad8e253deed498d64468f060e11fb65556bc3b \
-    --hash=sha256:fe6499909524d17e70a9a46012bc9dedc305004ce915918da224c85b4e6aae2e \
-    --hash=sha256:ffbc5f16418a880c9c41c300fa375ad0d98b028ab23e5fffb645ce4fcc474a1d
-    # via -r scripts/ml/requirements/requirements-ltx25-cuda.txt
 tqdm==4.70.1 \
     --hash=sha256:c293e525e6fef9c20e8728fd4612df02a0aa31bb5fe91ecd93e123b1b7bffa73 \
     --hash=sha256:cefd0eca11b2a37a3aee776544d4f4ae913f02688135b5556b8788dfa474afc4

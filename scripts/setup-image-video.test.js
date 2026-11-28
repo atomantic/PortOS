@@ -1168,6 +1168,7 @@ source "$1"
     for (const block of blocks) expect(block).toMatch(/--hash=sha256:[0-9a-f]{64}/);
     const pins = requirements.map((line) => line.replace(/\s*\\$/, ''));
     for (const pin of direct) expect(pins).toContain(pin);
+    expect([...direct, ...pins].some((pin) => /^torchvision==/i.test(pin))).toBe(false);
     expect(lock).not.toMatch(/git\+/);
     expect(lock.match(/#subdirectory=packages\/ltx-/g)).toHaveLength(2);
     expect(lock).toContain('d151147788a9284cca791edc6ce898007e727fe6.tar.gz');
