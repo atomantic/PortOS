@@ -93,8 +93,9 @@ async function assertConfigWritable() {
 async function saveConfigUnlocked(config) {
   await ensureDir(PATHS.data);
   await assertConfigWritable();
-  cachedConfig = normalizeBrowserConfig({ ...DEFAULT_CONFIG, ...config });
-  await atomicWrite(CONFIG_FILE, cachedConfig);
+  const nextConfig = normalizeBrowserConfig({ ...DEFAULT_CONFIG, ...config });
+  await atomicWrite(CONFIG_FILE, nextConfig);
+  cachedConfig = nextConfig;
   cachedConfigMtimeMs = await getConfigMtimeMs();
   browserEvents.emit('mutation:started');
   browserEvents.emit('config:changed', cachedConfig);
