@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { getVoiceRealtimeStatus, updateVoiceConfig } from '../../services/apiVoice';
 import { startRealtimeCall } from '../../services/voiceRealtime';
 
@@ -8,11 +8,12 @@ export const SOPHON_INSTALL_COMMAND = 'git clone https://github.com/adventists-a
 
 /**
  * Realtime (speech-to-speech) Voice Call: a local full-duplex voice you can interrupt, which hands lookups and actions
- * to the regular Voice tools and speaks their result. Shows whether the model is installed, the on/off and size
- * settings, and a call button with live captions.
+ * to the regular Voice tools and speaks their result. Shows whether the model is installed, the on/off, size and
+ * install-path settings, and call controls with live captions.
  */
 export default function RealtimeCallPanel({ compact = false }) {
   const [status, setStatus] = useState(null);
+  const [homeDraft, setHomeDraft] = useState('');
   const [loadError, setLoadError] = useState('');
   const [saving, setSaving] = useState(false);
   const [call, setCall] = useState({ phase: 'idle', error: '' });
@@ -20,10 +21,14 @@ export default function RealtimeCallPanel({ compact = false }) {
   const handle = useRef(null);
   // Bumped by hang-up and unmount, so a call still starting (mic prompt, worklet load) is stopped when it resolves.
   const attempt = useRef(0);
+  const modelId = useId();
+  const homeId = useId();
 
   const refresh = useCallback(async () => {
     try {
-      setStatus(await getVoiceRealtimeStatus({ silent: true }));
+      const next = await getVoiceRealtimeStatus({ silent: true });
+      setStatus(next);
+      setHomeDraft(next?.home || '');
       setLoadError('');
     } catch (err) {
       setLoadError(err.message);
@@ -40,7 +45,7 @@ export default function RealtimeCallPanel({ compact = false }) {
   const save = async (patch) => {
     setSaving(true);
     try {
-      await updateVoiceConfig({ realtime: patch });
+      await updateVoiceConfig({ realtime: patch }, { silent: true });
       await refresh();
     } catch (err) {
       setLoadError(err.message);
@@ -72,6 +77,10 @@ export default function RealtimeCallPanel({ compact = false }) {
     }
   };
 
+  const interrupt = () => {
+    handle.current?.interrupt();
+  };
+
   const hangUp = () => {
     attempt.current += 1;
     handle.current?.stop();
@@ -80,9 +89,18 @@ export default function RealtimeCallPanel({ compact = false }) {
   };
 
   const live = call.phase === 'live';
+  const busy = live || call.phase === 'loading';
+  const trimmedHome = homeDraft.trim();
+  const homeDirty = Boolean(status) && trimmedHome !== (status.home || '');
   const ledTone = live ? 'bg-port-success shadow-[0_0_6px_rgb(var(--port-success)/0.85)]'
     : call.phase === 'loading' ? 'bg-port-warning animate-pulse' : 'bg-port-text-muted/50';
   const missing = status ? Object.entries(status.parts || {}).filter(([, ok]) => !ok).map(([part]) => part) : [];
+
+  const saveHome = (e) => {
+    e.preventDefault();
+    if (!trimmedHome || !homeDirty || saving || busy) return;
+    save({ home: trimmedHome });
+  };
 
   return (
     <section aria-label="Realtime voice" className={`space-y-3 rounded-xl border border-port-border bg-port-card text-port-text ${compact ? 'p-3' : 'p-4'}`}>
@@ -95,9 +113,14 @@ export default function RealtimeCallPanel({ compact = false }) {
             </span>
           </h2>
         </div>
-        {status?.installed && status.enabled && status.voiceEnabled !== false && (live || call.phase === 'loading'
-          ? <button type="button" className={button} onClick={hangUp}>Hang up</button>
-          : <button type="button" className={button} onClick={start}>Start realtime call</button>)}
+        {status?.installed && status.enabled && status.voiceEnabled !== false && (
+          <div className="flex flex-wrap items-center gap-2">
+            {live && <button type="button" className={button} onClick={interrupt}>Interrupt</button>}
+            {busy
+              ? <button type="button" className={button} onClick={hangUp}>Hang up</button>
+              : <button type="button" className={button} disabled={saving || homeDirty} onClick={start}>Start realtime call</button>}
+          </div>
+        )}
       </div>
       <p className="text-xs text-port-text-muted">
         Speech to speech: you can interrupt it, and it hands lookups and actions to your Voice tools. The first call loads the model (about a minute).
@@ -107,27 +130,43 @@ export default function RealtimeCallPanel({ compact = false }) {
       )}
       {loadError && <p role="alert" className="text-xs text-port-error-text">{loadError}</p>}
       {!status && !loadError && <p role="status" className="text-xs">Checking realtime voice…</p>}
+      {status && (
+        <div className="space-y-2.5 text-xs">
+          <div className="flex flex-wrap items-center gap-3">
+            {status.installed && (
+              <label className="inline-flex items-center gap-1.5">
+                <input type="checkbox" checked={status.enabled} disabled={saving || busy} onChange={(e) => save({ enabled: e.target.checked })} />
+                Enable realtime calls
+              </label>
+            )}
+            <div className="inline-flex items-center gap-1.5">
+              <label htmlFor={modelId}>Model</label>
+              <select id={modelId} value={status.size} disabled={saving || busy} onChange={(e) => save({ size: e.target.value })}
+                className="min-h-9 rounded-md border border-port-border bg-port-bg px-1.5 font-mono text-xs">
+                <option value="32B">32B (smarter, ~24 GB)</option>
+                <option value="4B">4B (fastest, ~9 GB)</option>
+              </select>
+            </div>
+          </div>
+          <form onSubmit={saveHome} className="flex flex-wrap items-center gap-2 min-w-0">
+            <label htmlFor={homeId} className="shrink-0 text-port-text-muted">Install path</label>
+            <input
+              id={homeId}
+              type="text"
+              value={homeDraft}
+              disabled={saving || busy}
+              onChange={(e) => setHomeDraft(e.target.value)}
+              className="min-h-9 min-w-[12rem] flex-1 rounded-md border border-port-border bg-port-bg px-2 font-mono text-xs text-port-text"
+            />
+            <button type="submit" className={button} disabled={saving || busy || !homeDirty || !trimmedHome}>Save path</button>
+          </form>
+        </div>
+      )}
       {status && !status.installed && (
         <div className="space-y-1.5 text-xs">
           <p>Not installed at <code className="break-all">{status.home}</code> (missing {missing.join(', ')}). Install the Sophon-Realtime Mac build in a terminal, then refresh:</p>
           <pre className="whitespace-pre-wrap break-all rounded-lg border border-port-border bg-port-bg p-2 font-mono text-[11px]">{SOPHON_INSTALL_COMMAND}</pre>
           <button type="button" className={button} onClick={refresh}>Refresh</button>
-        </div>
-      )}
-      {status?.installed && (
-        <div className="flex flex-wrap items-center gap-3 text-xs">
-          <label className="inline-flex items-center gap-1.5">
-            <input type="checkbox" checked={status.enabled} disabled={saving || live} onChange={(e) => save({ enabled: e.target.checked })} />
-            Enable realtime calls
-          </label>
-          <label className="inline-flex items-center gap-1.5">
-            Model
-            <select value={status.size} disabled={saving || live} onChange={(e) => save({ size: e.target.value })}
-              className="min-h-9 rounded-md border border-port-border bg-port-bg px-1.5 font-mono text-xs">
-              <option value="32B">32B (smarter, ~24 GB)</option>
-              <option value="4B">4B (fastest, ~9 GB)</option>
-            </select>
-          </label>
         </div>
       )}
       {call.error && <p role="alert" className="text-xs text-port-error-text">{call.error}</p>}
