@@ -51,4 +51,18 @@ describe('PrivacyOrgsTab', () => {
     expect(await screen.findByText(/1 current/i)).toBeInTheDocument();
     expect(screen.queryByText(/Could not load holdings/)).not.toBeInTheDocument();
   });
+
+  it('renders a safe privacy portal link only for http(s) portalUrl values', async () => {
+    getPrivacyOrgs.mockResolvedValue([
+      { id: 'org-1', name: 'Acme Bank', category: 'bank', trust: 'trusted', status: 'active', contact: { portalUrl: 'https://privacy.example.com' } },
+      { id: 'org-2', name: 'Unsafe Org', category: 'other', trust: 'unwanted', status: 'active', contact: { portalUrl: 'javascript:alert(1)' } },
+    ]);
+    getVaultRecords.mockResolvedValue([]);
+    getOrgHoldings.mockResolvedValue([]);
+    render(<PrivacyOrgsTab subjectId="self" />);
+
+    const portalLinks = await screen.findAllByRole('link', { name: 'Open privacy portal' });
+    expect(portalLinks).toHaveLength(1);
+    expect(portalLinks[0]).toHaveAttribute('href', 'https://privacy.example.com');
+  });
 });

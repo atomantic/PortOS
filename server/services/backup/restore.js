@@ -738,6 +738,8 @@ const LIVE_FILE_RESTORE_OWNERS = Object.freeze([
     },
   },
   cachedStoreOwner('digital-twin/social-accounts.json', () => import('../socialAccounts.js')),
+  cachedStoreOwner('digital-twin/feedback.json', () => import('../feedbackStore.js')),
+  cachedStoreOwner('digital-twin/taste-profile.json', () => import('../taste-questionnaire.js')),
   {
     name: 'voice timers',
     refreshLabel: 'voice timers reload',
@@ -746,6 +748,15 @@ const LIVE_FILE_RESTORE_OWNERS = Object.freeze([
       const { withLiveVoiceTimersRestore } = await import('../voice/timers.js');
       return withLiveVoiceTimersRestore(inner);
     },
+  },
+  cachedStoreOwner('cos/decisions.json', () => import('../decisionLog.js')),
+  cachedStoreOwner('cos/learning.json', () => import('../taskLearning/store.js')),
+  cachedStoreOwner('memory-classifier-config.json', () => import('../memoryClassifier.js')),
+  {
+    name: 'tools',
+    refreshLabel: 'tools cache invalidation',
+    appliesTo: scope => !scope || scope.toLowerCase() === 'tools' || scope.toLowerCase().startsWith('tools/'),
+    hold: async inner => (await import('../tools.js')).withLiveRestore(inner),
   },
   cachedStoreOwner('notifications.json', () => import('../notifications.js')),
   cachedStoreOwner('feeds.json', () => import('../feeds.js')),

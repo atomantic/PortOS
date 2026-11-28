@@ -509,6 +509,7 @@ export default function MediaCollections() {
                   <div className={`bg-port-card border rounded-xl overflow-hidden flex flex-col ${c.synthetic ? 'border-port-accent/40' : 'border-port-border'}`}>
                     <Link
                       to={`/media/collections/${encodeURIComponent(c.id)}`}
+                      aria-label={c.name}
                       className="block aspect-square bg-port-bg relative"
                     >
                       {c.cover ? (
@@ -517,7 +518,7 @@ export default function MediaCollections() {
                         // of the browser's broken-image icon.
                         <MediaImage src={c.cover} alt={c.name} className="w-full h-full object-cover" loading="lazy" />
                       ) : (
-                        <div className="w-full h-full flex items-center justify-center text-gray-600">
+                        <div className="w-full h-full flex items-center justify-center text-gray-600" aria-hidden="true">
                           {c.synthetic ? <Inbox className="w-12 h-12" /> : <FolderOpen className="w-12 h-12" />}
                         </div>
                       )}
@@ -532,8 +533,20 @@ export default function MediaCollections() {
                         {c.displayTitle}
                       </Link>
                       <div className="flex items-center gap-2 text-[10px] text-gray-500">
-                        {c.counts.image > 0 && <span className="flex items-center gap-1"><ImageIcon className="w-3 h-3" />{c.counts.image}</span>}
-                        {c.counts.video > 0 && <span className="flex items-center gap-1"><Film className="w-3 h-3" />{c.counts.video}</span>}
+                        {c.counts.image > 0 && (
+                          <span className="flex items-center gap-1">
+                            <ImageIcon className="w-3 h-3" aria-hidden="true" />
+                            {c.counts.image}
+                            <span className="sr-only"> {c.counts.image === 1 ? 'image' : 'images'}</span>
+                          </span>
+                        )}
+                        {c.counts.video > 0 && (
+                          <span className="flex items-center gap-1">
+                            <Film className="w-3 h-3" aria-hidden="true" />
+                            {c.counts.video}
+                            <span className="sr-only"> {c.counts.video === 1 ? 'video' : 'videos'}</span>
+                          </span>
+                        )}
                         {c.counts.image === 0 && c.counts.video === 0 && <span>Empty</span>}
                       </div>
                       <div className="flex-1" />

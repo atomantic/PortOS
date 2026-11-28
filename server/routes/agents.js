@@ -10,10 +10,20 @@ router.get('/', asyncHandler(async (req, res) => {
   res.json(agents);
 }));
 
+function parsePositivePid(raw) {
+  if (typeof raw !== 'string' || !/^[1-9]\d*$/.test(raw)) {
+    throw new ServerError('Invalid PID', { status: 400, code: 'INVALID_PARAM' });
+  }
+  const pid = Number(raw);
+  if (!Number.isSafeInteger(pid)) {
+    throw new ServerError('Invalid PID', { status: 400, code: 'INVALID_PARAM' });
+  }
+  return pid;
+}
+
 // GET /api/agents/:pid - Get specific process info
 router.get('/:pid', asyncHandler(async (req, res) => {
-  const pid = parseInt(req.params.pid, 10);
-  if (Number.isNaN(pid)) throw new ServerError('Invalid PID', { status: 400, code: 'INVALID_PARAM' });
+  const pid = parsePositivePid(req.params.pid);
   const info = await getProcessInfo(pid);
   if (!info) {
     throw new ServerError('Process not found', { status: 404, code: 'NOT_FOUND' });
@@ -23,8 +33,7 @@ router.get('/:pid', asyncHandler(async (req, res) => {
 
 // DELETE /api/agents/:pid - Kill a process
 router.delete('/:pid', asyncHandler(async (req, res) => {
-  const pid = parseInt(req.params.pid, 10);
-  if (Number.isNaN(pid)) throw new ServerError('Invalid PID', { status: 400, code: 'INVALID_PARAM' });
+  const pid = parsePositivePid(req.params.pid);
   await killProcess(pid);
   res.json({ success: true, pid });
 }));

@@ -19,6 +19,12 @@ import { cancelAll, getEvent } from './eventScheduler.js';
 import { updateMeta } from './digital-twin-meta.js';
 import { getDigitalTwinForPrompt } from './digital-twin-context.js';
 import { scheduleTimer, __resetVoiceTimers } from './voice/timers.js';
+import * as decisionLog from './decisionLog.js';
+import * as memoryClassifier from './memoryClassifier.js';
+import * as feedbackStore from './feedbackStore.js';
+import * as tasteQuestionnaire from './taste-questionnaire.js';
+import * as taskLearningStore from './taskLearning/store.js';
+import * as tools from './tools.js';
 
 describe('live file restore caches', () => {
   beforeEach(() => { spawn.mockReset(); });
@@ -310,6 +316,128 @@ describe('live file restore caches', () => {
     } finally {
       setAIToolkitInstance(null);
       await fs.rm(join(testDataRoot(), 'voice-timers.json'), { force: true });
+    }
+  });
+
+  it('reconciles decision log, classifier config, twin feedback/taste, learning and tools caches across live restore', async () => {
+    const decisionPath = join(PATHS.cos, 'decisions.json');
+    const learningPath = join(PATHS.cos, 'learning.json');
+    const classifierPath = join(testDataRoot(), 'memory-classifier-config.json');
+    const feedbackPath = join(PATHS.digitalTwin, 'feedback.json');
+    const tastePath = join(PATHS.digitalTwin, 'taste-profile.json');
+    const toolPath = join(PATHS.tools, 'tool-restored.json');
+    const oldToolPath = join(PATHS.tools, 'tool-before.json');
+    const nowIso = new Date().toISOString();
+
+    await Promise.all([
+      fs.mkdir(PATHS.cos, { recursive: true }),
+      fs.mkdir(PATHS.digitalTwin, { recursive: true }),
+      fs.mkdir(PATHS.tools, { recursive: true }),
+    ]);
+
+    decisionLog.invalidateCache();
+    memoryClassifier.invalidateCache();
+    feedbackStore.invalidateCache();
+    tasteQuestionnaire.invalidateCache();
+    taskLearningStore.clearLearningCache();
+    tools.invalidateCache();
+
+    await Promise.all([
+      fs.writeFile(decisionPath, JSON.stringify({
+        version: 1,
+        decisions: [{ id: 'dec-before', type: 'idle', reason: 'before', count: 1, timestamp: nowIso }],
+        stats: { totalDecisions: 1, byType: { idle: 1 } },
+      })),
+      fs.writeFile(learningPath, JSON.stringify({
+        version: 2, lastUpdated: nowIso, byTaskType: {}, byTaskTypeExecution: {},
+        byModelTier: {}, errorPatterns: {}, failureSignatures: {}, routingAccuracy: {},
+        environmentalFailures: {}, correlationWindow: [],
+        totals: { completed: 1, succeeded: 1, failed: 0, totalDurationMs: 100, avgDurationMs: 100 },
+      })),
+      fs.writeFile(classifierPath, JSON.stringify({ enabled: true, model: 'before-model', timeout: 11111 })),
+      fs.writeFile(feedbackPath, JSON.stringify({
+        version: '1.0.0', entries: [{ id: 'fb-before', rating: 'sounds_like_me' }],
+        stats: { totalFeedback: 1, soundsLikeMe: 1, doesntSoundLikeMe: 0 },
+        documentWeightAdjustments: {}, lastCalculatedAt: null,
+      })),
+      fs.writeFile(tastePath, JSON.stringify({
+        version: '1.0.0', createdAt: nowIso, updatedAt: nowIso, profileSummary: 'before-summary',
+        lastSessionAt: null, sections: {},
+      })),
+      fs.writeFile(oldToolPath, JSON.stringify({ id: 'tool-before', name: 'Before Tool', category: 'test', enabled: true })),
+    ]);
+
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now());
+    try {
+      // Warm every in-memory cache with pre-restore data.
+      expect((await decisionLog.getDecisionSummary()).last24Hours.total).toBe(1);
+      expect((await memoryClassifier.getConfig()).model).toBe('before-model');
+      expect((await feedbackStore.loadFeedback()).entries).toMatchObject([{ id: 'fb-before' }]);
+      expect((await tasteQuestionnaire.getTasteProfile()).profileSummary).toBe('before-summary');
+      expect((await taskLearningStore.loadLearningData()).totals.completed).toBe(1);
+      expect((await tools.getTools()).map((t) => t.id)).toEqual(['tool-before']);
+
+      const proc = fakeProc();
+      spawn.mockReturnValue(proc);
+      const pending = restoreSnapshot('/dest', 'snap-1', { dryRun: false });
+      await flush();
+
+      // Queue live mutations while rsync is running — they must wait for restore and apply onto restored bytes.
+      const queuedDecision = decisionLog.recordDecision('task_selected', 'after-restore');
+      const queuedClassifier = memoryClassifier.updateConfig({ timeout: 22222 });
+      const queuedTool = tools.updateTool('tool-restored', { description: 'edited-after-restore' });
+
+      // Simulate rsync installing the snapshot files.
+      await Promise.all([
+        fs.writeFile(decisionPath, JSON.stringify({
+          version: 1,
+          decisions: [{ id: 'dec-restored', type: 'idle', reason: 'restored', count: 5, timestamp: nowIso }],
+          stats: { totalDecisions: 5, byType: { idle: 5 } },
+        })),
+        fs.writeFile(learningPath, JSON.stringify({
+          version: 2, lastUpdated: nowIso, byTaskType: {}, byTaskTypeExecution: {},
+          byModelTier: {}, errorPatterns: {}, failureSignatures: {}, routingAccuracy: {},
+          environmentalFailures: {}, correlationWindow: [],
+          totals: { completed: 42, succeeded: 40, failed: 2, totalDurationMs: 4200, avgDurationMs: 100 },
+        })),
+        fs.writeFile(classifierPath, JSON.stringify({ enabled: false, model: 'restored-model', timeout: 33333 })),
+        fs.writeFile(feedbackPath, JSON.stringify({
+          version: '1.0.0', entries: [{ id: 'fb-restored', rating: 'sounds_like_me' }],
+          stats: { totalFeedback: 1, soundsLikeMe: 1, doesntSoundLikeMe: 0 },
+          documentWeightAdjustments: {}, lastCalculatedAt: null,
+        })),
+        fs.writeFile(tastePath, JSON.stringify({
+          version: '1.0.0', createdAt: nowIso, updatedAt: nowIso, profileSummary: 'restored-summary',
+          lastSessionAt: null, sections: {},
+        })),
+        fs.rm(oldToolPath, { force: true }),
+        fs.writeFile(toolPath, JSON.stringify({ id: 'tool-restored', name: 'Restored Tool', category: 'test', enabled: true })),
+      ]);
+
+      proc.emit('close', 0);
+      await pending;
+      await Promise.all([queuedDecision, queuedClassifier, queuedTool]);
+
+      const storedDecisions = JSON.parse(await fs.readFile(decisionPath, 'utf8'));
+      expect(storedDecisions.stats.totalDecisions).toBe(6);
+      expect(storedDecisions.decisions.map((d) => d.reason)).toEqual(['after-restore', 'restored']);
+
+      const storedClassifier = JSON.parse(await fs.readFile(classifierPath, 'utf8'));
+      expect(storedClassifier).toMatchObject({ enabled: false, model: 'restored-model', timeout: 22222 });
+      expect((await memoryClassifier.getConfig()).model).toBe('restored-model');
+
+      expect((await feedbackStore.loadFeedback()).entries).toMatchObject([{ id: 'fb-restored' }]);
+      expect((await tasteQuestionnaire.getTasteProfile()).profileSummary).toBe('restored-summary');
+      expect((await taskLearningStore.loadLearningData()).totals.completed).toBe(42);
+      expect(await tools.getTools()).toMatchObject([{ id: 'tool-restored', description: 'edited-after-restore' }]);
+    } finally {
+      clock.mockRestore();
+      decisionLog.invalidateCache();
+      memoryClassifier.invalidateCache();
+      feedbackStore.invalidateCache();
+      tasteQuestionnaire.invalidateCache();
+      taskLearningStore.clearLearningCache();
+      tools.invalidateCache();
     }
   });
 });

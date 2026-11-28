@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Plus, Pencil, Trash2, ExternalLink, Building2 } from 'lucide-react';
+import { Plus, Pencil, Trash2, ExternalLink, Building2, Shield } from 'lucide-react';
 import { getPrivacyOrgs, deletePrivacyOrg, getVaultRecords, getOrgHoldings } from '../../services/apiPrivacy.js';
 import ListLoadError from '../ui/ListLoadError';
 import toast from '../ui/Toast';
@@ -188,9 +188,21 @@ export default function PrivacyOrgsTab({ subjectId }) {
                         rel="noreferrer"
                         title="Open website"
                         aria-label="Open website"
-                        className="p-2 rounded text-gray-400 hover:text-white hover:bg-port-border/50"
+                        className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 inline-flex items-center justify-center p-2 rounded text-gray-400 hover:text-white hover:bg-port-border/50"
                       >
                         <ExternalLink size={16} />
+                      </a>
+                    )}
+                    {org.contact?.portalUrl && isHttpUrl(org.contact.portalUrl) && (
+                      <a
+                        href={org.contact.portalUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        title="Open privacy portal"
+                        aria-label="Open privacy portal"
+                        className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 inline-flex items-center justify-center p-2 rounded text-gray-400 hover:text-white hover:bg-port-border/50"
+                      >
+                        <Shield size={16} />
                       </a>
                     )}
                     <button onClick={() => openEdit(org)} title="Edit organization" aria-label="Edit organization" className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-2 rounded text-gray-400 hover:text-white hover:bg-port-border/50">

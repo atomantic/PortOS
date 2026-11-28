@@ -368,7 +368,6 @@ export async function importAppleHealthXml(filePath, io = null, { flushInterval 
     await unlink(filePath).catch(() => {});
   }
 
-  emitToOperatorsOn(io, 'health:xml:complete', { days: allDays.size, records: processedRecords });
   console.log(`🍎 XML import complete: ${processedRecords} records across ${allDays.size} days`);
 
   return { days: allDays.size, records: processedRecords };

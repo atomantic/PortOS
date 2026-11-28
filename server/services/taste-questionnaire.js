@@ -396,6 +396,13 @@ const queueProfileWrite = createFileWriteQueue();
 // publish), so a reader's stale disk read can never overwrite a newer write.
 let profileCache = null;
 
+export function invalidateCache() {
+  profileCache = null;
+}
+
+/** Hold profile mutations through live backup transfer and cache reconciliation. */
+export const withLiveRestore = (restore) => queueProfileWrite(() => restore(invalidateCache));
+
 function createDefaultProfile() {
   const profile = {
     version: '1.0.0',

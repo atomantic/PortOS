@@ -361,6 +361,132 @@ describe('VoiceWidget async lifecycle', () => {
     await settle();
     expect(mocks.startContinuous).toHaveBeenCalledTimes(1);
   });
+
+  it('drops a superseded fast-path turn when a newer typed message is sent', async () => {
+    mocks.getVoiceConfig.mockResolvedValue({ ...ENABLED_CONFIG, llm: { fastPath: { enabled: true } } });
+    let resolveFirst;
+    let resolveSecond;
+    mocks.resolveTurn
+      .mockReturnValueOnce(new Promise((r) => { resolveFirst = r; }))
+      .mockReturnValueOnce(new Promise((r) => { resolveSecond = r; }));
+    const widget = await renderWidget();
+    const input = within(widget).getByLabelText('Message to the voice assistant');
+    const sendBtn = within(widget).getByRole('button', { name: 'Send text' });
+
+    fireEvent.change(input, { target: { value: 'first question' } });
+    fireEvent.click(sendBtn);
+    await settle();
+
+    fireEvent.change(input, { target: { value: 'second question' } });
+    fireEvent.click(sendBtn);
+    await settle();
+
+    await act(async () => { resolveSecond({ tier: 'server' }); });
+    await act(async () => { resolveFirst({ tier: 'server' }); });
+    expect(voiceClientMock.sendText).toHaveBeenCalledTimes(1);
+    expect(voiceClientMock.sendText).toHaveBeenCalledWith('second question');
+  });
+
+  it('cancels an in-flight fast-path turn on disengage so it neither speaks nor sends to server', async () => {
+    mocks.getVoiceConfig.mockResolvedValue({ ...ENABLED_CONFIG, llm: { fastPath: { enabled: true } } });
+    let resolveFastPath;
+    mocks.resolveTurn.mockReturnValueOnce(new Promise((r) => { resolveFastPath = r; }));
+    const widget = await renderWidget();
+    fireEvent.change(within(widget).getByLabelText('Message to the voice assistant'), { target: { value: 'cancel me' } });
+    fireEvent.click(within(widget).getByRole('button', { name: 'Send text' }));
+    await settle();
+
+    act(() => { window.dispatchEvent(new Event(DISENGAGE_EVENT)); });
+    await settle();
+
+    await act(async () => { resolveFastPath({ tier: 'nano', reply: 'stale reply' }); });
+    expect(mocks.speakSynthesized).not.toHaveBeenCalled();
+    expect(voiceClientMock.sendText).not.toHaveBeenCalled();
+  });
+
+  it('does not let a stale voice:idle audio drain clobber a newer turn thinking stage', async () => {
+    let resolveDrain;
+    voiceClientMock.whenVoiceTurnAudioDrained.mockReturnValueOnce(new Promise((r) => { resolveDrain = r; }));
+    const widget = await renderWidget();
+    const ui = within(widget);
+
+    // Prior turn finishes sending audio and awaits local playback drain.
+    act(() => mocks.events.get('voice:tts:audio')?.({ sentence: 'old reply' }));
+    act(() => mocks.events.get('voice:idle')?.({ reason: 'turn-complete' }));
+    await settle();
+
+    // User starts a new turn before the prior turn's drain promise settles.
+    fireEvent.change(ui.getByLabelText('Message to the voice assistant'), { target: { value: 'new question' } });
+    fireEvent.click(ui.getByRole('button', { name: 'Send text' }));
+    await settle();
+    expect(ui.getByText('Thinking', { selector: '[role="status"]' })).toBeInTheDocument();
+
+    // Prior turn's drain resolves (e.g. because cancelVoicePlayback drained the queue);
+    // it must NOT reset the new turn's Thinking stage back to Standby.
+    await act(async () => { resolveDrain(true); });
+    await settle();
+    expect(ui.getByText('Thinking', { selector: '[role="status"]' })).toBeInTheDocument();
+  });
+
+  it('does not let a delayed voice:transcript echo invalidate a newer turn fast-path lookup', async () => {
+    mocks.getVoiceConfig.mockResolvedValue({ ...ENABLED_CONFIG, llm: { fastPath: { enabled: true } } });
+    let resolveSecond;
+    mocks.resolveTurn.mockReturnValueOnce(new Promise((r) => { resolveSecond = r; }));
+    const widget = await renderWidget();
+    const ui = within(widget);
+
+    fireEvent.change(ui.getByLabelText('Message to the voice assistant'), { target: { value: 'newer question' } });
+    fireEvent.click(ui.getByRole('button', { name: 'Send text' }));
+    await settle();
+
+    // Delayed text echo from an earlier server-routed turn arrives while the newer fast path is in flight.
+    act(() => mocks.events.get('voice:transcript')?.({ text: 'earlier question', source: 'text' }));
+    await settle();
+
+    await act(async () => { resolveSecond({ tier: 'server' }); });
+    expect(voiceClientMock.sendText).toHaveBeenCalledTimes(1);
+    expect(voiceClientMock.sendText).toHaveBeenCalledWith('newer question');
+  });
+
+  it('discards an earlier pending typed fast-path lookup when a new server-transcribed voice turn starts', async () => {
+    mocks.getVoiceConfig.mockResolvedValue({ ...ENABLED_CONFIG, llm: { fastPath: { enabled: true } } });
+    let resolveTyped;
+    mocks.resolveTurn.mockReturnValueOnce(new Promise((r) => { resolveTyped = r; }));
+    const widget = await renderWidget();
+    const ui = within(widget);
+
+    fireEvent.change(ui.getByLabelText('Message to the voice assistant'), { target: { value: 'older typed question' } });
+    fireEvent.click(ui.getByRole('button', { name: 'Send text' }));
+    await settle();
+
+    // A genuinely new server-transcribed voice turn starts while the typed fast path is still pending.
+    act(() => mocks.events.get('voice:transcript')?.({ text: 'spoken question', source: 'voice' }));
+    await settle();
+
+    await act(async () => { resolveTyped({ tier: 'nano', reply: 'stale fast reply' }); });
+    expect(mocks.speakSynthesized).not.toHaveBeenCalled();
+    expect(voiceClientMock.sendText).not.toHaveBeenCalled();
+  });
+
+  it('ignores an older turn voice:idle delivered after a newer typed turn has already started', async () => {
+    const widget = await renderWidget();
+    const ui = within(widget);
+
+    // Prior server turn is active.
+    act(() => mocks.events.get('voice:transcript')?.({ text: 'old turn', source: 'voice' }));
+    await settle();
+
+    // User starts a new typed turn before the prior turn's voice:idle arrives.
+    fireEvent.change(ui.getByLabelText('Message to the voice assistant'), { target: { value: 'new typed turn' } });
+    fireEvent.click(ui.getByRole('button', { name: 'Send text' }));
+    await settle();
+    expect(ui.getByText('Thinking', { selector: '[role="status"]' })).toBeInTheDocument();
+
+    // Delayed voice:idle from the older turn arrives after the newer turn started.
+    act(() => mocks.events.get('voice:idle')?.({ reason: 'turn-complete' }));
+    await settle();
+    expect(ui.getByText('Thinking', { selector: '[role="status"]' })).toBeInTheDocument();
+  });
 });
 
 describe('Voice Call console', () => {

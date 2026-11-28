@@ -17,6 +17,7 @@ const queueDecisionWrite = createFileWriteQueue();
 
 // In-memory cache for recent decisions (avoid excessive file I/O)
 let decisionCache = null;
+let cacheGeneration = 0;
 
 // Decision types
 export const DECISION_TYPES = {
@@ -52,6 +53,7 @@ async function loadDecisions() {
     return decisionCache;
   }
 
+  const generation = cacheGeneration;
   await ensureDir(DATA_DIR);
 
   // STRICT (#4115): `getDecisionSummary()` divides by `recentDecisions.length`
@@ -60,6 +62,7 @@ async function loadDecisions() {
   // `data.stats.totalDecisions` is also a LIFETIME counter that `saveDecisions`
   // writes back, so the same read resets it to zero on the next recordDecision.
   const loaded = await readJSONFile(DECISION_FILE, structuredClone(DEFAULT_DATA), { strict: true });
+  if (generation !== cacheGeneration) return loadDecisions();
   // A dashboard read that started on a cold cache can finish after a write.
   decisionCache ??= loaded;
   return decisionCache;
@@ -70,9 +73,18 @@ async function loadDecisions() {
  */
 async function saveDecisions(data) {
   await atomicWrite(DECISION_FILE, data);
+  cacheGeneration += 1;
   decisionCache = data;
   dashboardEvents.emit('cos:decisions:changed');
 }
+
+export function invalidateCache() {
+  cacheGeneration += 1;
+  decisionCache = null;
+}
+
+/** Hold mutations through live backup transfer and cache reconciliation. */
+export const withLiveRestore = (restore) => queueDecisionWrite(() => restore(invalidateCache));
 
 /**
  * Record a decision
