@@ -4,7 +4,6 @@ import ConnectingPortrait, { CONNECTING_STEPS } from './ConnectingPortrait';
 import SatPhoneViewfinder from './SatPhoneViewfinder';
 
 vi.mock('./VoiceCallGenerativePortrait', () => ({ default: ({ connecting }) => <div>{connecting ? 'portrait connecting' : 'portrait'}</div> }));
-vi.mock('./SatPhoneCaption', () => ({ default: () => null }));
 
 describe('ConnectingPortrait', () => {
   let images;
@@ -38,12 +37,22 @@ describe('ConnectingPortrait', () => {
   });
 });
 
-describe('SatPhoneViewfinder while connecting', () => {
+describe('SatPhoneViewfinder', () => {
   it('shows Connecting on the status chip and passes it to the portrait, but keeps a live stage', () => {
     const { rerender } = render(<SatPhoneViewfinder connecting stage="idle" />);
     expect(screen.getByRole('status')).toHaveTextContent('Connecting');
     expect(screen.getByText('portrait connecting')).toBeInTheDocument();
     rerender(<SatPhoneViewfinder connecting stage="speaking" />);
     expect(screen.getByRole('status')).toHaveTextContent('Speaking');
+  });
+
+  it('shows the channel and agent name above the avatar instead of AVATAR LIVE', () => {
+    const { rerender } = render(<SatPhoneViewfinder channel={{ index: 0 }} agentName="Alba" runningAvatar stage="idle" />);
+    expect(screen.getByText('CH1 · Alba')).toBeInTheDocument();
+    expect(screen.queryByText(/AVATAR LIVE|PORTRAIT/)).not.toBeInTheDocument();
+
+    rerender(<SatPhoneViewfinder channel={{ index: 2 }} agentName="" runningAvatar={false} stage="idle" />);
+    expect(screen.getByText('CH3')).toBeInTheDocument();
+    expect(screen.queryByText(/AVATAR LIVE|PORTRAIT/)).not.toBeInTheDocument();
   });
 });

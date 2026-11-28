@@ -289,7 +289,7 @@ export default function VoiceWidget({ config, claimHeld, consoleHost }) {
 
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-  }, [history]);
+  }, [history, interimTranscript]);
 
   const handleStart = useCallback(async () => {
     if (!enabled || disposedRef.current) return;
@@ -660,6 +660,7 @@ export default function VoiceWidget({ config, claimHeld, consoleHost }) {
     onInterrupt: handleInterrupt,
     onEnd: endCall,
     onClear: handleClear,
+    agentName: globalPersonality?.name || '',
     voiceLabel: tts?.voice || tts?.engine,
     llmProvider: activeLlmProvider,
     llmModel: activeLlmModel,

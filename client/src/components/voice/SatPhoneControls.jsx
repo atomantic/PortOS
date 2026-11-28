@@ -51,7 +51,7 @@ function SignalMeter({ level, stage, muted }) {
   );
 }
 
-export function SatPhoneTalkPaddle({
+export function SatPhoneTalkButton({
   isFloating,
   capturing,
   handsFree,
@@ -61,26 +61,26 @@ export function SatPhoneTalkPaddle({
 }) {
   const openMic = handsFree || !canChangeMicMode;
   const MicIcon = capturing ? MicOff : Mic;
-  const paddleAriaLabel = isFloating
+  const buttonAriaLabel = isFloating
     ? (handsFree
       ? (capturing ? 'Stop hands-free listening' : 'Start hands-free listening')
       : (capturing ? 'Send voice message' : 'Start listening'))
     : (capturing ? (openMic ? 'Close mic' : 'Send voice') : (openMic ? 'Open mic' : 'Talk'));
 
-  const paddleTitle = handsFree
+  const buttonTitle = handsFree
     ? (capturing ? `Click or press ${hotkey} to close mic` : `Click or press ${hotkey} to open hands-free mic`)
     : (capturing ? `Click or press ${hotkey} to send voice` : `Click or press ${hotkey} to talk`);
 
-  const paddleLegend = capturing ? (openMic ? 'LIVE' : 'SEND') : 'TALK';
+  const buttonLegend = capturing ? (openMic ? 'LIVE' : 'SEND') : 'TALK';
 
   return (
     <button
       type="button"
       onClick={onMic}
       aria-pressed={capturing}
-      aria-label={paddleAriaLabel}
-      title={paddleTitle}
-      className="satphone-paddle flex w-9 sm:w-10 shrink-0 flex-col items-center justify-center gap-2 rounded-xl border px-1 py-3 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-port-accent"
+      aria-label={buttonAriaLabel}
+      title={buttonTitle}
+      className="satphone-paddle inline-flex min-h-10 pointer-coarse:min-h-11 w-full items-center justify-center gap-2 rounded-lg border px-3 py-1.5 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-port-accent"
     >
       <span
         aria-hidden="true"
@@ -90,12 +90,12 @@ export function SatPhoneTalkPaddle({
             : 'bg-port-accent-2/70'
         }`}
       />
-      <MicIcon size={15} aria-hidden="true" />
+      <MicIcon size={14} aria-hidden="true" />
       <span
         aria-hidden="true"
-        className="font-mono text-[10px] font-bold uppercase tracking-[0.2em] [writing-mode:vertical-rl] rotate-180"
+        className="font-mono text-[11px] font-bold uppercase tracking-[0.16em]"
       >
-        {paddleLegend}
+        {buttonLegend}
       </span>
     </button>
   );
@@ -104,8 +104,11 @@ export function SatPhoneTalkPaddle({
 export function SatPhoneTelemetry({
   isFloating,
   stage,
+  capturing,
   handsFree,
   canChangeMicMode,
+  hotkey,
+  onMic,
   onMode,
   channel,
   channelCount = 0,
@@ -120,76 +123,83 @@ export function SatPhoneTelemetry({
   onVolumeChange,
   onToggleMute,
 }) {
-  const modeBadge = !canChangeMicMode ? 'WEB' : handsFree ? 'VOX' : 'PTT';
   const llmDisplay = llmModel && llmModel !== 'auto'
     ? voiceModelDisplayName(llmModel)
     : (llmProvider ? `${llmProvider} · auto` : null);
   const residencyShort = voiceLlmResidencyBadge(llmResidency)?.short;
-  const lcdSubline = [voiceLabel || 'Saved voice', llmDisplay, llmDisplay && residencyShort].filter(Boolean).join(' · ');
+  const llmLine = [llmDisplay, llmDisplay && residencyShort].filter(Boolean).join(' · ');
+  const voiceDisplay = voiceLabel || 'Saved voice';
   const channelNumber = (channel?.index ?? 0) + 1;
   const channelName = channel?.label || `Channel ${channelNumber}`;
 
   return (
-    <div className="flex items-center gap-2.5 min-w-0">
-      <div className="flex flex-1 flex-col gap-1.5 min-w-0">
-        {/* Digital LCD readout — real telemetry; the channel picks the avatar on the viewfinder */}
-        <div className="satphone-lcd flex items-center justify-between gap-2 rounded-lg border px-2.5 py-2 min-w-0">
-          <div className="flex flex-col gap-0.5 min-w-0">
-            <div className="flex items-center gap-1.5 font-mono text-[10px] font-bold uppercase tracking-wider">
-              <span className="text-port-accent">{modeBadge}</span>
-              <span className="opacity-40" aria-hidden="true">/</span>
-              <span>{`CH${channelNumber}`}</span>
-              <span className="opacity-40" aria-hidden="true">/</span>
-              <span className={muted ? 'text-port-error-text' : ''}>
-                {muted ? 'MUTE' : `${Math.round(volume * 100)}%`}
+    <div className="flex flex-col gap-1.5 min-w-0">
+      <div className="flex items-center gap-2.5 min-w-0">
+        <div className="flex flex-1 flex-col gap-1.5 min-w-0">
+          {/* Digital LCD readout — active brain, voice, and live audio signal level */}
+          <div className="satphone-lcd flex items-center justify-between gap-2 rounded-lg border px-2.5 py-2 min-w-0">
+            <div className="flex flex-col gap-0.5 min-w-0">
+              {llmLine && (
+                <span className="font-mono text-[10px] font-semibold truncate" title={llmLine}>
+                  {llmLine}
+                </span>
+              )}
+              <span className="font-mono text-[10px] opacity-75 truncate" title={voiceDisplay}>
+                {voiceDisplay}
               </span>
             </div>
-            <span className="font-mono text-[10px] opacity-75 truncate" title={lcdSubline}>
-              {lcdSubline}
-            </span>
+            <SignalMeter level={signalLevel} stage={stage} muted={muted} />
           </div>
-          <SignalMeter level={signalLevel} stage={stage} muted={muted} />
+
+          <SatPhoneTalkButton
+            isFloating={isFloating}
+            capturing={capturing}
+            handsFree={handsFree}
+            canChangeMicMode={canChangeMicMode}
+            hotkey={hotkey}
+            onMic={onMic}
+          />
         </div>
 
-        {/* Mode keys beneath LCD: Mic mode (VOX/PTT) + channel changer */}
-        <div className={`grid gap-1.5 ${canChangeMicMode ? 'grid-cols-2' : 'grid-cols-1'}`}>
-          {canChangeMicMode && (
-            <button
-              type="button"
-              onClick={onMode}
-              aria-pressed={handsFree}
-              data-active={handsFree ? 'true' : 'false'}
-              title={handsFree
-                ? 'Hands-free (VOX) ON — mic stays open, auto-submits on pause. Click for push-to-talk.'
-                : 'Push-to-talk (PTT) ON — press TALK to record, press again to send. Click for hands-free.'}
-              className={keyBase}
-            >
-              {isFloating ? (handsFree ? 'hands-free' : 'push-to-talk') : 'Hands-free'}
-            </button>
-          )}
-          <button
-            type="button"
-            onClick={onNextChannel}
-            disabled={!onNextChannel || channelCount < 2}
-            aria-label={`Channel ${channelNumber}, ${channelName}. Switch to the next channel`}
-            title={`CH${channelNumber} · ${channelName} — click for the next channel's avatar`}
-            className={`${keyBase} min-w-0`}
-          >
-            <ScanFace size={13} aria-hidden="true" className="shrink-0" />
-            <span className="shrink-0">{`CH${channelNumber}`}</span>
-            <span aria-hidden="true" className="truncate opacity-70 normal-case">{channelName}</span>
-          </button>
-        </div>
+        {/* Precision tactile rotary volume dial */}
+        <SatPhoneRotaryDial
+          volume={volume}
+          muted={muted}
+          onVolumeChange={onVolumeChange}
+          onToggleMute={onToggleMute}
+          size={isFloating ? 'sm' : 'md'}
+        />
       </div>
 
-      {/* Precision tactile rotary volume dial */}
-      <SatPhoneRotaryDial
-        volume={volume}
-        muted={muted}
-        onVolumeChange={onVolumeChange}
-        onToggleMute={onToggleMute}
-        size={isFloating ? 'sm' : 'md'}
-      />
+      {/* Mode & channel keys */}
+      <div className={`grid gap-1.5 ${canChangeMicMode ? 'grid-cols-2' : 'grid-cols-1'}`}>
+        {canChangeMicMode && (
+          <button
+            type="button"
+            onClick={onMode}
+            aria-pressed={handsFree}
+            data-active={handsFree ? 'true' : 'false'}
+            title={handsFree
+              ? 'Hands-free (VOX) ON — mic stays open, auto-submits on pause. Click for push-to-talk.'
+              : 'Push-to-talk (PTT) ON — press TALK to record, press again to send. Click for hands-free.'}
+            className={keyBase}
+          >
+            {isFloating ? (handsFree ? 'hands-free' : 'push-to-talk') : 'Hands-free'}
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={onNextChannel}
+          disabled={!onNextChannel || channelCount < 2}
+          aria-label={`Channel ${channelNumber}, ${channelName}. Switch to the next channel`}
+          title={`CH${channelNumber} · ${channelName} — click for the next channel's avatar`}
+          className={`${keyBase} min-w-0`}
+        >
+          <ScanFace size={13} aria-hidden="true" className="shrink-0" />
+          <span className="shrink-0">{`CH${channelNumber}`}</span>
+          <span aria-hidden="true" className="truncate opacity-70 normal-case">{channelName}</span>
+        </button>
+      </div>
     </div>
   );
 }

@@ -190,13 +190,33 @@ describe('VoiceWidget accessibility', () => {
     }
   });
 
-  it('exposes toggle states and keeps the active speaker focusable', async () => {
+  it('exposes toggle states and omits the speaker button while this tab already owns output', async () => {
     const widget = await renderWidget();
-    const speaker = within(widget).getByRole('button', { name: /speaker/ });
-    expect(speaker).not.toBeDisabled();
-    expect(speaker).toHaveAttribute('aria-pressed', 'true');
+    expect(within(widget).queryByRole('button', { name: /speaker/i })).not.toBeInTheDocument();
     expect(within(widget).getByRole('button', { name: /^(hands-free|push-to-talk)$/ })).toHaveAttribute('aria-pressed');
-    expect(within(widget).getByRole('button', { name: 'Start hands-free listening' })).toHaveAttribute('aria-pressed', 'false');
+    const talk = within(widget).getByRole('button', { name: 'Start hands-free listening' });
+    expect(talk).toHaveAttribute('aria-pressed', 'false');
+    expect(talk.innerHTML).not.toContain('writing-mode:vertical-rl');
+  });
+
+  it('shows the agent name above the avatar, keeps transcript only in the transmission log, and omits redundant LCD header badges', async () => {
+    mocks.getVoiceConfig.mockResolvedValue({
+      ...ENABLED_CONFIG,
+      stt: { engine: 'web-speech', language: 'en' },
+      llm: { provider: 'lmstudio', model: 'gemma4:31b', personality: { name: 'Alba' }, fastPath: null },
+    });
+    const widget = await renderWidget();
+    const ui = within(widget);
+    expect(ui.getByText('CH1 · Alba')).toBeInTheDocument();
+    expect(ui.queryByText(/AVATAR LIVE|PORTRAIT/i)).not.toBeInTheDocument();
+    expect(ui.queryByText('WEB')).not.toBeInTheDocument();
+    expect(ui.queryByText('PT-01')).not.toBeInTheDocument();
+    expect(ui.getByText('example-voice')).toBeInTheDocument();
+
+    act(() => mocks.events.get('voice:llm:delta')?.({ delta: 'Unique reply line' }));
+    // Transcript appears once, inside the transmission log — not duplicated on top of the avatar.
+    expect(ui.getAllByText('Unique reply line')).toHaveLength(1);
+    expect(ui.getByRole('log')).toHaveTextContent('Unique reply line');
   });
 
   it('lets the floating handset claim voice output from another tab', async () => {
