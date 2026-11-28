@@ -284,7 +284,7 @@ export default function VoiceWidget({ config, claimHeld, consoleHost }) {
   }, []);
 
   const floatingFullVisible = enabled && !hidden && !consoleHost && visualMode === 'full';
-  const { data: floatingAvatarData, error: floatingAvatarError } = useAvatarRuntime(floatingFullVisible);
+  const { data: floatingAvatarData, error: floatingAvatarError } = useAvatarRuntime(floatingFullVisible, { autoStart: true });
   const runningFloatingAvatar = Boolean(!floatingAvatarError && floatingAvatarData?.supported && floatingAvatarData.phase === 'running');
 
   useEffect(() => {

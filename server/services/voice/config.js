@@ -175,6 +175,14 @@ export const VOICE_DEFAULTS = Object.freeze({
 
   vad: { endOfSpeechMs: 700, minUtteranceMs: 250 },
 
+  // AvatarForcing (the Voice Call's generated avatar). autoStart: start the
+  // installed worker when a Voice Call view opens, so the call shows the live
+  // avatar instead of the still portrait. Start and Stop on the avatar card
+  // remember the choice.
+  avatar: {
+    autoStart: true,
+  },
+
   // Realtime (speech-to-speech) Voice Call: a local full-duplex voice model
   // (Sophon-Realtime's Mac/MLX build, installed separately) listens, takes
   // turns, can be interrupted and speaks; lookups and actions are delegated to

@@ -610,7 +610,11 @@ describe('readVoiceLlmResidency while a warm-up loads the model', () => {
     probeVoiceLlmResidency.mockReset();
     probeVoiceLlmResidency.mockResolvedValue({ state: 'unloaded', runtime: 'ollama', model: 'model-a' });
     emitToOperators.mockClear();
+    // resolveModel lists the provider's models; without this a real Ollama on the test machine answers, and the
+    // pinned 'model-a' resolves to one of its installed models instead.
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('offline')));
   });
+  afterEach(() => vi.unstubAllGlobals());
 
   it('reports loading until the warm-up releases, and tells open views each time', async () => {
     const release = markVoiceLlmWarming('ollama', 'model-a');
