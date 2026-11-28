@@ -388,8 +388,8 @@ async function loadMemoryItems() {
 }
 
 async function saveMemoryItems(items) {
-  await ensureDir(MEATSPACE_DIR);
-  await atomicWrite(MEMORY_ITEMS_FILE, { items });
+  await ensureDir(MEATSPACE_DIR, { mode: 0o700 });
+  await atomicWrite(MEMORY_ITEMS_FILE, { items }, { mode: 0o600, dirMode: 0o700 });
 }
 
 // =============================================================================
