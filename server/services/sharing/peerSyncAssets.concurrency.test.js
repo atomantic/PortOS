@@ -17,7 +17,7 @@ const bootRoot = tempRoot;
 
 vi.mock('../../lib/fileUtils.js', async () => {
   const actual = await vi.importActual('../../lib/fileUtils.js');
-  return makePathsProxy(actual, { dataRoot: () => tempRoot });
+  return makePathsProxy({ ...actual, sha256File: vi.fn(actual.sha256File) }, { dataRoot: () => tempRoot });
 });
 
 const peers = [];
@@ -27,8 +27,9 @@ vi.mock('../instances.js', () => ({
 
 vi.mock('../../lib/peerHttpClient.js', async (importOriginal) => ({ ...(await importOriginal()), peerFetch: vi.fn() }));
 
+const { sha256File } = await import('../../lib/fileUtils.js');
 const { peerFetch } = await import('../../lib/peerHttpClient.js');
-const { pullMissingAssetsFromPeer, assetWriteQueue } = await import('./peerSyncAssets.js');
+const { diffAssetManifestAgainstLocal, pullMissingAssetsFromPeer, assetWriteQueue } = await import('./peerSyncAssets.js');
 const { syncMediaLibraryWithAllPeers } = await import('./peerMediaLibrarySync.js');
 
 const sha = (buf) => createHash('sha256').update(buf).digest('hex');
@@ -178,6 +179,74 @@ describe('#3929 — syncMediaLibraryWithAllPeers global re-entrancy guard', () =
     expect(await first).toEqual({ peers: 2 });
     // Guard releases: a later tick sweeps normally.
     expect(await syncMediaLibraryWithAllPeers()).toEqual({ peers: 2 });
+  });
+});
+
+describe('diffAssetManifestAgainstLocal — flat-asset hash caching and bounded concurrency', () => {
+  beforeEach(() => {
+    tempRoot = mkdtempSync(join(tmpdir(), 'portos-diff-cache-'));
+    vi.mocked(sha256File).mockClear();
+  });
+  afterEach(() => {
+    if (tempRoot) rmSync(tempRoot, { recursive: true, force: true });
+  });
+
+  it('caches flat-asset SHA-256 across repeated diffs and invalidates on file change', async () => {
+    mkdirSync(join(tempRoot, 'audio'), { recursive: true });
+    const aPath = join(tempRoot, 'audio', 'cached-a.mp3');
+    const bPath = join(tempRoot, 'audio', 'cached-b.mp3');
+    const aBytes = Buffer.from('audio-alpha-v1');
+    const bBytes = Buffer.from('audio-beta-v1');
+    writeFileSync(aPath, aBytes);
+    writeFileSync(bPath, bBytes);
+
+    const manifest = [
+      audioEntry('cached-a.mp3', aBytes),
+      audioEntry('cached-b.mp3', bBytes),
+    ];
+
+    expect(await diffAssetManifestAgainstLocal(manifest)).toEqual([]);
+    expect(sha256File).toHaveBeenCalledTimes(2);
+
+    // Second diff (e.g. post-pull re-diff) reuses cached hashes with zero extra sha256File calls.
+    expect(await diffAssetManifestAgainstLocal(manifest)).toEqual([]);
+    expect(sha256File).toHaveBeenCalledTimes(2);
+
+    // Replacing cached-a.mp3 with different bytes invalidates its cache entry only.
+    const aBytesV2 = Buffer.from('audio-alpha-v2-longer');
+    writeFileSync(aPath, aBytesV2);
+    const missing = await diffAssetManifestAgainstLocal(manifest);
+    expect(missing).toEqual([manifest[0]]);
+    expect(sha256File).toHaveBeenCalledTimes(3);
+  });
+
+  it('bounds concurrent flat-asset hashing and preserves manifest order', async () => {
+    mkdirSync(join(tempRoot, 'audio'), { recursive: true });
+    const manifest = [];
+    for (let i = 0; i < 12; i++) {
+      const name = `clip-${String(i).padStart(2, '0')}.mp3`;
+      writeFileSync(join(tempRoot, 'audio', name), Buffer.from(`local-${i}`));
+      manifest.push(audioEntry(name, Buffer.from(`remote-${i}`)));
+    }
+
+    const actual = await vi.importActual('../../lib/fileUtils.js');
+    let inFlight = 0;
+    let maxInFlight = 0;
+    vi.mocked(sha256File).mockImplementation(async (p) => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await sleep(15);
+      inFlight -= 1;
+      return actual.sha256File(p);
+    });
+
+    try {
+      const missing = await diffAssetManifestAgainstLocal(manifest);
+      expect(missing.map((e) => e.filename)).toEqual(manifest.map((e) => e.filename));
+      expect(maxInFlight).toBe(8);
+    } finally {
+      vi.mocked(sha256File).mockImplementation(actual.sha256File);
+    }
   });
 });
 

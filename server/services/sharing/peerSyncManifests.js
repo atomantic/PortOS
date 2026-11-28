@@ -2,7 +2,7 @@
 
 import { join } from 'path';
 import { existsSync } from 'fs';
-import { PATHS, readJSONFile, sha256File } from '../../lib/fileUtils.js';
+import { PATHS, readJSONFile } from '../../lib/fileUtils.js';
 import { isPlainObject } from '../../lib/objects.js';
 import { getOrComputeImageSha256, sidecarGenParamsHash, sidecarMatchesGenParamsHash, imageLiveStamp } from '../../lib/assetHash.js';
 import { collectAssetReferences } from './exporter.js';
@@ -26,7 +26,8 @@ import {
   deletedVideoIds,
   directoryForAssetKind,
   hasAllowedAssetExtension,
-  readVideoHistoryRows
+  readVideoHistoryRows,
+  sha256FileCached
 } from './peerSyncAssetMetadata.js';
 
 // Bound file hashing to avoid starving unrelated filesystem work when a
@@ -200,8 +201,7 @@ export async function hashSimpleAsset(filename, kind, sourceDir) {
   const safeName = sanitizeAssetFilename(filename);
   if (!safeName) return null;
   const fullPath = join(sourceDir, safeName);
-  if (!existsSync(fullPath)) return null;
-  const hash = await sha256File(fullPath).catch(() => null);
+  const hash = await sha256FileCached(fullPath);
   if (!hash) return null;
   return { filename: safeName, kind, sha256: hash };
 }
@@ -226,26 +226,29 @@ export async function diffAssetManifestAgainstLocal(manifest, { includeMismatche
   const deletedVideos = await deletedVideoIds(manifest);
   // Released to a Make-primary host (services/mediaHolders.js): streamed from
   // there on purpose, so an absent copy is not missing. Read only when needed.
-  let released = null;
+  let releasedPromise = null;
   const isReleased = async (kind, name) => {
     if (kind !== 'image' && kind !== 'video') return false;
-    released ??= await import('../peerHostedMedia.js').then((m) => m.releasedHostedKeys()).catch(() => new Set());
-    return released.has(`${kind}:${name}`);
+    releasedPromise ??= import('../peerHostedMedia.js').then((m) => m.releasedHostedKeys()).catch(() => new Set());
+    return (await releasedPromise).has(`${kind}:${name}`);
   };
-  const missing = [];
-  let hostedIndex = null;
-  for (const entry of manifest) {
-    if (!isPlainObject(entry) || !isStr(entry.filename) || !isStr(entry.kind)) continue;
-    if (blockedByImageTombstone(deletedImages, entry) || blockedByVideoTombstone(deletedVideos, entry)) continue;
+  let hostedIndexPromise = null;
+  const getHostedIndex = () => {
+    hostedIndexPromise ??= import('../peerHostedMedia.js').then((m) => m.listHostedEntries());
+    return hostedIndexPromise;
+  };
+  const results = await mapWithConcurrency(manifest, ASSET_HASH_CONCURRENCY, async (entry) => {
+    if (!isPlainObject(entry) || !isStr(entry.filename) || !isStr(entry.kind)) return null;
+    if (blockedByImageTombstone(deletedImages, entry) || blockedByVideoTombstone(deletedVideos, entry)) return null;
     const dir = directoryForAssetKind(entry.kind);
-    if (!dir) continue;
+    if (!dir) return null;
     // Peer-supplied filenames go straight into a local `join(dir, name)` here
     // and via the receiver's reverse-pull GET in Stage 3 — a malicious peer
     // could probe / hash arbitrary local files with a `../etc/passwd` style
     // entry. Reject anything that isn't a bare basename before any FS op.
     const safeName = sanitizeAssetFilename(entry.filename);
-    if (!safeName) continue;
-    if (!hasAllowedAssetExtension(entry.kind, safeName)) continue;
+    if (!safeName) return null;
+    if (!hasAllowedAssetExtension(entry.kind, safeName)) return null;
     // Build a sanitized projection: only the known fields the receiver needs
     // to pull. Echoing the raw peer-supplied entry would amplify any
     // junk fields it shipped (large strings, extra kinds, prototype-pollution
@@ -260,10 +263,9 @@ export async function diffAssetManifestAgainstLocal(manifest, { includeMismatche
     };
     const fullPath = join(dir, safeName);
     if (!existsSync(fullPath)) {
-      if (!(await isReleased(entry.kind, safeName))) missing.push(sanitizedEntry);
-      continue;
+      return (await isReleased(entry.kind, safeName)) ? null : sanitizedEntry;
     }
-    if (!includeMismatched) continue;
+    if (!includeMismatched) return null;
     // For images, compute the hash result once up front: it carries both the
     // sha256 AND the parsed sidecar JSON, so the sidecarSha256 comparison below
     // reuses it instead of re-reading the same file (one sidecar read per image
@@ -274,19 +276,14 @@ export async function diffAssetManifestAgainstLocal(manifest, { includeMismatche
       imageHashResult = await getOrComputeImageSha256(fullPath);
     }
     // Compare SHA when the manifest carries one — for ALL kinds, not just
-    // images. The image path uses the sidecar cache (fast for the common
-    // ~200-asset universe case); image-ref/video stream-hash on demand.
-    // Existence-only would let a renamed-in-place asset on the receiver
-    // silently mismatch the sender, and the snapshot-sync fallback is the
-    // ONLY thing that would catch it 60s later — better to detect on push.
+    // images. Images use the sidecar cache; flat assets use the stat-keyed
+    // sha256FileCached map so large videos/audio/models are not re-hashed on
+    // every diff or post-pull re-diff when unchanged on disk.
     if (isStr(entry.sha256)) {
       const localHash = entry.kind === 'image'
         ? imageHashResult?.hash ?? null
-        : await sha256File(fullPath).catch(() => null);
-      if (localHash !== entry.sha256) {
-        missing.push(sanitizedEntry);
-        continue;
-      }
+        : await sha256FileCached(fullPath);
+      if (localHash !== entry.sha256) return sanitizedEntry;
     }
     // Sidecar-only divergence: image bytes are already present and hash-match,
     // but the peer has a gen-params sidecar we're missing or have stale.
@@ -304,12 +301,13 @@ export async function diffAssetManifestAgainstLocal(manifest, { includeMismatche
       const localSidecar = imageHashResult?.sidecar
         ?? await readJSONFile(join(PATHS.images, imageSidecarName(safeName)), null, { logError: false });
       // A copy this sender may name the origin of must pull the sidecar to adopt it.
-      hostedIndex ??= await import('../peerHostedMedia.js').then((m) => m.listHostedEntries());
+      const hostedIndex = await getHostedIndex();
       const adopts = heldImageAdoptsOrigin(localSidecar, { instanceId: senderInstanceId }, safeName, hostedIndex);
-      if (!sidecarMatchesGenParamsHash(localSidecar, entry.sidecarSha256, { originCandidates: adopts ? [] : [senderInstanceId] })) missing.push(sanitizedEntry);
+      if (!sidecarMatchesGenParamsHash(localSidecar, entry.sidecarSha256, { originCandidates: adopts ? [] : [senderInstanceId] })) return sanitizedEntry;
     }
-  }
-  return missing;
+    return null;
+  });
+  return results.filter(Boolean);
 }
 
 /**

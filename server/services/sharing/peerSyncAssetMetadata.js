@@ -1,7 +1,8 @@
 /** Resolve asset paths, tombstones, and video history for federation manifests and transfers. */
 
 import { extname, join } from 'path';
-import { PATHS, readJSONFile } from '../../lib/fileUtils.js';
+import { stat } from 'fs/promises';
+import { PATHS, readJSONFile, sha256File } from '../../lib/fileUtils.js';
 import { isStr } from '../../lib/textUtils.js';
 import { mediaTombstoneStamps } from '../mediaTombstones.js';
 import { parseTsMs } from '../../lib/lwwTimestamp.js';
@@ -64,4 +65,30 @@ export function directoryForAssetKind(kind) {
 export async function readVideoHistoryRows() {
   const raw = await readJSONFile(join(PATHS.data, 'video-history.json'), []);
   return Array.isArray(raw) ? raw : [];
+}
+
+// Stat-keyed SHA-256 cache for flat (non-image) media assets so repeated
+// manifest diffs, post-pull re-diffs, and pre-pull hash rechecks do not
+// re-read multi-GB video/audio/music/model files when unchanged on disk.
+const ASSET_SHA_CACHE_MAX = 200_000;
+const assetShaCache = new Map(); // fullPath → { stamp, sha256 }
+
+export async function sha256FileCached(fullPath) {
+  const info = await stat(fullPath).catch(() => null);
+  if (!info?.isFile()) {
+    assetShaCache.delete(fullPath);
+    return null;
+  }
+  const stamp = `${info.mtimeMs}:${info.size}:${info.ino}:${info.ctimeMs}`;
+  const cached = assetShaCache.get(fullPath);
+  if (cached?.stamp === stamp) return cached.sha256;
+  assetShaCache.delete(fullPath);
+  const sha256 = await sha256File(fullPath).catch(() => null);
+  if (!sha256) return null;
+  if (assetShaCache.size >= ASSET_SHA_CACHE_MAX) {
+    const oldestKey = assetShaCache.keys().next().value;
+    if (oldestKey !== undefined) assetShaCache.delete(oldestKey);
+  }
+  assetShaCache.set(fullPath, { stamp, sha256 });
+  return sha256;
 }
