@@ -16,7 +16,7 @@ const LABEL = 'block font-mono text-[10px] uppercase tracking-[0.14em] text-port
 const INPUT = 'min-h-11 w-full min-w-0 rounded-lg border border-port-border bg-port-card px-2.5 font-mono text-xs text-port-text placeholder:text-port-text-muted focus:border-port-accent focus:outline-none';
 
 /** A text field that saves on blur or Enter and follows saves from elsewhere while not being edited. */
-function BlurInput({ id, value, onCommit, ...rest }) {
+function BlurInput({ id, label, value, onCommit, ...rest }) {
   const [draft, setDraft] = useState(null);
   const commit = () => {
     if (draft !== null && draft.trim() !== value) onCommit(draft.trim());
@@ -26,6 +26,7 @@ function BlurInput({ id, value, onCommit, ...rest }) {
     <input
       id={id}
       type="text"
+      aria-label={label}
       value={draft ?? value}
       onChange={(event) => setDraft(event.target.value)}
       onBlur={commit}
@@ -119,12 +120,12 @@ export default function ChannelAgentEditor({ number, agent = {}, defaults = {}, 
 
       <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
         <div className="flex min-w-0 flex-col gap-1">
-          <label htmlFor={`${id}-name`} className={LABEL}>Name</label>
-          <BlurInput id={`${id}-name`} value={agent.name || ''} maxLength={64} placeholder={persona.name || 'Default'} onCommit={(name) => save({ name })} />
+          <span aria-hidden="true" className={LABEL}>Name</span>
+          <BlurInput id={`${id}-name`} label="Name" value={agent.name || ''} maxLength={64} placeholder={persona.name || 'Default'} onCommit={(name) => save({ name })} />
         </div>
         <div className="flex min-w-0 flex-col gap-1">
-          <label htmlFor={`${id}-role`} className={LABEL}>Role</label>
-          <BlurInput id={`${id}-role`} value={agent.role || ''} maxLength={128} list={`${id}-roles`} placeholder={persona.role || 'Default'} onCommit={(role) => save({ role })} />
+          <span aria-hidden="true" className={LABEL}>Role</span>
+          <BlurInput id={`${id}-role`} label="Role" value={agent.role || ''} maxLength={128} list={`${id}-roles`} placeholder={persona.role || 'Default'} onCommit={(role) => save({ role })} />
           <datalist id={`${id}-roles`}>{ROLES.map((role) => <option key={role} value={role} />)}</datalist>
         </div>
       </div>
@@ -140,7 +141,7 @@ export default function ChannelAgentEditor({ number, agent = {}, defaults = {}, 
           ))}
         </div>
         <BlurInput
-          aria-label={`Describe the speech style for channel ${number}`}
+          label={`Describe the speech style for channel ${number}`}
           value={style && !SPEECH_STYLES.includes(style) ? style : ''}
           maxLength={256}
           placeholder="Or describe it…"
@@ -158,7 +159,7 @@ export default function ChannelAgentEditor({ number, agent = {}, defaults = {}, 
             </ChoiceChip>
           ))}
         </div>
-        <BlurInput aria-label={`Add a trait to channel ${number}`} value="" maxLength={64} placeholder="Add a trait…" onCommit={addTrait} />
+        <BlurInput label={`Add a trait to channel ${number}`} value="" maxLength={64} placeholder="Add a trait…" onCommit={addTrait} />
       </div>
 
       <div className="flex flex-col gap-1">
