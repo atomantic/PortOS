@@ -7,7 +7,10 @@ snapshot=20260827T000000Z
 for suite in noble noble-updates noble-security; do
   echo "deb [arch=amd64 signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg check-valid-until=no] https://snapshot.ubuntu.com/ubuntu/$snapshot/ $suite main universe"
 done > sources.list
-apt=(apt-get -o Dir::Etc::sourcelist=/tmp/portos-vllm/sources.list -o Dir::Etc::sourceparts=-)
+apt=(
+  apt-get -o Dir::Etc::sourcelist=/tmp/portos-vllm/sources.list -o Dir::Etc::sourceparts=-
+  -o Acquire::Retries=5 -o Acquire::http::Timeout=60 -o Acquire::https::Timeout=60
+)
 rm -rf /var/lib/apt/lists/*
 "${apt[@]}" -o APT::Update::Error-Mode=any update
 prefix="/var/lib/apt/lists/snapshot.ubuntu.com_ubuntu_${snapshot}_dists"
@@ -18,7 +21,9 @@ cdb2f31d809f589719a53c6ad15f255b27569c4059542ada282aaa21b8e164b0  ${prefix}_nobl
 EOF
 "${apt[@]}" install -y --no-install-recommends python3.12 python3.12-venv python3.12-dev build-essential patch curl ca-certificates
 while read -r _ package; do
-  curl --fail --show-error --silent --location --output "$package" "https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/$package"
+  curl --fail --show-error --silent --location --connect-timeout 15 \
+    --speed-time 60 --speed-limit 1024 --retry 5 --retry-delay 2 \
+    --output "$package" "https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/$package"
 done < cuda-packages.sha256
 sha256sum --check --strict cuda-packages.sha256
 "${apt[@]}" install -y --no-install-recommends ./*.deb

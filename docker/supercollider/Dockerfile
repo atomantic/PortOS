@@ -100,7 +100,17 @@ RUN set -eux; \
     rm -rf /var/lib/apt/lists/*; \
     apt-get update --error-on=any; \
     sh /tmp/portos-apt/verify-snapshot.sh /var/lib/apt/lists /tmp/portos-apt/debian-inrelease.sha256; \
-    xargs -a /usr/local/share/doc/supercollider/runtime-packages.txt apt-get install -y; \
+    for attempt in 1 2 3 4 5; do \
+      if xargs -a /usr/local/share/doc/supercollider/runtime-packages.txt apt-get install -y; then \
+        break; \
+      fi; \
+      if [ "$attempt" -eq 5 ]; then \
+        echo "apt-get install failed after 5 attempts" >&2; \
+        exit 1; \
+      fi; \
+      echo "apt-get install failed on attempt ${attempt}; retrying after sleep..." >&2; \
+      sleep $(( attempt * 5 )); \
+    done; \
     rm -rf /var/lib/apt/lists/* /tmp/portos-apt; \
     ldconfig; \
     if ldd /usr/local/bin/sclang /usr/local/bin/scsynth | grep 'not found'; then exit 1; fi; \
