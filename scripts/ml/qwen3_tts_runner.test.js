@@ -235,6 +235,35 @@ with tempfile.TemporaryDirectory() as temp:
 });
 
 describe.skipIf(!python)('Qwen3 verified local inference', () => {
+  it('passes UTF-8 synthesis input from stdin and continues accepting manual flags', () => {
+    const entrypoint = fixture + String.raw`
+def capture(args):
+    print(json.dumps({name: getattr(args, name) for name in ("text", "instructions", "reference_transcript")}))
+    return 0
+runner.run_synthesis = capture
+sys.argv = sys.argv[1:]
+raise SystemExit(runner.main())
+`;
+    const payload = { text: ' Invented speech — 東京\n', instructions: ' Example direction ', reference_transcript: 'Example reference' };
+    const args = ['-c', entrypoint, script, '--output-wav', 'unused.wav'];
+    const runCli = (flags, input) => spawnSync(python, [...args, ...flags], { input, encoding: 'utf8' });
+
+    const fromStdin = runCli(['--stdin-json'], JSON.stringify(payload));
+    expect(fromStdin.status).toBe(0);
+    expect(JSON.parse(fromStdin.stdout)).toEqual(payload);
+
+    const fromFlags = runCli([
+      '--text', payload.text, '--instructions', payload.instructions, '--reference-transcript', payload.reference_transcript,
+    ]);
+    expect(fromFlags.status).toBe(0);
+    expect(JSON.parse(fromFlags.stdout)).toEqual(payload);
+
+    const invalid = runCli(['--stdin-json'], `{ "text": "${payload.reference_transcript}"`);
+    expect(invalid.status).toBe(2);
+    expect(invalid.stderr).toContain('Invalid synthesis JSON on stdin');
+    expect(invalid.stderr).not.toContain(payload.reference_transcript);
+  });
+
   it('loads the immutable local snapshot and invokes design/clone with accurate revision evidence', () => {
     const result = run(inferenceFixture + String.raw`
 with tempfile.TemporaryDirectory() as temp:
