@@ -244,9 +244,17 @@ describe('checkSetup error classification', () => {
     expect(report.remediation).not.toContain('Full Disk Access');
   });
 
-  it('reports ok with a message count for a readable chat.db', async () => {
-    const report = await checkSetup();
-    expect(report.ok).toBe(true);
-    expect(report.messageCount).toBe(2);
+  it('reports ok with a message count and scrubbed home path for a readable chat.db', async () => {
+    vi.stubEnv('HOME', dataRoot);
+    vi.stubEnv('USERPROFILE', dataRoot);
+    try {
+      const report = await checkSetup();
+      expect(report.ok).toBe(true);
+      expect(report.messageCount).toBe(2);
+      expect(report.dbPath).toBe(join('~', 'fixture-chat.db'));
+      expect(report.dbPath).not.toContain(dataRoot);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });

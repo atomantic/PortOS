@@ -19,8 +19,9 @@ export const GOOGLE_API_TIMEOUT_MS = 30_000;
 export const OAUTH_REDIRECT_URI = `http://${process.env.PUBLIC_HOST || 'localhost'}:${process.env.PORT || PORTS.API}/api/calendar/google/oauth/callback`;
 
 let oAuth2Client = null;
-// Token refreshes and disconnects share this generation and file-write tail.
+// Token refreshes, client loads, and disconnects share this generation and write tail.
 let authGeneration = 0;
+let activeClears = 0;
 const queueTokenWrite = createFileWriteQueue();
 const oauthState = createOAuthStateStore();
 
@@ -38,9 +39,14 @@ export async function getCredentials() {
 export async function saveCredentials({ clientId, clientSecret }) {
   authGeneration++;
   oAuth2Client = null;
-  await ensureAuthDir();
   const credentials = { clientId, clientSecret, redirectUri: OAUTH_REDIRECT_URI };
-  await writeSecureJson(CREDENTIALS_FILE, credentials);
+  await queueTokenWrite(async () => {
+    await ensureAuthDir();
+    await writeSecureJson(CREDENTIALS_FILE, credentials);
+    // Re-bump after serializing so any overlapping exchange or reader is invalidated.
+    authGeneration++;
+    oAuth2Client = null;
+  });
   console.log('📅 Google OAuth credentials saved');
   return { hasCredentials: true, redirectUri: credentials.redirectUri };
 }
@@ -52,28 +58,19 @@ export async function getTokens() {
   return JSON.parse(raw);
 }
 
-async function saveTokens(tokens) {
-  await queueTokenWrite(async () => {
-    await ensureAuthDir();
-    await writeSecureJson(TOKENS_FILE, tokens);
-  });
-  console.log('📅 Google OAuth tokens saved');
-}
-
 async function persistRefreshedTokens(newTokens, generation) {
   await queueTokenWrite(async () => {
-    if (generation !== authGeneration) return;
+    if (generation !== authGeneration || activeClears > 0) return;
     await ensureAuthDir();
     const existing = (await getTokens()) || {};
-    if (generation !== authGeneration) return;
+    if (generation !== authGeneration || activeClears > 0) return;
     await writeSecureJson(TOKENS_FILE, { ...existing, ...newTokens });
   });
-  if (generation !== authGeneration) return;
+  if (generation !== authGeneration || activeClears > 0) return;
   console.log('📅 Google OAuth tokens refreshed');
 }
 
-function attachTokenPersistence(client) {
-  const generation = authGeneration;
+function attachTokenPersistence(client, generation) {
   client.on('tokens', (newTokens) => {
     persistRefreshedTokens(newTokens, generation)
       .catch((err) => console.error(`❌ Failed to persist refreshed Google OAuth tokens: ${err.message}`));
@@ -84,9 +81,7 @@ const REVOKE_URL = 'https://oauth2.googleapis.com/revoke';
 const REVOKE_TIMEOUT_MS = 5_000;
 
 // Best-effort: disconnecting must succeed locally even when Google is unreachable.
-async function revokeStoredToken() {
-  const tokens = await getTokens().catch(() => null);
-  const token = tokens?.refresh_token || tokens?.access_token;
+async function revokeToken(token) {
   if (!token) return;
   const res = await fetchWithTimeout(REVOKE_URL, {
     method: 'POST',
@@ -101,9 +96,22 @@ async function revokeStoredToken() {
 export async function clearAuth() {
   authGeneration++;
   oAuth2Client = null;
-  await ensureAuthDir();
-  await revokeStoredToken();
-  await saveTokens({});
+  activeClears++;
+  let tokenToRevoke = null;
+  try {
+    await queueTokenWrite(async () => {
+      await ensureAuthDir();
+      const tokens = await getTokens().catch(() => null);
+      tokenToRevoke = tokens?.refresh_token || tokens?.access_token || null;
+      await writeSecureJson(TOKENS_FILE, {});
+      // Re-bump after clearing disk so no reader that raced before the lock can survive.
+      authGeneration++;
+      oAuth2Client = null;
+    });
+  } finally {
+    activeClears--;
+  }
+  await revokeToken(tokenToRevoke);
   console.log('📅 Google OAuth tokens cleared');
 }
 
@@ -143,16 +151,23 @@ async function exchangeAuthorizationCode(code) {
   const { tokens } = await client.getToken(code);
   let saved = false;
   await queueTokenWrite(async () => {
-    if (generation !== authGeneration) return;
+    if (generation !== authGeneration || activeClears > 0) return;
     await ensureAuthDir();
     await writeSecureJson(TOKENS_FILE, tokens);
+    // Re-check after the write: clearAuth() or saveCredentials() may have started
+    // while writeSecureJson was in flight. When saveCredentials() superseded the
+    // exchange without a queued clearAuth(), clear the mismatched-client tokens
+    // rather than leaving them paired with the new credentials.
+    if (generation !== authGeneration || activeClears > 0) {
+      if (activeClears === 0) await writeSecureJson(TOKENS_FILE, {});
+      return;
+    }
+    client.setCredentials(tokens);
+    attachTokenPersistence(client, generation);
+    oAuth2Client = client;
     saved = true;
   });
   if (!saved) throw new Error('Google OAuth credentials changed during authorization');
-  oAuth2Client = client;
-  oAuth2Client.setCredentials(tokens);
-
-  attachTokenPersistence(oAuth2Client);
 
   console.log('📅 Google OAuth callback processed, tokens stored');
 }
@@ -171,17 +186,21 @@ export async function handleCallback({ code, state, error }) {
 }
 
 export async function getAuthenticatedClient() {
+  if (activeClears > 0) return null;
+  const generation = authGeneration;
   const credentials = await getCredentials();
   if (!credentials?.clientId) return null;
 
   const tokens = await getTokens();
   if (!tokens?.access_token) return null;
+  if (generation !== authGeneration || activeClears > 0) return null;
 
   if (!oAuth2Client) {
-    oAuth2Client = createOAuth2Client(credentials);
-    oAuth2Client.setCredentials(tokens);
+    const client = createOAuth2Client(credentials);
+    client.setCredentials(tokens);
 
-    attachTokenPersistence(oAuth2Client);
+    attachTokenPersistence(client, generation);
+    oAuth2Client = client;
   }
 
   return oAuth2Client;
