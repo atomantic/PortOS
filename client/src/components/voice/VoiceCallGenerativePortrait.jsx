@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import portraitUrl from './call-portrait.webp';
 import MediaImage from '../MediaImage';
+import ConnectingPortrait from './ConnectingPortrait';
 import { avatarImageSrc } from './useAvatarLibrary';
 import { bindVoiceOutputVisualizer } from '../../services/voiceClient';
 import { streamVoiceAvatar, streamVoiceAvatarIdle } from '../../services/apiVoiceAvatar';
@@ -84,7 +85,7 @@ function animateWav(canvas, wav, { stopForReducedMotion, keepFrameOnStop, onPain
   };
 }
 
-export default function VoiceCallGenerativePortrait({ running, fill = false, stage = 'idle', avatarFilename = null }) {
+export default function VoiceCallGenerativePortrait({ running, connecting = false, fill = false, stage = 'idle', avatarFilename = null }) {
   const canvas = useRef(null);
   const idleStage = normalizeIdleStage(stage);
   const idleStageRef = useRef(idleStage);
@@ -306,6 +307,7 @@ export default function VoiceCallGenerativePortrait({ running, fill = false, sta
         ? <MediaImage src={avatarImageSrc(avatarFilename)} fallbackSrc={portraitUrl} alt="Channel avatar portrait" className="block size-full object-cover" />
         : <img src={portraitUrl} alt="Radio operator portrait" className="block size-full object-cover" />}
       <canvas ref={canvas} role="presentation" width={512} height={512} style={{ visibility: 'hidden' }} className="pointer-events-none absolute inset-0 size-full motion-reduce:invisible!" />
+      {connecting && <ConnectingPortrait src={avatarFilename ? avatarImageSrc(avatarFilename) : portraitUrl} />}
     </div>
     {running && unavailable && <p role="status" className="px-2 pt-1.5 pb-1 text-center font-mono text-[11px] text-port-text-muted">
       No avatar frames arrived. Voice audio still works.

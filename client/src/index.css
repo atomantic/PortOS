@@ -2239,6 +2239,17 @@ html[data-port-theme-mode="day"] .satphone-bezel {
   );
 }
 
+/* A bright band rolling down the pixelated portrait while a call connects. */
+.satphone-connecting-sweep {
+  top: -20%;
+  background: linear-gradient(180deg, transparent, rgb(var(--port-accent) / 0.22), transparent);
+  animation: satphone-connecting-sweep 1.6s linear infinite;
+}
+
+@keyframes satphone-connecting-sweep {
+  to { transform: translateY(600%); }
+}
+
 html[data-port-theme-mode="day"] .satphone-scanlines {
   background-image: repeating-linear-gradient(
     180deg,
@@ -2481,7 +2492,8 @@ html[data-port-theme-mode="day"] .satphone-log-well {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .satphone-scanlines {
+  .satphone-scanlines,
+  .satphone-connecting-sweep {
     display: none;
   }
 }
