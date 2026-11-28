@@ -2252,9 +2252,15 @@ describe.each(['windows', 'linux'])('ACE-Step 1.5 %s Install/Repair', (target) =
     expect(lock).not.toMatch(/git\+|^[\w.-]+\s*@/m);
     expect(lock).toMatch(/^setuptools==/m);
     expect(lock).toMatch(/^hatchling==/m);
+    const packages = pins.map((pin) => pin.split('==')[0]);
+    expect(packages).toEqual(expect.arrayContaining(['pytorch-wavelets', 'pywavelets']));
+    expect(packages.filter((name) => [
+      'torchvision', 'scipy', 'typer-slim', 'torchcodec', 'torchao',
+      'numba', 'llvmlite', 'peft', 'sentencepiece', 'wheel',
+    ].includes(name))).toEqual([]);
   });
 
-  it('syncs the lock, then installs only the pinned checkout without dependencies, on Install and Repair', () => {
+  it('syncs the lock, then builds the pinned checkout as an inference package on Install and Repair', () => {
     const install = installer();
     const env = { ALLOW_LOCAL_INSTALL: '1' };
     expect(install.run(env)).toContain('ACE-Step 1.5 venv ready');
@@ -2271,7 +2277,9 @@ describe.each(['windows', 'linux'])('ACE-Step 1.5 %s Install/Repair', (target) =
     for (const checkout of checkouts) expect(checkout).toContain('dce621408bee8c31b4fcf4811682eb9359e1bc94');
     const localInstalls = commands.filter((line) => line.startsWith('uv pip install'));
     expect(localInstalls).toHaveLength(2);
-    for (const line of localInstalls) expect(line).toContain('--no-deps --no-build-isolation --ignore-requires-python');
+    for (const line of localInstalls) expect(line).toContain('--no-deps --no-build-isolation --python');
+    expect(commands.filter((line) => line.includes(' archive --format=zip '))).toHaveLength(2);
+    expect(commands.filter((line) => /^python - .*requirements-acestep15-cuda\.txt$/.test(line))).toHaveLength(2);
     expect(install.commands()).not.toMatch(/--upgrade|git\+|python -m pip/);
   });
 

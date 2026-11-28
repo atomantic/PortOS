@@ -15,7 +15,7 @@ together when changing the CUDA index or shared inputs.
 | Runtime slug | Install flag | `CUDA_SCOPED` | `LINUX_CUDA_SCOPED` |
 | --- | --- | --- | --- |
 | `acestep-cuda` | `INSTALL_ACESTEP` | torch | |
-| `acestep15-cuda` | `INSTALL_ACESTEP15` | torch torchcodec | torchao |
+| `acestep15-cuda` | `INSTALL_ACESTEP15` | torch | |
 | `audioldm2-cuda` | `INSTALL_AUDIOLDM2` | torch | |
 | `flux2-cuda` | `INSTALL_FLUX2` | torch | |
 | `minimax-h3-cuda` | `INSTALL_MINIMAX_H3_CUDA` | torch torchvision | torchao |
@@ -23,8 +23,10 @@ together when changing the CUDA index or shared inputs.
 | `muscriptor-cuda` | `INSTALL_MUSCRIPTOR` | torch | |
 | `wan22-cuda` | `INSTALL_WAN22_CUDA` | torch | |
 
-ACE-Step builds its pinned source after dependency sync. Keep Linux TorchAO
-on the CUDA index for H3 and ACE-Step 1.5 and Windows TorchAO on PyPI.
+ACE-Step builds its pinned source after dependency sync. ACE-Step 1.5 CUDA
+builds from a temporary archive of the pinned checkout using the inference
+requirements as wheel dependency metadata. Keep Linux TorchAO
+on the CUDA index for H3 and Windows TorchAO on PyPI.
 Keep the H3 checkpoint index guard in the model loader. Wan's bundled FFmpeg
 requires glibc 2.28 and Linux 4.18 or newer. [LTX-2.5](#ltx-25-cuda) uses cu132.
 
