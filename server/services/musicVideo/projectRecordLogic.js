@@ -1,6 +1,7 @@
 /** Music Video project creation, patching, storage and peer merge shared by both stores. */
 import { DEFAULT_FAL_SEEDVR2_TARGET_RESOLUTION } from '../../lib/videoGenRequestFields.js';
 import { festivalPacketSchema } from '../../lib/musicVideo/musicVideoFestivalPacket.js';
+import { normalizeMakingOfStory } from '../../lib/musicVideo/musicVideoMakingOfStory.js';
 import { normalizeBlenderRecord } from '../../lib/musicVideo/musicVideoBlender.js';
 import { musicVideoMediaMode, assertMusicVideoMediaSelections } from '../../lib/musicVideo/musicVideoMediaPolicy.js';
 import { remapMusicVideoDependencies, restampLegacyFrameCasts, retainLegacyFinalLayerBaseline } from '../../lib/musicVideo/musicVideoDependencies.js';
@@ -130,6 +131,7 @@ export function buildProjectRecord(input, { id, now, blender, sourceFilm }) {
     id,
     name,
     ...(input.festivalPacket ? { festivalPacket: festivalPacketSchema.parse(input.festivalPacket) } : {}),
+    ...(input.makingOfStory ? { makingOfStory: normalizeMakingOfStory(input.makingOfStory) } : {}),
     version: 1,
     parentProjectId: null,
     rootProjectId: null,
@@ -401,6 +403,7 @@ export function applyProjectPatch(project, patch) {
   const timedPatch = {
     ...patch,
     ...('festivalPacket' in patch ? { festivalPacket: patch.festivalPacket === null ? null : festivalPacketSchema.parse(patch.festivalPacket) } : {}),
+    ...('makingOfStory' in patch ? { makingOfStory: patch.makingOfStory === null ? null : normalizeMakingOfStory(patch.makingOfStory) } : {}),
     ...(patch.productionPolicy ? { productionPolicy: normalizeMusicVideoProductionPolicy(patch.productionPolicy, project.productionPolicy) } : {}),
     ...(patch.visualSpec ? { visualSpec: normalizeVisualSpec(patch.visualSpec, project.visualSpec) } : {}),
     // Automation brief merges per sub-field; null clears it.
@@ -682,6 +685,7 @@ export function mergeProjectRecord(local, remoteRaw) {
   remote = { ...remote };
   // Pre-packet peers can omit the optional field; absence must not erase edits.
   if (!Object.hasOwn(remote, 'festivalPacket') && Object.hasOwn(local, 'festivalPacket')) remote.festivalPacket = local.festivalPacket;
+  if (!Object.hasOwn(remote, 'makingOfStory') && Object.hasOwn(local, 'makingOfStory')) remote.makingOfStory = local.makingOfStory;
   if (Object.hasOwn(local, 'imageMode')) remote.imageMode = local.imageMode;
   if (Object.hasOwn(local, 'imageModelId')) remote.imageModelId = local.imageModelId;
   // #9066: this install's production-run checkpoint survives a newer remote.

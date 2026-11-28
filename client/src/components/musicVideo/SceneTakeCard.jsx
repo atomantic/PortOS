@@ -1,4 +1,5 @@
-import { ArrowRightLeft, Ban, Check, Loader2, RotateCcw, Eye, X, MessageSquare, PencilLine } from 'lucide-react';
+import { ArrowRightLeft, Ban, Bookmark, Check, Loader2, RotateCcw, Eye, X, MessageSquare, PencilLine } from 'lucide-react';
+import { findCapturedMakingOfItem, useMakingOfCapture } from './MakingOfCaptureContext.js';
 import { musicVideoRenderTierLabel } from '../../../../server/lib/musicVideo/musicVideoRenderTier.js';
 import { sequenceTakeLabel, sequenceTakeSummary } from '../../../../server/lib/musicVideo/musicVideoSequenceTake.js';
 import { takePreviewKey, takeThumbUrl, takeClipUrl, takeControl } from '../../lib/musicVideoTakes.js';
@@ -48,10 +49,12 @@ function TakeThumbnail({ take, kind, isSelected, rejected, playback, onOpenPrevi
 }
 
 function TakeReviewActions({ take, scene, kind, frameTake, isSelected, rejected, busy, saving, move, movable, savingMove, actions, openNote }) {
+  const makingOf = useMakingOfCapture();
   if (!take.takeId) return null;
   const { onSelect, onReview, onMark, marks, onCheck, checking } = actions;
   const { moveFor, setMoveFor } = move;
   const bad = marks?.[takePreviewKey(take)] === 'bad';
+  const captured = makingOf ? findCapturedMakingOfItem(makingOf.story, kind === 'video' ? 'video' : 'image', take.assetId) : null;
   const takeChecking = Boolean(checking?.has(take.takeId));
   const savingSelect = Boolean(saving?.has(takeControl.select(scene, take)));
   const savingReject = Boolean(saving?.has(takeControl.status(scene, take, 'rejected')));
@@ -115,6 +118,26 @@ function TakeReviewActions({ take, scene, kind, frameTake, isSelected, rejected,
           title="Note what to change on the next attempt">
           <MessageSquare size={11} />
         </button>
+        {makingOf && (
+          <button
+            type="button"
+            disabled={busy}
+            aria-pressed={Boolean(captured)}
+            aria-label={captured ? 'Edit Making-Of item' : 'Save take to Making Of'}
+            onClick={() => makingOf.openCapture({
+              kind: kind === 'video' ? 'video' : 'image',
+              assetId: take.assetId,
+              sceneId: scene.sceneId,
+              label: `${scene.label || `Shot ${(scene.order ?? 0) + 1}`} ${kind === 'video' ? 'clip' : 'frame'}`,
+              role: bad || rejected ? 'fail' : isSelected ? 'final' : 'process',
+              note: take.note || '',
+            })}
+            className={`pointer-coarse:min-h-11 pointer-coarse:min-w-11 inline-flex items-center rounded px-1.5 py-0.5 text-[10px] min-h-[32px] sm:min-h-0 disabled:opacity-50 ${captured ? 'bg-port-accent/20 text-port-accent' : 'bg-port-border'}`}
+            title={captured ? 'Saved in Making Of — click to edit tags or notes' : 'Save this take to Making Of'}
+          >
+            <Bookmark size={11} aria-hidden="true" />
+          </button>
+        )}
       </div>
     </>
   );

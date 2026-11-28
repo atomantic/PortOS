@@ -1,5 +1,7 @@
 import { Suspense, useEffect, useState, useCallback, useMemo, useRef } from 'react';
+import { Bookmark } from 'lucide-react';
 import PageSkeleton from '../ui/PageSkeleton';
+import { MakingOfCaptureContext, findCapturedMakingOfItem } from './MakingOfCaptureContext.js';
 import useMusicVideoProductionReview from './useMusicVideoProductionReview.js';
 import usePrevizJobs from '../../hooks/usePrevizJobs.js';
 import useMusicVideoBlender from '../../hooks/useMusicVideoBlender.js';
@@ -42,8 +44,8 @@ const approvalStageFor = (tab, project, readiness, proofActive) => (tab === 'pro
   : APPROVAL_STAGE_BY_TAB[tab] || null);
 // Steps reviewed by watching: the player leads them, with the approval beside it.
 const PLAYER_FIRST_STAGES = new Set(['produce', 'review', 'editor']);
-// Steps with no player: Assets is a contact sheet, Story and Plan are read and edited rather than watched.
-const NO_DOCK_STAGES = new Set(['assets', 'story', 'board']);
+// Steps with no player: Assets is a contact sheet, Making of is a post-publish workspace, Story and Plan are read and edited rather than watched.
+const NO_DOCK_STAGES = new Set(['assets', 'making-of', 'story', 'board']);
 // Each stage panel is its own chunk, fetched when its step first opens, so the
 // project list and every other step never download it. The wiring hooks above
 // stay static: they run for every step (checklists, notes, attention items).
@@ -62,6 +64,8 @@ const ProduceStage = lazyWithReload(() => import('./stages/ProduceStage.jsx'));
 const ReviewStage = lazyWithReload(() => import('./stages/ReviewStage.jsx'));
 const PublishStage = lazyWithReload(() => import('./stages/PublishStage.jsx'));
 const AssetsStage = lazyWithReload(() => import('./stages/AssetsStage.jsx'));
+const MakingOfStage = lazyWithReload(() => import('./stages/MakingOfStage.jsx'));
+const MakingOfCaptureModal = lazyWithReload(() => import('./MakingOfCaptureModal.jsx'));
 const CleanupStage = lazyWithReload(() => import('./stages/CleanupStage.jsx'));
 const EditorStage = lazyWithReload(() => import('./stages/EditorStage.jsx'));
 const stageFallback = <PageSkeleton header="none" label="Loading step" cards={3} sidebar={false} />;
@@ -70,7 +74,7 @@ const OWN_DOCK_STAGES = new Set(['editor']);
 // The panels each stage tab renders (see lib/musicVideoStages.js for the ids).
 const STAGE_VIEWS = {
   setup: SetupStage, story: StoryStage, 'cast-sets': CastSetsStage, board: PlanStage, previz: PrevizStage, produce: ProduceStage, review: ReviewStage, publish: PublishStage,
-  assets: AssetsStage, cleanup: CleanupStage, editor: EditorStage,
+  assets: AssetsStage, 'making-of': MakingOfStage, cleanup: CleanupStage, editor: EditorStage,
 };
 // Rendered inside a stage's Suspense boundary, so its effect fires only once that panel has
 // committed (a lazy panel commits after its chunk loads) and again whenever the kept-alive
@@ -180,6 +184,23 @@ export default function ProjectWorkspace({
   // references or one scene's frame takes. This workspace remounts per
   // project, so a picker opened for one project can never write into another.
   const [pickerTarget, setPickerTarget] = useState(null);
+  const [makingOfCapture, setMakingOfCapture] = useState(null);
+  const openMakingOfCapture = useCallback((draft) => {
+    if (!draft) return;
+    if (draft.existingItem) {
+      setMakingOfCapture(draft);
+      return;
+    }
+    const existingItem = findCapturedMakingOfItem(selected.makingOfStory, draft.kind, draft.assetId);
+    setMakingOfCapture(existingItem ? { ...draft, existingItem } : draft);
+  }, [selected.makingOfStory]);
+  const handleMakingOfStorySaved = useCallback((story) => {
+    patchProject(selectedId, { makingOfStory: story });
+  }, [patchProject, selectedId]);
+  const makingOfContextValue = useMemo(() => ({
+    story: selected.makingOfStory || null,
+    openCapture: openMakingOfCapture,
+  }), [selected.makingOfStory, openMakingOfCapture]);
   const previewItems = useMemo(() => buildMusicVideoPreviewItems(selected, finalVideo.src, blenderState), [selected, finalVideo.src, blenderState]);
   const [preview, setPreview] = useHydratedPreviewRoute(previewItems);
   const openPreview = useCallback((key) => {
@@ -187,6 +208,22 @@ export default function ProjectWorkspace({
     const match = previewItems.find((i) => i.key === key);
     if (match) setPreview(match);
   }, [previewItems, setPreview]);
+  const previewAssetId = preview ? (preview.kind === 'video' ? preview.id : preview.filename) : null;
+  const previewCaptured = previewAssetId ? findCapturedMakingOfItem(selected.makingOfStory, preview.kind, previewAssetId) : null;
+  const previewPageActions = preview && previewAssetId ? (
+    <button
+      type="button"
+      onClick={() => openMakingOfCapture({
+        kind: preview.kind === 'video' ? 'video' : 'image',
+        assetId: previewAssetId,
+        label: preview.prompt && preview.prompt !== '(no prompt)' ? preview.prompt.slice(0, 120) : previewAssetId,
+      })}
+      className={`inline-flex min-h-[44px] items-center gap-1.5 rounded border px-2.5 py-1 text-xs font-medium pointer-fine:sm:min-h-[30px] ${previewCaptured ? 'border-port-accent bg-port-accent/15 text-port-accent' : 'border-port-border bg-port-bg text-port-text hover:border-port-accent/60'}`}
+    >
+      <Bookmark size={13} aria-hidden="true" />
+      {previewCaptured ? 'In Making of (edit)' : 'Save to Making of'}
+    </button>
+  ) : null;
 
   const publishStage = usePublishStageWiring({
     selected, replaceProject, publishing, goToStage, creativeSetupPending, styleReferencesPending, compositionSavePending,
@@ -259,6 +296,8 @@ export default function ProjectWorkspace({
     openPreview,
     openContactSheet: () => setContactSheetOpen(true),
     seekToScene,
+    onCaptureMakingOf: openMakingOfCapture,
+    onMakingOfStorySaved: handleMakingOfStorySaved,
   };
   const StageView = STAGE_VIEWS[activeStage];
   const playerFirst = PLAYER_FIRST_STAGES.has(activeStage);
@@ -278,9 +317,22 @@ export default function ProjectWorkspace({
   );
 
   return (
-    <>
+    <MakingOfCaptureContext.Provider value={makingOfContextValue}>
       <MediaPreview preview={preview} setPreview={setPreview} items={previewItems}
+        pageActions={previewPageActions}
         filmLookProject={{ look: selected.filmLook, name: selected.name, onSave: saveFilmLook }} />
+      {makingOfCapture && (
+        <Suspense fallback={null}>
+          <MakingOfCaptureModal
+            open
+            projectId={selectedId}
+            draft={makingOfCapture}
+            story={selected.makingOfStory}
+            onClose={() => setMakingOfCapture(null)}
+            onSaved={handleMakingOfStorySaved}
+          />
+        </Suspense>
+      )}
       <WorkspaceDrawers selected={selected} navigation={navigation} board={board} castSetsStage={castSetsStage}
         produce={produce} plan={plan} pickerTarget={pickerTarget} setPickerTarget={setPickerTarget}
         openPreview={openPreview} cloning={cloning} onClone={onClone} deletion={deletion} />
@@ -335,6 +387,6 @@ export default function ProjectWorkspace({
             </Suspense>
           )}
         </MusicVideoLayout>
-    </>
+    </MakingOfCaptureContext.Provider>
   );
 }

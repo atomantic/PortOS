@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router';
-import { Activity, Ban, Check, Film, FolderInput, Image as ImageIcon, Library, Pencil, Search, Star, Trash2, Undo2 } from 'lucide-react';
+import { Activity, Ban, Bookmark, Check, Film, FolderInput, Image as ImageIcon, Library, Pencil, Search, Star, Trash2, Undo2 } from 'lucide-react';
+import { findCapturedMakingOfItem } from '../MakingOfCaptureContext.js';
 import TabPills from '../../ui/TabPills.jsx';
 import InfiniteScrollFooter from '../../ui/InfiniteScrollFooter.jsx';
 import toast from '../../ui/Toast.jsx';
@@ -39,7 +40,7 @@ const ACTION = 'inline-flex min-h-[44px] items-center gap-1 rounded border borde
  * (`?kind=clips&asset=<id>`).
  */
 export default function AssetsStage({ board }) {
-  const { project, takes, onEditShot } = board;
+  const { project, takes, onEditShot, onCaptureMakingOf } = board;
   const projectId = project.id;
   const shotNumbers = numberShots(project.scenes);
   const [searchParams, setSearchParams] = useSearchParams();
@@ -236,6 +237,22 @@ export default function AssetsStage({ board }) {
                 Mark bad, keep in use
               </button>
             )}
+            {onCaptureMakingOf && (() => {
+              const captured = findCapturedMakingOfItem(project.makingOfStory, picked.kind, picked.assetId);
+              return (
+                <button type="button" disabled={working} aria-pressed={Boolean(captured)}
+                  onClick={() => onCaptureMakingOf({
+                    kind: picked.kind === 'video' ? 'video' : 'image',
+                    assetId: picked.assetId,
+                    sceneId: picked.sceneId || null,
+                    label: pickedShot ? `Shot ${pickedShot} ${noun}` : (picked.prompt || '').slice(0, 80) || picked.assetId,
+                    role: picked.mark === 'bad' ? 'fail' : inUse(picked) ? 'final' : 'process',
+                  })}
+                  className={`${ACTION} ${captured ? 'border-port-accent text-port-accent' : ''}`}>
+                  <Bookmark size={14} aria-hidden="true" />{captured ? 'In Making of' : 'Making of'}
+                </button>
+              );
+            })()}
             {!inUse(picked) && (
               <button type="button" disabled={working} onClick={() => setConfirmDelete('picked')} className={ACTION}>
                 <Trash2 size={14} aria-hidden="true" />Delete

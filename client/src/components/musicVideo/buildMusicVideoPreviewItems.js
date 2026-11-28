@@ -54,6 +54,17 @@ export default function buildMusicVideoPreviewItems(selected, finalVideoSrc, ble
   }
   // Cast & sets references and their inputs open here too, never as a raw file.
   items.push(...castAndSetsPreviewItems(selected.castAndSets));
+  for (const ref of selected.visualSpec?.references || []) {
+    if (ref?.imageId) items.push(normalizeImage({ filename: ref.imageId, prompt: ref.label || ref.note || '' }));
+  }
+  for (const ref of selected.styleReferences || []) {
+    if (ref?.imageId) items.push(normalizeImage({ filename: ref.imageId, prompt: ref.caption || '' }));
+  }
+  for (const entry of selected.makingOfStory?.items || []) {
+    if (!entry?.assetId) continue;
+    if (entry.kind === 'video') items.push(videoItem(entry.assetId, `${entry.assetId}.mp4`, entry.label || entry.note || ''));
+    else items.push(normalizeImage({ filename: entry.assetId, prompt: entry.label || entry.note || '' }));
+  }
   // A Blender film's stills are workspace files, served by the film's media route.
   if (blenderState) items.push(...blenderStillPreviewItems(blenderState, (path) => musicVideoBlenderMediaUrl(selected.id, path)));
   // Scenes can reuse the same frame/clip (Make's generation controls surface a

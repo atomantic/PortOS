@@ -45,6 +45,7 @@ export const MUSIC_VIDEO_PAGES = [
   // The editor fills the screen like an editing application, so its title is for screen readers only.
   { id: 'editor', label: 'Editor', title: 'Editor', quietTitle: true },
   { id: 'assets', label: 'Assets', title: 'Assets' },
+  { id: 'making-of', label: 'Making of', title: 'Making of' },
   { id: 'cleanup', label: 'Cleanup', title: 'Cleanup' },
 ];
 

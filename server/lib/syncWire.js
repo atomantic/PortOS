@@ -4,6 +4,7 @@
  */
 
 import { festivalPacketSchema } from './musicVideo/musicVideoFestivalPacket.js';
+import { makingOfStorySchema } from './musicVideo/musicVideoMakingOfStory.js';
 import { isPlainObject } from './objects.js';
 import {
   BIBLE_LIMITS,
@@ -79,6 +80,11 @@ export function stripMusicVideoLocalRenderPins(record, { stripVideoBackend = tru
     const packet = festivalPacketSchema.safeParse(shared.festivalPacket);
     if (packet.success) shared.festivalPacket = packet.data;
     else delete shared.festivalPacket;
+  }
+  if (shared.makingOfStory != null) {
+    const story = makingOfStorySchema.safeParse(shared.makingOfStory);
+    if (story.success) shared.makingOfStory = story.data;
+    else delete shared.makingOfStory;
   }
   // A composition document names a folder on this install only
   // (services/musicVideo/compositionDocument.js); the render mode and HUD
