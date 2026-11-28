@@ -132,4 +132,27 @@ describe('guard corpus pathspec parity with git (#16996)', () => {
     writeFileSync(path, 'second\n');
     expect(corpus.read('bytes.txt')).toBe(text);
   });
+
+  it('shares batched text reads and applies the binary cutoff in bytes', async () => {
+    const cached = join(root, 'cached.txt');
+    const binary = join(root, 'binary.txt');
+    const lateNul = join(root, 'late-nul.txt');
+    const missing = join(root, 'missing.txt');
+    const fresh = join(root, 'fresh.txt');
+    writeFileSync(cached, 'cached text');
+    writeFileSync(binary, 'binary\0text');
+    writeFileSync(fresh, 'fresh text');
+    const text = `${'é'.repeat(4000)}\0text`;
+    writeFileSync(lateNul, text);
+    const corpus = createGuardCorpus(root);
+    expect(corpus.read(cached)).toBe('cached text');
+    expect(corpus.read(lateNul)).toBe(text);
+    writeFileSync(cached, 'changed text');
+    expect(await Array.fromAsync(corpus.readSources([cached, binary, missing, lateNul, 'fresh.txt'], {
+      textOnly: true, allowMissing: true,
+    }))).toEqual([[cached, 'cached text'], [lateNul, text], ['fresh.txt', 'fresh text']]);
+    writeFileSync(fresh, 'changed text');
+    expect(corpus.read(fresh)).toBe('fresh text');
+    await expect(Array.fromAsync(corpus.readSources([missing]))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
 });

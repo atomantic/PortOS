@@ -131,17 +131,19 @@ export function mask(source) {
   return parts.join('');
 }
 
-function resolveModule(fromFile, specifier) {
+const fileExists = (file) => existsSync(file) && statSync(file).isFile();
+
+function resolveModule(fromFile, specifier, isFile) {
   if (!specifier.startsWith('.')) return null;
   const base = resolve(dirname(fromFile), specifier);
   for (const candidate of [base, `${base}.js`, `${base}.jsx`, `${base}.mjs`, `${base}.cjs`, join(base, 'index.js'), join(base, 'index.jsx')]) {
-    if (existsSync(candidate) && statSync(candidate).isFile()) return candidate;
+    if (isFile(candidate)) return candidate;
   }
   return null;
 }
 
 /** Static export names of a module, following `export * from`. */
-export function exportNames(file, { readFile = (path) => readFileSync(path, 'utf8'), seen = new Set(), names = new Set() } = {}) {
+export function exportNames(file, { readFile = (path) => readFileSync(path, 'utf8'), isFile = fileExists, seen = new Set(), names = new Set() } = {}) {
   if (seen.has(file)) return names;
   seen.add(file);
   const raw = readFile(file);
@@ -166,8 +168,8 @@ export function exportNames(file, { readFile = (path) => readFileSync(path, 'utf
   for (const m of source.matchAll(/\bexport\s*\*\s*(?:as\s+([\w$]+)\s*)?from\s*(['"`])/g)) {
     if (m[1]) { names.add(m[1]); continue; }
     const start = m.index + m[0].length;
-    const target = resolveModule(file, raw.slice(start, raw.indexOf(m[2], start)));
-    if (target) exportNames(target, { readFile, seen, names });
+    const target = resolveModule(file, raw.slice(start, raw.indexOf(m[2], start)), isFile);
+    if (target) exportNames(target, { readFile, isFile, seen, names });
   }
   return names;
 }
@@ -264,7 +266,7 @@ const lineAt = (source, index) => source.slice(0, index).split('\n').length;
  * `<duplicate>` as the key for the first two) that excused a violation are added to
  * `used`, so callers can fail on entries the scan no longer needs (see `unusedAllowed`).
  */
-export function mockDrift(testFile, rawSource, { root, allowed = new Map(), used = new Set(), readFile }) {
+export function mockDrift(testFile, rawSource, { root, allowed = new Map(), used = new Set(), readFile, isFile = fileExists }) {
   // Most test files mock nothing; masking one is the scan's whole cost.
   if (!rawSource.includes('vi.mock(')) return [];
   const masked = mask(rawSource);
@@ -279,7 +281,7 @@ export function mockDrift(testFile, rawSource, { root, allowed = new Map(), used
   for (const m of rawSource.matchAll(MOCK_CALL_RE)) {
     if (masked[m.index] !== 'v' || !m[2].startsWith('.')) continue;
     const line = lineAt(rawSource, m.index);
-    const target = resolveModule(testFile, m[2]);
+    const target = resolveModule(testFile, m[2], isFile);
     if (!target) {
       report(m[2], '<unresolved>', line, 'does not resolve');
       continue;
@@ -289,7 +291,7 @@ export function mockDrift(testFile, rawSource, { root, allowed = new Map(), used
     } else firstLine.set(target, line);
     const opens = factoryObjects(masked, m.index + m[0].length);
     if (opens.length === 0) continue;
-    if (!exportCache.has(target)) exportCache.set(target, exportNames(target, { readFile }));
+    if (!exportCache.has(target)) exportCache.set(target, exportNames(target, { readFile, isFile }));
     const exported = exportCache.get(target);
     for (const open of opens) {
       for (const { key, at } of literalKeys(rawSource, masked, open)) {
