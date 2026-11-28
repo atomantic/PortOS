@@ -8,6 +8,13 @@ const socketMock = vi.hoisted(() => ({
   off: vi.fn((event, fn) => { if (socketListeners.get(event) === fn) socketListeners.delete(event); }),
 }));
 vi.mock('./socket', () => ({ default: socketMock }));
+const playbackMock = vi.hoisted(() => ({ visualizer: undefined }));
+vi.mock('./voicePlayback.js', () => ({
+  getVoiceOutputVisualizer: () => playbackMock.visualizer,
+  getVoiceVolume: () => 0.8,
+  isVoiceMuted: () => false,
+  onVoiceAudioPrefs: (fn) => { fn({ volume: 0.8, muted: false }); return () => {}; },
+}));
 import { floatToPcm16, pcm16ToFloat, startRealtimeCall } from './voiceRealtime';
 
 describe('realtime PCM helpers', () => {
@@ -46,6 +53,7 @@ describe('startRealtimeCall', () => {
       sampleRate: opts?.sampleRate,
       currentTime: 0,
       destination: {},
+      createGain: vi.fn(() => ({ gain: { value: 1 }, connect: vi.fn() })),
       audioWorklet: {
         addModule: vi.fn(async () => {
           if (addModuleError) throw addModuleError;
@@ -79,6 +87,7 @@ describe('startRealtimeCall', () => {
     workletNodeError = null;
     track = { stop: vi.fn() };
     workletNode = null;
+    playbackMock.visualizer = undefined;
 
     Object.defineProperty(navigator, 'mediaDevices', {
       configurable: true,
@@ -169,6 +178,37 @@ describe('startRealtimeCall', () => {
     expect(track.stop).toHaveBeenCalledTimes(1);
     expect(contexts[0].close).toHaveBeenCalledTimes(1);
     expect(contexts[1].close).toHaveBeenCalledTimes(1);
+  });
+
+  it('with the avatar running, renders reply audio in segments before playing each, and drops them on interrupt', async () => {
+    const anims = [];
+    playbackMock.visualizer = vi.fn(() => {
+      const anim = { ready: Promise.resolve(), start: vi.fn(), stop: vi.fn() };
+      anims.push(anim);
+      return anim;
+    });
+    const handle = await startRealtimeCall();
+    const audio = socketListeners.get('voice:realtime:audio');
+    // 0.5 s is under the first segment's 0.6 s: nothing is played or rendered yet.
+    audio({ pcm: new Int16Array(12000).buffer });
+    expect(playbackMock.visualizer).not.toHaveBeenCalled();
+    expect(scheduledSources).toHaveLength(0);
+    // Reaching 0.6 s hands one WAV of the whole segment to the avatar, then plays it in sync.
+    audio({ pcm: new Int16Array(2400).buffer });
+    await vi.waitFor(() => expect(playbackMock.visualizer).toHaveBeenCalledTimes(1));
+    const wav = playbackMock.visualizer.mock.calls[0][0];
+    expect(new TextDecoder().decode(new Uint8Array(wav, 0, 4))).toBe('RIFF');
+    expect(wav.byteLength).toBe(44 + 14400 * 2);
+    await vi.waitFor(() => expect(scheduledSources).toHaveLength(1));
+    expect(anims[0].start).toHaveBeenCalledTimes(1);
+    // The end of a reply sends whatever is buffered; an interrupt stops the avatar with the audio.
+    audio({ pcm: new Int16Array(4800).buffer });
+    socketListeners.get('voice:realtime:reply')({ text: 'Hi', cancelled: false });
+    await vi.waitFor(() => expect(scheduledSources).toHaveLength(2));
+    socketListeners.get('voice:realtime:interrupt')();
+    expect(anims.every((a) => a.stop.mock.calls.length > 0)).toBe(true);
+    expect(scheduledSources.every((src) => src.stop.mock.calls.length === 1)).toBe(true);
+    handle.stop();
   });
 
   it('releases mic tracks and AudioContexts if AudioWorkletNode construction fails', async () => {

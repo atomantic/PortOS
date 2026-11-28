@@ -6,10 +6,19 @@
  */
 import socket from './socket';
 import { markVoiceTiming } from './voiceTimingDebug.js';
+import { getVoiceOutputVisualizer, getVoiceVolume, isVoiceMuted, onVoiceAudioPrefs } from './voicePlayback.js';
+import { encodePcmToWav } from '../lib/audioRecorder.js';
 
 const MIC_RATE = 16000;
 const OUT_RATE = 24000;
 const FRAME_SAMPLES = 320; // 20 ms at 16 kHz
+// With the Voice Call avatar running, reply audio is played in short segments, each one rendered to lip-synced frames first
+// (the avatar takes a whole WAV). The first segment of a reply is short so speech starts soon; later ones are longer so
+// the avatar keeps up, and any segment goes out early when the queued audio is about to run dry.
+const AVATAR_FIRST_SEGMENT_S = 0.6;
+const AVATAR_SEGMENT_S = 1.6;
+const AVATAR_LOW_WATER_S = 0.35;
+const AVATAR_READY_WAIT_MS = 750;
 
 const WORKLET_SOURCE = `
 class RealtimeMic extends AudioWorkletProcessor {
@@ -114,7 +123,66 @@ export const startRealtimeCall = async (handlers = {}) => {
   // Gapless playback: each chunk starts where the previous one ends; an interrupt stops everything scheduled.
   let nextAt = 0;
   const playing = new Set();
+  // Output volume and mute follow the voice widget's controls.
+  const outGain = outCtx.createGain();
+  outGain.connect(outCtx.destination);
+  const offPrefs = onVoiceAudioPrefs(({ volume, muted }) => { outGain.gain.value = muted ? 0 : volume; });
+  outGain.gain.value = isVoiceMuted() ? 0 : getVoiceVolume();
+
+  const schedule = (samples) => {
+    const buffer = outCtx.createBuffer(1, samples.length, OUT_RATE);
+    buffer.copyToChannel(samples, 0);
+    const src = outCtx.createBufferSource();
+    src.buffer = buffer;
+    src.connect(outGain);
+    const at = Math.max(outCtx.currentTime + 0.03, nextAt);
+    src.start(at);
+    nextAt = at + buffer.duration;
+    playing.add(src);
+    src.onended = () => playing.delete(src);
+    return { at, duration: buffer.duration };
+  };
+
+  // Avatar segmenting (only while the avatar renderer is bound).
+  let segment = [];
+  let segmentSamples = 0;
+  let firstOfReply = true;
+  let avatarGen = 0;
+  let avatarChain = Promise.resolve();
+  let pendingSegments = 0;
+  const animations = new Set();
+  const emitSegment = () => {
+    if (!segmentSamples) return;
+    const samples = new Float32Array(segmentSamples);
+    let offset = 0;
+    for (const part of segment) { samples.set(part, offset); offset += part.length; }
+    segment = []; segmentSamples = 0; firstOfReply = false;
+    const gen = avatarGen;
+    pendingSegments += 1;
+    avatarChain = avatarChain.then(async () => {
+      if (gen !== avatarGen || stopped) return;
+      let anim;
+      try { anim = getVoiceOutputVisualizer()?.(encodePcmToWav(samples, OUT_RATE)); } catch { /* the avatar never owns the audio */ }
+      if (anim) await Promise.race([anim.ready, new Promise((r) => { setTimeout(r, AVATAR_READY_WAIT_MS); })]);
+      if (gen !== avatarGen || stopped) { anim?.stop(); return; }
+      const { at, duration } = schedule(samples);
+      if (!anim) return;
+      animations.add(anim);
+      anim.start(() => outCtx.currentTime - at);
+      setTimeout(() => { anim.stop(); animations.delete(anim); }, Math.max(0, (at - outCtx.currentTime + duration) * 1000) + 80);
+    }).finally(() => { if (gen === avatarGen) pendingSegments -= 1; });
+  };
+  const segmentTimer = setInterval(() => {
+    // Only once a reply is already playing, and nothing is waiting on the avatar: then the queue is about to run dry.
+    if (segmentSamples && !firstOfReply && !pendingSegments && nextAt > 0 && (nextAt - outCtx.currentTime) < AVATAR_LOW_WATER_S) emitSegment();
+  }, 100);
+
   const flush = () => {
+    avatarGen += 1;
+    pendingSegments = 0;
+    segment = []; segmentSamples = 0; firstOfReply = true;
+    for (const anim of animations) anim.stop();
+    animations.clear();
     for (const src of playing) { try { src.stop(); } catch { /* already ended */ } }
     playing.clear();
     nextAt = 0;
@@ -124,16 +192,10 @@ export const startRealtimeCall = async (handlers = {}) => {
     if (stopped || outCtx.state === 'closed' || !payload?.pcm) return;
     const samples = pcm16ToFloat(payload.pcm);
     if (!samples.length) return;
-    const buffer = outCtx.createBuffer(1, samples.length, OUT_RATE);
-    buffer.copyToChannel(samples, 0);
-    const src = outCtx.createBufferSource();
-    src.buffer = buffer;
-    src.connect(outCtx.destination);
-    const at = Math.max(outCtx.currentTime + 0.03, nextAt);
-    src.start(at);
-    nextAt = at + buffer.duration;
-    playing.add(src);
-    src.onended = () => playing.delete(src);
+    if (!getVoiceOutputVisualizer()) { schedule(samples); return; }
+    segment.push(samples);
+    segmentSamples += samples.length;
+    if (segmentSamples >= (firstOfReply ? AVATAR_FIRST_SEGMENT_S : AVATAR_SEGMENT_S) * OUT_RATE) emitSegment();
   };
   const teardown = ({ emitStop = true } = {}) => {
     if (stopped) return;
@@ -142,6 +204,8 @@ export const startRealtimeCall = async (handlers = {}) => {
     release();
     if (emitStop) socket.emit('voice:realtime:stop');
     for (const [event, fn] of Object.entries(listeners)) socket.off(event, fn);
+    clearInterval(segmentTimer);
+    offPrefs();
     flush();
     node.port.onmessage = null;
     source.disconnect();
@@ -164,7 +228,7 @@ export const startRealtimeCall = async (handlers = {}) => {
     'voice:realtime:audio': onAudio,
     'voice:realtime:interrupt': flush,
     'voice:realtime:state': onState,
-    'voice:realtime:reply': (data) => handlers.onReply?.(data),
+    'voice:realtime:reply': (data) => { emitSegment(); firstOfReply = true; handlers.onReply?.(data); },
     'voice:realtime:delegate': (data) => {
       markVoiceTiming('rt.delegate', { startsTurn: true });
       handlers.onDelegate?.(data);
