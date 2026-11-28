@@ -1,4 +1,4 @@
-import { assertCodexInventoryComplete, readCodexAccountingSources, codexSessionClaimKey, codexIdentityHash } from './codexUsageSources.js';
+import { assertCodexInventoryComplete, codexSessionClaimKey, codexSpeedRepairId, readCodexAccountingSources, resolveCodexBoundary } from './codexUsageSources.js';
 import { maintenance } from '../lib/maintenanceAdmission.js';
 /**
  * Replace PortOS's estimated per-run token counts with the CLI's own measured
@@ -702,11 +702,7 @@ async function readCodexSessions({ home, workspacePath, from, to, fold, codexRes
     const previous = codexHighWater.get(path);
     // Old snapshots used a raw source path. Adopt an extant alias or the
     // standard rollout filename identity even after it moved/compressed.
-    let billed = previous;
-    for (const [key, counts] of codexHighWater) {
-      const legacyId = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl(?:\.zst)?$/i.exec(key)?.[1];
-      if (session.paths.includes(key) || legacyId && codexIdentityHash(legacyId) === session.id) billed = mergeCodexBoundary(billed, counts);
-    }
+    const billed = resolveCodexBoundary(session, codexHighWater, previous);
     // Speed on this absolute read is only the growth past `billed`. Base
     // tokens stay cumulative so subtractBuckets still nets them. A missing
     // billed field does not constrain the frontier.
@@ -716,7 +712,7 @@ async function readCodexSessions({ home, workspacePath, from, to, fold, codexRes
     // A first bill includes the whole cumulative speed, so the historical
     // repair must not add it again. A legacy boundary that only bills the
     // growth does not take that id — the repair still owes the covered part.
-    if (billed == null && hasSpeed(net)) net.codexSpeedRepairIds = [`codex-speed:v1:${session.id}`];
+    if (billed == null && hasSpeed(net)) net.codexSpeedRepairIds = [codexSpeedRepairId(session.id)];
 
     // Advance the mark to the absolute position just read, before the next
     // `await` — for the same reason the Claude claim reserves per file: two
