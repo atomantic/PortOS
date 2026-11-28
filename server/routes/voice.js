@@ -125,9 +125,9 @@ router.put('/config', asyncHandler(async (req, res) => {
 router.get('/realtime/status', asyncHandler(async (req, res) => {
   validateRequest(emptyQuerySchema, req.query);
   const { realtimeStatus } = await import('../services/voice/realtimeRuntime.js');
-  const { realtime } = await getVoiceConfig();
-  const { home, size, parts, installed, running } = realtimeStatus(realtime);
-  res.json({ enabled: realtime?.enabled === true, home, size, parts, installed, running });
+  const cfg = await getVoiceConfig();
+  const { home, size, parts, installed, running } = realtimeStatus(cfg.realtime);
+  res.json({ enabled: cfg.realtime?.enabled === true, voiceEnabled: cfg.enabled === true, home, size, parts, installed, running });
 }));
 
 // GET /api/voice/status — reachability + enabled flag + binary/model presence

@@ -80,4 +80,11 @@ describe('RealtimeCallPanel', () => {
     expect(stop).toHaveBeenCalled();
     expect(screen.getByRole('button', { name: 'Start realtime call' })).toBeInTheDocument();
   });
+
+  it('hides the start button and explains why when Voice mode is turned off', async () => {
+    mocks.getVoiceRealtimeStatus.mockResolvedValue({ ...installed, voiceEnabled: false });
+    render(<RealtimeCallPanel />);
+    expect(await screen.findByText(/Turn on Voice mode in Voice settings/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Start realtime call' })).toBeNull();
+  });
 });

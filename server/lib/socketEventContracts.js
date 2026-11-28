@@ -56,6 +56,68 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
   'voice:avatar:library:changed': { direction: 'server-to-client', summary: 'Invalidate the Voice Call avatar library (Avatars collection and channel assignments); no payload.' },
   'voice:llm:residency:changed': { direction: 'server-to-client', summary: 'Invalidate the Voice LLM residency badge when a warm-up starts or finishes loading the model; no payload.' },
   'voice:conversationalGemma:changed': { direction: 'server-to-client', summary: 'Invalidate the machine-local Conversational Gemma 4 31B llama.cpp setup status; no payload.' },
+  'voice:realtime:state': {
+    direction: 'server-to-client',
+    summary: 'Lifecycle state of the socket’s realtime speech-to-speech Voice call.',
+    payloadSchema: {
+      type: 'object', required: ['active'], additionalProperties: false,
+      properties: {
+        active: { type: 'boolean' },
+        loading: { type: 'boolean' },
+        reason: { type: 'string', enum: ['hangup', 'sidecar-closed'] },
+        error: { type: 'string' },
+      },
+    },
+  },
+  'voice:realtime:audio': {
+    direction: 'server-to-client',
+    summary: 'Streamed 24 kHz mono PCM16 reply audio chunk from the realtime voice sidecar.',
+    payloadSchema: {
+      type: 'object', required: ['pcm', 'sampleRate'], additionalProperties: false,
+      properties: { pcm: { type: 'string', format: 'binary' }, sampleRate: { type: 'integer' } },
+    },
+  },
+  'voice:realtime:interrupt': {
+    direction: 'server-to-client',
+    summary: 'User barged in; client drops buffered realtime reply audio.',
+    payloadSchema: { type: 'object', additionalProperties: false, properties: {} },
+  },
+  'voice:realtime:reply': {
+    direction: 'server-to-client',
+    summary: 'Spoken transcript of a completed or interrupted realtime voice reply.',
+    payloadSchema: {
+      type: 'object', required: ['text', 'cancelled'], additionalProperties: false,
+      properties: { text: { type: 'string' }, cancelled: { type: 'boolean' } },
+    },
+  },
+  'voice:realtime:delegate': {
+    direction: 'server-to-client',
+    summary: 'Realtime voice handed a lookup or action to the PortOS Voice tool pipeline.',
+    payloadSchema: {
+      type: 'object', required: ['callId', 'task'], additionalProperties: false,
+      properties: { callId: { type: 'string' }, task: { type: 'string' } },
+    },
+  },
+  'voice:realtime:result': {
+    direction: 'server-to-client',
+    summary: 'Tool-pipeline result returned to the realtime voice for its follow-up spoken reply.',
+    payloadSchema: {
+      type: 'object', required: ['callId', 'task', 'text'], additionalProperties: false,
+      properties: { callId: { type: 'string' }, task: { type: 'string' }, text: { type: 'string' } },
+    },
+  },
+  'voice:realtime:event': {
+    direction: 'server-to-client',
+    summary: 'Forwarded realtime sidecar lifecycle event (first_audio, barge_in, reply_start, merge_abort, error).',
+    payloadSchema: {
+      type: 'object', required: ['ev', 'afterSilenceS', 'followup'], additionalProperties: false,
+      properties: {
+        ev: { type: 'string', enum: ['first_audio', 'barge_in', 'reply_start', 'merge_abort', 'error'] },
+        afterSilenceS: { type: ['number', 'null'] },
+        followup: { type: 'boolean' },
+      },
+    },
+  },
   'generated-preview:playback': input(generatedPreviewPlaybackSchema, 'Calibrate or control an advertised cooperative document preview; audio remains in the client.'),
   'generated-preview:playback-state': {
     direction: 'server-to-client',
