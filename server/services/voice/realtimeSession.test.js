@@ -40,7 +40,43 @@ describe('openRealtimeCall', () => {
     expect(ws.sent.at(-1)).toBe(mic);
     const reply = Buffer.alloc(960);
     ws.emit('message', reply, true);
-    expect(emit).toHaveBeenCalledWith('voice:realtime:audio', { pcm: reply, sampleRate: 24000 });
+    expect(emit).toHaveBeenCalledWith('voice:realtime:audio', { pcm: reply, sampleRate: 24000, replyId: null });
+  });
+
+  it('tags reply audio, interrupts, onsets and replies with the sidecar reply id', async () => {
+    const { ws, emit } = await open();
+    ws.text({ type: 'reply_audio', reply_id: 'a1b2' });
+    const first = Buffer.alloc(960);
+    ws.emit('message', first, true);
+    ws.text({ type: 'reply', text: 'Hi', cancelled: false, reply_id: 'a1b2' });
+    ws.text({ type: 'reply_audio', reply_id: 'c3d4' });
+    const second = Buffer.alloc(960);
+    ws.emit('message', second, true);
+    ws.text({ type: 'onset', reply_id: 'a1b2' });
+    ws.text({ type: 'interrupt', reply_id: 'c3d4' });
+    // Ids that are not the sidecar's short hex are dropped rather than relayed.
+    ws.text({ type: 'onset', reply_id: '<script>' });
+    ws.text({ type: 'interrupt', reply_id: 42 });
+    expect(emit.mock.calls.filter(([event]) => event !== 'voice:realtime:state')).toEqual([
+      ['voice:realtime:audio', { pcm: first, sampleRate: 24000, replyId: 'a1b2' }],
+      ['voice:realtime:reply', { text: 'Hi', cancelled: false, replyId: 'a1b2' }],
+      ['voice:realtime:audio', { pcm: second, sampleRate: 24000, replyId: 'c3d4' }],
+      ['voice:realtime:onset', { replyId: 'a1b2' }],
+      ['voice:realtime:interrupt', { replyId: 'c3d4' }],
+      ['voice:realtime:interrupt', { replyId: null }],
+    ]);
+  });
+
+  it('tells the sidecar which reply the browser stopped and how much of it played', async () => {
+    const { ws, call } = await open();
+    call.interrupt();
+    call.interrupt({ replyId: 'a1b2', playedS: 0.42 });
+    call.cut({ replyId: 'c3d4', playedS: 1.5 });
+    expect(ws.sent.map((m) => JSON.parse(m))).toEqual([
+      { type: 'interrupt' },
+      { type: 'interrupt', reply_id: 'a1b2', played_s: 0.42 },
+      { type: 'cut', reply_id: 'c3d4', played_s: 1.5 },
+    ]);
   });
 
   it('sends the playback reference after the mic bytes, announcing each framing change first', async () => {
@@ -82,8 +118,8 @@ describe('openRealtimeCall', () => {
     ws.text({ type: 'interrupt' });
     ws.text({ type: 'reply', text: 'Hi there', cancelled: false });
     ws.text({ type: 'event', ev: 'turn_check' });
-    expect(emit).toHaveBeenCalledWith('voice:realtime:interrupt', {});
-    expect(emit).toHaveBeenCalledWith('voice:realtime:reply', { text: 'Hi there', cancelled: false });
+    expect(emit).toHaveBeenCalledWith('voice:realtime:interrupt', { replyId: null });
+    expect(emit).toHaveBeenCalledWith('voice:realtime:reply', { text: 'Hi there', cancelled: false, replyId: null });
     expect(emit).not.toHaveBeenCalledWith('voice:realtime:event', expect.objectContaining({ ev: 'turn_check' }));
     call.close();
     expect(scheduleRealtimeIdleStop).toHaveBeenCalled();

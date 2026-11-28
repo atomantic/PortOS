@@ -1,11 +1,16 @@
 /**
  * Realtime (speech-to-speech) Voice Call transport: 16 kHz PCM16 microphone up, gapless 24 kHz PCM16 reply audio down.
  *
- * Turn-taking and barge-in happen in the voice model; this side only drops buffered audio when the server says the
- * user interrupted. Each mic frame carries `far`, what the speaker played over the same 20 ms (see
- * voicePlaybackReference.js), so the voice does not mistake its own echo for the user talking over it. The browser's
- * echo canceller stays the one echo-cancellation stage; the reference only raises the voice's speech threshold. Without a
- * reliable reference (no AudioWorklet output tap or no getOutputTimestamp) frames go up without `far`, as before.
+ * Turn-taking and barge-in happen in the voice model. Each mic frame carries `far`, what the speaker played over the same
+ * 20 ms (see voicePlaybackReference.js), so the voice does not mistake its own echo for the user talking over it. The
+ * browser's echo canceller stays the one echo-cancellation stage; the reference only raises the voice's speech threshold.
+ * Without a reliable reference (no AudioWorklet output tap or no getOutputTimestamp) frames go up without `far`.
+ *
+ * Reply audio arrives tagged with the voice's reply id and this side owns the playout clock: the voice judges whether a
+ * finished reply is still being heard from generation time, but the browser schedules the audio itself (and waits for the
+ * avatar before each segment), so when the voice reports that the user started speaking after a reply finished
+ * generating, this side stops that reply if it is still playing here, and reports how much of each stopped reply was
+ * heard so the voice's history matches it.
  */
 import socket from './socket';
 import { markVoiceTiming } from './voiceTimingDebug.js';
@@ -23,6 +28,8 @@ const AVATAR_FIRST_SEGMENT_S = 0.6;
 const AVATAR_SEGMENT_S = 1.6;
 const AVATAR_LOW_WATER_S = 0.35;
 const AVATAR_READY_WAIT_MS = 750;
+// Replies kept for interrupts and onsets that name them; a stopped one also drops audio that arrives after its interrupt.
+const RECENT_REPLIES = 16;
 
 // The mic processor posts each input block with its context frame, so capture time is known. The tap sits between the
 // output gain and the speaker, passes audio through unchanged and posts what it rendered, with its frame.
@@ -183,16 +190,42 @@ export const startRealtimeCall = async (handlers = {}) => {
     pending = merged.slice(offset);
   };
 
-  // Gapless playback: each chunk starts where the previous one ends; an interrupt stops everything scheduled.
+  // Gapless playback: each chunk starts where the previous one ends. Each reply keeps its own clips, sources and avatar
+  // animations, so an interrupt for one reply never stops another.
   let nextAt = 0;
-  const playing = new Set();
   // Output volume and mute follow the voice widget's controls.
   const outGain = outCtx.createGain();
   if (tap) { outGain.connect(tap); tap.connect(outCtx.destination); } else outGain.connect(outCtx.destination);
   const offPrefs = onVoiceAudioPrefs(({ volume, muted }) => { outGain.gain.value = muted ? 0 : volume; });
   outGain.gain.value = isVoiceMuted() ? 0 : getVoiceVolume();
 
-  const schedule = (samples) => {
+  // replyId -> { id, clips: [{ at, duration }], sources, anims, held (samples not yet scheduled), stopped, halted }
+  const replies = new Map();
+  const isAudible = (rec) => !rec.stopped
+    && (rec.held > 0 || rec.clips.some((c) => c.at + c.duration > outCtx.currentTime));
+  // Seconds of the reply that have actually played here, from the same schedule the audio and the avatar follow.
+  const playedS = (rec) => {
+    const now = outCtx.currentTime;
+    const played = rec.clips.reduce((sum, c) => sum + Math.min(c.duration, Math.max(0, now - c.at)), 0);
+    return Math.round(played * 1000) / 1000;
+  };
+  const replyFor = (id) => {
+    const known = replies.get(id);
+    // Untagged audio (an older sidecar) is one running reply that starts over after an interrupt.
+    if (known && !(known.stopped && !id)) return known;
+    let release;
+    const halted = new Promise((resolve) => { release = resolve; });
+    const rec = { id, clips: [], sources: new Set(), anims: new Set(), held: 0, stopped: false, halted, release };
+    replies.delete(id);
+    replies.set(id, rec);
+    for (const [oldId, old] of replies) {
+      if (replies.size <= RECENT_REPLIES) break;
+      if (old !== rec && !isAudible(old)) replies.delete(oldId);
+    }
+    return rec;
+  };
+
+  const schedule = (samples, rec) => {
     const buffer = outCtx.createBuffer(1, samples.length, OUT_RATE);
     buffer.copyToChannel(samples, 0);
     const src = outCtx.createBufferSource();
@@ -201,63 +234,110 @@ export const startRealtimeCall = async (handlers = {}) => {
     const at = Math.max(outCtx.currentTime + 0.03, nextAt);
     src.start(at);
     nextAt = at + buffer.duration;
-    playing.add(src);
-    src.onended = () => playing.delete(src);
+    rec.clips.push({ at, duration: buffer.duration });
+    rec.sources.add(src);
+    src.onended = () => rec.sources.delete(src);
     return { at, duration: buffer.duration };
   };
 
   // Avatar segmenting (only while the avatar renderer is bound).
   let segment = [];
   let segmentSamples = 0;
+  let segmentRec = null;
   let firstOfReply = true;
-  let avatarGen = 0;
   let avatarChain = Promise.resolve();
   let pendingSegments = 0;
-  const animations = new Set();
   const emitSegment = () => {
     if (!segmentSamples) return;
+    const rec = segmentRec;
     const samples = new Float32Array(segmentSamples);
     let offset = 0;
     for (const part of segment) { samples.set(part, offset); offset += part.length; }
     segment = []; segmentSamples = 0; firstOfReply = false;
-    const gen = avatarGen;
     pendingSegments += 1;
     avatarChain = avatarChain.then(async () => {
-      if (gen !== avatarGen || stopped) return;
+      if (rec.stopped || stopped) return;
       let anim;
       try { anim = getVoiceOutputVisualizer()?.(encodePcmToWav(samples, OUT_RATE)); } catch { /* the avatar never owns the audio */ }
-      if (anim) await Promise.race([anim.ready, new Promise((r) => { setTimeout(r, AVATAR_READY_WAIT_MS); })]);
-      if (gen !== avatarGen || stopped) { anim?.stop(); return; }
-      const { at, duration } = schedule(samples);
+      // A stopped reply releases the wait at once, so the next reply's segments are not held behind it.
+      if (anim) {
+        await Promise.race([Promise.resolve(anim.ready).catch(() => {}), rec.halted, new Promise((r) => { setTimeout(r, AVATAR_READY_WAIT_MS); })]);
+      }
+      if (rec.stopped || stopped) { anim?.stop(); return; }
+      rec.held -= samples.length;
+      const { at, duration } = schedule(samples, rec);
       if (!anim) return;
-      animations.add(anim);
+      rec.anims.add(anim);
       anim.start(() => outCtx.currentTime - at);
-      setTimeout(() => { anim.stop(); animations.delete(anim); }, Math.max(0, (at - outCtx.currentTime + duration) * 1000) + 80);
-    }).finally(() => { if (gen === avatarGen) pendingSegments -= 1; });
+      setTimeout(() => { anim.stop(); rec.anims.delete(anim); }, Math.max(0, (at - outCtx.currentTime + duration) * 1000) + 80);
+    }).finally(() => { pendingSegments -= 1; });
   };
   const segmentTimer = setInterval(() => {
     // Only once a reply is already playing, and nothing is waiting on the avatar: then the queue is about to run dry.
     if (segmentSamples && !firstOfReply && !pendingSegments && nextAt > 0 && (nextAt - outCtx.currentTime) < AVATAR_LOW_WATER_S) emitSegment();
   }, 100);
 
-  const flush = () => {
-    avatarGen += 1;
-    pendingSegments = 0;
-    segment = []; segmentSamples = 0; firstOfReply = true;
-    for (const anim of animations) anim.stop();
-    animations.clear();
-    for (const src of playing) { try { src.stop(); } catch { /* already ended */ } }
-    playing.clear();
+  const stopReply = (rec) => {
+    if (rec.stopped) return;
+    rec.stopped = true;
+    rec.release();
+    for (const anim of rec.anims) anim.stop();
+    rec.anims.clear();
+    for (const src of rec.sources) { try { src.stop(); } catch { /* already ended */ } }
+    rec.sources.clear();
+    if (segmentRec === rec) { segment = []; segmentSamples = 0; segmentRec = null; firstOfReply = true; }
     nextAt = 0;
+    for (const other of replies.values()) {
+      if (!other.stopped) for (const c of other.clips) nextAt = Math.max(nextAt, c.at + c.duration);
+    }
   };
+  const stopAll = () => { for (const rec of replies.values()) stopReply(rec); };
+  // Stop a reply that was (or was about to be) heard and tell the voice how much of it played here.
+  const cutReply = (rec) => {
+    const heard = playedS(rec);
+    stopReply(rec);
+    if (rec.id) socket.emit('voice:realtime:cut', { replyId: rec.id, playedS: heard });
+  };
+  // Stop this reply and any older one still playing ahead of it (a follow-up can queue behind a reply's tail), never a
+  // newer one. Replies are kept in arrival order.
+  const cutThrough = (rec) => {
+    for (const older of replies.values()) {
+      if (older === rec) break;
+      if (isAudible(older)) cutReply(older);
+    }
+    if (rec.clips.length || rec.held) cutReply(rec);
+    else stopReply(rec);
+  };
+  const onInterrupt = (data) => {
+    const id = data?.replyId;
+    if (typeof id !== 'string' || !id) { stopAll(); return; }
+    const rec = replies.get(id);
+    if (!rec) stopReply(replyFor(id)); // a reply not heard yet: drop any audio of it that still arrives
+    else if (!rec.stopped) cutThrough(rec);
+  };
+  // The user started speaking after the voice finished generating this reply. Stop it only if it is still playing here,
+  // so finished playback is never cut and an older reply's onset never touches a newer one.
+  const onOnset = (data) => {
+    const rec = typeof data?.replyId === 'string' ? replies.get(data.replyId) : undefined;
+    if (!rec || !isAudible(rec)) return;
+    markVoiceTiming('rt.onset stops reply still playing');
+    cutThrough(rec);
+  };
+
   let stopped = false;
   const onAudio = (payload) => {
     if (stopped || outCtx.state === 'closed' || !payload?.pcm) return;
     const samples = pcm16ToFloat(payload.pcm);
     if (!samples.length) return;
-    if (!getVoiceOutputVisualizer()) { schedule(samples); return; }
+    const id = typeof payload.replyId === 'string' ? payload.replyId : '';
+    if (id && replies.get(id)?.stopped) return;
+    const rec = replyFor(id);
+    if (!getVoiceOutputVisualizer()) { schedule(samples, rec); return; }
+    if (segmentRec && segmentRec !== rec) { emitSegment(); firstOfReply = true; }
+    segmentRec = rec;
     segment.push(samples);
     segmentSamples += samples.length;
+    rec.held += samples.length;
     if (segmentSamples >= (firstOfReply ? AVATAR_FIRST_SEGMENT_S : AVATAR_SEGMENT_S) * OUT_RATE) emitSegment();
   };
   const teardown = ({ emitStop = true } = {}) => {
@@ -270,7 +350,7 @@ export const startRealtimeCall = async (handlers = {}) => {
     for (const [event, fn] of Object.entries(listeners)) socket.off(event, fn);
     clearInterval(segmentTimer);
     offPrefs();
-    flush();
+    stopAll();
     node.port.onmessage = null;
     if (tap) { tap.port.onmessage = null; tap.disconnect(); }
     source.disconnect();
@@ -297,7 +377,8 @@ export const startRealtimeCall = async (handlers = {}) => {
   };
   const listeners = {
     'voice:realtime:audio': onAudio,
-    'voice:realtime:interrupt': flush,
+    'voice:realtime:interrupt': onInterrupt,
+    'voice:realtime:onset': onOnset,
     'voice:realtime:state': onState,
     'voice:realtime:reply': (data) => { emitSegment(); firstOfReply = true; handlers.onReply?.(data); },
     'voice:realtime:delegate': (data) => {
@@ -326,8 +407,12 @@ export const startRealtimeCall = async (handlers = {}) => {
   return {
     stop: () => teardown({ emitStop: true }),
     interrupt() {
-      flush();
-      socket.emit('voice:realtime:interrupt');
+      // Every reply still playing is cut; the newest one rides the interrupt, older ones report what was heard of them.
+      const heard = [...replies.values()].filter((rec) => rec.id && isAudible(rec)).map((rec) => ({ replyId: rec.id, playedS: playedS(rec) }));
+      stopAll();
+      const newest = heard.pop();
+      for (const older of heard) socket.emit('voice:realtime:cut', older);
+      socket.emit('voice:realtime:interrupt', newest ?? {});
     },
   };
 };

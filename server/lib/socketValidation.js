@@ -191,3 +191,10 @@ export function validateSocketData(schema, data, socket, event) {
   });
   return null;
 }
+
+// voice:realtime:cut — the browser stopped a realtime reply (by the sidecar's reply id) after `playedS` seconds of it
+// had played. voice:realtime:interrupt carries the same pair when a reply was playing, or nothing.
+const realtimeReplyIdSchema = z.string().regex(/^[0-9a-f]{1,32}$/);
+const realtimePlayedSchema = z.number().finite().min(0).max(3600);
+export const voiceRealtimeCutSchema = z.object({ replyId: realtimeReplyIdSchema, playedS: realtimePlayedSchema }).strict();
+export const voiceRealtimeInterruptSchema = voiceRealtimeCutSchema.partial().strict();

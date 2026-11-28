@@ -17,11 +17,12 @@
 // Inbound:  voice:capture:start | voice:call:audio | voice:capture:stop
 // Outbound: voice:capture:state
 // Realtime speech-to-speech call:
-// Inbound:  voice:realtime:start | voice:realtime:audio | voice:realtime:interrupt | voice:realtime:stop
-// Outbound: voice:realtime:state | voice:realtime:audio | voice:realtime:interrupt
+// Inbound:  voice:realtime:start | voice:realtime:audio | voice:realtime:interrupt | voice:realtime:cut | voice:realtime:stop
+// Outbound: voice:realtime:state | voice:realtime:audio | voice:realtime:interrupt | voice:realtime:onset
 //           | voice:realtime:reply | voice:realtime:delegate | voice:realtime:result | voice:realtime:event
 
 import { SOCKET_MEDIA_MAX_BYTES } from '../lib/socketPayloadLimits.js';
+import { voiceRealtimeCutSchema, voiceRealtimeInterruptSchema } from '../lib/socketValidation.js';
 import { HOST_CONTROL_FORBIDDEN_MESSAGE, socketHasCurrentHostControl } from '../services/authGate.js';
 import { getVoiceConfig } from '../services/voice/config.js';
 import { registerEchoBuffer, unregisterEchoBuffer } from '../services/voice/echo.js';
@@ -1003,7 +1004,15 @@ export const registerVoiceHandlers = (socket) => {
     realtime.pushAudio(audioBuffer(pcm), far);
   });
 
-  socket.on('voice:realtime:interrupt', () => realtime?.interrupt());
+  socket.on('voice:realtime:interrupt', (payload) => {
+    const parsed = voiceRealtimeInterruptSchema.safeParse(payload ?? {});
+    const heard = parsed.success && parsed.data.replyId && parsed.data.playedS !== undefined ? parsed.data : undefined;
+    realtime?.interrupt(heard);
+  });
+  socket.on('voice:realtime:cut', (payload) => {
+    const parsed = voiceRealtimeCutSchema.safeParse(payload);
+    if (parsed.success) realtime?.cut(parsed.data);
+  });
   socket.on('voice:realtime:stop', () => closeRealtime());
 
   socket.on('disconnect', () => {
