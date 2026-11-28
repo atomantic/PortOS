@@ -1,11 +1,12 @@
 import { emitToOperatorsOn } from './socketIo.js';
 import { execFile, spawn } from '../lib/childProcess.js';
 import { userInfo } from 'os';
-import { existsSync, mkdirSync, createReadStream } from 'fs';
+import { existsSync, mkdirSync, createReadStream, chmodSync, rmSync } from 'fs';
 import { join } from 'path';
 import { ServerError } from '../lib/errorHandler.js';
 import { checkHealth, query, POOL_CONFIG } from '../lib/db.js';
 import { PATHS } from '../lib/fileUtils.js';
+import { scrubHomePath } from '../lib/homePath.js';
 import { stripAnsi } from '../lib/ansiStrip.js';
 import { resolvePgDumpBinary } from '../lib/pgTools.js';
 import { resolveBashBinary, toBashPath } from '../lib/bashResolver.js';
@@ -94,9 +95,9 @@ export async function beginDatabaseCutoverRecovery(id) {
 /**
  * Run a command and return { stdout, stderr, exitCode }.
  */
-function runCmd(cmd, args, timeout = 120_000, env = process.env, { redactFailureOutput = false } = {}) {
+function runCmd(cmd, args, timeout = 120_000, env = process.env, { redactFailureOutput = false, input } = {}) {
   return new Promise((resolve) => {
-    execFile(cmd, args, { cwd: rootDir, timeout, env }, (err, stdout, stderr) => {
+    const child = execFile(cmd, args, { cwd: rootDir, timeout, env }, (err, stdout, stderr) => {
       const exitCode = err ? (typeof err.code === 'number' ? err.code : 1) : 0;
       // Resolved Compose configuration may contain credentials even when its
       // command fails. Do not put introspection payloads in logs or API errors.
@@ -105,8 +106,13 @@ function runCmd(cmd, args, timeout = 120_000, env = process.env, { redactFailure
         stderr = 'Docker resource inspection failed';
       }
       if (exitCode !== 0) {
-        const detail = stripAnsi(stderr || stdout || err.message || '').replace(/\s+/g, ' ').trim();
-        console.error(`🗄️ ${cmd} ${args.join(' ')} exited ${exitCode}: ${detail}`);
+        let detail = stripAnsi(stderr || stdout || err.message || '').replace(/\s+/g, ' ').trim();
+        let loggedArgs = args.join(' ');
+        if (pgPassword) {
+          detail = detail.split(pgPassword).join('***');
+          if (pgPassword !== 'portos') loggedArgs = loggedArgs.split(pgPassword).join('***');
+        }
+        console.error(`🗄️ ${cmd} ${scrubHomePath(loggedArgs)} exited ${exitCode}: ${scrubHomePath(detail)}`);
       }
       resolve({
         stdout: stripAnsi(stdout || ''),
@@ -114,6 +120,7 @@ function runCmd(cmd, args, timeout = 120_000, env = process.env, { redactFailure
         exitCode
       });
     });
+    if (input !== undefined) child?.stdin?.end(input);
   });
 }
 
@@ -593,56 +600,76 @@ async function syncDatabaseImpl(io) {
 
   emit('start', { message: 'Exporting from active database...' });
   // Explicit backend export bypasses db.sh's saved-mode/container selection.
-  const { dumpFile } = await exportDatabaseImpl(currentMode);
-  console.log(`🗄️ Sync: exported to ${dumpFile}`);
+  const { dumpFile } = await exportDatabaseImpl(currentMode, { internal: true });
+  console.log(`🗄️ Sync: exported to ${scrubHomePath(dumpFile)}`);
 
-  // Step 2: Ensure target is running and configured
-  emit('start', { message: `Checking ${targetMode} is running...` });
-  const readyResult = await runCmd('pg_isready', [
-    '-h', 'localhost', '-p', targetPort
-  ], 5_000, pgEnv(targetPort));
-  if (readyResult.exitCode !== 0) {
-    emit('error', { message: `${targetMode} database not running on port ${targetPort}. Start it first.` });
-    throw new ServerError(`${targetMode} database not running on port ${targetPort}. Start it first.`, { status: 400 });
-  }
+  try {
+    // Step 2: Ensure target is running and configured
+    emit('start', { message: `Checking ${targetMode} is running...` });
+    const readyResult = await runCmd('pg_isready', [
+      '-h', 'localhost', '-p', targetPort
+    ], 5_000, pgEnv(targetPort));
+    if (readyResult.exitCode !== 0) {
+      emit('error', { message: `${targetMode} database not running on port ${targetPort}. Start it first.` });
+      throw new ServerError(`${targetMode} database not running on port ${targetPort}. Start it first.`, { status: 400 });
+    }
 
-  // Ensure target has the portos role and database (native pg may lack the role)
-  if (targetMode === 'native') {
-    emit('start', { message: 'Ensuring native database role and schema exist...' });
-    const sysUser = getSysUser('postgres');
-    const sysEnv = pgEnv(targetPort);
-    // Create role if missing (connect as system superuser)
-    await runCmd('psql', ['-h', 'localhost', '-p', targetPort, '-U', sysUser, '-d', 'postgres',
-      '-c', `DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='${pgEscapeString(pgUser)}') THEN CREATE ROLE ${pgQuoteIdentifier(pgUser)} WITH LOGIN PASSWORD '${pgEscapeString(pgPassword)}' CREATEDB SUPERUSER; END IF; END $$;`
-    ], 10_000, sysEnv);
-    // Create database if missing
-    const dbCheck = await runCmd('psql', ['-h', 'localhost', '-p', targetPort, '-U', sysUser, '-d', 'postgres',
-      '-tAc', `SELECT 1 FROM pg_database WHERE datname='${pgEscapeString(pgDb)}'`
-    ], 5_000, sysEnv);
-    if (!dbCheck.stdout.trim().includes('1')) {
-      await runCmd('psql', ['-h', 'localhost', '-p', targetPort, '-U', sysUser, '-d', 'postgres',
-        '-c', `CREATE DATABASE ${pgQuoteIdentifier(pgDb)} OWNER ${pgQuoteIdentifier(pgUser)};`
+    // Ensure target has the portos role and database (native pg may lack the role)
+    if (targetMode === 'native') {
+      emit('start', { message: 'Ensuring native database role and schema exist...' });
+      const sysUser = getSysUser('postgres');
+      const sysEnv = pgEnv(targetPort);
+      // Provision the role via psql stdin + \getenv so pgPassword never enters
+      // process argv or command failure logs (mirrors scripts/db.sh provision_role).
+      const roleCheck = await runCmd(
+        'psql',
+        ['-h', 'localhost', '-p', targetPort, '-U', sysUser, '-d', 'postgres', '-tA', '-X', '-q'],
+        10_000,
+        { ...sysEnv, PORTOS_BOOTSTRAP_ROLE: pgUser },
+        { input: "\\getenv role PORTOS_BOOTSTRAP_ROLE\nSELECT 1 FROM pg_roles WHERE rolname = :'role';\n" }
+      );
+      if (!roleCheck.stdout.trim().split(/\r?\n/).includes('1')) {
+        await runCmd(
+          'psql',
+          ['-h', 'localhost', '-p', targetPort, '-U', sysUser, '-d', 'postgres', '-v', 'ON_ERROR_STOP=1', '-X', '-q'],
+          10_000,
+          { ...sysEnv, PORTOS_BOOTSTRAP_ROLE: pgUser, PORTOS_BOOTSTRAP_PASSWORD: pgPassword },
+          { input: "\\getenv role PORTOS_BOOTSTRAP_ROLE\n\\getenv pw PORTOS_BOOTSTRAP_PASSWORD\nCREATE ROLE :\"role\" WITH LOGIN PASSWORD :'pw' CREATEDB SUPERUSER;\n" }
+        );
+      }
+      // Create database if missing
+      const dbCheck = await runCmd('psql', ['-h', 'localhost', '-p', targetPort, '-U', sysUser, '-d', 'postgres',
+        '-tAc', `SELECT 1 FROM pg_database WHERE datname='${pgEscapeString(pgDb)}'`
+      ], 5_000, sysEnv);
+      if (!dbCheck.stdout.trim().includes('1')) {
+        await runCmd('psql', ['-h', 'localhost', '-p', targetPort, '-U', sysUser, '-d', 'postgres',
+          '-c', `CREATE DATABASE ${pgQuoteIdentifier(pgDb)} OWNER ${pgQuoteIdentifier(pgUser)};`
+        ], 10_000, sysEnv);
+      }
+      // Best-effort extensions (non-fatal — dump may handle schema, and pgvector may not be installed)
+      await runCmd('psql', ['-h', 'localhost', '-p', targetPort, '-U', sysUser, '-d', pgDb,
+        '-c', 'CREATE EXTENSION IF NOT EXISTS vector; CREATE EXTENSION IF NOT EXISTS pgcrypto;'
       ], 10_000, sysEnv);
     }
-    // Best-effort extensions (non-fatal — dump may handle schema, and pgvector may not be installed)
-    await runCmd('psql', ['-h', 'localhost', '-p', targetPort, '-U', sysUser, '-d', pgDb,
-      '-c', 'CREATE EXTENSION IF NOT EXISTS vector; CREATE EXTENSION IF NOT EXISTS pgcrypto;'
-    ], 10_000, sysEnv);
+
+    // Step 3: Import into target (active backend untouched — different port).
+    // Streamed via spawn (no shell) with pg17-only directives stripped in-process,
+    // so no user/env value is ever interpolated into a shell string.
+    emit('start', { message: `Importing into ${targetMode} (port ${targetPort})...` });
+    const importResult = await importDumpFile(dumpFile, targetPort, pgEnv(targetPort));
+
+    if (importResult.exitCode !== 0) {
+      emit('error', { message: `Import into ${targetMode} failed` });
+      throw new ServerError(`Import into ${targetMode} failed`, { status: 500, context: { details: commandDetail(importResult) } });
+    }
+
+    emit('complete', { message: `Data synced to ${targetMode}` });
+    return { success: true };
+  } finally {
+    // Erase the temporary sync dump once the transfer finishes or fails so
+    // unencrypted personal records are not retained indefinitely on disk.
+    try { rmSync(dumpFile, { force: true }); } catch { /* best-effort cleanup */ }
   }
-
-  // Step 3: Import into target (active backend untouched — different port).
-  // Streamed via spawn (no shell) with pg17-only directives stripped in-process,
-  // so no user/env value is ever interpolated into a shell string.
-  emit('start', { message: `Importing into ${targetMode} (port ${targetPort})...` });
-  const importResult = await importDumpFile(dumpFile, targetPort, pgEnv(targetPort));
-
-  if (importResult.exitCode !== 0) {
-    emit('error', { message: `Import into ${targetMode} failed` });
-    throw new ServerError(`Import into ${targetMode} failed`, { status: 500, context: { details: importResult.stderr || importResult.stdout } });
-  }
-
-  emit('complete', { message: `Data synced to ${targetMode}` });
-  return { success: true, dumpFile };
 }
 
 /**
@@ -806,7 +833,7 @@ async function setupNativeDatabaseImpl(io) {
 }
 
 /** Export a specific database backend, or the active backend when omitted. */
-async function exportDatabaseImpl(backend) {
+async function exportDatabaseImpl(backend, { internal = false } = {}) {
   const label = `backup-${Date.now()}`;
 
   if (backend) {
@@ -823,7 +850,10 @@ async function exportDatabaseImpl(backend) {
     // Use Node's fs (not `mkdir -p`): on Windows `mkdir` is a cmd.exe builtin,
     // not a spawnable executable, and `-p` isn't a valid flag — execFile would
     // fail with ENOENT. `recursive: true` is the cross-platform equivalent.
-    mkdirSync(dumpDir, { recursive: true });
+    mkdirSync(dumpDir, { recursive: true, mode: 0o700 });
+    if (process.platform !== 'win32') {
+      try { chmodSync(dumpDir, 0o700); } catch { /* ignore when mocked or unavailable */ }
+    }
     const dumpFile = join(dumpDir, `portos-${backend}-${label}.sql`);
     // Use -f flag to write output directly — no shell redirect needed, avoids shell injection.
     // Resolve a pg_dump whose major is >= the TARGET backend's server (probed
@@ -840,9 +870,13 @@ async function exportDatabaseImpl(backend) {
       '--no-owner', '--no-privileges', '--no-comments', '--if-exists', '--clean', '-f', dumpFile
     ], 120_000, env);
     if (result.exitCode !== 0) {
-      throw new ServerError('Export failed', { status: 500, context: { details: result.stderr || result.stdout } });
+      try { rmSync(dumpFile, { force: true }); } catch { /* best-effort partial cleanup */ }
+      throw new ServerError('Export failed', { status: 500, context: { details: commandDetail(result) } });
     }
-    return { success: true, dumpFile };
+    if (process.platform !== 'win32') {
+      try { chmodSync(dumpFile, 0o600); } catch { /* ignore when mocked or unavailable */ }
+    }
+    return { success: true, dumpFile: internal ? dumpFile : scrubHomePath(dumpFile) };
   }
 
   // Default: export from active backend via db.sh
@@ -850,12 +884,16 @@ async function exportDatabaseImpl(backend) {
   if (result.exitCode !== 0) {
     throw new ServerError('Export failed', {
       status: 500,
-      context: { details: result.stderr || result.stdout }
+      context: { details: commandDetail(result) }
     });
   }
   const dumpLines = result.stdout.trim().split('\n');
   const dumpFile = dumpLines[dumpLines.length - 1]?.trim();
-  return { success: true, dumpFile, output: result.stdout };
+  return {
+    success: true,
+    dumpFile: internal ? dumpFile : scrubHomePath(dumpFile),
+    output: scrubHomePath(result.stdout)
+  };
 }
 
 /** Fix stale PostgreSQL pid files. */

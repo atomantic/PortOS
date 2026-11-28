@@ -866,6 +866,7 @@ cmd_export() {
     err "Could not create dump directory: $DUMP_DIR" >&2
     return 1
   fi
+  chmod 700 "$DUMP_DIR" 2>/dev/null || true
   local dumpfile="$DUMP_DIR/portos-$label.sql"
 
   info "Exporting database to $dumpfile..." >&2
