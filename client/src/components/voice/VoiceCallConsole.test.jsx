@@ -1,11 +1,22 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
 const mocks = vi.hoisted(() => ({
   getVoiceRealtimeStatus: vi.fn(),
   updateVoiceConfig: vi.fn(),
   startRealtimeCall: vi.fn(),
+  socketHandlers: new Map(),
+  socketEmit: vi.fn(),
+}));
+
+vi.mock('../../services/socket', () => ({
+  default: {
+    connected: true,
+    emit: mocks.socketEmit,
+    on: (event, fn) => mocks.socketHandlers.set(event, fn),
+    off: vi.fn(),
+  },
 }));
 
 vi.mock('../../services/apiVoice', () => ({
@@ -41,6 +52,38 @@ vi.mock('./AvatarChannelsPanel', () => ({
 
 import VoiceCallConsole from './VoiceCallConsole';
 
+function renderConsole(props = {}) {
+  return render(
+    <MemoryRouter>
+      <VoiceCallConsole
+        stage="idle"
+        history={[]}
+        scrollRef={{ current: null }}
+        interimTranscript=""
+        capturing={false}
+        handsFree={false}
+        canChangeMicMode
+        hotkey="Space"
+        draft=""
+        onDraft={vi.fn()}
+        onSend={vi.fn()}
+        onMic={vi.fn()}
+        onMode={vi.fn()}
+        onInterrupt={vi.fn()}
+        onEnd={vi.fn()}
+        onClear={vi.fn()}
+        voiceLabel="Piper"
+        llmProvider="ollama"
+        llmModel="auto"
+        onLlmSaved={vi.fn()}
+        agentDefaults={{}}
+        images={[]}
+        {...props}
+      />
+    </MemoryRouter>,
+  );
+}
+
 describe('VoiceCallConsole', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -57,34 +100,7 @@ describe('VoiceCallConsole', () => {
       home: '/models/sophon',
       parts: { python: true, engine: true, weights: true },
     });
-    render(
-      <MemoryRouter>
-        <VoiceCallConsole
-          stage="idle"
-          history={[]}
-          scrollRef={{ current: null }}
-          interimTranscript=""
-          capturing={false}
-          handsFree={false}
-          canChangeMicMode
-          hotkey="Space"
-          draft=""
-          onDraft={vi.fn()}
-          onSend={vi.fn()}
-          onMic={vi.fn()}
-          onMode={vi.fn()}
-          onInterrupt={vi.fn()}
-          onEnd={vi.fn()}
-          onClear={vi.fn()}
-          voiceLabel="Piper"
-          llmProvider="ollama"
-          llmModel="auto"
-          onLlmSaved={vi.fn()}
-          agentDefaults={{}}
-          images={[]}
-        />
-      </MemoryRouter>,
-    );
+    renderConsole();
 
     const tab = screen.getByRole('button', { name: /Realtime voice/ });
     expect(tab).toHaveAttribute('aria-expanded', 'false');
@@ -98,5 +114,23 @@ describe('VoiceCallConsole', () => {
     fireEvent.click(screen.getByRole('button', { name: /Voice brain/ }));
     expect(tab).toHaveAttribute('aria-expanded', 'false');
     expect(stop).not.toHaveBeenCalled();
+  });
+
+  it('shows server and app stage timings in the Transmission log while the timing toggle is on', () => {
+    renderConsole({ history: [{ role: 'user', text: 'hello', at: 1 }] });
+    const toggle = screen.getByRole('button', { name: 'Stage timings' });
+    expect(toggle).toHaveAttribute('aria-pressed', 'false');
+
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute('aria-pressed', 'true');
+    expect(mocks.socketEmit).toHaveBeenCalledWith('voice:debug:timing', { enabled: true });
+    act(() => mocks.socketHandlers.get('voice:timing')({ turnId: 't1', label: 'stt.done 812ms chars=5', ms: 830 }));
+    const log = screen.getByRole('log', { name: 'Transmission log' });
+    expect(log).toHaveTextContent('+830ms srv stt.done 812ms chars=5');
+    expect(log.textContent.indexOf('hello')).toBeLessThan(log.textContent.indexOf('stt.done'));
+
+    fireEvent.click(toggle);
+    expect(mocks.socketEmit).toHaveBeenLastCalledWith('voice:debug:timing', { enabled: false });
+    expect(log).not.toHaveTextContent('stt.done');
   });
 });

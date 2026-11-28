@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { AudioLines, Brain, ChevronDown, ChevronUp, Radio, ScanFace, Trash2, Video } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { AudioLines, Brain, ChevronDown, ChevronUp, Radio, ScanFace, Timer, Trash2, Video } from 'lucide-react';
 import { voiceModelDisplayName } from '../../../../server/lib/voiceModelCatalog.js';
 import AvatarChannelsPanel from './AvatarChannelsPanel';
 import AvatarRuntimeSettings from './AvatarRuntimeSettings';
@@ -12,6 +12,8 @@ import { activeChannelOf, channelLlm, useAvatarLibrary } from './useAvatarLibrar
 import { safeReadStorage, safeWriteStorage } from '../../lib/safeStorage';
 import useVoiceLlmResidency from '../../hooks/useVoiceLlmResidency';
 import { voiceLlmResidencyBadge } from './voiceLlmResidencyBadge';
+import { mergeTimingLines, useVoiceTimingLog } from './useVoiceTimingLog';
+import { formatClockTime } from '../../utils/formatters';
 
 
 const TAB_KEY = 'portos.voice.callTab';
@@ -112,6 +114,18 @@ export default function VoiceCallConsole({
   const { data: library } = useAvatarLibrary();
   const onAirLlm = channelLlm(activeChannelOf(library), llmProvider, llmModel);
   const llmResidency = useVoiceLlmResidency({ provider: onAirLlm.provider, model: onAirLlm.model, stage });
+  const timing = useVoiceTimingLog();
+  const rows = mergeTimingLines(history, timing.enabled ? timing.lines : []);
+  const hasRows = rows.length > 0;
+  // The widget scrolls on new turns; timing lines arrive between them.
+  const timingCount = timing.lines.length;
+  useEffect(() => {
+    if (timingCount && scrollRef?.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+  }, [timingCount, scrollRef]);
+  const clearLog = () => {
+    timing.clear();
+    if (history.length) onClear?.();
+  };
 
   return (
     <section
@@ -193,10 +207,22 @@ export default function VoiceCallConsole({
             </div>
 
             <div className="flex flex-wrap items-center gap-1.5">
-              {history.length > 0 && onClear && (
+              <button
+                type="button"
+                onClick={timing.toggle}
+                aria-pressed={timing.enabled}
+                title={timing.enabled ? 'Hide stage timings' : 'Show stage timings'}
+                aria-label="Stage timings"
+                className={`satphone-key inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg border px-2.5 ${
+                  timing.enabled ? 'border-port-accent text-port-accent' : 'text-port-text-muted hover:text-port-text'
+                }`}
+              >
+                <Timer size={14} aria-hidden="true" />
+              </button>
+              {hasRows && onClear && (
                 <button
                   type="button"
-                  onClick={onClear}
+                  onClick={clearLog}
                   title="Clear transmission log"
                   aria-label="Clear transmission log"
                   className="satphone-key inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg border px-2.5 text-port-text-muted hover:text-port-error-text"
@@ -217,12 +243,22 @@ export default function VoiceCallConsole({
               aria-label="Transmission log"
               className="space-y-2.5 break-words font-mono text-xs leading-relaxed sm:text-sm"
             >
-              {history.length === 0 && !interimTranscript && (
+              {!hasRows && !interimTranscript && (
                 <p className="opacity-65">
                   Channel quiet. Press the TALK paddle or type on the handset.
                 </p>
               )}
-              {history.map((turn, i) => (
+              {rows.map(({ turn, timing: line }, i) => (line ? (
+                <p key={i} className="text-[10px] leading-snug text-port-text-muted sm:text-[11px]">
+                  <span className="tabular-nums">{formatClockTime(line.at, { milliseconds: true })}</span>
+                  {' '}
+                  <span className="tabular-nums text-port-accent">{line.ms === null ? '' : `+${line.ms}ms`}</span>
+                  {' '}
+                  <span className="uppercase">{line.source === 'server' ? 'srv' : 'app'}</span>
+                  {' '}
+                  {line.label}
+                </p>
+              ) : (
                 <div key={i} className={turn.role === 'user' ? 'opacity-80' : ''}>
                   <span
                     className={`mr-2 inline-block rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider ${
@@ -236,7 +272,7 @@ export default function VoiceCallConsole({
                   {turn.text}
                   <VoiceImageChips images={turn.images} className="mt-1" />
                 </div>
-              ))}
+              )))}
             </div>
             {interimTranscript && (
               <p aria-hidden="true" className="mt-2 font-mono text-xs italic opacity-70">

@@ -645,7 +645,10 @@ const executeTurnLlmLoop = async ({
         tools: toolSpecs,
         tag: turnId,
         // The call UI shows "Loading model" instead of "Thinking" until tokens arrive.
-        onModelLoading: ({ model }) => emit('voice:llm:loading', { model }),
+        onModelLoading: ({ model }) => {
+          tlog(`llm.loading iter=${iter + 1} model=${model} (not resident)`);
+          emit('voice:llm:loading', { model });
+        },
         onDelta: (delta) => {
           if (firstDeltaAt === null) {
             firstDeltaAt = Date.now();
@@ -658,7 +661,7 @@ const executeTurnLlmLoop = async ({
       });
       if (!firstLlm) firstLlm = llm;
       lastLlm = llm;
-      tlog(`llm.done  iter=${iter + 1} ${Date.now() - iterStart}ms model=${llm.model} text=${(llm.text || '').length}c spoken=${deltaChars}c tool_calls=${llm.toolCalls?.length || 0} finish=${llm.finishReason ?? '—'}`);
+      tlog(`llm.done  iter=${iter + 1} ${Date.now() - iterStart}ms resolve=${llm.resolveMs ?? '—'}ms model=${llm.model} text=${(llm.text || '').length}c spoken=${deltaChars}c tool_calls=${llm.toolCalls?.length || 0} finish=${llm.finishReason ?? '—'}`);
       // Accumulate spoken text across tool-calling iterations. The old single-
       // assignment version dropped every earlier segment, so the persisted
       // `reply` (and next turn's history) diverged from what the user actually
@@ -809,7 +812,13 @@ export const runTurn = async ({ audio, text, mimeType, source, history = [], emi
   const turnStart = Date.now();
   const turnId = shortId();
   const elapsed = () => Date.now() - turnStart;
-  const tlog = (msg) => console.log(`🎙️ [${turnId}] ${msg} +${elapsed()}ms`);
+  // The Voice Call timing debug toggle (state.timingDebug) mirrors each stage line to the client's
+  // Transmission log; the server console keeps the same lines either way.
+  const tlog = (msg) => {
+    const ms = elapsed();
+    console.log(`🎙️ [${turnId}] ${msg} +${ms}ms`);
+    if (state?.timingDebug) emit('voice:timing', { turnId, label: msg, ms });
+  };
 
   tlog(`turn.start source=${text ? 'text' : 'audio'} ${text ? `chars=${String(text).length}` : `bytes=${audio?.byteLength || audio?.length || 0} mime=${mimeType || '—'}`}`);
 
@@ -916,8 +925,8 @@ export const runTurn = async ({ audio, text, mimeType, source, history = [], emi
   const toolSummary = toolRuns.length
     ? ` · tools=${toolRuns.map((r) => `${r.name}(${r.ok ? `${r.ms}ms` : 'err'})`).join(',')}`
     : '';
-  console.log(
-    `🎙️ [${turnId}] turn.summary ${inputKind} ${totalMs}ms — ` +
+  tlog(
+    `turn.summary ${inputKind} ${totalMs}ms — ` +
     `stt=${sttLatencyMs}ms · ` +
     `llm[${lastLlm?.model}] ttft=${firstLlm?.ttfbMs ?? '—'}ms total=${lastLlm?.totalMs}ms finish=${lastLlm?.finishReason ?? '—'} · ` +
     `tts=${ttsTotal}ms (${ttsTimings.length} sentences)` +

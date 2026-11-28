@@ -373,7 +373,7 @@ export const markVoiceLlmWarming = (provider, model) => {
  * @param {(delta: string) => void} [opts.onDelta]
  * @param {({ model: string }) => void} [opts.onModelLoading]  called before the request when the model is not resident
  * @param {Array<object>} [opts.tools]  OpenAI-format tool specs (optional)
- * @returns {Promise<{ text: string, toolCalls: Array<object>, model: string|null, ttfbMs: number|null, totalMs: number, finishReason: string|null }>}
+ * @returns {Promise<{ text: string, toolCalls: Array<object>, model: string|null, ttfbMs: number|null, totalMs: number, resolveMs: number, finishReason: string|null }>}
  */
 export const streamChat = async (messages, opts = {}) => {
   const resolveStart = Date.now();
@@ -655,6 +655,7 @@ export const streamChat = async (messages, opts = {}) => {
         model,
         ttfbMs,
         totalMs: Date.now() - started,
+        resolveMs,
         finishReason,
       };
     }

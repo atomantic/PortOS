@@ -5,6 +5,7 @@
  * user interrupted.
  */
 import socket from './socket';
+import { markVoiceTiming } from './voiceTimingDebug.js';
 
 const MIC_RATE = 16000;
 const OUT_RATE = 24000;
@@ -123,6 +124,7 @@ export const startRealtimeCall = async (handlers = {}) => {
     outCtx.close().catch(() => {});
   };
   const onState = (state) => {
+    markVoiceTiming(`rt.state ${state?.error ? 'error' : state?.loading ? 'loading' : state?.active ? 'live' : (state?.reason || 'off')}`);
     live = Boolean(state?.active);
     if (state?.error || state?.reason === 'sidecar-closed') teardown({ emitStop: false });
     handlers.onState?.(state);
@@ -137,15 +139,28 @@ export const startRealtimeCall = async (handlers = {}) => {
     'voice:realtime:interrupt': flush,
     'voice:realtime:state': onState,
     'voice:realtime:reply': (data) => handlers.onReply?.(data),
-    'voice:realtime:delegate': (data) => handlers.onDelegate?.(data),
-    'voice:realtime:result': (data) => handlers.onResult?.(data),
-    'voice:realtime:event': (data) => handlers.onEvent?.(data),
+    'voice:realtime:delegate': (data) => {
+      markVoiceTiming('rt.delegate', { startsTurn: true });
+      handlers.onDelegate?.(data);
+    },
+    'voice:realtime:result': (data) => {
+      markVoiceTiming(`rt.result ${data?.text?.length ?? 0}c`);
+      handlers.onResult?.(data);
+    },
+    'voice:realtime:event': (data) => {
+      const silence = Number.isFinite(data?.afterSilenceS) ? ` ${Math.round(data.afterSilenceS * 1000)}ms after silence` : '';
+      markVoiceTiming(`rt.${data?.ev}${silence}${data?.followup ? ' (follow-up)' : ''}`);
+      handlers.onEvent?.(data);
+    },
     disconnect: onDisconnect,
   };
   for (const [event, fn] of Object.entries(listeners)) socket.on(event, fn);
   await Promise.all([micCtx.resume(), outCtx.resume()]).catch(() => {});
   if (!stopped && socket.connected === false) onDisconnect();
-  else if (!stopped) socket.emit('voice:realtime:start');
+  else if (!stopped) {
+    markVoiceTiming('rt.start', { startsTurn: true });
+    socket.emit('voice:realtime:start');
+  }
 
   return {
     stop: () => teardown({ emitStop: true }),

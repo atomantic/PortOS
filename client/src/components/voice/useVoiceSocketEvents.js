@@ -10,6 +10,7 @@ import {
   sendScreenshotResult,
   whenVoiceTurnAudioDrained,
 } from '../../services/voiceClient';
+import { markVoiceTiming } from '../../services/voiceTimingDebug';
 import { doClick, doFill, doSelect, doSetCheckbox } from '../../services/uiInteract';
 import { pushUiIndexAfterAction } from './useVoiceUiSync';
 import toast from '../ui/Toast';
@@ -81,6 +82,7 @@ export function useVoiceSocketEvents({
         if (d?.reason === 'reset') clearHistory();
         whenVoiceTurnAudioDrained().then(() => {
           if (!isLive()) return;
+          if (d?.reason === 'turn-complete') markVoiceTiming('audio.drained (turn end)');
           setStage((current) => (activeStages.has(current) ? current : restState()));
         });
       }),
@@ -139,8 +141,10 @@ export function useVoiceSocketEvents({
           sendScreenshotResult(requestId, null);
           return;
         }
+        const captureStart = Date.now();
         const frame = await captureVisionFrame();
         if (!isLive()) return;
+        markVoiceTiming(`vision.frame ${frame ? 'ok' : 'none'} ${Date.now() - captureStart}ms`);
         if (!frame) {
           toast('Voice: screen capture was unavailable.', { icon: '📷' });
           setVisionEnabled(isVisionCaptureEnabled());
