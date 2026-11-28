@@ -1384,7 +1384,29 @@ if [[ "$INSTALL_ACESTEP" == "1" ]]; then
       git -C "${ACESTEP_DIR}" fetch --progress origin
     fi
     git_checkout_pin "${ACESTEP_DIR}" "${ACESTEP_PIN}"
-    portos_uv pip install --no-deps --no-build-isolation --python "$ACESTEP_PY" "${ACESTEP_DIR}"
+    (
+      build_dir="$(mktemp -d "${ACESTEP_VENV%/*}/acestep-build.XXXXXXXX")"
+      trap 'rm -rf -- "$build_dir"' EXIT
+      git -C "$ACESTEP_DIR" archive --format=zip HEAD > "$build_dir/source.zip"
+      # setup.py reads requirements.txt, which otherwise declares the upstream
+      # GUI/training stack and older pins. Change only the staged inference build.
+      "$ACESTEP_PY" - "$build_dir" "$SCRIPT_DIR/ml/requirements/requirements-acestep-cuda.txt" <<'PY'
+from pathlib import Path
+import sys
+from zipfile import ZipFile
+
+build_dir, requirements = map(Path, sys.argv[1:])
+source = build_dir / "source"
+with ZipFile(build_dir / "source.zip") as archive:
+    archive.extractall(source)
+dependencies = [
+    line for line in map(str.strip, requirements.read_text(encoding="utf-8").splitlines())
+    if line and not line.startswith("#") and line not in {"setuptools", "wheel"}
+]
+(source / "requirements.txt").write_text("\n".join(dependencies) + "\n", encoding="utf-8")
+PY
+      portos_uv pip install --no-deps --no-build-isolation --python "$ACESTEP_PY" "$build_dir/source"
+    )
   fi
   pin_venv_arm64 "$ACESTEP_VENV"
   # Verify the pipeline class imports — a clean import means generation only

@@ -9,10 +9,10 @@
 # torchvision stays the PyPI 0.29.2 wheel (the only build pinned to torch 2.14.1).
 # docopt and unidic-lite publish only source distributions; the installer
 # allows building exactly those two (both pure Python), still hash-verified.
-# Inference only: scripts/ml/generate_acestep.py runs ACEStepPipeline. Upstream also declares tensorboard,
-# tensorboardX, datasets, pytorch-lightning and matplotlib for its trainer; none is imported by
-# acestep.pipeline_ace_step at ACESTEP_PIN (static import-graph walk), so they are omitted. Re-check the graph
-# when bumping the pin.
+# Inference only: scripts/ml/generate_acestep.py runs ACEStepPipeline. Training-only
+# peft, tensorboard, tensorboardX, datasets, pytorch-lightning and matplotlib are
+# not imported by the pipeline at ACESTEP_PIN. Click is not a direct inference
+# dependency; it remains transitive. Re-check the import graph when bumping the pin.
 torch==2.14.1+cu126
 torchvision==0.29.2
 torchaudio==2.11.1
@@ -21,7 +21,6 @@ diffusers==0.42.1
 transformers==5.22.2
 huggingface-hub[hf_xet]==2.4.0
 sentencepiece==0.2.3
-peft==0.21.2
 librosa==0.11.0
 loguru==0.7.3
 numpy==2.4.6
@@ -34,7 +33,6 @@ num2words==0.5.14
 spacy>=3.8.4
 cutlet
 fugashi[unidic-lite]
-click
 filelock==4.2.9
 pillow==13.0.0
 wheel

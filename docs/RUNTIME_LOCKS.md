@@ -23,9 +23,9 @@ together when changing the CUDA index or shared inputs.
 | `muscriptor-cuda` | `INSTALL_MUSCRIPTOR` | torch | |
 | `wan22-cuda` | `INSTALL_WAN22_CUDA` | torch | |
 
-ACE-Step builds its pinned source after dependency sync. ACE-Step 1.5 CUDA
-builds from a temporary archive of the pinned checkout using the inference
-requirements as wheel dependency metadata. Keep Linux TorchAO
+ACE-Step v1 and 1.5 CUDA build from temporary archives of the pinned sources
+after dependency sync. Their wheel metadata declares the PortOS inference
+requirements rather than the upstream training/GUI dependencies. Keep Linux TorchAO
 on the CUDA index for H3 and Windows TorchAO on PyPI.
 Keep the H3 checkpoint index guard in the model loader. Wan's bundled FFmpeg
 requires glibc 2.28 and Linux 4.18 or newer. [LTX-2.5](#ltx-25-cuda) uses cu132.
