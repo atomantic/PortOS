@@ -1484,6 +1484,16 @@ describe.each([
     expect(section).toContain(`pip install --require-hashes --no-deps${binaryOnly} -r "$SCRIPT_DIR/ml/requirements/${lockName}"`);
     expect(section).not.toMatch(/pip install --upgrade/);
   });
+
+  if (lockName === 'requirements-musicgen-mlx.lock.txt') {
+    it('omits unused scipy from the MusicGen MLX lock', () => {
+      const names = new Set(Array.from(lock.matchAll(/^([a-z0-9][a-z0-9._-]*)==/gim), ([, name]) => name.toLowerCase()));
+      expect(names.has('scipy')).toBe(false);
+      for (const kept of ['mlx', 'mlx-metal', 'numpy', 'torch', 'transformers', 'sentencepiece', 'huggingface-hub']) {
+        expect(names.has(kept), kept).toBe(true);
+      }
+    });
+  }
 });
 
 describe('MiniMax Music 3 MLX Install/Repair', () => {
