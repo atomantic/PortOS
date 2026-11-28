@@ -2,7 +2,7 @@
 
 import { anyAbortSignal } from '../../lib/requestAbort.js';
 import { rememberTtsSentence } from './echo.js';
-import { synthesize } from './tts.js';
+import { synthesizeAgentSpeech } from './channelAgent.js';
 
 const SENTENCE_RE = /[.!?\n](?:\s+|$)/;
 
@@ -31,7 +31,7 @@ const reportTtsError = (err, signal, emit) => {
 // Canonical replies still complete in text when the synthesizer is unavailable.
 export const emitSyntheticReply = async ({ reply, signal, recentTts, emit }) => {
   if (signal?.aborted) return;
-  const audio = await synthesize(reply, { signal }).catch((err) => reportTtsError(err, signal, emit));
+  const audio = await synthesizeAgentSpeech(reply, { signal }).catch((err) => reportTtsError(err, signal, emit));
   if (signal?.aborted) return;
   if (audio) {
     if (recentTts) rememberTtsSentence(recentTts, reply);
@@ -59,7 +59,7 @@ export const createTurnTtsSpeaker = ({ signal, state, emit, tlog }) => {
     const i = ++ttsIdx;
     const t0 = Date.now();
     tlog(`tts.start #${i} chars=${sentence.length}`);
-    const { wav, latencyMs } = await synthesize(sentence, { signal: ttsSignal });
+    const { wav, latencyMs } = await synthesizeAgentSpeech(sentence, { signal: ttsSignal });
     if (ttsSignal.aborted) return;
     ttsTimings.push(latencyMs);
     tlog(`tts.done  #${i} ${latencyMs}ms synth+queue=${Date.now() - t0}ms`);

@@ -4,9 +4,9 @@ import { voiceModelDisplayName } from '../../../../server/lib/voiceModelCatalog.
 import AvatarChannelsPanel from './AvatarChannelsPanel';
 import AvatarRuntimeSettings from './AvatarRuntimeSettings';
 import SatPhoneHandset from './SatPhoneHandset';
-import VoiceLlmQuickPicker from './VoiceLlmQuickPicker';
+import ChannelBrainPicker from './ChannelBrainPicker';
 import { useAvatarRuntime } from './useAvatarRuntime';
-import { activeChannelOf, useAvatarLibrary } from './useAvatarLibrary';
+import { activeChannelOf, channelLlm, useAvatarLibrary } from './useAvatarLibrary';
 import { safeReadStorage, safeWriteStorage } from '../../lib/safeStorage';
 
 
@@ -18,7 +18,7 @@ const TABS = ['video', 'brain', 'avatars'];
  * so the handset and log stay above the fold on a phone. Each chip carries its
  * live status and opens one panel at a time; tapping the open chip folds it.
  */
-function StationTabs({ runningAvatar, llmProvider, llmModel, onLlmSaved, avatarData, avatarError, onUpdateAvatarData, onRefetchAvatar }) {
+function StationTabs({ runningAvatar, llmProvider, llmModel, onLlmSaved, agentDefaults, avatarData, avatarError, onUpdateAvatarData, onRefetchAvatar }) {
   const [tab, setTab] = useState(() => {
     const saved = safeReadStorage(TAB_KEY);
     return saved === 'none' ? null : TABS.includes(saved) ? saved : 'video';
@@ -32,11 +32,12 @@ function StationTabs({ runningAvatar, llmProvider, llmModel, onLlmSaved, avatarD
   const videoStatus = runningAvatar ? 'Live' : 'Still portrait';
   const channel = activeChannelOf(library);
   const avatarsStatus = channel ? `CH${channel.index + 1} on air` : 'Channels';
-  const brainStatus = llmModel && llmModel !== 'auto' ? voiceModelDisplayName(llmModel) : `${llmProvider || 'lmstudio'} (auto)`;
+  const brain = channelLlm(channel, llmProvider, llmModel);
+  const brainStatus = brain.model !== 'auto' ? voiceModelDisplayName(brain.model) : `${brain.provider} (auto)`;
   const tabs = [
     { id: 'video', label: 'Video feed', status: videoStatus, Icon: Video, led: runningAvatar ? 'bg-port-accent shadow-[0_0_6px_rgb(var(--port-accent))]' : 'bg-port-success' },
     { id: 'brain', label: 'Voice brain', status: brainStatus, Icon: Brain },
-    { id: 'avatars', label: 'Avatars', status: avatarsStatus, Icon: ScanFace },
+    { id: 'avatars', label: 'Channels', status: avatarsStatus, Icon: ScanFace },
   ];
 
   return (
@@ -73,12 +74,12 @@ function StationTabs({ runningAvatar, llmProvider, llmModel, onLlmSaved, avatarD
       )}
       {tab === 'brain' && (
         <div id="station-panel-brain">
-          <VoiceLlmQuickPicker compact provider={llmProvider} model={llmModel} onSaved={onLlmSaved} />
+          <ChannelBrainPicker compact globalProvider={llmProvider} globalModel={llmModel} onGlobalSaved={onLlmSaved} />
         </div>
       )}
       {tab === 'avatars' && (
         <div id="station-panel-avatars">
-          <AvatarChannelsPanel />
+          <AvatarChannelsPanel agentDefaults={{ ...agentDefaults, provider: llmProvider, model: llmModel }} />
         </div>
       )}
     </div>
@@ -88,7 +89,7 @@ function StationTabs({ runningAvatar, llmProvider, llmModel, onLlmSaved, avatarD
 export default function VoiceCallConsole({
   stage, history, scrollRef, interimTranscript, capturing, handsFree, canChangeMicMode,
   hotkey, draft, onDraft, onSend, onMic, onMode, onInterrupt, onEnd, onClear,
-  voiceLabel, llmProvider, llmModel, onLlmSaved, volume = 0.85, muted = false, onVolumeChange, onToggleMute,
+  voiceLabel, llmProvider, llmModel, onLlmSaved, agentDefaults, volume = 0.85, muted = false, onVolumeChange, onToggleMute,
   sfxEnabled = true, onToggleSfx, signalLevel = 0, visionEnabled = false, onToggleVision,
 }) {
   const { data, error, updateData, refetch } = useAvatarRuntime();
@@ -148,6 +149,7 @@ export default function VoiceCallConsole({
           llmProvider={llmProvider}
           llmModel={llmModel}
           onLlmSaved={onLlmSaved}
+          agentDefaults={{ ...agentDefaults, voiceLabel }}
           avatarData={data}
           avatarError={error}
           onUpdateAvatarData={updateData}

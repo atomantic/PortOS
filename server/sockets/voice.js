@@ -46,7 +46,7 @@ import {
   recordTurn,
   setCallStateListener,
 } from '../services/voice/callSession.js';
-import { synthesize } from '../services/voice/tts.js';
+import { synthesizeAgentSpeech } from '../services/voice/channelAgent.js';
 import {
   attachCaptureHost,
   detachCaptureHost,
@@ -506,7 +506,7 @@ export const registerVoiceHandlers = (socket) => {
     call.busy = true;
     markSpeaking();
     try {
-      const { wav, latencyMs } = await synthesize(line);
+      const { wav, latencyMs } = await synthesizeAgentSpeech(line);
       socket.emit('voice:call:tts', { sentence: line, wav, latencyMs });
       // Consume only now that the line has actually been delivered. Clearing
       // it before synthesize resolved is what turned one TTS failure into a

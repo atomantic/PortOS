@@ -9,13 +9,17 @@ import VoiceLlmFields from './VoiceLlmFields';
 
 /**
  * Inline Voice Brain / LLM picker for the Voice Call station and floating
- * sat-phone setup tray. Saves each change immediately to voice config.
+ * sat-phone setup tray. Saves each change immediately, to the global voice
+ * config by default or through `onSave` (a channel's own LLM), and shows
+ * `children` (the scope chips) under its heading.
  */
 export default function VoiceLlmQuickPicker({
   provider = 'lmstudio',
   model = 'auto',
   onSaved,
+  onSave,
   compact = false,
+  children,
 }) {
   const mountedRef = useMounted();
   const { apiProviders, error, reload, refreshing, refreshModels } = useVoiceLlmProviders();
@@ -25,7 +29,9 @@ export default function VoiceLlmQuickPicker({
     if (saving) return;
     setSaving(true);
     try {
-      await updateVoiceConfig({ llm: { provider: nextProvider, model: nextModel } }, { silent: true });
+      const choice = { provider: nextProvider, model: nextModel };
+      if (onSave) await onSave(choice);
+      else await updateVoiceConfig({ llm: choice }, { silent: true });
       if (!mountedRef.current) return;
       onSaved?.({ provider: nextProvider, model: nextModel });
       toast.success(`Voice LLM set to ${nextModel === 'auto' ? `${nextProvider} (auto)` : voiceModelDisplayName(nextModel)}`);
@@ -58,6 +64,8 @@ export default function VoiceLlmQuickPicker({
         )}
       </div>
 
+      {children}
+
       <VoiceLlmFields
         compact={compact}
         provider={provider}
@@ -70,6 +78,10 @@ export default function VoiceLlmQuickPicker({
         // The server already saved provider + model; reload so the new provider is listed.
         onSetupComplete={(next) => {
           reload();
+          if (onSave) {
+            saveLlm(next);
+            return;
+          }
           onSaved?.(next);
           toast.success(`Voice LLM set to ${voiceModelDisplayName(next.model)}`);
         }}

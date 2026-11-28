@@ -1,9 +1,11 @@
-import { useState, useEffect, useLayoutEffect, useRef, useCallback, useId } from 'react';
+import { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback, useId } from 'react';
 import { createPortal } from 'react-dom';
 import { Link, useNavigate } from 'react-router';
 import VoiceCallConsole from './VoiceCallConsole';
 import SatPhoneHandset from './SatPhoneHandset';
 import { useAvatarRuntime } from './useAvatarRuntime';
+import { activeChannelOf, useAvatarLibrary } from './useAvatarLibrary';
+import { applyChannelPersonality, hasChannelPersona } from '../../../../server/lib/voiceChannels.js';
 import { useSidebarContext } from '../SidebarContext';
 import { Mic, MicOff, Brain, Volume2, VolumeX, Square, Trash2, ChevronDown, ChevronUp, Send, Infinity as InfinityIcon, NotebookPen, X, EyeOff, Monitor, MonitorOff, Radio, Maximize2 } from 'lucide-react';
 import {
@@ -80,7 +82,14 @@ export default function VoiceWidget({ config, claimHeld, consoleHost }) {
   const vadRef = useRef(config.vad);
   vadRef.current = config.vad;
   const navigate = useNavigate();
-  const { enabled, hotkey, sttEngine, sttLanguage, fastPath, personality, llm, tts } = config;
+  const { enabled, hotkey, sttEngine, sttLanguage, fastPath, personality: globalPersonality, llm, tts } = config;
+  // The on-device fast path answers as the on-air channel's persona, as the server does.
+  const { data: channelLibrary } = useAvatarLibrary(Boolean(enabled && fastPath?.enabled && fastPath?.browserLlm));
+  const onAirAgent = activeChannelOf(channelLibrary)?.agent;
+  const personality = useMemo(
+    () => (hasChannelPersona(onAirAgent) ? applyChannelPersonality(globalPersonality, onAirAgent) : globalPersonality),
+    [globalPersonality, onAirAgent],
+  );
   const [llmOverride, setLlmOverride] = useState(null);
   useEffect(() => { setLlmOverride(null); }, [llm?.provider, llm?.model]);
   const activeLlmProvider = llmOverride?.provider || llm?.provider || 'lmstudio';
@@ -929,6 +938,7 @@ export default function VoiceWidget({ config, claimHeld, consoleHost }) {
         llmProvider={activeLlmProvider}
         llmModel={activeLlmModel}
         onLlmSaved={setLlmOverride}
+        agentDefaults={{ personality: globalPersonality }}
         volume={audioPrefs.volume}
         muted={audioPrefs.muted}
         onVolumeChange={handleVolumeChange}

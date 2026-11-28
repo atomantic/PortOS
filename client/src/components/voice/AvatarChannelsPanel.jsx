@@ -1,14 +1,15 @@
-import { useCallback, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { Link } from 'react-router';
-import { ImagePlus, Images, ScanFace, Sparkles, Trash2 } from 'lucide-react';
+import { ImagePlus, Images, ScanFace, SlidersHorizontal, Sparkles, Trash2 } from 'lucide-react';
 import { generateImage } from '../../services/apiSystem.js';
-import { addAvatarToLibrary, removeAvatarFromLibrary, saveAvatarChannels } from '../../services/apiVoiceAvatar';
+import { addAvatarToLibrary, patchAvatarChannel, removeAvatarFromLibrary, saveAvatarChannels } from '../../services/apiVoiceAvatar';
 import GalleryImagePicker from '../imageGen/GalleryImagePicker';
 import MediaJobThumb from '../pipeline/MediaJobThumb';
 import MediaImage from '../MediaImage';
 import AutoSizeTextarea from '../ui/AutoSizeTextarea';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair';
 import toast from '../ui/Toast';
+import ChannelAgentEditor from './ChannelAgentEditor';
 import portraitUrl from './call-portrait.webp';
 import { avatarImageSrc, useAvatarLibrary } from './useAvatarLibrary';
 
@@ -23,8 +24,10 @@ function AvatarThumb({ filename, alt, className = '' }) {
     : <img src={portraitUrl} alt={alt} className={`object-cover ${className}`} />;
 }
 
-function ChannelRow({ index, channel, active, avatars, onSelect, onLabel, onAvatar }) {
+function ChannelRow({ index, channel, active, avatars, agentDefaults, onSelect, onLabel, onAvatar, onAgent }) {
   const [picking, setPicking] = useState(false);
+  const [tuning, setTuning] = useState(false);
+  const tunedCount = Object.keys(channel.agent || {}).filter((field) => field !== 'model').length;
   const [label, setLabel] = useState(channel.label);
   const [lastSaved, setLastSaved] = useState(channel.label);
   // Follow edits from other tabs without clobbering an unsaved local edit.
@@ -71,7 +74,19 @@ function ChannelRow({ index, channel, active, avatars, onSelect, onLabel, onAvat
           onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); commitLabel(); } }}
           className="min-h-11 min-w-0 flex-1 rounded-lg border border-port-border bg-port-card px-2.5 font-mono text-xs text-port-text placeholder:text-port-text-muted focus:border-port-accent focus:outline-none"
         />
+        <button
+          type="button"
+          onClick={() => setTuning((open) => !open)}
+          aria-expanded={tuning}
+          aria-label={`Tune the agent on channel ${number}`}
+          title={tunedCount ? `${tunedCount} setting${tunedCount === 1 ? '' : 's'} tuned for this channel` : 'Tune this channel\'s voice, LLM and persona'}
+          className={`${key} relative shrink-0 px-2.5 ${tunedCount ? 'text-port-accent-text' : ''}`}
+        >
+          <SlidersHorizontal size={14} aria-hidden="true" />
+          {tunedCount > 0 && <span aria-hidden="true" className="font-mono text-[10px]">{tunedCount}</span>}
+        </button>
       </div>
+      {tuning && <ChannelAgentEditor number={number} agent={channel.agent} defaults={agentDefaults} onSave={onAgent} />}
       {picking && (
         <div role="group" aria-label={`Avatars for channel ${number}`} className="grid grid-cols-4 gap-1.5 sm:grid-cols-6">
           <button
@@ -175,36 +190,21 @@ function AvatarCreator({ onCreated }) {
 }
 
 /**
- * Avatar library and channel assignments for the Voice Call station. Avatars live in the
- * shared Avatars media collection (they federate with it); channel assignments are this
- * install's own.
+ * Avatar library and channels for the Voice Call station. Avatars live in the shared
+ * Avatars media collection (they federate with it); channel assignments and each
+ * channel's agent tuning are this install's own.
  */
-export default function AvatarChannelsPanel() {
+export default function AvatarChannelsPanel({ agentDefaults }) {
   const { data: library, error, updateData } = useAvatarLibrary();
   const [galleryOpen, setGalleryOpen] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(null);
   const [removing, setRemoving] = useState(false);
   const removingRef = useRef(false);
 
-  const savedChannels = useRef(null);
-  const channelSaves = useRef(Promise.resolve());
-
-  useLayoutEffect(() => {
-    savedChannels.current = library?.channels;
-  }, [library]);
-
-  const saveChannels = (buildPatch) => {
-    // The API replaces the full array. Build each patch after the prior write
-    // settles, using its response even if React has yet to render it.
-    channelSaves.current = channelSaves.current.then(async () => {
-      const next = await saveAvatarChannels(buildPatch(savedChannels.current));
-      savedChannels.current = next.channels;
-      updateData(next);
-    }).catch(() => {});
+  // Each edit names one channel and field; the server merges it, so overlapping edits all land.
+  const editChannel = (index, change) => {
+    patchAvatarChannel(index, change).then(updateData).catch(() => {});
   };
-  const editChannel = (index, change) => saveChannels((channels) => ({
-    channels: channels.map((channel, i) => (i === index ? { ...channel, ...change } : channel)),
-  }));
   const fileAvatar = useCallback((filename) => {
     addAvatarToLibrary(filename).then((next) => {
       updateData(next);
@@ -260,9 +260,11 @@ export default function AvatarChannelsPanel() {
                 channel={channel}
                 active={library.active === index}
                 avatars={avatars}
-                onSelect={() => saveChannels(() => ({ active: index }))}
+                agentDefaults={agentDefaults}
+                onSelect={() => saveAvatarChannels({ active: index }).then(updateData).catch(() => {})}
                 onLabel={(label) => editChannel(index, { label })}
                 onAvatar={(avatar) => editChannel(index, { avatar })}
+                onAgent={(agent) => editChannel(index, { agent })}
               />
             ))}
           </ol>
