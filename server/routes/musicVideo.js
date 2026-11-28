@@ -65,6 +65,7 @@ import { basename } from 'path';
 import { Router } from 'express';
 import storyRoutes from './musicVideoStory.js';
 import festivalPacketRoutes from './musicVideoFestivalPacket.js';
+import makingOfStoryRoutes from './musicVideoMakingOfStory.js';
 import researchSeedRoutes from './musicVideoResearchSeed.js';
 import blenderRoutes from './musicVideoBlender.js';
 import spendRoutes from './musicVideoSpend.js';
@@ -449,6 +450,7 @@ router.post('/:id/plan', asyncHandler(async (req, res) => {
 
 router.use('/', storyRoutes);
 router.use('/', festivalPacketRoutes);
+router.use('/', makingOfStoryRoutes);
 router.use('/', researchSeedRoutes);
 router.use('/', blenderRoutes);
 router.use('/', spendRoutes);

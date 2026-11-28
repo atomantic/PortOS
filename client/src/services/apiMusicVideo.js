@@ -15,6 +15,24 @@ export const previewMusicVideoMakingOf = (selection, options = {}) => request('/
 export const exportMusicVideoMakingOf = (selection, options = {}) => request('/music-video/making-of/export', {
   method: 'POST', body: JSON.stringify(selection), responseType: 'arraybuffer', ...options,
 });
+export const captureMusicVideoMakingOfItem = (id, item, options = {}) => request(`/music-video/${encodeURIComponent(id)}/making-of/items`, {
+  method: 'POST', body: JSON.stringify(item), ...options,
+});
+export const updateMusicVideoMakingOfItem = (id, itemId, patch, options = {}) => request(`/music-video/${encodeURIComponent(id)}/making-of/items/${encodeURIComponent(itemId)}`, {
+  method: 'PATCH', body: JSON.stringify(patch), ...options,
+});
+export const deleteMusicVideoMakingOfItem = (id, itemId, options = {}) => request(`/music-video/${encodeURIComponent(id)}/making-of/items/${encodeURIComponent(itemId)}`, {
+  method: 'DELETE', ...options,
+});
+export const createMusicVideoMakingOfPost = (id, post, options = {}) => request(`/music-video/${encodeURIComponent(id)}/making-of/posts`, {
+  method: 'POST', body: JSON.stringify(post), ...options,
+});
+export const updateMusicVideoMakingOfPost = (id, postId, patch, options = {}) => request(`/music-video/${encodeURIComponent(id)}/making-of/posts/${encodeURIComponent(postId)}`, {
+  method: 'PATCH', body: JSON.stringify(patch), ...options,
+});
+export const deleteMusicVideoMakingOfPost = (id, postId, options = {}) => request(`/music-video/${encodeURIComponent(id)}/making-of/posts/${encodeURIComponent(postId)}`, {
+  method: 'DELETE', ...options,
+});
 
 // Music Video production mode (#1760). Director scene-board project CRUD + the
 // offline beat/tempo/section analysis. `options` lets a caller suppress

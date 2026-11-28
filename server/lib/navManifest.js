@@ -95,6 +95,7 @@ const RAW_NAV_COMMANDS = [
   { id: 'nav.create.music-video.publish', path: '/music-video/publish', label: 'Music Video Publish', section: 'Create' },
   { id: 'nav.create.music-video.editor', path: '/music-video/editor', label: 'Music Video Editor', section: 'Create' },
   { id: 'nav.create.music-video.assets', path: '/music-video/assets', label: 'Music Video Assets', section: 'Create' },
+  { id: 'nav.create.music-video.making-of', path: '/music-video/making-of', label: 'Music Video Making Of', section: 'Create' },
   { id: 'nav.create.music-video-cleanup', path: '/music-video/cleanup', label: 'Music Video Cleanup', section: 'Create' },
   { id: 'nav.create.decks', path: '/decks', label: 'Decks', section: 'Create' },
   { id: 'nav.create.mood-boards', path: '/mood-boards', label: 'Mood Boards', section: 'Create' },

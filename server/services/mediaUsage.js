@@ -54,6 +54,7 @@ const musicVideoRole = (path, data, id) => {
   if (path[0] === 'renderHistoryId' || path[0] === 'renderPartialFilename') return { role: 'Final render' };
   if (path[0] === 'publishKit') return { role: 'Publish kit' };
   if (path[0] === 'castAndSets') return { role: 'Cast & sets' };
+  if (path[0] === 'makingOfStory') return { role: 'Making of', href: `/music-video/${enc(id)}/making-of` };
   return scenesShot(path, data, id);
 };
 

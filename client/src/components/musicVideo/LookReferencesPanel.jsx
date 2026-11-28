@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { ImagePlus, Trash2, Sparkles, Download } from 'lucide-react';
+import { Bookmark, ImagePlus, Trash2, Sparkles, Download } from 'lucide-react';
+import { findCapturedMakingOfItem, useMakingOfCapture } from './MakingOfCaptureContext.js';
 import useMounted from '../../hooks/useMounted.js';
 import { isOutsideReference } from '../../hooks/useMusicVideoSceneMedia.js';
 import { getMoodBoard } from '../../services/apiMoodBoard.js';
@@ -50,6 +51,7 @@ const optionLabel = (options, value) => options.find(([id]) => id === value)?.[1
  */
 export default function LookReferencesPanel({ project, onSave, onSaveSpec, onAddReference, onReferenceLabels, onPendingChange }) {
   const mounted = useMounted();
+  const makingOf = useMakingOfCapture();
   const spec = project.visualSpec || {};
   const references = spec.references || [];
   const [uploads, setUploads] = useState(project.styleReferences || []);
@@ -207,6 +209,25 @@ export default function LookReferencesPanel({ project, onSave, onSaveSpec, onAdd
                         {ROLES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
                       </select>
                     </div>
+                    {makingOf && ref.imageId && (() => {
+                      const captured = findCapturedMakingOfItem(makingOf.story, 'reference', ref.imageId);
+                      return (
+                        <button type="button" aria-pressed={Boolean(captured)}
+                          onClick={() => makingOf.openCapture({
+                            kind: 'reference',
+                            assetId: ref.imageId,
+                            refId: ref.id,
+                            label: ref.label || `${roleLabel} reference`,
+                            role: 'reference',
+                            note: ref.note || '',
+                          })}
+                          aria-label={captured ? `Edit ${ref.label || 'reference'} in Making Of` : `Save ${ref.label || 'reference'} to Making Of`}
+                          title={captured ? 'Saved in Making Of — click to edit' : 'Save reference to Making Of'}
+                          className={`pointer-coarse:min-h-11 pointer-coarse:min-w-11 inline-flex min-h-[32px] min-w-[32px] shrink-0 items-center justify-center rounded ${captured ? 'text-port-accent' : 'text-port-text-muted hover:text-port-text'}`}>
+                          <Bookmark size={12} aria-hidden="true" />
+                        </button>
+                      );
+                    })()}
                     <button type="button" onClick={() => saveReferences(references.filter((r) => r.id !== ref.id))}
                       aria-label="Remove reference" title="Remove reference"
                       className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 inline-flex min-h-[32px] min-w-[32px] shrink-0 items-center justify-center text-port-error">
@@ -248,8 +269,26 @@ export default function LookReferencesPanel({ project, onSave, onSaveSpec, onAdd
                   placeholder="Palette, lighting, lens, grain"
                   onChange={(e) => changeUploads(uploads.map((item, i) => (i === index ? { ...item, caption: e.target.value } : item)))}
                   className="block w-full min-w-0 max-w-full rounded border border-port-border bg-port-bg p-1 text-sm" />
-                <button type="button" aria-label={`Remove style upload ${index + 1}`} onClick={() => changeUploads(uploads.filter((_, i) => i !== index))}
-                  className="min-h-[44px] text-xs text-port-error pointer-fine:sm:min-h-0">Remove</button>
+                <div className="flex flex-wrap items-center gap-2">
+                  {makingOf && ref.imageId && (() => {
+                    const captured = findCapturedMakingOfItem(makingOf.story, 'reference', ref.imageId);
+                    return (
+                      <button type="button" aria-pressed={Boolean(captured)}
+                        onClick={() => makingOf.openCapture({
+                          kind: 'reference',
+                          assetId: ref.imageId,
+                          label: ref.caption?.slice(0, 80) || `Style upload ${index + 1}`,
+                          role: 'reference',
+                          note: ref.caption || '',
+                        })}
+                        className={`inline-flex min-h-[44px] items-center gap-1 text-xs pointer-fine:sm:min-h-0 ${captured ? 'text-port-accent' : 'text-port-text-muted hover:text-port-text'}`}>
+                        <Bookmark size={12} aria-hidden="true" />{captured ? 'In Making of' : 'Making of'}
+                      </button>
+                    );
+                  })()}
+                  <button type="button" aria-label={`Remove style upload ${index + 1}`} onClick={() => changeUploads(uploads.filter((_, i) => i !== index))}
+                    className="min-h-[44px] text-xs text-port-error pointer-fine:sm:min-h-0">Remove</button>
+                </div>
               </div>
             </div>
           </li>

@@ -7,7 +7,7 @@ vi.mock('../services/socket', () => ({ default: { on: () => {}, off: () => {}, e
 
 const STAGE_FILES = {
   setup: 'SetupStage', story: 'StoryStage', 'cast-sets': 'CastSetsStage', board: 'PlanStage', previz: 'PrevizStage', produce: 'ProduceStage',
-  review: 'ReviewStage', publish: 'PublishStage', assets: 'AssetsStage', cleanup: 'CleanupStage', editor: 'EditorStage',
+  review: 'ReviewStage', publish: 'PublishStage', assets: 'AssetsStage', 'making-of': 'MakingOfStage', cleanup: 'CleanupStage', editor: 'EditorStage',
 };
 const STAGE_IDS = [...MUSIC_VIDEO_STAGES, ...MUSIC_VIDEO_PAGES].map((entry) => entry.id);
 const PROJECT = { id: 'mv-test-1', name: 'Test Project', scenes: [], createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' };

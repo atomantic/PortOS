@@ -1,11 +1,14 @@
+import { ArrowRight, Bookmark } from 'lucide-react';
 import DcpPanel from '../DcpPanel.jsx';
 import FestivalPacketPanel from '../FestivalPacketPanel.jsx';
+import PublishCard from '../PublishCard.jsx';
 import PublishKitPanel from '../PublishKitPanel.jsx';
 import PublishPostingPanel from '../PublishPostingPanel.jsx';
 import PublishPlatformsPanel from '../PublishPlatformsPanel.jsx';
 import PublishCrossLinksPanel from '../PublishCrossLinksPanel.jsx';
 import PromotionPlanPanel from '../PromotionPlanPanel.jsx';
 import FlyerPanel from '../FlyerPanel.jsx';
+import { formatCount } from '../../../utils/formatters.js';
 
 /**
  * Publish: the release kit made from the final render (encodes, thumbnails,
@@ -16,13 +19,27 @@ import FlyerPanel from '../FlyerPanel.jsx';
  * for the director with reminders.
  */
 export default function PublishStage({ board }) {
-  const { project, locked, publishKit, publishing, excerpts } = board;
+  const { project, locked, publishKit, publishing, excerpts, goToStage } = board;
+  const makingOfItems = project?.makingOfStory?.items?.length || 0;
+  const makingOfPosts = project?.makingOfStory?.posts?.length || 0;
   return (
     <fieldset id="mv-publish-kit" disabled={locked} className="min-w-0 space-y-3">
       {publishing && <PublishPlatformsPanel projectId={project?.id} publishing={publishing} />}
       <PublishKitPanel project={project} publishKit={publishKit} enabledTargets={publishing?.enabledTargets} />
       {publishing && <PublishPostingPanel project={project} publishing={publishing} excerpts={excerpts} />}
       {publishing && <PublishCrossLinksPanel project={project} publishing={publishing} />}
+      {goToStage && (
+        <PublishCard projectId={project?.id} cardId="making-of" label="Making of & behind the scenes" icon={Bookmark}
+          summary={makingOfItems || makingOfPosts ? `${formatCount(makingOfItems, { fallback: '0' })} saved · ${formatCount(makingOfPosts, { fallback: '0' })} posts` : ''}>
+          <p className="text-port-text-muted">Collect bloopers, before/after comparisons, reference sheets, and clips tagged during production, and stage follow-up Making-Of threads.</p>
+          <div>
+            <button type="button" onClick={() => goToStage('making-of')}
+              className="inline-flex min-h-[44px] items-center gap-1.5 rounded border border-port-border bg-port-bg px-3 py-1.5 text-xs font-medium text-port-text hover:border-port-accent/60 pointer-fine:sm:min-h-[32px]">
+              Open Making of <ArrowRight size={13} aria-hidden="true" />
+            </button>
+          </div>
+        </PublishCard>
+      )}
       <FlyerPanel key={project?.id} project={project} publishKit={publishKit} />
       <DcpPanel project={project} dcp={publishKit.dcp} />
       <FestivalPacketPanel project={project} />

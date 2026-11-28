@@ -23,6 +23,7 @@ import {
   CREDITS_OUTRO_STYLES,
 } from '../musicVideoCreditsOutro.js';
 import { festivalPacketSchema } from '../musicVideoFestivalPacket.js';
+import { makingOfStorySchema } from '../musicVideoMakingOfStory.js';
 import { MUSIC_VIDEO_CAMERA_FRAME_ASPECTS } from '../musicVideoFilmLook.js';
 import {
   MUSIC_VIDEO_AUDIO_LAYER_LIMIT,
@@ -576,6 +577,7 @@ const musicVideoTitleCardSchema = z.object({
 
 export const musicVideoProjectCreateSchema = z.object({
   festivalPacket: festivalPacketSchema.nullable().optional(),
+  makingOfStory: makingOfStorySchema.nullable().optional(),
   mediaMode: z.enum(MUSIC_VIDEO_MEDIA_MODES).optional(),
   productionPolicy: musicVideoProductionPolicySchema.optional(),
   name: z.string().min(1).max(200),
@@ -624,6 +626,7 @@ export const musicVideoProjectUpdateSchema = z.object({
   // The descriptions the editor started from, used only for conflict checks.
   catalogDescriptionBases: z.array(z.object({ subjectId: z.string().min(1).max(64), description: z.string().max(16000) }).strict()).max(MUSIC_VIDEO_MAX_SUBJECTS).optional(),
   festivalPacket: festivalPacketSchema.nullable().optional(),
+  makingOfStory: makingOfStorySchema.nullable().optional(),
   storySummary: z.string().max(20000).optional(),
   mediaMode: z.enum(MUSIC_VIDEO_MEDIA_MODES).optional(),
   productionPolicy: musicVideoProductionPolicySchema.optional(),
