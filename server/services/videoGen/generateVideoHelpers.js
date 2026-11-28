@@ -401,7 +401,7 @@ export function formatRuntimeFingerprint(fp) {
 // The LoRA-trainer mitigation ("let the display sleep") is NOT offered: generateVideo holds a
 // `caffeinate -dis` assertion for the child's lifetime, so display sleep is impossible by
 // construction. Running headless still works, so that is what we point at.
-const nativeCrashCause = (signal) => `Render crashed (${signal}) — a native fault inside the MLX/Metal layer, not a PortOS-level error. Retry with a lower resolution/frame count; if it repeats on the same model, reinstall that runtime from Settings → Video (a mismatched mlx / mlx-metal pair in the venv is the usual cause).`;
+const nativeCrashCause = (signal) => `Render crashed (${signal}) — a native fault inside the MLX/Metal layer, not a PortOS-level error. Retry with a lower resolution/frame count; if it repeats on the same model, reinstall that runtime from Media Gen Settings → Local (a mismatched mlx / mlx-metal pair in the venv is the usual cause).`;
 
 const SIGNAL_DEATH_CAUSES = Object.freeze({
   SIGKILL: 'Process killed (likely out of memory — try a smaller model or resolution)',
