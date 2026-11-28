@@ -46,6 +46,7 @@ commands target the PM2 listener.
 | 5564 | portos-slotstream | - | Loopback SSD-streaming MoE runtime. Optional PM2 process, started/stopped from Models → Runtimes. Never 11434 — that port is a PortOS-managed Ollama. |
 | 5566 | jev sidecar (loopback) | - | Loopback openjev entailment scorer. Not a PM2 process: `server/services/jev.js` starts it on the first scoring call and reaps it after ten idle minutes. See [JEV_SETUP.md](./JEV_SETUP.md). |
 | 5568 | portos-llama-server | - | Loopback llama.cpp speculative-decoding server. Optional PM2 process, started/stopped from Models → Runtimes. |
+| 5569 | realtime voice sidecar | - | Loopback speech-to-speech Voice sidecar (`scripts/ml/sophon/portos_sophon.py`). Started on demand when a realtime Voice Call begins; stops after 10 idle minutes. |
 | 8000 | portos-mtplx | - | Loopback MTPLX OpenAI-compatible API (upstream's own default, kept so the shipped provider presets match). Optional PM2 process, started/stopped from Models → Runtimes. See [MTPLX setup](./features/local-llm-runtimes.md#mtplx-on-apple-silicon). |
 | 8001 | portos-splash | - | Loopback Splash API; managed from Models → Runtimes. |
 | 8002 | portos-mkserve | - | Loopback mkserve API; managed from Models → Runtimes. |
@@ -153,7 +154,7 @@ PortOS automatically detects ports from env vars:
 | Range | Purpose |
 |-------|---------|
 | 5553-5561 | PortOS core services (includes the `:5553` loopback mirror and the `portos-db` Docker container on `:5561`) |
-| 5562-5569 | Reserved for PortOS extensions. Assigned: 5562 whisper, 5563 Eidoverse bridge (on demand), 5564 slotstream (on demand), 5565 Tailcat ingress (on demand), 5566 jev scorer (on demand), 5568 llama-server. Unassigned but still reserved: 5567, 5569 |
+| 5562-5569 | Reserved for PortOS extensions. Assigned: 5562 whisper, 5563 Eidoverse bridge (on demand), 5564 slotstream (on demand), 5565 Tailcat ingress (on demand), 5566 jev scorer (on demand), 5568 llama-server, 5569 realtime voice sidecar (on demand). Unassigned but still reserved: 5567 |
 | 5570-5599 | User applications — **put managed apps here**. App scaffolding and the PM2 Standardizer allocate from this band, overflowing just past 5599 when it is full |
 | 6000 and other browser-blocked ports | Never allocated. Chrome and Firefox refuse to connect to the WHATWG Fetch "bad ports" (`ERR_UNSAFE_PORT`; 6000 is X11), so a managed app there has no reachable UI. `server/lib/browserUnsafePorts.js` holds the list and every allocator skips it |
 
@@ -169,7 +170,7 @@ PortOS automatically detects ports from env vars:
 > without an error, PortOS logged `🌐 Eidoverse host listening`, and the Eidoverse page
 > served the other app's admin UI. Nothing in either process reported a problem.
 >
-> The on-demand ports (5563, 5564, 5566, 5568) are the easiest to get wrong, because they are free
+> The on-demand ports (5563, 5564, 5566, 5568, 5569) are the easiest to get wrong, because they are free
 > at boot and only bind once a user opens the relevant page — so a port scan taken at
 > install time shows them available. Treat the whole band as taken regardless.
 >

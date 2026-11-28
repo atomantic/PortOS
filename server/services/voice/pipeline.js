@@ -360,6 +360,9 @@ export const detectNarrationWithoutCall = ({ finalText, toolRuns }) =>
 // Short correlation id so overlapping turns in the logs can be told apart
 // (user interrupts, late-arriving retries). 5 chars of base36 randomness is
 // plenty for single-user PortOS.
+// The speaker a text-only turn uses: the reply text is still collected by the LLM loop, nothing is synthesized.
+const SILENT_SPEAKER = Object.freeze({ appendDelta: () => {}, cancel: () => {}, drain: async () => {}, ttsTimings: Object.freeze([]) });
+
 const shortId = () => Math.random().toString(36).slice(2, 7);
 
 // Cap on an injected per-conversation briefing (the FaceTime call host passes
@@ -788,10 +791,12 @@ const withAttachedImages = async ({ userText, cfg, state, emit, signal, hasHostC
  * @param {Array}  args.history      — prior conversation messages
  * @param {(event:string, payload:any) => void} args.emit
  * @param {AbortSignal} [args.signal]
+ * @param {boolean} [args.speak=true]  false = text only: no TTS, the reply is returned for another voice to say
+ *   (the realtime speech-to-speech voice speaks the result of a task it delegated).
  * @returns {Promise<{ transcript: string, reply: string, userContent?: string }>} userContent is
  *   the message sent to the model when images were added to it.
  */
-export const runTurn = async ({ audio, text, mimeType, source, history = [], emit, signal, state, systemContext = null, hasHostControl }) => {
+export const runTurn = async ({ audio, text, mimeType, source, history = [], emit, signal, state, systemContext = null, hasHostControl, speak = true }) => {
   // The on-air Voice Call channel's agent: global settings plus that channel's overrides.
   const cfg = await getAgentVoiceConfig();
   if (signal?.aborted) return { transcript: '', reply: '' };
@@ -864,7 +869,7 @@ export const runTurn = async ({ audio, text, mimeType, source, history = [], emi
     return runDictationTurn({ userText, state, signal, emit, hasHostControl });
   }
 
-  const speakSyntheticReply = (reply) => emitSyntheticReply({ reply, signal, recentTts: state?.recentTts, emit });
+  const speakSyntheticReply = (reply) => (speak ? emitSyntheticReply({ reply, signal, recentTts: state?.recentTts, emit }) : undefined);
 
   const confirmed = await resolvePendingConfirmation({ state, userText, turnId, emit, tlog, speakSyntheticReply });
   if (confirmed) return confirmed;
@@ -881,7 +886,7 @@ export const runTurn = async ({ audio, text, mimeType, source, history = [], emi
   const messages = await buildTurnMessages({ cfg, systemContext, userText, userContent, intent, state, history, tlog });
   const maxIterations = Math.max(1, cfg.llm.tools?.maxIterations ?? 3);
 
-  const speaker = createTurnTtsSpeaker({ signal, state, emit, tlog });
+  const speaker = speak ? createTurnTtsSpeaker({ signal, state, emit, tlog }) : SILENT_SPEAKER;
   const { firstLlm, lastLlm, finalText, toolRuns, confirmationPrompt } = await executeTurnLlmLoop({
     cfg, messages, toolSpecs, maxIterations, signal, emit, turnId, tlog, speaker, state, hasHostControl,
   });

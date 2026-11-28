@@ -1,0 +1,100 @@
+// Realtime (speech-to-speech) Voice runtime: finds a local Sophon-Realtime Mac install and runs the PortOS sidecar
+// (scripts/ml/sophon/portos_sophon.py) on demand, one process at a time, stopping it after a quiet period.
+import { randomBytes } from 'node:crypto';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import { createInterface } from 'node:readline';
+import { spawn } from '../../lib/childProcess.js';
+import { ServerError } from '../../lib/errorHandler.js';
+import { expandHome } from '../../lib/fileUtils.js';
+import { PATHS } from '../../lib/paths.js';
+import { PORTS } from '../../lib/ports.js';
+
+export const SIDECAR_SCRIPT = join(PATHS.root, 'scripts', 'ml', 'sophon', 'portos_sophon.py');
+export const REALTIME_SIZES = Object.freeze({ '32B': 'models', '4B': 'models-4b' });
+const START_TIMEOUT_MS = 180_000;
+const IDLE_STOP_MS = 10 * 60_000;
+
+const realtimeError = (message, status = 409) => new ServerError(message, { status, code: 'VOICE_REALTIME' });
+
+/** Where a Sophon Mac install keeps its interpreter, engine and weights, and whether each part is present. */
+export const describeInstall = (realtime = {}) => {
+  const home = expandHome(realtime.home || '~/.portos/sophon-mac');
+  const size = REALTIME_SIZES[realtime.size] ? realtime.size : '32B';
+  const python = join(home, '.venv', 'bin', 'python');
+  const app = join(home, 'app');
+  const models = join(home, REALTIME_SIZES[size]);
+  const parts = {
+    python: existsSync(python),
+    engine: existsSync(join(app, 'engine.py')) && existsSync(join(app, 'adapt.py')),
+    weights: existsSync(join(models, '.complete')),
+  };
+  return { home, size, python, app, models, parts, installed: Object.values(parts).every(Boolean) };
+};
+
+let current = null; // { child, port, token, key, ready: Promise, idleTimer }
+
+const stopCurrent = (reason = 'stop') => {
+  const proc = current;
+  current = null;
+  if (!proc) return;
+  clearTimeout(proc.idleTimer);
+  console.log(`🗣️ voice.realtime.stop reason=${reason}`);
+  proc.child.kill('SIGTERM');
+};
+
+/**
+ * Start (or reuse) the sidecar for this install and resolve its loopback endpoint once the model has loaded.
+ * @returns {Promise<{ url: string }>}
+ */
+export const ensureRealtimeSidecar = async (realtime = {}, { persona = '', launch = spawn } = {}) => {
+  const install = describeInstall(realtime);
+  if (!install.installed) {
+    const missing = Object.entries(install.parts).filter(([, ok]) => !ok).map(([part]) => part).join(', ');
+    throw realtimeError(`Realtime voice is not installed at ${install.home} (missing ${missing}).`, 503);
+  }
+  const key = JSON.stringify([install.home, install.size, persona]);
+  if (current && current.key !== key) stopCurrent('config-changed');
+  if (!current) {
+    const token = randomBytes(18).toString('hex');
+    const port = PORTS.VOICE_REALTIME;
+    const child = launch(install.python, ['-u', SIDECAR_SCRIPT, '--app', install.app, '--models', install.models,
+      '--port', String(port), '--token', token, '--lang', 'en', '--persona', persona], { shell: false, stdio: ['ignore', 'pipe', 'pipe'] });
+    const proc = { child, port, token, key, idleTimer: null };
+    proc.ready = new Promise((resolve, reject) => {
+      const timer = setTimeout(() => { reject(realtimeError('Realtime voice did not finish loading.', 503)); child.kill('SIGKILL'); }, START_TIMEOUT_MS);
+      timer.unref?.();
+      createInterface({ input: child.stdout, crlfDelay: Infinity }).on('line', (line) => {
+        if (line.startsWith('{"ready"')) { clearTimeout(timer); resolve(); }
+      });
+      child.stderr.resume(); // Model diagnostics stay out of the server log.
+      child.on('error', (err) => { clearTimeout(timer); reject(realtimeError(`Could not launch realtime voice: ${err.message}`, 503)); });
+      child.once('close', (code) => {
+        clearTimeout(timer);
+        if (current === proc) current = null;
+        reject(realtimeError(`Realtime voice stopped (exit ${code}).`, 503));
+      });
+    });
+    current = proc;
+    console.log(`🗣️ voice.realtime.start size=${install.size} port=${port}`);
+  }
+  const proc = current;
+  await proc.ready;
+  clearTimeout(proc.idleTimer);
+  return { url: `ws://127.0.0.1:${proc.port}/?token=${proc.token}` };
+};
+
+/** Keep the model loaded between calls, then free its ~26 GB once nobody has called for a while. */
+export const scheduleRealtimeIdleStop = (ms = IDLE_STOP_MS) => {
+  if (!current) return;
+  clearTimeout(current.idleTimer);
+  current.idleTimer = setTimeout(() => stopCurrent('idle'), ms);
+  current.idleTimer.unref?.();
+};
+
+export const stopRealtimeSidecar = () => stopCurrent('shutdown');
+
+export const realtimeStatus = (realtime = {}) => {
+  const install = describeInstall(realtime);
+  return { ...install, running: Boolean(current) };
+};

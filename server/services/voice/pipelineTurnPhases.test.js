@@ -47,6 +47,21 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers());
 
 describe('runTurn tool execution', () => {
+  it('returns the reply without synthesizing speech for a text-only (speak: false) turn', async () => {
+    mocks.streamChat.mockImplementation(async (_messages, { onDelta }) => {
+      onDelta('It is nine. ');
+      return completion('It is nine.');
+    });
+    const events = [];
+    const result = await runTurn({
+      text: 'what time is it', source: 'delegate', speak: false, state: {}, signal: new AbortController().signal,
+      emit: (event) => events.push(event),
+    });
+    expect(result).toEqual({ transcript: 'what time is it', reply: 'It is nine.' });
+    expect(mocks.synthesize).not.toHaveBeenCalled();
+    expect(events).not.toContain('voice:tts:audio');
+  });
+
   it('reports length exhaustion instead of blaming otherwise enabled tools', async () => {
     mocks.streamChat.mockResolvedValue({ ...completion(''), finishReason: 'length' });
     const events = [];

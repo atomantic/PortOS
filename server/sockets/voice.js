@@ -821,6 +821,82 @@ export const registerVoiceHandlers = (socket) => {
     }
   });
 
+  // ── Realtime (speech-to-speech) call ─────────────────────────────────────
+  // The browser streams 16 kHz PCM16 microphone audio; a local full-duplex
+  // voice model hears it, takes turns, can be interrupted and speaks. When it
+  // needs a lookup or an action it delegates a task, which runs through the
+  // regular Voice tool pipeline as a text-only turn, and the voice speaks the
+  // result. One realtime call per socket.
+  let realtime = null;
+  let realtimeOpening = null;
+  // Aborts delegated turns still running when the call ends, so their tool
+  // actions stop and nothing reaches the tab after hang-up.
+  let realtimeCtrl = null;
+  const closeRealtime = () => {
+    realtimeOpening = null;
+    realtimeCtrl?.abort();
+    realtimeCtrl = null;
+    realtime?.close();
+    realtime = null;
+  };
+  // Pipeline events a delegated turn may send the tab: tool side effects
+  // (navigation, UI actions, dictation, errors). Its own speech, transcript and
+  // streaming text are dropped — the realtime voice says the result.
+  const DELEGATE_DROPPED = /^voice:(tts:|transcript$|llm:(delta|done|loading)$|idle$)/;
+  const runRealtimeDelegate = async (task) => {
+    const signal = realtimeCtrl?.signal;
+    if (!signal || signal.aborted) return '';
+    const { runTurn } = await import('../services/voice/pipeline.js');
+    const { reply } = await runTurn({
+      text: task,
+      source: 'delegate',
+      history: state.history,
+      state,
+      speak: false,
+      signal,
+      hasHostControl: () => socketHasCurrentHostControl(socket),
+      emit: (event, data) => { if (!signal.aborted && !DELEGATE_DROPPED.test(event)) socket.emit(event, data); },
+    });
+    if (signal.aborted) return '';
+    pushHistory('user', task);
+    pushHistory('assistant', reply);
+    return reply;
+  };
+
+  socket.on('voice:realtime:start', async () => {
+    try {
+      const cfg = await getVoiceConfig();
+      if (!cfg.enabled || !cfg.realtime?.enabled) {
+        socket.emit('voice:realtime:state', { active: false, error: 'Realtime voice is turned off in Voice settings.' });
+        return;
+      }
+      if (realtime || realtimeOpening) return;
+      realtimeCtrl = new AbortController();
+      socket.emit('voice:realtime:state', { active: false, loading: true });
+      const { openRealtimeCall } = await import('../services/voice/realtimeSession.js');
+      const opening = openRealtimeCall({ cfg, emit: (event, data) => socket.emit(event, data), runDelegate: runRealtimeDelegate });
+      realtimeOpening = opening;
+      const session = await opening;
+      if (realtimeOpening !== opening) { session.close(); return; }   // hung up while the model was loading
+      realtimeOpening = null;
+      realtime = session;
+    } catch (err) {
+      realtimeOpening = null;
+      console.error(`🗣️ voice:realtime:start failed: ${err.message}`);
+      socket.emit('voice:realtime:state', { active: false, error: err.message });
+    }
+  });
+
+  socket.on('voice:realtime:audio', (payload = {}) => {
+    const pcm = payload?.pcm;
+    const bytes = audioByteLength(pcm);
+    if (!realtime || !bytes || bytes > MAX_CALL_FRAME_BYTES) return;
+    realtime.pushAudio(Buffer.isBuffer(pcm) ? pcm : Buffer.from(ArrayBuffer.isView(pcm) ? pcm.buffer.slice(pcm.byteOffset, pcm.byteOffset + pcm.byteLength) : pcm));
+  });
+
+  socket.on('voice:realtime:interrupt', () => realtime?.interrupt());
+  socket.on('voice:realtime:stop', () => closeRealtime());
+
   socket.on('disconnect', () => {
     hostRequestGeneration += 1;
     // Drop this tab from the voice-output registry; if it was the sole
@@ -829,6 +905,7 @@ export const registerVoiceHandlers = (socket) => {
     releaseVoiceOutput(socket);
     state.ctrl?.abort();
     call.ctrl?.abort();
+    closeRealtime();
     // Abort any pending UI refresh waiters so their turns don't hang.
     const waiters = state.uiWaiters;
     state.uiWaiters = [];

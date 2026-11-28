@@ -1,5 +1,6 @@
 import { Link } from 'react-router';
 import { EyeOff, Maximize2, PanelBottomClose, ScanFace, SlidersHorizontal, Volume2, VolumeX, X } from 'lucide-react';
+import RealtimeCallPanel from './RealtimeCallPanel';
 import AvatarRuntimeSettings from './AvatarRuntimeSettings';
 import ChannelBrainPicker from './ChannelBrainPicker';
 
@@ -160,6 +161,7 @@ export function SatPhoneSetup({
         residency={llmResidency}
         onGlobalSaved={onLlmSaved}
       />
+      <RealtimeCallPanel compact />
       <AvatarRuntimeSettings
         compact
         data={avatarData}

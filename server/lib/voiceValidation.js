@@ -85,6 +85,12 @@ export const voiceConfigPatchSchema = z.object({
     escalateAfterMinutes: z.number().int().min(1).max(1440).optional(),
     autoAnswer: z.boolean().optional(),
   }).partial().optional(),
+  realtime: z.object({
+    enabled: z.boolean().optional(),
+    engine: z.literal('sophon').optional(),
+    size: z.enum(['32B', '4B']).optional(),
+    home: z.string().trim().min(1).max(512).optional(),
+  }).partial().optional(),
   stt: z.object({
     engine: z.enum(['whisper', 'web-speech']).optional(),
     endpoint: z.string().url().optional(),

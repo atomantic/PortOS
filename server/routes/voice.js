@@ -120,6 +120,15 @@ router.put('/config', asyncHandler(async (req, res) => {
   res.json({ config: next, reconciliation });
 }));
 
+// GET /api/voice/realtime/status — is the realtime (speech-to-speech) voice installed, and is it loaded? Never starts it.
+router.get('/realtime/status', asyncHandler(async (req, res) => {
+  validateRequest(emptyQuerySchema, req.query);
+  const { realtimeStatus } = await import('../services/voice/realtimeRuntime.js');
+  const { realtime } = await getVoiceConfig();
+  const { home, size, parts, installed, running } = realtimeStatus(realtime);
+  res.json({ enabled: realtime?.enabled === true, home, size, parts, installed, running });
+}));
+
 // GET /api/voice/status — reachability + enabled flag + binary/model presence
 router.get('/status', asyncHandler(async (_req, res) => {
   res.json(await voiceObservation.read());

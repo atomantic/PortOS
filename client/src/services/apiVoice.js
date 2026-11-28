@@ -9,6 +9,7 @@ import api, { singleFlightRead } from './apiCore';
 // useAsyncAction).
 export const getVoiceStatus = (options) => api.get('/voice/status', options);
 export const getVoiceLlmResidency = (options) => api.get('/voice/llm/residency', options);
+export const getVoiceRealtimeStatus = (options) => api.get('/voice/realtime/status', options);
 export const getVoiceConfig = (options) => singleFlightRead('/voice/config', () => api.get('/voice/config', options), options);
 export const updateVoiceConfig = (patch, options) => api.put('/voice/config', patch, options);
 export const listVoices = (engine, options) => api.get(`/voice/voices${engine ? `?engine=${engine}` : ''}`, options);
