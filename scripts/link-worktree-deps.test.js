@@ -39,6 +39,24 @@ describe('link-worktree-deps script', () => {
     expect(lstatSync(join(source, 'node_modules')).isSymbolicLink()).toBe(false);
   });
 
+  it('links PortOS claim dependencies from the script’s own checkout', () => {
+    root = mkdtempSync(join(tmpdir(), 'portos-link-worktree-deps-'));
+    const source = dirname(dirname(SCRIPT));
+    const server = join(root, 'server');
+    mkdirSync(server);
+    writeFileSync(join(server, 'package.json'), '{}');
+    mkdirSync(join(root, 'node_modules'));
+    writeFileSync(join(root, 'node_modules', 'local-install.txt'), '');
+    // A managed app would refuse to link without a matching root receipt.
+    writeFileSync(join(root, 'pnpm-lock.yaml'), "lockfileVersion: '9.0'\n");
+
+    const result = runScript(source, root, '--claim');
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain('server/node_modules linked');
+    expect(realpathSync(join(server, 'node_modules'))).toBe(realpathSync(join(source, 'server', 'node_modules')));
+  });
+
   it('reports a managed claim’s stale pnpm install without linking dependency paths', () => {
     root = mkdtempSync(join(tmpdir(), 'portos-link-worktree-deps-'));
     const source = join(root, 'source');
