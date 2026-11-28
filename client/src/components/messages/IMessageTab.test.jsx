@@ -241,6 +241,13 @@ describe('IMessageTab — conversation switch during destructive confirm/purge',
     fireEvent.click(screen.getByRole('button', { name: /Chat B/ }));
     expect(await screen.findByText('Event for chat-b')).toBeTruthy();
 
+    fireEvent.click(screen.getByRole('button', { name: /Chat A/ }));
+    expect(await screen.findByText('Event for chat-a')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Purge from PortOS' })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole('button', { name: /Chat B/ }));
+    expect(await screen.findByText('Event for chat-b')).toBeTruthy();
+
     await act(async () => {
       resolvePurge({ deleted: 2 });
     });

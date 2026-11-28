@@ -163,14 +163,14 @@ function ConversationDetail({
   identity,
   loading,
   timezone,
+  busy,
+  runPending,
   onBack,
   onPurged,
   onEventDeleted,
   onBlocked,
 }) {
   const [confirm, setConfirm] = useState(null); // 'purge' | 'block-purge' | null
-  const [busy, setBusy] = useState(false);
-  const busyRef = useRef(false);
 
   const handle = conversation?.handle;
   const displayTitle = conversation?.displayName
@@ -180,14 +180,9 @@ function ConversationDetail({
   const organization = conversation?.organization || identity?.organization;
   const personId = conversation?.personId || identity?.personId;
 
-  const runPurge = async () => {
-    if (busyRef.current) return;
-    busyRef.current = true;
-    setBusy(true);
+  const runPurge = () => runPending(chatKey, async () => {
     let failure = null;
     const result = await purgeImessageConversation(chatKey, { silent: true }).catch((err) => { failure = err; return null; });
-    busyRef.current = false;
-    setBusy(false);
     setConfirm(null);
     if (!result) {
       toast.error(failureMessage('Could not purge the conversation', failure));
@@ -195,33 +190,30 @@ function ConversationDetail({
     }
     toast.success(`Removed ${pluralize(result.deleted, 'event')} from PortOS`);
     onPurged?.(chatKey);
-  };
+  });
 
-  const runBlock = async ({ purgeExisting }) => {
-    if (busyRef.current) return;
+  const runBlock = ({ purgeExisting }) => {
     if (!handle) {
       toast.error('No handle to block on this conversation');
       setConfirm(null);
       return;
     }
-    busyRef.current = true;
-    setBusy(true);
-    let failure = null;
-    const result = await addImessageBlocklist(handle, { purgeExisting, silent: true }).catch((err) => { failure = err; return null; });
-    busyRef.current = false;
-    setBusy(false);
-    setConfirm(null);
-    if (!result) {
-      toast.error(failureMessage('Could not update the blocklist', failure));
-      return;
-    }
-    const purged = result.purged || 0;
-    toast.success(
-      purged > 0
-        ? `Blocked ${handle} — removed ${pluralize(purged, 'PortOS event')}`
-        : `Blocked ${handle} — future syncs will skip it`,
-    );
-    onBlocked?.(chatKey, { purged });
+    return runPending(chatKey, async () => {
+      let failure = null;
+      const result = await addImessageBlocklist(handle, { purgeExisting, silent: true }).catch((err) => { failure = err; return null; });
+      setConfirm(null);
+      if (!result) {
+        toast.error(failureMessage('Could not update the blocklist', failure));
+        return;
+      }
+      const purged = result.purged || 0;
+      toast.success(
+        purged > 0
+          ? `Blocked ${handle} — removed ${pluralize(purged, 'PortOS event')}`
+          : `Blocked ${handle} — future syncs will skip it`,
+      );
+      onBlocked?.(chatKey, { purged });
+    });
   };
 
   const deleteEvent = async (id) => {
@@ -505,6 +497,20 @@ export default function IMessageTab() {
   const [conversationIdentity, setConversationIdentity] = useState(null);
   const [eventsLoading, setEventsLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const pendingKeysRef = useRef(new Set());
+  const [pendingKeys, setPendingKeys] = useState(() => new Set());
+
+  const runPending = useCallback(async (key, task) => {
+    if (!key || pendingKeysRef.current.has(key)) return;
+    pendingKeysRef.current.add(key);
+    setPendingKeys(new Set(pendingKeysRef.current));
+    try {
+      await task();
+    } finally {
+      pendingKeysRef.current.delete(key);
+      setPendingKeys(new Set(pendingKeysRef.current));
+    }
+  }, []);
 
   // Ingestion config lives in a right-side drawer over this page (not its own
   // Settings page), deep-linked as ?settings=1 so ⌘K / voice can open it. The
@@ -745,6 +751,8 @@ export default function IMessageTab() {
             identity={conversationIdentity}
             loading={eventsLoading}
             timezone={undefined}
+            busy={Boolean(selectedKey && pendingKeys.has(selectedKey))}
+            runPending={runPending}
             onBack={() => select(null)}
             onPurged={onPurged}
             onEventDeleted={onEventDeleted}
