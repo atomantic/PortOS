@@ -102,6 +102,16 @@ export function makingOfItemKey(kind, assetId) {
   return `${mediaKind}:${assetId}`;
 }
 
+/** Build the closing X thread post that embeds the project's published X music video link. */
+export function buildMakingOfVideoLinkPost(projectName, videoXUrl) {
+  const url = String(videoXUrl || '').trim();
+  if (!/^https?:\/\/(?:www\.)?(?:x\.com|twitter\.com)\/\S+$/i.test(url)) return null;
+  const title = String(projectName || '').trim();
+  return title
+    ? `Watch the finished "${title}" music video:\n${url}`
+    : `Watch the finished music video:\n${url}`;
+}
+
 /** Whether a Making-Of item carries an attachable image/video file. */
 export function isMakingOfMediaItem(item) {
   return Boolean(item && item.kind !== 'note' && item.assetId);

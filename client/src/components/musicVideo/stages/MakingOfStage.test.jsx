@@ -206,4 +206,55 @@ describe('MakingOfStage', () => {
       { silent: true },
     ));
   });
+
+  it('offers the closing published X video link toggle and passes includeVideoLink when enabled', async () => {
+    api.prepareMusicVideoMakingOfXDraft.mockResolvedValue({
+      draftId: 'mvmof-2',
+      projectId: 'mv-demo',
+      postId: 'mop-1',
+      state: 'open',
+      screenshot: null,
+      summary: { posts: 3, attachments: 0 },
+      manualPublication: true,
+    });
+    const publishedProject = {
+      ...baseProject,
+      publishKit: { posts: { x: { url: 'https://x.com/example/status/9001' } } },
+    };
+
+    render(
+      <MakingOfStage
+        board={{
+          project: publishedProject,
+          onEditShot: vi.fn(),
+          openPreview: vi.fn(),
+          onCaptureMakingOf: vi.fn(),
+          onMakingOfStorySaved: vi.fn(),
+        }}
+      />,
+    );
+
+    const toggle = screen.getByRole('checkbox', { name: /Append closing post linking to published X video/i });
+    expect(toggle.checked).toBe(true);
+    expect(screen.getByText(/Watch the finished "Demo Film" music video:/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: /Fill X draft/i }));
+    await waitFor(() => expect(api.prepareMusicVideoMakingOfXDraft).toHaveBeenCalledWith(
+      'mv-demo',
+      'mop-1',
+      { includeVideoLink: true },
+      { silent: true },
+    ));
+
+    // Unchecking skips includeVideoLink on the next fill.
+    fireEvent.click(toggle);
+    expect(toggle.checked).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: /Fill again/i }));
+    await waitFor(() => expect(api.prepareMusicVideoMakingOfXDraft).toHaveBeenLastCalledWith(
+      'mv-demo',
+      'mop-1',
+      {},
+      { silent: true },
+    ));
+  });
 });

@@ -101,6 +101,30 @@ describe('Making-Of X thread draft service', () => {
     expect(payload.posts[0].mediaFiles.map((m) => m.name)).toEqual(['frame-1.png', 'clip-1.mp4']);
     expect(payload.posts[1].text).toBe('Part 2: Payoff');
     expect(payload.posts[1].mediaFiles.map((m) => m.name)).toEqual(['frame-2.png']);
+
+    // Optional closing post linking to the published X music video (skipped if already present).
+    const withLink = await buildMakingOfXThreadPayload(post, items, {
+      getVideoHistoryItem: async (id) => (id === 'vid-job-1' ? { id, filename: 'clip-1.mp4' } : null),
+      includeVideoLink: true,
+      projectName: 'Demo Film',
+      videoXUrl: 'https://x.com/example/status/9001',
+    });
+    expect(withLink.posts).toHaveLength(3);
+    expect(withLink.posts[2]).toEqual({ text: 'Watch the finished "Demo Film" music video:\nhttps://x.com/example/status/9001' });
+    expect(withLink.videoLink).toBe('https://x.com/example/status/9001');
+
+    const alreadyLinked = await buildMakingOfXThreadPayload(
+      { ...post, body: `${post.body}\n\nhttps://x.com/example/status/9001` },
+      items,
+      {
+        getVideoHistoryItem: async (id) => (id === 'vid-job-1' ? { id, filename: 'clip-1.mp4' } : null),
+        includeVideoLink: true,
+        projectName: 'Demo Film',
+        videoXUrl: 'https://x.com/example/status/9001',
+      },
+    );
+    expect(alreadyLinked.posts).toHaveLength(2);
+    expect(alreadyLinked.videoLink).toBeNull();
   });
 
   it('fills an X draft for review without ever submitting, guards reposts, and supports discard + posted detach', async () => {

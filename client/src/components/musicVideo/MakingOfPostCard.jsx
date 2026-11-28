@@ -18,6 +18,7 @@ import {
   MAKING_OF_STORY_LIMITS,
   MAKING_OF_X_MAX_MEDIA_PER_POST,
   autoDistributeMakingOfPartItems,
+  buildMakingOfVideoLinkPost,
   formatMakingOfPostCopy,
   isMakingOfMediaItem,
   normalizeMakingOfTags,
@@ -68,6 +69,8 @@ export default function MakingOfPostCard({
   post,
   items,
   busy,
+  projectName = '',
+  publishedVideoXUrl = '',
   defaultEditing = false,
   xDraft = null,
   xDraftBusy = null,
@@ -86,6 +89,7 @@ export default function MakingOfPostCard({
   const [confirmDiscardDraft, setConfirmDiscardDraft] = useState(false);
   const [confirmPostAgain, setConfirmPostAgain] = useState(false);
   const [confirmUndoPosted, setConfirmUndoPosted] = useState(false);
+  const [includeVideoLink, setIncludeVideoLink] = useState(Boolean(publishedVideoXUrl));
   const [recordUrlDraft, setRecordUrlDraft] = useState('');
 
   const [title, setTitle] = useState(post.title);
@@ -107,6 +111,16 @@ export default function MakingOfPostCard({
   const hasExplicitPartMedia = (post.partItemIds || []).some((bucket) => Array.isArray(bucket) && bucket.length > 0);
   const canFillX = X_CAPABLE_PLATFORMS.has(post.platform) && typeof onPrepareXDraft === 'function';
   const totalPartMedia = resolvedParts.reduce((sum, part) => sum + part.items.length, 0);
+  const closingVideoLinkText = canFillX && publishedVideoXUrl
+    ? buildMakingOfVideoLinkPost(projectName, publishedVideoXUrl)
+    : null;
+  const threadAlreadyLinksVideo = Boolean(publishedVideoXUrl)
+    && resolvedParts.some((part) => part.text.includes(publishedVideoXUrl.trim()));
+  const willAppendVideoLink = Boolean(closingVideoLinkText && includeVideoLink && !threadAlreadyLinksVideo);
+  const fillOptions = (extra = {}) => ({
+    ...(willAppendVideoLink ? { includeVideoLink: true } : {}),
+    ...extra,
+  });
 
   // Map each itemId → 1-based part numbers where it is attached so the bank strip shows assignments.
   const partBadgesByItemId = new Map();
@@ -349,7 +363,7 @@ export default function MakingOfPostCard({
                   )
                 ) : (
                   <button type="button" disabled={fillDisabled}
-                    onClick={() => onPrepareXDraft(post.id, isPosted ? { again: true } : {})}
+                    onClick={() => onPrepareXDraft(post.id, fillOptions(isPosted ? { again: true } : {}))}
                     className="inline-flex min-h-[44px] items-center gap-1 rounded border border-port-accent/40 bg-port-accent/20 px-2.5 py-1 text-xs font-medium text-port-accent hover:bg-port-accent/25 disabled:opacity-50 pointer-fine:sm:min-h-[30px]">
                     <Send size={12} aria-hidden="true" />
                     {xDraftBusy === 'prepare' ? 'Filling…' : (xDraft ? 'Fill again' : 'Fill X draft')}
@@ -390,7 +404,7 @@ export default function MakingOfPostCard({
               confirmAriaLabel={`Confirm filling X draft again for ${post.title}`}
               largeTouchTargets
               busy={!!xDraftBusy}
-              onConfirm={() => { setConfirmPostAgain(false); onPrepareXDraft(post.id, { again: true }); }}
+              onConfirm={() => { setConfirmPostAgain(false); onPrepareXDraft(post.id, fillOptions({ again: true })); }}
               onCancel={() => setConfirmPostAgain(false)}
             />
           )}
@@ -416,6 +430,20 @@ export default function MakingOfPostCard({
               onConfirm={() => { setConfirmDelete(false); onDelete(post.id); }}
               onCancel={() => setConfirmDelete(false)}
             />
+          )}
+
+          {/* Optional toggle: append closing post linking to the published X music video */}
+          {closingVideoLinkText && !threadAlreadyLinksVideo && (
+            <label className="flex flex-wrap items-center gap-2 text-xs text-port-text-muted min-h-[44px] pointer-fine:sm:min-h-0">
+              <input
+                type="checkbox"
+                checked={includeVideoLink}
+                disabled={busy || !!xDraftBusy}
+                onChange={(e) => setIncludeVideoLink(e.target.checked)}
+              />
+              <span>Append closing post linking to published X video</span>
+              <span className="text-[11px] text-port-text-muted/80 break-all">({publishedVideoXUrl})</span>
+            </label>
           )}
 
           {/* Live X draft fill progress, error, and review screenshot */}
@@ -619,6 +647,16 @@ export default function MakingOfPostCard({
                   </div>
                 );
               })}
+
+              {willAppendVideoLink && (
+                <div className="rounded border border-dashed border-port-accent/40 bg-port-bg/60 p-2.5 text-xs space-y-1">
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-[10px] font-medium text-port-accent">
+                    <span>Part {resolvedParts.length + 1} · Auto-appended on Fill X draft</span>
+                    <span>{formatCount(closingVideoLinkText.length, { fallback: '0' })} chars</span>
+                  </div>
+                  <p className="text-port-text whitespace-pre-wrap break-words">{closingVideoLinkText}</p>
+                </div>
+              )}
             </div>
           )}
         </>
