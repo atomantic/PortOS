@@ -986,16 +986,27 @@ describe('pinned runtime revisions', () => {
 });
 
 describe('MiniMax H3 MLX hash-pinned lock', () => {
-  const pinnedNames = (text) => text.split('\n').filter((l) => /^[a-z]/i.test(l)).map((l) => l.split(/ |\\/)[0]);
+  const pinnedVersions = (text) => text.match(/^[a-z][\w-]*==[^\s\\]+/gm) ?? [];
   const input = readFileSync(join(REQUIREMENTS_DIR, 'requirements-minimax-h3-mlx.txt'), 'utf8');
   const lock = readFileSync(join(REQUIREMENTS_DIR, 'requirements-minimax-h3-mlx.lock.txt'), 'utf8');
 
-  it('locks exactly the validated input set, every package carrying sha256 hashes', () => {
-    const locked = pinnedNames(lock);
-    expect(locked).toEqual(pinnedNames(input));
-    const blocks = lock.split(/\n(?=[a-z][^\n]*==)/i).filter((b) => /^[a-z][^\n]*==/i.test(b));
+  it('hash-pins every direct input and the separately resolved mlx-vlm wheel', () => {
+    const locked = pinnedVersions(lock);
+    expect(locked).toEqual(expect.arrayContaining([...pinnedVersions(input), 'mlx-vlm==0.6.10']));
+    const blocks = lock.split(/\n(?=[a-z][\w-]*==)/).slice(1);
     expect(blocks).toHaveLength(locked.length);
-    for (const block of blocks) expect(block).toMatch(/--hash=sha256:[0-9a-f]{64}/);
+    for (const block of blocks) expect(block).toMatch(/--hash=sha256:[0-9a-f]{64}(?=\s|$)/);
+  });
+
+  it('excludes dependencies outside the MiniMax H3 inference paths', () => {
+    const omitted = [
+      'fastapi', 'starlette', 'uvicorn', 'python-multipart', 'pydantic', 'pydantic-core',
+      'annotated-types', 'typing-inspection', 'opentelemetry-api', 'mlx-audio', 'miniaudio',
+      'sounddevice', 'cffi', 'pycparser', 'scipy', 'opencv-python', 'mlx-lm', 'llguidance',
+      'protobuf', 'sentencepiece', 'torch', 'torchvision',
+    ];
+    const names = [...pinnedVersions(input), ...pinnedVersions(lock)].map((pin) => pin.split('==')[0]);
+    expect(names.filter((name) => omitted.includes(name))).toEqual([]);
   });
 
   it('installs only locked wheels so no source build can resolve floating build dependencies', () => {
