@@ -324,6 +324,16 @@ export const extractInlineToolCalls = (text) => {
 };
 
 /**
+ * Residency of the model a voice turn on `provider`/`model` would use, with
+ * `auto` resolved the way a tool-calling turn resolves it.
+ */
+export const readVoiceLlmResidency = async ({ provider, model } = {}) => {
+  const endpoint = await resolveLlmEndpoint(provider);
+  const resolved = await resolveModel(model, { ...endpoint, requireTools: true });
+  return probeVoiceLlmResidency({ providerId: provider || DEFAULT_VOICE_BACKEND, apiBase: endpoint.apiBase, apiKey: endpoint.apiKey, model: resolved });
+};
+
+/**
  * Stream an LM Studio chat completion. Text deltas are forwarded via onDelta
  * for TTS; tool_call fragments are buffered per-index and returned at the end
  * so the pipeline can execute them and loop.
@@ -334,19 +344,10 @@ export const extractInlineToolCalls = (text) => {
  * @param {string} [opts.model='auto']
  * @param {AbortSignal} [opts.signal]
  * @param {(delta: string) => void} [opts.onDelta]
+ * @param {({ model: string }) => void} [opts.onModelLoading]  called before the request when the model is not resident
  * @param {Array<object>} [opts.tools]  OpenAI-format tool specs (optional)
  * @returns {Promise<{ text: string, toolCalls: Array<object>, model: string|null, ttfbMs: number|null, totalMs: number, finishReason: string|null }>}
  */
-/**
- * Residency of the model a voice turn on `provider`/`model` would use, with
- * `auto` resolved the way a tool-calling turn resolves it.
- */
-export const readVoiceLlmResidency = async ({ provider, model } = {}) => {
-  const endpoint = await resolveLlmEndpoint(provider);
-  const resolved = await resolveModel(model, { ...endpoint, requireTools: true });
-  return probeVoiceLlmResidency({ providerId: provider || DEFAULT_VOICE_BACKEND, apiBase: endpoint.apiBase, apiKey: endpoint.apiKey, model: resolved });
-};
-
 export const streamChat = async (messages, opts = {}) => {
   const resolveStart = Date.now();
   const { apiBase, apiKey, defaultModel, providerName } = await resolveLlmEndpoint(opts.provider);
