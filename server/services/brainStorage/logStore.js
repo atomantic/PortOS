@@ -1,9 +1,10 @@
 /** Brain settings and append-only digest and review logs. */
-import { readFile, appendFile } from 'fs/promises';
-import { existsSync } from 'fs';
+import { readFile, open } from 'fs/promises';
+import { constants, existsSync } from 'fs';
 import { join } from 'path';
 import { atomicWrite, ensureDir, readJSONFile, safeJSONParse, PATHS } from '../../lib/fileUtils.js';
 import { createFileWriteQueue } from '../../lib/fileWriteQueue.js';
+import { assertNotRealDataWrite } from '../../lib/testDataIsolation.js';
 import { brainEvents, generateId, now } from './recordStore.js';
 
 const DATA_DIR = PATHS.brain;
@@ -48,7 +49,7 @@ const DEFAULT_META = {
  * Ensure brain data directory exists
  */
 export async function ensureBrainDir() {
-  await ensureDir(DATA_DIR);
+  await ensureDir(DATA_DIR, { mode: 0o700 });
 }
 
 // =============================================================================
@@ -81,7 +82,7 @@ export async function loadMeta() {
  */
 export async function saveMeta(meta) {
   await ensureBrainDir();
-  await atomicWrite(FILES.meta, meta);
+  await atomicWrite(FILES.meta, meta, { mode: 0o600, dirMode: 0o700 });
   caches.meta.data = meta;
   caches.meta.timestamp = Date.now();
   brainEvents.emit('meta:changed', meta);
@@ -138,7 +139,16 @@ async function loadJsonlStore(type) {
 async function appendJsonl(type, record) {
   await ensureBrainDir();
   const line = JSON.stringify(record) + '\n';
-  await appendFile(FILES[type], line);
+  assertNotRealDataWrite(FILES[type], 'append Brain log');
+  const flags = constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | (constants.O_NOFOLLOW || 0);
+  const file = await open(FILES[type], flags, 0o600);
+  try {
+    // Restrict legacy logs on the same descriptor before appending new data.
+    if (process.platform !== 'win32') await file.chmod(0o600);
+    await file.appendFile(line);
+  } finally {
+    await file.close();
+  }
 
   // Invalidate cache so next read gets fresh data
   caches[type].data = null;

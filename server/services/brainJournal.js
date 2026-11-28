@@ -45,6 +45,7 @@ const SETTINGS_FILE = join(PATHS.brain, 'journal-settings.json');
 // converge (endless reconcile churn — the #1077 amplification class). Shape:
 // { [date]: { obsidianPath, obsidianVaultId } }.
 const OBSIDIAN_LOCATIONS_FILE = join(PATHS.brain, 'journal-obsidian-locations.json');
+const OBSIDIAN_LOCATIONS_WRITE_OPTIONS = { mode: 0o600, dirMode: 0o700 };
 
 const DEFAULT_SETTINGS = {
   obsidianVaultId: null,
@@ -88,7 +89,7 @@ async function loadObsidianLocations() {
   if (obsidianLocationsCache && (nowMs - obsidianLocationsCacheTime) < OBSIDIAN_LOCATIONS_CACHE_TTL_MS) {
     return obsidianLocationsCache;
   }
-  await ensureDir(PATHS.brain);
+  await ensureDir(PATHS.brain, { mode: 0o700 });
   obsidianLocationsCache = await readJSONFile(OBSIDIAN_LOCATIONS_FILE, {}, { strict: true });
   obsidianLocationsCacheTime = Date.now();
   return obsidianLocationsCache;
@@ -108,7 +109,7 @@ async function saveObsidianLocation(date, { obsidianPath, obsidianVaultId }) {
   } else {
     map[date] = { obsidianPath: obsidianPath ?? null, obsidianVaultId: obsidianVaultId ?? null };
   }
-  await atomicWrite(OBSIDIAN_LOCATIONS_FILE, map);
+  await atomicWrite(OBSIDIAN_LOCATIONS_FILE, map, OBSIDIAN_LOCATIONS_WRITE_OPTIONS);
   obsidianLocationsCache = map;
   obsidianLocationsCacheTime = Date.now();
 }
@@ -127,7 +128,7 @@ async function saveObsidianLocations() {
       map[date] = location;
       changed = true;
     }
-    if (changed) await atomicWrite(OBSIDIAN_LOCATIONS_FILE, map);
+    if (changed) await atomicWrite(OBSIDIAN_LOCATIONS_FILE, map, OBSIDIAN_LOCATIONS_WRITE_OPTIONS);
     pendingBulkLocations.clear();
     obsidianLocationsCache = map;
     obsidianLocationsCacheTime = Date.now();
