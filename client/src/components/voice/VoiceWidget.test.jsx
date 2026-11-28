@@ -316,6 +316,8 @@ describe('VoiceWidget async lifecycle', () => {
     await act(async () => { releaseStop(); });
     await settle();
     expect(mocks.startContinuous).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('complementary', { name: 'Voice assistant' })).toBeInTheDocument();
+    expect(localStorage.getItem(HIDDEN_KEY)).toBe('0');
   });
 
   it('stops an active continuous capture on disengage even after sttEngine switches to web-speech', async () => {

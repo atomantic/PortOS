@@ -559,11 +559,13 @@ export default function VoiceWidget({ config, claimHeld, consoleHost }) {
 
   // Route hide through tracked cancel so a rapid hide→re-engage waits for mic
   // teardown instead of tearing down tracks from the freshly opened capture.
+  // If a newer engage supersedes the hide before teardown settles, keep the
+  // controls visible instead of leaving the mic live behind a hidden widget.
   const hideWidget = useCallback(async () => {
-    engageSeqRef.current += 1;
+    const seq = ++engageSeqRef.current;
     pendingEngageRef.current = false;
     await trackCancel();
-    if (disposedRef.current) return;
+    if (disposedRef.current || seq !== engageSeqRef.current) return;
     writeVoiceHidden(true);
     // Hand focus to the sidebar toggle before this widget unmounts.
     const target = document.querySelector('[data-voice-toggle]') || document.getElementById('main-content');
