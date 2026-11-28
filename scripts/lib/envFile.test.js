@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { chmodSync, mkdtempSync, writeFileSync, readFileSync, mkdirSync, copyFileSync, rmSync, statSync } from 'fs';
+import { chmodSync, lstatSync, mkdtempSync, writeFileSync, readFileSync, mkdirSync, copyFileSync, rmSync, statSync, symlinkSync } from 'fs';
 import { spawnSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import { tmpdir } from 'os';
@@ -132,6 +132,17 @@ describe('upsertEnvKey', () => {
     chmodSync(envPath, 0o644);
     upsertEnvKey(envPath, 'PGMODE', 'native');
     expect(statSync(envPath).mode & 0o777).toBe(0o600);
+  });
+
+  it.skipIf(process.platform === 'win32')('preserves a symlinked .env while atomically tightening the target to 0600', () => {
+    const targetPath = join(dir, 'shared.env');
+    writeFileSync(targetPath, 'OTHER=keep\n', { mode: 0o644 });
+    chmodSync(targetPath, 0o644);
+    symlinkSync(targetPath, envPath);
+    upsertEnvKey(envPath, 'PGPASSWORD', 'example-secret');
+    expect(lstatSync(envPath).isSymbolicLink()).toBe(true);
+    expect(parseEnvFile(targetPath)).toEqual({ OTHER: 'keep', PGPASSWORD: 'example-secret' });
+    expect(statSync(targetPath).mode & 0o777).toBe(0o600);
   });
 });
 

@@ -6,7 +6,7 @@
  */
 
 import { randomBytes } from 'crypto';
-import { chmodSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'fs';
+import { chmodSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import envFileParser from './envFile.cjs';
 
@@ -47,13 +47,20 @@ export function upsertEnvKey(filePath, key, value) {
     return [`${key}=${value}${line.endsWith('\r') ? '\r' : ''}`];
   });
   content = replaced ? lines.join('\n') : `${key}=${value}\n${content}`;
-  // Stage into a fresh 0600 temp file and atomically replace .env so an
-  // existing world-readable inode never receives updated secrets before chmod.
-  const tmpPath = `${filePath}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
+  // Follow an existing symlink so a symlinked .env updates its target on the
+  // same filesystem instead of replacing the link, then stage into a fresh
+  // 0600 temp file and atomically replace it.
+  let targetPath = filePath;
+  try {
+    targetPath = realpathSync(filePath);
+  } catch (err) {
+    if (err.code !== 'ENOENT') throw err;
+  }
+  const tmpPath = `${targetPath}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
   try {
     writeFileSync(tmpPath, content, { mode: 0o600 });
     if (process.platform !== 'win32') chmodSync(tmpPath, 0o600);
-    renameSync(tmpPath, filePath);
+    renameSync(tmpPath, targetPath);
   } catch (err) {
     try { unlinkSync(tmpPath); } catch { /* best-effort cleanup */ }
     throw err;
