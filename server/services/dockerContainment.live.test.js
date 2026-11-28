@@ -4,7 +4,7 @@
  * Linux engine, the pinned Node image, real install and validate runs. Opt-in,
  * because it needs Docker and pulls the pinned image once:
  *
- *   cd server && PORTOS_DOCKER_CONTAINMENT_LIVE=1 npx vitest run services/dockerContainment.live.test.js
+ *   cd server && PORTOS_DOCKER_CONTAINMENT_LIVE=1 npx vitest run --configLoader native services/dockerContainment.live.test.js
  *
  * With the flag set an unready engine FAILS (it never silently skips), so a
  * green run is evidence. The install cases need the public npm registry.

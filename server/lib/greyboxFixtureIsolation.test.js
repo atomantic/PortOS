@@ -18,7 +18,7 @@ describe('greybox fixture isolation', () => {
     delete env.VITEST_POOL_ID;
     delete env.VITEST_WORKER_ID;
     execFileSync(process.execPath, [
-      'node_modules/vitest/vitest.mjs', 'run', '--configLoader', 'runner', '--maxWorkers=2',
+      'node_modules/vitest/vitest.mjs', 'run', '--configLoader', 'native', '--maxWorkers=2',
       'services/imageGen/prepareParams.test.js', 'services/videoGen/submitJob.test.js',
       'services/musicVideo/productionDispatch.test.js',
     ], { cwd: join(import.meta.dirname, '..'), env, timeout: 60000, stdio: 'pipe' });

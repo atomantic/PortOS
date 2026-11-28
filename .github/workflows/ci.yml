@@ -526,7 +526,7 @@ jobs:
         env:
           PORTOS_DB_RESTORE_LIVE: '1'
           PGMODE: native
-        run: cd server && npx --no-install vitest run services/backupDatabaseDump.restore.live.test.js
+        run: cd server && npx --no-install vitest run --configLoader native services/backupDatabaseDump.restore.live.test.js
 
       # Full mode: the runner subtracts what the memo verified and records the
       # `⏱ db full suite` duration line itself.
@@ -752,6 +752,19 @@ jobs:
       - name: Check server entry-point syntax
         run: node --check server/index.js
 
+      # The server contracts cover native Vitest launch and DB config discovery.
+      # Exercise the client config imports once when this plan also builds the UI.
+      - uses: ./.github/actions/setup-client
+        if: matrix.shard == 1 && fromJSON(needs.impact.outputs.plan).build
+        with:
+          setup-node: 'false'
+
+      - name: Check client config loading on Windows
+        if: matrix.shard == 1 && fromJSON(needs.impact.outputs.plan).build
+        env:
+          PORTOS_CI_MAX_WORKERS: 2
+        run: npm run test:ci --prefix client -- src/test/viteBuildOutDir.test.js src/test/workspaceTests.test.js
+
       # The platform is part of every memo key, so Windows reads only Windows verdicts.
       - name: Restore the test memo
         id: test-memo
@@ -905,7 +918,7 @@ jobs:
         working-directory: server
         env:
           PORTOS_DOCKER_CONTAINMENT_LIVE: '1'
-        run: npx --no-install vitest run services/dockerContainment.live.test.js
+        run: npx --no-install vitest run --configLoader native services/dockerContainment.live.test.js
 
   macos-native:
     name: macOS native release-agent supervision
@@ -1064,7 +1077,7 @@ jobs:
         working-directory: server
         env:
           PORTOS_SUPERCOLLIDER_LIVE: '1'
-        run: npx --no-install vitest run services/superColliderRender.live.test.js
+        run: npx --no-install vitest run --configLoader native services/superColliderRender.live.test.js
 
       - name: Record the proven platform
         run: |

@@ -11,7 +11,7 @@
  * Parity against a real imported ElsewhereAcres production run is opt-in —
  * production sprite data is never committed (see the repo's privacy rules):
  *   SPRITE_WALK_PARITY_RUN=<abs path to an imported grok/walk-* run dir> \
- *     npx vitest run services/sprites/walkPostprocess.e2e.test.js
+ *     npx vitest run --configLoader native services/sprites/walkPostprocess.e2e.test.js
  * re-runs the postprocess on that run's source video and asserts the same
  * packed geometry + frame count as its imported manifest.
  */

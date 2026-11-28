@@ -53,7 +53,7 @@ export function createVitestTempFixture(host, workspace, body, configUrl) {
   delete env.VITEST_POOL_ID;
   delete env.VITEST_WORKER_ID;
   return {
-    args: [join(workspacePath, 'node_modules/vitest/vitest.mjs'), 'run', '--configLoader', 'runner',
+    args: [join(workspacePath, 'node_modules/vitest/vitest.mjs'), 'run', '--configLoader', 'native',
       '--config', fileURLToPath(configUrl), '--root', root, '--maxWorkers', '1'],
     options: { cwd: workspacePath, env, encoding: 'utf8', timeout: 20000 },
   };
@@ -250,7 +250,12 @@ export async function runWatchConfigRestart(host, workspace, configUrl, inspect,
   // Real path: the watcher reports canonical paths (macOS tmpdir is a symlink),
   // and a config file it cannot match is a plain rerun, not a restart.
   const wrapper = join(realpathSync(host), 'fixture', 'vitest.config.mjs');
-  writeFileSync(wrapper, `export { default } from ${JSON.stringify(fileURLToPath(configUrl))};\n`);
+  // Native config reloads invalidate relative imports. Keep the link outside
+  // the test root so fixture discovery cannot collect the linked workspace.
+  const configPath = fileURLToPath(configUrl);
+  symlinkSync(dirname(configPath), join(host, 'workspace'),
+    process.platform === 'win32' ? 'junction' : 'dir');
+  writeFileSync(wrapper, `export { default } from '../workspace/${basename(configPath)}';\n`);
   const cfg = args.indexOf('--config') + 1;
   args[cfg] = wrapper;
   args[args.indexOf('--root') + 1] = dirname(wrapper);

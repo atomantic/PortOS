@@ -111,13 +111,13 @@ describe('dependency manifest Windows escalation', () => {
     }
   });
 
-  it('skips Windows for changes in workspaces the native job does not install', () => {
+  it('skips Windows for changes in workspaces outside the native dependency baseline', () => {
     const unsafe = lockfile({ ...BASE_PACKAGES, 'node_modules/@scope/binding-win32-x64': { version: '1.0.0', os: ['win32'], cpu: ['x64'] } });
     for (const path of ['package-lock.json', 'client/package-lock.json']) {
       const plan = planFor([path], { [path]: classifyDependencyChange(path, BASE, unsafe) });
       expect(plan.full, path).toBe(true);
       expect(plan.windowsMode, path).toBe('skip');
-      expect(plan.suiteReasons.windows, path).toContain('the Windows job does not install that workspace');
+      expect(plan.suiteReasons.windows, path).toContain('dependency changes in this workspace do not schedule the Windows job');
     }
     for (const path of ['.npmrc', 'client/.npmrc']) {
       expect(planFor([path], {}).windowsMode, path).toBe('skip');
@@ -126,11 +126,11 @@ describe('dependency manifest Windows escalation', () => {
     expect(lockPlan(unsafe).windowsMode).toBe('files');
   });
 
-  it('pins the Windows-installed workspaces to the windows-server install steps in ci.yml', () => {
-    // The install steps live in the setup-server composite action.
+  it('pins the native dependency baseline and the conditional client install in ci.yml', () => {
     const job = readCiJobs()['windows-server'];
     const installed = [...job.matchAll(/npm (?:ci|install)\b[^\n]*/g)].map(([cmd]) => cmd.match(/--prefix\s+(\S+)/)?.[1] ?? '.');
-    expect(installed.sort()).toEqual([...WINDOWS_INSTALLED_WORKSPACES].sort());
+    expect(installed.sort()).toEqual([...WINDOWS_INSTALLED_WORKSPACES, 'client'].sort());
+    expect(job).toContain('uses: ./.github/actions/setup-client\n        if: matrix.shard == 1 && fromJSON(needs.impact.outputs.plan).build');
   });
 
   it('runs shared schema contracts on the primary platform', () => {

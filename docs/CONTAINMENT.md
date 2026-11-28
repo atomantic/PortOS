@@ -69,5 +69,5 @@ The live suite exercises a local Docker engine and is required on relevant
 Linux CI changes. Use it on macOS with Docker Desktop for platform evidence.
 
 ```bash
-cd server && PORTOS_DOCKER_CONTAINMENT_LIVE=1 npx vitest run services/dockerContainment.live.test.js
+cd server && PORTOS_DOCKER_CONTAINMENT_LIVE=1 npx vitest run --configLoader native services/dockerContainment.live.test.js
 ```

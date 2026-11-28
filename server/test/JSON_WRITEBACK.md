@@ -1,6 +1,6 @@
 # JSON write-back prevention guard
 
-Run from `server/`: `node_modules/.bin/vitest run test/guards/runtime.guard.test.js -t jsonWritebackConventions` (the check lives in `test/guards/runtime/jsonWritebackConventions.test.js`).
+Run from `server/`: `node_modules/.bin/vitest run --configLoader native test/guards/runtime.guard.test.js -t jsonWritebackConventions` (the check lives in `test/guards/runtime/jsonWritebackConventions.test.js`).
 The guard parses source without importing services or reading runtime data.
 A non-strict read paired with `atomicWrite` on the same path in a service
 requires an entry in [jsonWritebackExceptions.js](jsonWritebackExceptions.js).

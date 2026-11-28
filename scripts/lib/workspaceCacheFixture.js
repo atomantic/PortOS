@@ -193,9 +193,8 @@ export async function checkDevCacheIsolation(expect, signal) {
       // repeating identical Vite startup for npm and PM2.
       for (const devArgs of Object.values(commands)) {
         const loaderAt = devArgs.indexOf('--configLoader');
-        expect(loaderAt === -1 ? undefined : devArgs[loaderAt + 1]).toBe('runner');
+        expect(loaderAt === -1 ? undefined : devArgs[loaderAt + 1]).toBe('native');
       }
-      const loader = 'runner';
       const fixtures = ['a', 'b'].map(name => {
         const parent = join(host, name);
         const root = join(parent, 'fixture');
@@ -203,7 +202,7 @@ export async function checkDevCacheIsolation(expect, signal) {
         mkdirSync(cwd, { recursive: true });
         link(dependencies, join(root, 'node_modules'));
         put(join(root, 'package.json'), '{"type":"module"}');
-        for (const file of ['vite.config.js', 'vite.chunkGroups.js']) {
+        for (const file of ['vite.config.js', 'vite.bundleReport.js', 'vite.chunkGroups.js']) {
           copyFileSync(join(REPO, 'client', file), join(root, file));
         }
         put(join(parent, 'package.json'), '{"type":"module","version":"0.0.0"}');
@@ -211,7 +210,7 @@ export async function checkDevCacheIsolation(expect, signal) {
         const cache = join(realpathSync(root), '.cache/vite').replaceAll('\\', '/');
         const script = join(root, 'inspect-dev.mjs');
         put(script, `import { resolveConfig } from 'vite';
-          const config = await resolveConfig({ configFile: ${JSON.stringify(join(root, 'vite.config.js'))}, configLoader: ${JSON.stringify(loader)} }, 'serve');
+          const config = await resolveConfig({ configFile: ${JSON.stringify(join(root, 'vite.config.js'))}, configLoader: 'native' }, 'serve');
           if (config.cacheDir !== ${JSON.stringify(cache)}) throw Error('dev cache escaped its config owner');
           process.stdout.write(config.cacheDir);`);
         const env = { ...process.env, TMPDIR: host, TMP: host, TEMP: host, NODE_DISABLE_COMPILE_CACHE: '1' };

@@ -11,13 +11,13 @@
     "dev": "node --watch start.js",
     "start": "node start.js",
     "lint": "node ../client/node_modules/@biomejs/biome/bin/biome lint --error-on-warnings --max-diagnostics=20 .",
-    "test": "vitest run --configLoader runner",
-    "test:fast": "vitest run --configLoader runner",
-    "test:watch": "vitest --configLoader runner",
-    "test:ci": "vitest run --silent=passed-only --reporter=default --reporter=github-actions --configLoader runner",
+    "test": "vitest run --configLoader native",
+    "test:fast": "vitest run --configLoader native",
+    "test:watch": "vitest --configLoader native",
+    "test:ci": "vitest run --silent=passed-only --reporter=default --reporter=github-actions --configLoader native",
     "setup:db:test": "node scripts/setup-db-test.mjs",
-    "test:db": "vitest run --config vitest.config.db.js --configLoader runner",
-    "test:db:ci": "vitest run --config vitest.config.db.js --reporter=default --reporter=github-actions --configLoader runner"
+    "test:db": "vitest run --config vitest.config.db.js --configLoader native",
+    "test:db:ci": "vitest run --config vitest.config.db.js --reporter=default --reporter=github-actions --configLoader native"
   },
   "dependencies": {
     "@babel/parser": "8.1.3",

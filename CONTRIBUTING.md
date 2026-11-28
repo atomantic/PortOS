@@ -66,6 +66,9 @@ npm test --prefix server -- services/creativeDirector/videoAssembly.test.js
 Report focused runs as coverage of the selected tests. See [Pregate](docs/PREGATE.md)
 for the focused plan, coverage limits, and full CI plan.
 
+When invoking Vite or Vitest directly, pass `--configLoader native` to use
+the same JavaScript config loader as the workspace scripts.
+
 For DB-backed checks, provision the isolated test database and run the DB suite
 after the server and client suites finish.
 

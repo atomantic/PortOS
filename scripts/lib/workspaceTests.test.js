@@ -16,7 +16,7 @@ const REPO_ROOT = join(import.meta.dirname, '..', '..');
 function vitestListedFiles(repoRoot, workspace) {
   // Through node, not the .bin shim: the shim is a shell script (.cmd on Windows) execFileSync cannot start there.
   const listed = execFileSync(process.execPath, [join(repoRoot, workspace, 'node_modules', 'vitest', 'vitest.mjs'),
-    'list', '--filesOnly', '--configLoader', 'runner'], {
+    'list', '--filesOnly', '--configLoader', 'native'], {
       cwd: join(repoRoot, workspace), encoding: 'utf8', maxBuffer: 16 * 1024 * 1024,
       env: { ...process.env, PORTOS_CI_TEST_SELECTION: '', PORTOS_CI_BROWSER_OWNER: '' },
     })
@@ -54,7 +54,7 @@ describe('workspace test enumeration', () => {
 
   it('collects the same files as `vitest list --config vitest.config.db.js` for the db scope', () => {
     const listed = execFileSync(process.execPath, [join(REPO_ROOT, 'server', 'node_modules', 'vitest', 'vitest.mjs'),
-      'list', '--filesOnly', '--config', 'vitest.config.db.js', '--configLoader', 'runner'], {
+      'list', '--filesOnly', '--config', 'vitest.config.db.js', '--configLoader', 'native'], {
       cwd: join(REPO_ROOT, 'server'), encoding: 'utf8', maxBuffer: 16 * 1024 * 1024,
       env: { ...process.env, PORTOS_CI_TEST_SELECTION: '' },
     }).split('\n').map((line) => line.trim().replace(/^\[[^\]]+\] /, '')).filter(Boolean);

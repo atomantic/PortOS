@@ -819,7 +819,7 @@ describe('planTestMemo and recordTestMemo', () => {
     delete env.VITEST_POOL_ID;
     delete env.VITEST_WORKER_ID;
     const result = spawnSync(process.execPath, [join(server, 'node_modules/vitest/vitest.mjs'),
-      'run', posix.relative('server', suite), posix.relative('server', mocked), '--configLoader', 'runner', '--config', config,
+      'run', posix.relative('server', suite), posix.relative('server', mocked), '--configLoader', 'native', '--config', config,
       '--experimental.recordDependencies', '--maxWorkers', '1', '--reporter=dot'], { cwd: server, env, encoding: 'utf8', timeout: 120000 });
     expect(result.status, result.error?.message ?? result.stdout + result.stderr).toBe(0);
     const bySuite = readVitestDependencies(vitestDependenciesPath(root, 'server'), 'server');

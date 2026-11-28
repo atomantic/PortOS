@@ -2,10 +2,10 @@ import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
 import { readFileSync, existsSync } from 'fs';
 import { execFileSync } from 'child_process';
-import { createRequire } from 'node:module';
 import { resolve } from 'path';
 
 import { resolveBundleNodeEnv } from '../lib/viteBuildEnv.js';
+import { bundleReport } from './vite.bundleReport.js';
 import { CHUNK_GROUPS } from './vite.chunkGroups.js';
 import { DEV_PROXY_CLIENT_ADDRESS_HEADER, devProxyForwardedOrigin } from '../lib/portosAuthCore.js';
 import {
@@ -16,8 +16,6 @@ import {
 
 const ANALYZE_BUNDLE = process.env.ANALYZE === 'true';
 const CONFIG_DIR = import.meta.dirname;
-// The Vite config runner closes before invoking the exported config function.
-const requireFromConfig = createRequire(import.meta.url);
 // client/dist is the bundle the running server serves; only publish-client-build.js
 // (which sets PORTOS_CLIENT_BUILD_OUT_DIR to its stage dir) may replace it. A bare
 // `vite build` lands in a git-ignored scratch dir instead of emptying live chunks.
@@ -246,7 +244,7 @@ export default defineConfig(({ command, mode }) => {
     plugins: [
       react(),
       guardInitialApiBundle(),
-      command === 'build' && ANALYZE_BUNDLE && requireFromConfig('./vite.bundleReport.js').bundleReport(),
+      command === 'build' && ANALYZE_BUNDLE && bundleReport(),
     ].filter(Boolean),
     resolve: {
       // Share Three.js without bypassing its package exports with a directory alias.

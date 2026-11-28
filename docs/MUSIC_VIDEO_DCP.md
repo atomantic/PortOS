@@ -13,7 +13,7 @@ Verification checks technical properties, not playback at every cinema. Inspect 
 Install a compatible DCP-o-matic toolchain and ffmpeg/ffprobe, then point `PORTOS_DCP_TEST_TOOLS` at the directory containing `dcpomatic2_create`, `dcpomatic2_cli` and `dcpomatic2_verify_cli` (on Windows their `.exe` counterparts). From `server/` run:
 
 ```sh
-PORTOS_DCP_TEST_TOOLS='/path/to/DCP-o-matic 2.app/Contents/MacOS' ./node_modules/.bin/vitest run routes/musicVideoDcp.integration.test.js
+PORTOS_DCP_TEST_TOOLS='/path/to/DCP-o-matic 2.app/Contents/MacOS' ./node_modules/.bin/vitest run --configLoader native routes/musicVideoDcp.integration.test.js
 ```
 
 The test generates a synthetic two-second source, builds a package through the route, compares the source hash, checks container dimensions, active area, duration, frame rate and decoded left/right audio, and checks that the real verifier rejects a deliberately damaged copy. The test is skipped when the optional tool directory is not specified. It uses temporary test data, not a real project or master.

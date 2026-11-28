@@ -325,7 +325,7 @@ module.exports = {
       interpreter: NODE_INTERPRETER,
       log_date_format: LOG_DATE_FORMAT,
       windowsHide: IS_WIN,
-      args: `--configLoader runner --host 0.0.0.0 --port ${PORTS.UI}`,
+      args: `--configLoader native --host 0.0.0.0 --port ${PORTS.UI}`,
       env: {
         ...BASE_ENV,
         VITE_PORT: PORTS.UI
