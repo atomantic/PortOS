@@ -43,6 +43,23 @@ describe('openRealtimeCall', () => {
     expect(emit).toHaveBeenCalledWith('voice:realtime:audio', { pcm: reply, sampleRate: 24000 });
   });
 
+  it('sends the playback reference after the mic bytes, announcing each framing change first', async () => {
+    const { ws, call } = await open();
+    const mic = Buffer.alloc(640, 1);
+    const far = Buffer.alloc(640, 2);
+    call.pushAudio(mic, far);
+    call.pushAudio(mic, far);
+    call.pushAudio(mic, Buffer.alloc(320));                     // mismatched reference: mic only
+    call.pushAudio(mic);
+    call.pushAudio(mic, far);
+    const sent = ws.sent.map((m) => (typeof m === 'string' ? JSON.parse(m) : m));
+    expect(sent).toEqual([
+      { type: 'reference', on: true }, Buffer.concat([mic, far]), Buffer.concat([mic, far]),
+      { type: 'reference', on: false }, mic, mic,
+      { type: 'reference', on: true }, Buffer.concat([mic, far]),
+    ]);
+  });
+
   it('runs a delegated task through the tool pipeline and hands the result back to the voice', async () => {
     const { ws, emit, runDelegate } = await open();
     ws.text({ type: 'delegate', call_id: 'c1', task: 'What time is it?' });

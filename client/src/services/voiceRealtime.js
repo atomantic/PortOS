@@ -2,12 +2,16 @@
  * Realtime (speech-to-speech) Voice Call transport: 16 kHz PCM16 microphone up, gapless 24 kHz PCM16 reply audio down.
  *
  * Turn-taking and barge-in happen in the voice model; this side only drops buffered audio when the server says the
- * user interrupted.
+ * user interrupted. Each mic frame carries `far`, what the speaker played over the same 20 ms (see
+ * voicePlaybackReference.js), so the voice does not mistake its own echo for the user talking over it. The browser's
+ * echo canceller stays the one echo-cancellation stage; the reference only raises the voice's speech threshold. Without a
+ * reliable reference (no AudioWorklet output tap or no getOutputTimestamp) frames go up without `far`, as before.
  */
 import socket from './socket';
 import { markVoiceTiming } from './voiceTimingDebug.js';
 import { getVoiceOutputVisualizer, getVoiceVolume, isVoiceMuted, onVoiceAudioPrefs } from './voicePlayback.js';
 import { encodePcmToWav } from '../lib/audioRecorder.js';
+import { captureTimeMs, createPlaybackReference, deviceTimeMs, inputLatencyOf, supportsPlaybackReference } from './voicePlaybackReference.js';
 
 const MIC_RATE = 16000;
 const OUT_RATE = 24000;
@@ -20,15 +24,29 @@ const AVATAR_SEGMENT_S = 1.6;
 const AVATAR_LOW_WATER_S = 0.35;
 const AVATAR_READY_WAIT_MS = 750;
 
+// The mic processor posts each input block with its context frame, so capture time is known. The tap sits between the
+// output gain and the speaker, passes audio through unchanged and posts what it rendered, with its frame.
 const WORKLET_SOURCE = `
 class RealtimeMic extends AudioWorkletProcessor {
   process(inputs) {
     const ch = inputs[0] && inputs[0][0];
-    if (ch && ch.length) this.port.postMessage(ch.slice(0));
+    if (ch && ch.length) this.port.postMessage({ ch: ch.slice(0), frame: currentFrame });
     return true;
   }
 }
 registerProcessor('portos-realtime-mic', RealtimeMic);
+class RealtimePlaybackTap extends AudioWorkletProcessor {
+  process(inputs, outputs) {
+    const ch = inputs[0] && inputs[0][0];
+    const out = outputs[0] && outputs[0][0];
+    if (ch && ch.length) {
+      if (out) out.set(ch);
+      this.port.postMessage({ ch: ch.slice(0), frame: currentFrame });
+    }
+    return true;
+  }
+}
+registerProcessor('portos-realtime-tap', RealtimePlaybackTap);
 `;
 
 // A realtime call owns the microphone and the conversation. The voice widget listens for this event and stops its own
@@ -104,6 +122,7 @@ export const startRealtimeCall = async (handlers = {}) => {
   let outCtx;
   let source;
   let node;
+  let tap = null;
   const url = URL.createObjectURL(new Blob([WORKLET_SOURCE], { type: 'application/javascript' }));
   try {
     micCtx = new Ctor({ sampleRate: MIC_RATE });
@@ -112,6 +131,15 @@ export const startRealtimeCall = async (handlers = {}) => {
     source = micCtx.createMediaStreamSource(stream);
     node = new AudioWorkletNode(micCtx, 'portos-realtime-mic');
     source.connect(node);
+    if (supportsPlaybackReference(micCtx, outCtx)) {
+      // The tap is optional: without it the call runs on the browser's echo cancellation alone.
+      try {
+        await outCtx.audioWorklet.addModule(url);
+        tap = new AudioWorkletNode(outCtx, 'portos-realtime-tap');
+      } catch {
+        tap = null;
+      }
+    }
   } catch (err) {
     // Release the microphone and contexts, or the mic indicator stays on after a failed start.
     source?.disconnect();
@@ -124,15 +152,34 @@ export const startRealtimeCall = async (handlers = {}) => {
     URL.revokeObjectURL(url);
   }
 
+  const reference = tap ? createPlaybackReference({ outRate: OUT_RATE, micRate: MIC_RATE }) : null;
+  const inputLatencyS = inputLatencyOf(stream);
+  markVoiceTiming(`rt.echo-reference ${reference ? 'on' : 'off'}`);
+  if (tap) {
+    tap.port.onmessage = ({ data }) => {
+      const at = deviceTimeMs(outCtx, data.frame / OUT_RATE);
+      if (at !== null) reference.push(data.ch, at);
+    };
+  }
+
   let pending = new Float32Array(0);
   let live = false;
   node.port.onmessage = ({ data }) => {
-    if (!live) return;
-    const merged = new Float32Array(pending.length + data.length);
-    merged.set(pending); merged.set(data, pending.length);
+    if (!live || !data?.ch) return;
+    const { ch } = data;
+    // Capture time of merged[0]: the held-over samples came just before this block.
+    const startMs = reference ? captureTimeMs(micCtx, data.frame / MIC_RATE, inputLatencyS) : null;
+    const mergedStartMs = startMs === null ? null : startMs - (pending.length * 1000) / MIC_RATE;
+    const merged = new Float32Array(pending.length + ch.length);
+    merged.set(pending); merged.set(ch, pending.length);
     let offset = 0;
     while (merged.length - offset >= FRAME_SAMPLES) {
-      socket.emit('voice:realtime:audio', { pcm: floatToPcm16(merged.subarray(offset, offset + FRAME_SAMPLES)) });
+      const payload = { pcm: floatToPcm16(merged.subarray(offset, offset + FRAME_SAMPLES)) };
+      if (reference) {
+        const far = mergedStartMs === null ? new Float32Array(FRAME_SAMPLES) : reference.frame(mergedStartMs + (offset * 1000) / MIC_RATE, FRAME_SAMPLES);
+        payload.far = floatToPcm16(far);
+      }
+      socket.emit('voice:realtime:audio', payload);
       offset += FRAME_SAMPLES;
     }
     pending = merged.slice(offset);
@@ -143,7 +190,7 @@ export const startRealtimeCall = async (handlers = {}) => {
   const playing = new Set();
   // Output volume and mute follow the voice widget's controls.
   const outGain = outCtx.createGain();
-  outGain.connect(outCtx.destination);
+  if (tap) { outGain.connect(tap); tap.connect(outCtx.destination); } else outGain.connect(outCtx.destination);
   const offPrefs = onVoiceAudioPrefs(({ volume, muted }) => { outGain.gain.value = muted ? 0 : volume; });
   outGain.gain.value = isVoiceMuted() ? 0 : getVoiceVolume();
 
@@ -227,6 +274,7 @@ export const startRealtimeCall = async (handlers = {}) => {
     offPrefs();
     flush();
     node.port.onmessage = null;
+    if (tap) { tap.port.onmessage = null; tap.disconnect(); }
     source.disconnect();
     stream.getTracks().forEach((t) => t.stop());
     micCtx.close().catch(() => {});
