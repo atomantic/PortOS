@@ -120,7 +120,12 @@ function runCmd(cmd, args, timeout = 120_000, env = process.env, { redactFailure
         exitCode
       });
     });
-    if (input !== undefined) child?.stdin?.end(input);
+    if (input !== undefined && child?.stdin) {
+      // Absorb EPIPE if the child exits before reading stdin; the execFile
+      // callback reports the command failure without crashing the server.
+      child.stdin.on?.('error', () => {});
+      child.stdin.end(input);
+    }
   });
 }
 
@@ -852,7 +857,11 @@ async function exportDatabaseImpl(backend, { internal = false } = {}) {
     // fail with ENOENT. `recursive: true` is the cross-platform equivalent.
     mkdirSync(dumpDir, { recursive: true, mode: 0o700 });
     if (process.platform !== 'win32') {
-      try { chmodSync(dumpDir, 0o700); } catch { /* ignore when mocked or unavailable */ }
+      try {
+        chmodSync(dumpDir, 0o700);
+      } catch {
+        throw new ServerError('Could not restrict dump directory permissions', { status: 500 });
+      }
     }
     const dumpFile = join(dumpDir, `portos-${backend}-${label}.sql`);
     // Use -f flag to write output directly — no shell redirect needed, avoids shell injection.
@@ -874,7 +883,12 @@ async function exportDatabaseImpl(backend, { internal = false } = {}) {
       throw new ServerError('Export failed', { status: 500, context: { details: commandDetail(result) } });
     }
     if (process.platform !== 'win32') {
-      try { chmodSync(dumpFile, 0o600); } catch { /* ignore when mocked or unavailable */ }
+      try {
+        chmodSync(dumpFile, 0o600);
+      } catch {
+        try { rmSync(dumpFile, { force: true }); } catch { /* best-effort cleanup */ }
+        throw new ServerError('Could not restrict dump file permissions', { status: 500 });
+      }
     }
     return { success: true, dumpFile: internal ? dumpFile : scrubHomePath(dumpFile) };
   }

@@ -976,7 +976,9 @@ describe('POST /api/database/sync endpoint safety', () => {
     'pins %s export and import to distinct endpoints with configured credentials',
     async (mode, port, targetPort) => {
       POOL_CONFIG.port = port;
-      const mkdir = vi.spyOn(await import('fs'), 'mkdirSync').mockImplementation(() => undefined);
+      const fsMod = await import('fs');
+      const mkdir = vi.spyOn(fsMod, 'mkdirSync').mockImplementation(() => undefined);
+      const chmod = vi.spyOn(fsMod, 'chmodSync').mockImplementation(() => undefined);
       createReadStream.mockImplementationOnce(() => Readable.from([Buffer.from('SELECT 1;\n')]));
       execFile.mockImplementation((_cmd, args, _opts, callback) => {
         callback(null, args.includes('status') ? `Current mode: ${mode}` : '1', '');
@@ -999,6 +1001,7 @@ describe('POST /api/database/sync endpoint safety', () => {
         expect(execFile.mock.calls.filter(([, args]) => args.includes('export'))).toHaveLength(0);
       } finally {
         mkdir.mockRestore();
+        chmod.mockRestore();
       }
     }
   );
@@ -1123,6 +1126,17 @@ describe('POST /api/database/sync endpoint safety', () => {
       const failRes = await request(makeApp()).post('/api/database/export').send({ backend: 'native' });
       expect(failRes.status).toBe(500);
       expect(rm).toHaveBeenCalledWith(expect.stringMatching(/portos-native-backup-\d+\.sql$/), { force: true });
+
+      // Refuses export if dump directory permissions cannot be restricted on POSIX.
+      if (process.platform !== 'win32') {
+        execFile.mockClear();
+        chmod.mockImplementationOnce(() => { throw new Error('EPERM'); });
+        mockExecFile([{ exitCode: 0, stdout: '' }]);
+        const permFailRes = await request(makeApp()).post('/api/database/export').send({ backend: 'native' });
+        expect(permFailRes.status).toBe(500);
+        expect(permFailRes.body.error).toMatch(/dump directory permissions/i);
+        expect(execFile.mock.calls.filter(([cmd]) => cmd === 'pg_dump')).toHaveLength(0);
+      }
     } finally {
       mkdir.mockRestore();
       chmod.mockRestore();
