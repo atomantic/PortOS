@@ -45,12 +45,12 @@ export default function MonthlyUsageCard({ history: points = [], series = [], in
           <div className="overflow-x-auto">
             <table className="w-full text-left tabular-nums whitespace-nowrap">
               <thead><tr>
-                <th className="py-2 pr-3">Month</th>
-                {series.map((provider) => <th key={provider.key} className="pr-3">{provider.label} (USD)</th>)}
-                <th className="pr-3">Est. cost (USD)</th><th>Tokens</th>
+                <th scope="col" className="py-2 pr-3">Month</th>
+                {series.map((provider) => <th scope="col" key={provider.key} className="pr-3">{provider.label} (USD)</th>)}
+                <th scope="col" className="pr-3">Est. cost (USD)</th><th scope="col">Tokens</th>
               </tr></thead>
               <tbody>{points.map((point) => <tr key={point.month}>
-                <th className="py-2 pr-3 font-normal">{monthLabel(point.month)}{point.partial ? ' (partial)' : ''}</th>
+                <th scope="row" className="py-2 pr-3 font-normal">{monthLabel(point.month)}{point.partial ? ' (partial)' : ''}</th>
                 {series.map((provider, i) => <td key={provider.key} className="pr-3">{formatUsd(point.values?.[i])}</td>)}
                 <td className="pr-3">{formatUsd(point.estimatedCost)}</td>
                 <td>{formatCount(point.tokens)}</td>

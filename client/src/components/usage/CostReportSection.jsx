@@ -251,17 +251,21 @@ export function RangeDateInput({ id, label, value, onCommit }) {
 export function CostReportFilters({ period, from, to, isCustom, onPeriod, onRange }) {
   return (
     <div className="flex flex-wrap items-center gap-2">
-      {USAGE_PERIOD_OPTIONS.map((opt) => (
-        <button
-          key={opt.id}
-          onClick={() => onPeriod(opt.id)}
-          className={`px-3 py-1 rounded-full text-xs sm:text-sm border ${!isCustom && period === opt.id
-            ? 'bg-port-accent/20 border-port-accent text-white'
-            : 'border-port-border text-gray-400 hover:text-white'}`}
-        >
-          {opt.label}
-        </button>
-      ))}
+      <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Usage report period">
+        {USAGE_PERIOD_OPTIONS.map((opt) => (
+          <button
+            key={opt.id}
+            type="button"
+            aria-pressed={!isCustom && period === opt.id}
+            onClick={() => onPeriod(opt.id)}
+            className={`px-3 py-1 rounded-full text-xs sm:text-sm border ${!isCustom && period === opt.id
+              ? 'bg-port-accent/20 border-port-accent text-white'
+              : 'border-port-border text-gray-400 hover:text-white'}`}
+          >
+            {opt.label}
+          </button>
+        ))}
+      </div>
       <div className={`flex flex-wrap items-center gap-1.5 rounded-xl border px-2 py-0.5 ${isCustom ? 'border-port-accent bg-port-accent/10' : 'border-port-border'}`}>
         <div className="flex items-center gap-1.5">
           <label htmlFor="usage-from" className="text-xs text-gray-400">From</label>

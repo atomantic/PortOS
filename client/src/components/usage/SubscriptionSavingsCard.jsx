@@ -241,10 +241,10 @@ export default function SubscriptionSavingsCard({ savings, onSaved }) {
             <table className="w-full text-sm">
               <thead>
                 <tr className="text-left text-xs text-gray-500 border-b border-port-border">
-                  <th className="py-2 pr-2 font-medium">Subscription</th>
-                  <th className="py-2 px-2 font-medium">Cost</th>
+                  <th scope="col" className="py-2 pr-2 font-medium">Subscription</th>
+                  <th scope="col" className="py-2 px-2 font-medium">Cost</th>
                   {rowCells(families[0]).map((cell) => (
-                    <th key={cell.key} className="py-2 px-2 font-medium text-right">{cell.label}</th>
+                    <th scope="col" key={cell.key} className="py-2 px-2 font-medium text-right">{cell.label}</th>
                   ))}
                 </tr>
               </thead>
