@@ -6,6 +6,11 @@
 # AUK_REVISION, recheck the import graph and the ranges in pyproject.toml.
 # PortOS runs auk_mlx, which does not import the PyTorch src/auk stack's
 # torchaudio, torchdiffeq, or x-transformers dependencies.
+# scripts/ml/auk_voice_worker.py also supplies an owned audio-only
+# qwen_omni_utils.process_mm_info shim over soundfile + soxr, omitting
+# qwen-omni-utils, PyAV (av), librosa, numba, llvmlite, scikit-learn, scipy,
+# pooch, audioread, and requests. torchvision remains because transformers'
+# Qwen2_5OmniProcessor instantiates Qwen2VLVideoProcessor at load time.
 mlx>=0.29
 soundfile
 soxr
@@ -17,9 +22,6 @@ soxr
 torch>=2.13
 torchvision>=0.28
 transformers>=5.10
-qwen-omni-utils>=0.0.9
-# PyAV 18.1.0 was yanked for an audio decoding defect. Keep the Python 3.11 branch on 18.1.1 (#20251).
-av==18.1.1 ; python_version < "3.12"
 omegaconf>=2.3.0
 safetensors
 huggingface_hub

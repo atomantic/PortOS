@@ -1,3 +1,4 @@
+# Bounded depfree regeneration: uv 0.13.7; cutoff 2026-11-25T00:00:00Z; dropped unused accelerate; retained versions and hashes unchanged.
 # TRELLIS.2 Metal wheel closure: CPython 3.13, Apple Silicon, macOS 26+.
 # Generated with hash-verified uv 0.13.7; cutoff 2026-11-25T00:00:00Z.
 # Seed the output with this lock to preserve unrelated versions. Regenerate from the repository root:
@@ -5,8 +6,6 @@
 #   --python-version 3.13 --python-platform aarch64-apple-darwin \
 #   --generate-hashes --only-binary :all: --exclude-newer 2026-11-25T00:00:00Z \
 #   --no-header --no-annotate -o scripts/ml/requirements/requirements-trellis2-mps.lock.txt
-accelerate==1.15.0 \
-    --hash=sha256:97eacca0b73e45cb867dbf8c5d5d4dc32219544300e0c8992c7334dc2ef33cec
 annotated-doc==0.0.4 \
     --hash=sha256:571ac1dc6991c450b25a9c2d84a3705e2ae7a53467b5d111c24fa8baabbed320
 anyio==4.16.0 \
@@ -433,8 +432,6 @@ pip==26.3 \
 plyfile==1.1.5 \
     --hash=sha256:675c0fc22b949c49398f5ed6725a1d781f6a9f7625b42232c02198f6509c4ae3 \
     --hash=sha256:c62b505062076d72ba67845066579301553baaa93c7d23d9ac1f43495158339c
-psutil==7.2.2 \
-    --hash=sha256:1a7b04c10f32cc88ab39cbf606e117fd74721c831c98a27dc04578deb0c16979
 pybind11==3.1.0 \
     --hash=sha256:a1cc06b524ab3edca51f8ad3895f9c4fa20b8b19283173dff4ae781449dc9639 \
     --hash=sha256:b8488090f8acffbcb6b5d6a85571a6827a0a2981ffb75e5a0b27b87c4a6b7dd0
