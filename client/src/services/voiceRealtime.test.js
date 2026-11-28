@@ -2,12 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const socketListeners = new Map();
 const socketMock = vi.hoisted(() => ({
+  connected: true,
   emit: vi.fn(),
   on: vi.fn((event, fn) => { socketListeners.set(event, fn); }),
   off: vi.fn((event, fn) => { if (socketListeners.get(event) === fn) socketListeners.delete(event); }),
 }));
 vi.mock('./socket', () => ({ default: socketMock }));
-
 import { floatToPcm16, pcm16ToFloat, startRealtimeCall } from './voiceRealtime';
 
 describe('realtime PCM helpers', () => {
@@ -32,6 +32,7 @@ describe('startRealtimeCall', () => {
   let workletNode;
   let scheduledSources;
   let addModuleError;
+  let workletNodeError;
 
   const makeAudioContext = (opts) => {
     const sourceNode = { connect: vi.fn(), disconnect: vi.fn() };
@@ -65,9 +66,11 @@ describe('startRealtimeCall', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     socketListeners.clear();
+    socketMock.connected = true;
     contexts = [];
     scheduledSources = [];
     addModuleError = null;
+    workletNodeError = null;
     track = { stop: vi.fn() };
     workletNode = null;
 
@@ -81,6 +84,7 @@ describe('startRealtimeCall', () => {
     vi.stubGlobal('window', { AudioContext: AudioContextCtor });
     vi.stubGlobal('AudioContext', AudioContextCtor);
     vi.stubGlobal('AudioWorkletNode', vi.fn(function AudioWorkletNodeMock() {
+      if (workletNodeError) throw workletNodeError;
       workletNode = { port: { onmessage: null } };
       return workletNode;
     }));
@@ -159,5 +163,27 @@ describe('startRealtimeCall', () => {
     expect(track.stop).toHaveBeenCalledTimes(1);
     expect(contexts[0].close).toHaveBeenCalledTimes(1);
     expect(contexts[1].close).toHaveBeenCalledTimes(1);
+  });
+
+  it('releases mic tracks and AudioContexts if AudioWorkletNode construction fails', async () => {
+    workletNodeError = new Error('worklet node failed');
+    await expect(startRealtimeCall()).rejects.toThrow('worklet node failed');
+    expect(contexts[0]._sourceNode.disconnect).toHaveBeenCalledTimes(1);
+    expect(track.stop).toHaveBeenCalledTimes(1);
+    expect(contexts).toHaveLength(2);
+    expect(contexts[0].close).toHaveBeenCalledTimes(1);
+    expect(contexts[1].close).toHaveBeenCalledTimes(1);
+  });
+
+  it('releases mic and reports disconnect when the socket drops mid-call', async () => {
+    const onState = vi.fn();
+    await startRealtimeCall({ onState });
+    expect(socketMock.emit).toHaveBeenCalledWith('voice:realtime:start');
+
+    socketListeners.get('disconnect')();
+    expect(track.stop).toHaveBeenCalledTimes(1);
+    expect(contexts[0].close).toHaveBeenCalledTimes(1);
+    expect(onState).toHaveBeenCalledWith({ active: false, error: 'Connection to PortOS was lost.' });
+    expect(socketListeners.size).toBe(0);
   });
 });

@@ -73,13 +73,53 @@ describe('openRealtimeCall', () => {
     expect(emit).toHaveBeenCalledWith('voice:realtime:state', { active: false, reason: 'hangup' });
   });
 
-  it('rejects when the sidecar closes before it is ready', async () => {
+  it('rejects when the sidecar closes before it is ready and preserves close reason without emitting sidecar-closed', async () => {
     const ws = new FakeSocket();
-    const pending = openRealtimeCall({ cfg: {}, emit: vi.fn(), runDelegate: vi.fn(), connect: () => ws,
+    const emit = vi.fn();
+    const pending = openRealtimeCall({ cfg: {}, emit, runDelegate: vi.fn(), connect: () => ws,
       ensureSidecar: vi.fn().mockResolvedValue({ url: 'ws://x' }) });
     await Promise.resolve();
+    ws.readyState = 3;
+    ws.emit('close', 1013, Buffer.from('one conversation at a time'));
+    await expect(pending).rejects.toThrow('closed before it was ready (one conversation at a time)');
+    expect(emit).not.toHaveBeenCalledWith('voice:realtime:state', expect.objectContaining({ reason: 'sidecar-closed' }));
+  });
+
+  it('times out and closes the socket if the sidecar never sends ready', async () => {
+    const ws = new FakeSocket();
+    const closeSpy = vi.spyOn(ws, 'close');
+    const pending = openRealtimeCall({
+      cfg: {},
+      emit: vi.fn(),
+      runDelegate: vi.fn(),
+      connect: () => ws,
+      ensureSidecar: vi.fn().mockResolvedValue({ url: 'ws://x' }),
+      readyTimeoutMs: 15,
+    });
+    await expect(pending).rejects.toThrow('timed out before it was ready');
+    expect(closeSpy).toHaveBeenCalled();
+  });
+
+  it('schedules idle stop and invokes onClose when the sidecar closes after going live', async () => {
+    const ws = new FakeSocket();
+    const emit = vi.fn();
+    const onClose = vi.fn();
+    vi.mocked(scheduleRealtimeIdleStop).mockClear();
+    const pending = openRealtimeCall({
+      cfg: {},
+      emit,
+      runDelegate: vi.fn(),
+      onClose,
+      connect: () => ws,
+      ensureSidecar: vi.fn().mockResolvedValue({ url: 'ws://x' }),
+    });
+    await Promise.resolve();
+    ws.text({ type: 'ready' });
+    await pending;
     ws.close();
-    await expect(pending).rejects.toThrow('closed before it was ready');
+    expect(scheduleRealtimeIdleStop).toHaveBeenCalledTimes(1);
+    expect(onClose).toHaveBeenCalledWith('sidecar-closed');
+    expect(emit).toHaveBeenCalledWith('voice:realtime:state', { active: false, reason: 'sidecar-closed' });
   });
 
   it('aborts cleanly during ready without emitting active state', async () => {

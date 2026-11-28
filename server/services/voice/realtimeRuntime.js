@@ -14,6 +14,7 @@ import { PORTS } from '../../lib/ports.js';
 export const SIDECAR_SCRIPT = join(PATHS.root, 'scripts', 'ml', 'sophon', 'portos_sophon.py');
 export const REALTIME_SIZES = Object.freeze({ '32B': 'models', '4B': 'models-4b' });
 const START_TIMEOUT_MS = 180_000;
+const STOP_TIMEOUT_MS = 5_000;
 const IDLE_STOP_MS = 10 * 60_000;
 
 const realtimeError = (message, status = 409) => new ServerError(message, { status, code: 'VOICE_REALTIME' });
@@ -33,15 +34,36 @@ export const describeInstall = (realtime = {}) => {
   return { home, size, python, app, models, parts, installed: Object.values(parts).every(Boolean) };
 };
 
-let current = null; // { child, port, token, key, ready: Promise, idleTimer }
+let current = null; // { child, port, token, key, ready: Promise, exited: Promise, idleTimer }
+let pendingStop = null;
 
 const stopCurrent = (reason = 'stop') => {
   const proc = current;
   current = null;
-  if (!proc) return;
+  if (!proc) return Promise.resolve();
   clearTimeout(proc.idleTimer);
   console.log(`🗣️ voice.realtime.stop reason=${reason}`);
   proc.child.kill('SIGTERM');
+  const waitExit = new Promise((resolve) => {
+    let settled = false;
+    const done = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(killTimer);
+      resolve();
+    };
+    const killTimer = setTimeout(() => {
+      proc.child.kill('SIGKILL');
+      done();
+    }, STOP_TIMEOUT_MS);
+    killTimer.unref?.();
+    proc.exited.then(done, done);
+  });
+  const stopPromise = waitExit.finally(() => {
+    if (pendingStop === stopPromise) pendingStop = null;
+  });
+  pendingStop = stopPromise;
+  return stopPromise;
 };
 
 /**
@@ -55,7 +77,10 @@ export const ensureRealtimeSidecar = async (realtime = {}, { persona = '', launc
     throw realtimeError(`Realtime voice is not installed at ${scrubHomePath(install.home)} (missing ${missing}).`, 503);
   }
   const key = JSON.stringify([install.home, install.size, persona]);
-  if (current && current.key !== key) stopCurrent('config-changed');
+  while ((current && current.key !== key) || pendingStop) {
+    if (current && current.key !== key) await stopCurrent('config-changed');
+    else if (pendingStop) await pendingStop;
+  }
   if (!current) {
     const token = randomBytes(18).toString('hex');
     const port = PORTS.VOICE_REALTIME;
@@ -66,21 +91,35 @@ export const ensureRealtimeSidecar = async (realtime = {}, { persona = '', launc
       stdio: ['ignore', 'pipe', 'pipe'],
       env: { ...process.env, PORTOS_REALTIME_TOKEN: token, PORTOS_REALTIME_PERSONA: persona },
     });
-    const proc = { child, port, token, key, idleTimer: null };
+    let resolveExited;
+    const exited = new Promise((resolve) => { resolveExited = resolve; });
+    const proc = { child, port, token, key, exited, idleTimer: null };
     proc.ready = new Promise((resolve, reject) => {
-      const timer = setTimeout(() => { reject(realtimeError('Realtime voice did not finish loading.', 503)); child.kill('SIGKILL'); }, START_TIMEOUT_MS);
+      const timer = setTimeout(() => {
+        if (current === proc) current = null;
+        reject(realtimeError('Realtime voice did not finish loading.', 503));
+        child.kill('SIGKILL');
+      }, START_TIMEOUT_MS);
       timer.unref?.();
       createInterface({ input: child.stdout, crlfDelay: Infinity }).on('line', (line) => {
         if (line.startsWith('{"ready"')) { clearTimeout(timer); resolve(); }
       });
       child.stderr.resume(); // Model diagnostics stay out of the server log.
-      child.on('error', (err) => { clearTimeout(timer); reject(realtimeError(`Could not launch realtime voice: ${scrubHomePath(err.message)}`, 503)); });
+      child.on('error', (err) => {
+        clearTimeout(timer);
+        if (current === proc) current = null;
+        resolveExited();
+        reject(realtimeError(`Could not launch realtime voice: ${scrubHomePath(err.message)}`, 503));
+      });
       child.once('close', (code) => {
         clearTimeout(timer);
         if (current === proc) current = null;
+        resolveExited();
         reject(realtimeError(`Realtime voice stopped (exit ${code}).`, 503));
       });
     });
+    // Prevent an unhandledRejection crash if the sidecar exits while no caller is awaiting startup.
+    proc.ready.catch(() => {});
     current = proc;
     console.log(`🗣️ voice.realtime.start size=${install.size} port=${port}`);
   }

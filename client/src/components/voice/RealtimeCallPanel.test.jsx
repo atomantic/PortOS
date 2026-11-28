@@ -87,4 +87,17 @@ describe('RealtimeCallPanel', () => {
     expect(await screen.findByText(/Turn on Voice mode in Voice settings/)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Start realtime call' })).toBeNull();
   });
+
+  it('stops the returned handle if an error state arrives before startRealtimeCall resolves', async () => {
+    mocks.getVoiceRealtimeStatus.mockResolvedValue(installed);
+    const stop = vi.fn();
+    mocks.startRealtimeCall.mockImplementation(async (h) => {
+      h.onState({ active: false, error: 'Realtime voice is turned off in Voice settings.' });
+      return { stop };
+    });
+    render(<RealtimeCallPanel />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Start realtime call' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('turned off in Voice settings');
+    await waitFor(() => expect(stop).toHaveBeenCalled());
+  });
 });

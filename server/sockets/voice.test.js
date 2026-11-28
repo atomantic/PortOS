@@ -57,7 +57,12 @@ vi.mock(import('../services/voice/callEndpointing.js'), async (importOriginal) =
   return { ...actual, createCallEndpointer: vi.fn(actual.createCallEndpointer) };
 });
 
+vi.mock('../services/voice/realtimeSession.js', () => ({
+  openRealtimeCall: vi.fn(),
+}));
+
 const { truncateOnWordBoundary, registerVoiceHandlers } = await import('./voice.js');
+const { openRealtimeCall } = await import('../services/voice/realtimeSession.js');
 const { createCallEndpointer } = await import('../services/voice/callEndpointing.js');
 const {
   getVoiceOutputSocket,
@@ -1326,6 +1331,44 @@ describe('voice host startup cancellation', () => {
 
     expect(host.emitted.filter(frame => frame.event === 'voice:error')).toEqual([]);
     expect(getState().hostAttached).toBe(true);
+  });
+
+  it.each(['voice:realtime:stop', 'disconnect'])('does not open a realtime session if %s arrives during config load', async (cancelEvent) => {
+    let finishConfig;
+    getVoiceConfig.mockImplementationOnce(() => new Promise(resolve => { finishConfig = resolve; }));
+    openRealtimeCall.mockClear();
+    const host = makeFakeSocket();
+    registerVoiceHandlers(host);
+    const starting = host.fire('voice:realtime:start');
+    host.fire(cancelEvent);
+    finishConfig({ enabled: true, realtime: { enabled: true } });
+    await starting;
+
+    expect(openRealtimeCall).not.toHaveBeenCalled();
+  });
+
+  it('ignores duplicate voice:realtime:start while config is loading and allows restart after sidecar close', async () => {
+    let finishConfig;
+    getVoiceConfig.mockImplementationOnce(() => new Promise(resolve => { finishConfig = resolve; }));
+    openRealtimeCall.mockReset();
+    let capturedOnClose;
+    openRealtimeCall.mockImplementation(async ({ onClose }) => {
+      capturedOnClose = onClose;
+      return { pushAudio: vi.fn(), interrupt: vi.fn(), close: vi.fn() };
+    });
+
+    const host = makeFakeSocket();
+    registerVoiceHandlers(host);
+    const first = host.fire('voice:realtime:start');
+    const duplicate = host.fire('voice:realtime:start');
+    finishConfig({ enabled: true, realtime: { enabled: true } });
+    await Promise.all([first, duplicate]);
+    expect(openRealtimeCall).toHaveBeenCalledTimes(1);
+
+    capturedOnClose('sidecar-closed');
+    getVoiceConfig.mockResolvedValueOnce({ enabled: true, realtime: { enabled: true } });
+    await host.fire('voice:realtime:start');
+    expect(openRealtimeCall).toHaveBeenCalledTimes(2);
   });
 
 });
