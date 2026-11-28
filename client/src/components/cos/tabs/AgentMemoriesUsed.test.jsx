@@ -19,6 +19,12 @@ describe('AgentMemoriesUsed', () => {
     expect(link).toHaveAttribute('title', 'Open memory version 2');
   });
 
+  it('names each memory by the text that was sent', () => {
+    renderList([{ id: 'abcdef12-0000', version: 1, relevance: 0.5, preview: 'Prefer inline confirmations over dialogs.' }]);
+    expect(screen.getByRole('link', { name: /Prefer inline confirmations over dialogs\..*abcdef12/ }))
+      .toHaveAttribute('href', '/cos/memory/abcdef12-0000?version=1');
+  });
+
   it('renders nothing for an empty list or a record that predates the field', () => {
     expect(renderList([]).container.innerHTML).toBe('');
     expect(renderList(undefined).container.innerHTML).toBe('');

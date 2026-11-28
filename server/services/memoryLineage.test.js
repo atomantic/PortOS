@@ -45,7 +45,7 @@ describe('memory lineage: retrieval -> run record (#10495)', () => {
     let injected = [];
     const section = await getMemorySection({}, { onInjected: list => { injected = list; } });
     expect(injected.map(m => m.id)).toEqual(['mem-a', 'mem-b']);
-    expect(injected[0]).toEqual({ id: 'mem-a', version: null, relevance: 0.9 });
+    expect(injected[0]).toEqual({ id: 'mem-a', version: null, relevance: 0.9, preview: 'content of mem-a' });
     for (const m of injected) expect(section).toContain(`content of ${m.id}`);
 
     const metadata = await spawn('agent-1', injected);

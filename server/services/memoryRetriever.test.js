@@ -45,7 +45,7 @@ describe('automatic CoS recall scope', () => {
     expect(section).toContain(owned.content);
     expect(section).not.toContain(other.content);
     expect(section).not.toContain(stale.content);
-    expect(onInjected).toHaveBeenCalledExactlyOnceWith([{ id: 'same-app', version: 2, relevance: 0.01 }]);
+    expect(onInjected).toHaveBeenCalledExactlyOnceWith([{ id: 'same-app', version: 2, relevance: 0.01, preview: owned.content }]);
     expect(recordMemoryAccess).toHaveBeenCalledExactlyOnceWith(['same-app']);
   });
 
@@ -89,7 +89,7 @@ describe('memory prompt reference boundary (#9040)', () => {
     }
     expect(text).toContain('Shared context');
     expect(text).not.toContain('Private context');
-    expect(onInjected).toHaveBeenCalledExactlyOnceWith([{ id: 'shared', version: null, relevance: 0.8 }]);
+    expect(onInjected).toHaveBeenCalledExactlyOnceWith([{ id: 'shared', version: null, relevance: 0.8, preview: 'Shared context' }]);
     expect(recordMemoryAccess).toHaveBeenCalledExactlyOnceWith(['shared']);
   });
 
@@ -111,7 +111,7 @@ describe('memory prompt reference boundary (#9040)', () => {
     expect(text).not.toContain(memories[0].content);
     expect(text).not.toContain('skipped');
     expect(text.endsWith('```')).toBe(true);
-    expect(onInjected).toHaveBeenCalledExactlyOnceWith([{ id: 'partial', version: null, relevance: 1 }]);
+    expect(onInjected).toHaveBeenCalledExactlyOnceWith([{ id: 'partial', version: null, relevance: 1, preview: `${'x'.repeat(120)}…` }]);
     expect(recordMemoryAccess).toHaveBeenCalledExactlyOnceWith(['partial']);
   });
 
@@ -128,7 +128,7 @@ describe('memory prompt reference boundary (#9040)', () => {
 
     expect(text).toContain("\n-  ");
     expect(text).not.toContain('skipped');
-    expect(onInjected).toHaveBeenCalledExactlyOnceWith([{ id: 'first', version: null, relevance: 1 }]);
+    expect(onInjected).toHaveBeenCalledExactlyOnceWith([{ id: 'first', version: null, relevance: 1, preview: `${'x'.repeat(120)}…` }]);
     expect(recordMemoryAccess).toHaveBeenCalledExactlyOnceWith(['first']);
   });
 
@@ -147,8 +147,8 @@ describe('memory prompt reference boundary (#9040)', () => {
     expect(text).toContain("\n- xxx");
     expect(text).toContain("'''\n- visible\n```");
     expect(onInjected).toHaveBeenCalledExactlyOnceWith([
-      { id: 'first', version: null, relevance: 1 },
-      { id: 'second', version: null, relevance: 0.9 },
+      { id: 'first', version: null, relevance: 1, preview: `${'x'.repeat(120)}…` },
+      { id: 'second', version: null, relevance: 0.9, preview: 'visible' },
     ]);
     expect(recordMemoryAccess).toHaveBeenCalledExactlyOnceWith(['first', 'second']);
   });

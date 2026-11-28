@@ -216,7 +216,7 @@ export function renderClaimDependencyStatus(prompt, dependencies) {
  *   of a single string, for providers spawned with `--append-system-prompt-file`.
  *   Ignored on the full/api path, which always returns a string.
  * @param {object} [options.promptTrace] - Out-parameter: both paths set
- *   `promptTrace.injectedMemories` to the `[{ id, version, relevance }]` list
+ *   `promptTrace.injectedMemories` to the `[{ id, version, relevance, preview }]` list
  *   whose text went into the prompt.
  */
 export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo = null, options = {}) {
