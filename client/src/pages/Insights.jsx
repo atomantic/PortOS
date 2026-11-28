@@ -287,6 +287,7 @@ export default function Insights() {
         activeTab={activeTab}
         onChange={(id) => navigate(`/insights/${id}`)}
         ariaLabel="Insights sections"
+        mobileCompact
       />
 
       {/* Tab content */}
