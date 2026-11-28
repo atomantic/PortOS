@@ -91,7 +91,7 @@ function stubApi(page, enabled = true, avatar = {}) {
 // Speak one assistant line: a typed navigation turn the trigger tier answers out loud.
 async function speakLine(page) {
   await page.getByRole('textbox', { name: 'Message to the voice assistant' }).fill('open voice call');
-  await page.getByRole('button', { name: 'Send', exact: true }).click();
+  await page.getByRole('button', { name: 'Send text' }).click();
 }
 
 describe.skipIf(!chrome)('Voice Call console in Chrome', () => {
@@ -387,17 +387,20 @@ describe.skipIf(!chrome)('Voice Call console in Chrome', () => {
       await page.evaluate(themeId => { document.documentElement.dataset.portTheme = themeId; }, theme);
       const consoleView = page.getByRole('region', { name: 'PortOS call console' });
       await consoleView.waitFor();
-      expect(await consoleView.evaluate(element => {
+      const fitsFrame = () => consoleView.evaluate(element => {
         const frame = element.getBoundingClientRect();
-        return frame.right <= window.innerWidth && [...element.querySelectorAll('button,input')].every(control => {
+        return frame.right <= window.innerWidth && [...element.querySelectorAll('button,input,textarea')].every(control => {
           const box = control.getBoundingClientRect();
           return box.left >= frame.left && box.right <= frame.right;
         });
-      })).toBe(true);
+      });
+      expect(await fitsFrame()).toBe(true);
       // The portrait is always on; the transceiver offers channels instead of an audio-only toggle.
       await consoleView.getByRole('img', { name: 'Radio operator portrait' }).waitFor();
       expect(await consoleView.getByRole('button', { name: /^Avatar$|Play sample/ }).count()).toBe(0);
+      await consoleView.getByRole('group', { name: 'Station settings' }).getByRole('button', { name: /^Avatars/ }).click();
       await consoleView.getByRole('list', { name: 'Transceiver channels' }).waitFor();
+      expect(await fitsFrame()).toBe(true);
       await page.getByRole('button', { name: 'Model & voice settings' }).click();
       await page.getByLabel('LLM model', { exact: true }).waitFor();
       const model = page.getByLabel('LLM model', { exact: true });
@@ -470,6 +473,8 @@ describe.skipIf(!chrome)('Voice Call console in Chrome', () => {
       await consoleView.locator('canvas[width="512"]').waitFor({ state: 'visible' });
 
       // Inline Voice LLM picker lets the user select a model directly and offers one-click llama.cpp + Conversational Gemma setup.
+      // The voice brain lives behind its station chip so the handset stays above the fold.
+      await consoleView.getByRole('button', { name: /Voice brain/ }).click();
       const quickModel = consoleView.getByLabel('Voice LLM model', { exact: true });
       await quickModel.waitFor();
       expect(await quickModel.inputValue()).toBe('fixture-model');

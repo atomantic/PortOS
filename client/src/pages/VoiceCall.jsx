@@ -13,19 +13,23 @@ export default function VoiceCall() {
 
   return (
     <PageLayout
+      bodyClassName="overflow-auto p-2 sm:p-4 md:p-6"
       header={
         <PageHeader
           title="Voice Call"
           subtitle="Video-enabled satellite transceiver & local AvatarForcing station."
           icon={Radio}
           actions={
+            // Icon-only on phones so the header stays one row; the label returns at `sm`.
             <button
               type="button"
               onClick={() => setShowSettings(true)}
-              className="satphone-key inline-flex min-h-11 items-center gap-2 rounded-lg border px-3.5 font-mono text-xs font-semibold uppercase tracking-wider"
+              aria-label="Model & voice settings"
+              title="Model & voice settings"
+              className="satphone-key inline-flex min-h-11 min-w-11 items-center justify-center gap-2 rounded-lg border px-2.5 font-mono text-xs font-semibold uppercase tracking-wider sm:px-3.5"
             >
               <Settings2 size={15} aria-hidden="true" />
-              Model &amp; voice settings
+              <span className="hidden sm:inline">Model &amp; voice settings</span>
             </button>
           }
         />

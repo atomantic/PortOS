@@ -1,68 +1,86 @@
 import { useState } from 'react';
-import { Radio, Send, Settings2, Trash2 } from 'lucide-react';
+import { Brain, ChevronDown, ChevronUp, Radio, ScanFace, Trash2, Video } from 'lucide-react';
+import { voiceModelDisplayName } from '../../../../server/lib/voiceModelCatalog.js';
 import AvatarChannelsPanel from './AvatarChannelsPanel';
 import AvatarRuntimeSettings from './AvatarRuntimeSettings';
 import SatPhoneHandset from './SatPhoneHandset';
 import VoiceLlmQuickPicker from './VoiceLlmQuickPicker';
 import { useAvatarRuntime } from './useAvatarRuntime';
+import { activeChannelOf, useAvatarLibrary } from './useAvatarLibrary';
+import { safeReadStorage, safeWriteStorage } from '../../lib/safeStorage';
 
-function StationTelemetry({
-  voiceLabel,
-  canChangeMicMode,
-  handsFree,
-  volume,
-  muted,
-  runningAvatar,
-  showAvatarSettings,
-  onToggleAvatarSettings,
-}) {
-  const captureMode = !canChangeMicMode ? 'Web Speech' : handsFree ? 'Hands-free (VOX)' : 'Push-to-talk';
-  const avatarStatus = runningAvatar ? 'AvatarForcing live' : 'Still portrait';
+
+const TAB_KEY = 'portos.voice.callTab';
+const TABS = ['video', 'brain', 'avatars'];
+
+/**
+ * Station settings as two compact disclosure chips instead of stacked cards,
+ * so the handset and log stay above the fold on a phone. Each chip carries its
+ * live status and opens one panel at a time; tapping the open chip folds it.
+ */
+function StationTabs({ runningAvatar, llmProvider, llmModel, onLlmSaved, avatarData, avatarError, onUpdateAvatarData, onRefetchAvatar }) {
+  const [tab, setTab] = useState(() => {
+    const saved = safeReadStorage(TAB_KEY);
+    return saved === 'none' ? null : TABS.includes(saved) ? saved : 'video';
+  });
+  const { data: library } = useAvatarLibrary();
+  const choose = (next) => {
+    const value = tab === next ? null : next;
+    safeWriteStorage(TAB_KEY, value || 'none');
+    setTab(value);
+  };
+  const videoStatus = runningAvatar ? 'Live' : 'Still portrait';
+  const channel = activeChannelOf(library);
+  const avatarsStatus = channel ? `CH${channel.index + 1} on air` : 'Channels';
+  const brainStatus = llmModel && llmModel !== 'auto' ? voiceModelDisplayName(llmModel) : `${llmProvider || 'lmstudio'} (auto)`;
+  const tabs = [
+    { id: 'video', label: 'Video feed', status: videoStatus, Icon: Video, led: runningAvatar ? 'bg-port-accent shadow-[0_0_6px_rgb(var(--port-accent))]' : 'bg-port-success' },
+    { id: 'brain', label: 'Voice brain', status: brainStatus, Icon: Brain },
+    { id: 'avatars', label: 'Avatars', status: avatarsStatus, Icon: ScanFace },
+  ];
 
   return (
-    <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-      <div className="rounded-xl border border-port-border bg-port-card px-3 py-2.5 min-w-0">
-        <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-port-text-muted">Voice profile</p>
-        <p className="mt-0.5 truncate font-mono text-xs font-semibold text-port-text" title={voiceLabel || 'Saved settings'}>
-          {voiceLabel || 'Saved settings'}
-        </p>
-      </div>
-      <div className="rounded-xl border border-port-border bg-port-card px-3 py-2.5 min-w-0">
-        <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-port-text-muted">Audio link</p>
-        <p className="mt-0.5 truncate font-mono text-xs font-semibold text-port-text" title={`${captureMode} · ${muted ? 'Muted' : `${Math.round(volume * 100)}%`}`}>
-          {captureMode} · {muted ? 'Muted' : `${Math.round(volume * 100)}%`}
-        </p>
-      </div>
-      <div className="flex items-center justify-between gap-2 rounded-xl border border-port-border bg-port-card px-3 py-2.5 min-w-0">
-        <div className="min-w-0">
-          <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-port-text-muted">Video feed</p>
-          <p className="mt-0.5 flex items-center gap-1.5 font-mono text-xs font-semibold text-port-text">
-            <span
-              aria-hidden="true"
-              className={`h-1.5 w-1.5 shrink-0 rounded-full ${
-                runningAvatar ? 'bg-port-accent shadow-[0_0_6px_rgb(var(--port-accent))]' : 'bg-port-success'
-              }`}
-            />
-            <span className="truncate" title={avatarStatus}>{avatarStatus}</span>
-          </p>
-        </div>
-        {runningAvatar && (
+    <div className="flex min-w-0 flex-col gap-2">
+      <div role="group" aria-label="Station settings" className="grid grid-cols-[repeat(auto-fit,minmax(8.5rem,1fr))] gap-2">
+        {tabs.map(({ id, label, status, Icon, led }) => (
           <button
+            key={id}
             type="button"
-            onClick={onToggleAvatarSettings}
-            aria-expanded={showAvatarSettings}
-            aria-label="Avatar settings"
-            title={showAvatarSettings ? 'Hide avatar settings' : 'Avatar settings'}
-            className={`inline-flex shrink-0 items-center justify-center rounded-lg border p-1.5 pointer-coarse:min-h-11 pointer-coarse:min-w-11 transition-colors ${
-              showAvatarSettings
-                ? 'border-port-accent bg-port-accent/10 text-port-accent-text'
-                : 'border-port-border bg-port-bg text-port-text-muted hover:border-port-accent hover:text-port-text'
+            aria-expanded={tab === id}
+            aria-controls={`station-panel-${id}`}
+            onClick={() => choose(id)}
+            className={`flex min-h-11 min-w-0 items-center gap-2 rounded-xl border px-2.5 py-1.5 text-left transition-colors ${
+              tab === id ? 'border-port-accent bg-port-accent/10' : 'border-port-border bg-port-card hover:border-port-accent'
             }`}
           >
-            <Settings2 size={15} aria-hidden="true" />
+            <Icon size={14} aria-hidden="true" className="shrink-0 text-port-accent" />
+            <span className="min-w-0 flex-1">
+              <span className="block font-mono text-[10px] uppercase tracking-[0.14em] text-port-text-muted">{label}</span>
+              <span className="flex items-center gap-1.5 font-mono text-xs font-semibold text-port-text">
+                {led && <span aria-hidden="true" className={`h-1.5 w-1.5 shrink-0 rounded-full ${led}`} />}
+                <span className="truncate" title={status}>{status}</span>
+              </span>
+            </span>
+            {tab === id ? <ChevronUp size={14} aria-hidden="true" className="shrink-0 text-port-text-muted" /> : <ChevronDown size={14} aria-hidden="true" className="shrink-0 text-port-text-muted" />}
           </button>
-        )}
+        ))}
       </div>
+
+      {tab === 'video' && (
+        <div id="station-panel-video">
+          <AvatarRuntimeSettings data={avatarData} error={avatarError} updateData={onUpdateAvatarData} refetch={onRefetchAvatar} compact />
+        </div>
+      )}
+      {tab === 'brain' && (
+        <div id="station-panel-brain">
+          <VoiceLlmQuickPicker compact provider={llmProvider} model={llmModel} onSaved={onLlmSaved} />
+        </div>
+      )}
+      {tab === 'avatars' && (
+        <div id="station-panel-avatars">
+          <AvatarChannelsPanel />
+        </div>
+      )}
     </div>
   );
 }
@@ -73,7 +91,6 @@ export default function VoiceCallConsole({
   voiceLabel, llmProvider, llmModel, onLlmSaved, volume = 0.85, muted = false, onVolumeChange, onToggleMute,
   sfxEnabled = true, onToggleSfx, signalLevel = 0, visionEnabled = false, onToggleVision,
 }) {
-  const [showAvatarSettings, setShowAvatarSettings] = useState(false);
   const { data, error, updateData, refetch } = useAvatarRuntime();
   const runningAvatar = Boolean(!error && data?.supported && data.phase === 'running');
 
@@ -124,35 +141,20 @@ export default function VoiceCallConsole({
         />
       </div>
 
-      {/* Right column: Tactical Station Bay (Telemetry + Avatar Engine + Transmission Log & Composer) */}
+      {/* Right column: station settings tabs + transmission log */}
       <div className="flex min-w-0 flex-col gap-4">
-        <StationTelemetry
-          voiceLabel={voiceLabel}
-          canChangeMicMode={canChangeMicMode}
-          handsFree={handsFree}
-          volume={volume}
-          muted={muted}
+        <StationTabs
           runningAvatar={runningAvatar}
-          showAvatarSettings={showAvatarSettings}
-          onToggleAvatarSettings={() => setShowAvatarSettings((prev) => !prev)}
+          llmProvider={llmProvider}
+          llmModel={llmModel}
+          onLlmSaved={onLlmSaved}
+          avatarData={data}
+          avatarError={error}
+          onUpdateAvatarData={updateData}
+          onRefetchAvatar={refetch}
         />
 
-        <AvatarRuntimeSettings
-          data={data}
-          error={error}
-          updateData={updateData}
-          refetch={refetch}
-          open={showAvatarSettings}
-          onToggleOpen={setShowAvatarSettings}
-        />
-
-        <VoiceLlmQuickPicker
-          provider={llmProvider}
-          model={llmModel}
-          onSaved={onLlmSaved}
-        />
-
-        {/* Dedicated full-height Transmission Log & Message Composer */}
+        {/* Transmission log (the composer lives on the handset) */}
         <section className="flex min-w-0 flex-col gap-3 rounded-2xl border border-port-border bg-port-card p-3.5 text-port-text sm:p-4">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-2 min-w-0">
@@ -194,7 +196,7 @@ export default function VoiceCallConsole({
             >
               {history.length === 0 && !interimTranscript && (
                 <p className="opacity-65">
-                  Channel quiet. Press the TALK paddle on the handset or transmit a message below.
+                  Channel quiet. Press the TALK paddle or type on the handset.
                 </p>
               )}
               {history.map((turn, i) => (
@@ -222,30 +224,7 @@ export default function VoiceCallConsole({
             )}
           </div>
 
-          <form
-            className="flex min-w-0 flex-wrap gap-2 sm:flex-nowrap"
-            onSubmit={(event) => { event.preventDefault(); onSend(); }}
-          >
-            <input
-              type="text"
-              aria-label="Message to the voice assistant"
-              value={draft}
-              onChange={(event) => onDraft(event.target.value)}
-              placeholder="Transmit a message…"
-              className="min-h-11 min-w-0 flex-1 rounded-xl border border-port-border bg-port-bg px-3.5 font-mono text-sm text-port-text placeholder:text-port-text-muted focus:border-port-accent focus:outline-none"
-            />
-            <button
-              type="submit"
-              disabled={!draft.trim()}
-              className="satphone-key inline-flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-xl border px-4 font-mono text-xs font-semibold uppercase tracking-wider text-port-accent-text disabled:opacity-45"
-            >
-              <Send size={14} aria-hidden="true" />
-              Send
-            </button>
-          </form>
         </section>
-
-        <AvatarChannelsPanel />
       </div>
     </section>
   );

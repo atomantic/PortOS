@@ -16,10 +16,8 @@ function AvatarActions({ data, ask, terms, pending }) {
   </>;
 }
 
-export default function AvatarRuntimeSettings({ data, error, updateData, refetch, compact = false, open, onToggleOpen }) {
-  const [localOpen, setLocalOpen] = useState(false);
-  const showControls = typeof open === 'boolean' ? open : localOpen;
-  const setShowControls = onToggleOpen || setLocalOpen;
+export default function AvatarRuntimeSettings({ data, error, updateData, refetch, compact = false }) {
+  const [showControls, setShowControls] = useState(false);
   const [terms, setTerms] = useState(false);
   const [pending, setPending] = useState(false);
   const [failure, setFailure] = useState('');
@@ -41,13 +39,6 @@ export default function AvatarRuntimeSettings({ data, error, updateData, refetch
   };
 
   const running = Boolean(data?.supported && data.phase === 'running' && !error);
-  // When embedded with an external toggle (e.g. the Voice Call telemetry card's
-  // settings icon) and AvatarForcing is already live, collapse completely until
-  // the user opens avatar settings.
-  if (typeof open === 'boolean' && running && !showControls) {
-    return null;
-  }
-
   const ledTone = running
     ? 'bg-port-success shadow-[0_0_6px_rgb(var(--port-success)/0.85)]'
     : data?.phase === 'starting' || data?.phase === 'installing'
@@ -65,7 +56,7 @@ export default function AvatarRuntimeSettings({ data, error, updateData, refetch
       {running && <button type="button" className={button} aria-expanded={showControls}
         onClick={() => setShowControls(!showControls)}>{showControls ? 'Hide avatar settings' : 'Avatar settings'}</button>}
     </div>
-    {!running && <p className="text-xs text-port-text-muted">Calls and Play sample still work with a still portrait.</p>}
+    {!running && <p className="text-xs text-port-text-muted">Calls still work with a still portrait.</p>}
     {(error || !data) && <p role="status" className="text-xs">{error ? 'Could not load avatar status.' : 'Checking avatar runtime…'}</p>}
     {error && <button type="button" className={button} onClick={refetch}>Retry status</button>}
     {data && !data.supported && <p className="text-xs text-port-text-muted">This runtime needs an Apple Silicon host running macOS 26 or later.</p>}
