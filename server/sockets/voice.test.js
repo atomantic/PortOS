@@ -57,12 +57,7 @@ vi.mock(import('../services/voice/callEndpointing.js'), async (importOriginal) =
   return { ...actual, createCallEndpointer: vi.fn(actual.createCallEndpointer) };
 });
 
-vi.mock('../services/voice/realtimeSession.js', () => ({
-  openRealtimeCall: vi.fn(),
-}));
-
 const { truncateOnWordBoundary, registerVoiceHandlers } = await import('./voice.js');
-const { openRealtimeCall } = await import('../services/voice/realtimeSession.js');
 const { createCallEndpointer } = await import('../services/voice/callEndpointing.js');
 const {
   getVoiceOutputSocket,
