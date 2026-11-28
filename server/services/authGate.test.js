@@ -58,6 +58,23 @@ vi.mock('./peerSocketRelay.js', () => ({
 }));
 vi.mock('./instanceEvents.js', () => ({ instanceEvents: { emit: vi.fn() } }));
 
+const liveReads = vi.hoisted(() => ({
+  account: vi.fn(async () => ({ status: 'ready' })),
+  models: vi.fn(async () => ({ models: [{ id: 'example-live-model' }] })),
+  quotas: vi.fn(async (options) => [{ family: 'codex', note: options.cacheOnly ? 'Saved quota' : 'Live quota' }]),
+}));
+vi.mock('./codexAppServer.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  getCodexAccountReadiness: liveReads.account,
+  listCodexModels: liveReads.models,
+  peekCodexAccountReadiness: () => ({ status: 'unknown' }),
+  peekCodexModelCatalog: () => ({ models: [{ id: 'example-saved-model' }] }),
+}));
+vi.mock('./provider/providerUsage.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  getProviderQuotas: liveReads.quotas,
+}));
+
 // Direct settings.json writes that also drop the getSettings() read cache —
 // see server/lib/settingsTestUtil.js for why the reset is required here
 // (a prior setPassword() warms the cache; a bypass-save() write leaves it stale).
@@ -894,7 +911,7 @@ describe('host control by default on /api writes (#16018)', () => {
     return ['Authorization', `Bearer ${PORTOS_API_TOKEN}`];
   };
 
-  it.each(['remote', 'basic', 'local', 'session', 'agent'])('checks %s authority for host repository and runtime reads (#19495)', async (authority) => {
+  it.each(['remote', 'basic', 'local', 'session', 'agent'])('checks %s authority for host repository and runtime reads (#19495, #20300)', async (authority) => {
     const paths = [
       '/api/apps/example-app/documents',
       '/api/apps/example-app/documents/docs/guide.md',
@@ -914,6 +931,11 @@ describe('host control by default on /api writes (#16018)', () => {
       '/api/music/setup/runtime-install',
       '/api/remote-desktop/status',
       '/api/html-pages/runs/example-run/pages/0/path',
+      '/api/local-llm/llama-server/update-status',
+      '/api/iterm/status',
+      '/api/image-gen/setup/python',
+      '/api/image-gen/setup/flux2-status',
+      '/api/image-gen/setup/flux2-install',
     ];
     const header = authority === 'remote' ? null : await authorityHeader(authority);
     const { app, sink } = await buildApp(authority === 'local' ? '127.0.0.1' : '192.0.2.10');
@@ -926,6 +948,42 @@ describe('host control by default on /api writes (#16018)', () => {
       expect((await send(app, 'head', path, undefined, header)).status, path).toBe(allowed ? 200 : 403);
     }
     expect(sink).toHaveBeenCalledTimes(allowed ? paths.length * 2 : 0);
+  });
+
+  it.each(['remote', 'basic', 'local', 'session', 'agent'])('checks %s authority for live Codex and quota reads (#20300)', async (authority) => {
+    const { createCodexAccountRoutes } = await import('../routes/providers/codexAccount.js');
+    const { default: usageRoutes } = await import('../routes/usage.js');
+    const { errorMiddleware } = await import('../lib/errorHandler.js');
+    const header = authority === 'remote' ? null : await authorityHeader(authority);
+    const { app } = await buildApp(authority === 'local' ? '127.0.0.1' : '192.0.2.10');
+    app.use('/api/providers', createCodexAccountRoutes());
+    app.use('/api/usage', usageRoutes);
+    app.use(errorMiddleware);
+    for (const read of Object.values(liveReads)) read.mockClear();
+
+    const allowed = authority !== 'remote' && authority !== 'basic';
+    const account = '/api/providers/codex/account';
+    const models = '/api/providers/codex/models';
+    const quotas = '/api/usage/providers';
+    for (const path of [account + '?fresh=1', models + '?fresh=1', quotas + '?refresh=1', quotas + '?refresh=true']) {
+      const response = await send(app, 'get', path, undefined, header);
+      expect(response.status, path).toBe(allowed ? 200 : 403);
+      if (!allowed) expect(response.body.code, path).toBe('HOST_CONTROL_FORBIDDEN');
+    }
+    if (allowed) {
+      expect(liveReads.account).toHaveBeenCalledWith({ fresh: true });
+      expect(liveReads.models).toHaveBeenCalledWith({ fresh: true });
+      expect(liveReads.quotas).toHaveBeenCalledTimes(2);
+      expect(liveReads.quotas).toHaveBeenLastCalledWith({ wait: 'fresh', family: null });
+      return;
+    }
+
+    expect((await send(app, 'get', account, undefined, header)).body).toEqual({ readiness: { status: 'unknown' } });
+    expect((await send(app, 'get', models, undefined, header)).body).toEqual({ models: [{ id: 'example-saved-model' }] });
+    expect((await send(app, 'get', quotas, undefined, header)).body).toEqual({ providers: [{ family: 'codex', note: 'Saved quota' }], cacheOnly: true });
+    expect(liveReads.account).not.toHaveBeenCalled();
+    expect(liveReads.models).not.toHaveBeenCalled();
+    expect(liveReads.quotas).toHaveBeenCalledExactlyOnceWith({ wait: 'never', family: null, cacheOnly: true });
   });
 
   it('refuses a remote password-free caller on every write and sensitive GET before any sink', async () => {

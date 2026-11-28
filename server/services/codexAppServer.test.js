@@ -239,6 +239,17 @@ describe('the cached snapshot the provider list reads', () => {
     expect(spawn).toHaveBeenCalledTimes(1);
   });
 
+  it('omits subprocess diagnostics from the read-only cached account verdict', async () => {
+    spawn.mockImplementationOnce(() => { throw new Error('Could not start /home/example/bin/codex'); });
+    const live = await getCodexAccountReadiness();
+    expect(live.error.message).toContain('/home/example/bin/codex');
+    expect(peekCodexAccountReadiness({ includeDiagnostics: false })).toMatchObject({
+      status: live.status,
+      checkedAt: live.checkedAt,
+      error: { code: live.error.code, message: 'Codex account check failed.' },
+    });
+  });
+
   it('is dropped by an account/updated notification so the next read is real', async () => {
     const promise = getCodexAccountReadiness();
     await scripted(child, promise, [['initialize', {}], ['account/read', { account: null }]]);

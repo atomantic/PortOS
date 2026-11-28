@@ -51,11 +51,17 @@ export default function useCodexAccount({ providers, setProviders, providerListR
     if (typeof getCodexAccount !== 'function') return undefined;
     const revision = ++accountRevision.current;
     setCodexAccountLoading(true);
-    const result = await getCodexAccount({ fresh, silent: true }).catch(() => null);
+    const result = await getCodexAccount({ fresh, silent: true }).catch(() => undefined);
     if (!observationMounted.current || revision !== accountRevision.current) return;
-    const readiness = result?.readiness && typeof result.readiness === 'object' ? result.readiness : null;
-    setCodexAccount(readiness);
     setCodexAccountLoading(false);
+    // A refused live check already toasts through request(); keep any verdict
+    // the page previously loaded.
+    if (!result) {
+      setCodexAccount((current) => current ?? null);
+      return;
+    }
+    const readiness = result.readiness && typeof result.readiness === 'object' ? result.readiness : null;
+    setCodexAccount(readiness);
     if (readiness?.status === 'ready') loadCodexModels(fresh);
     return readiness;
   }, [loadCodexModels, observationMounted]);

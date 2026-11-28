@@ -39,9 +39,14 @@ const READY = {
   checkedAt: 1_700_000_000_000,
 };
 
-const appWith = (providers = [CODEX, CLAUDE]) => {
+const appWith = (providers = [CODEX, CLAUDE], { local = true } = {}) => {
   const providerService = { getAllProviders: vi.fn().mockResolvedValue({ activeProvider: 'codex', providers }) };
   const app = express();
+  app.use((req, _res, next) => {
+    req.portosAuthContext = { enabled: false };
+    if (!local) Object.defineProperty(req.socket, 'remoteAddress', { value: '192.0.2.10' });
+    next();
+  });
   app.use(express.json());
   app.use('/api/providers', createPortOSProviderRoutes({
     services: { providers: providerService }, routes: { providers: Router() },
@@ -173,6 +178,12 @@ describe('GET /api/providers decorates the Codex cards', () => {
 
     expect(cards.codex.codexAccount.status).toBe(CODEX_ACCOUNT_STATUS.ready);
     expect(cards['claude-code']).not.toHaveProperty('codexAccount');
+  });
+
+  it('omits cached Codex host diagnostics for callers without host control', async () => {
+    await request(appWith([CODEX], { local: false })).get('/api/providers');
+    expect(codexAppServer.peekCodexAccountReadiness).toHaveBeenCalledWith({ includeDiagnostics: false });
+    expect(codexAppServer.peekCodexModelCatalog).toHaveBeenCalledWith({ includeDiagnostics: false });
   });
 
   it('adds a presentation-only finding for a signed-out account', async () => {

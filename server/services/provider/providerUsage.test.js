@@ -47,6 +47,7 @@ vi.mock('../peerUsage.js', () => ({
   getFleetQuotaEntries: vi.fn().mockResolvedValue([])
 }));
 vi.mock('./providerQuotaShare.js', () => ({
+  readLocalQuotaCards: vi.fn().mockResolvedValue({ quotas: [] }),
   recordLocalQuotaCards: vi.fn().mockResolvedValue(null)
 }));
 vi.mock('../usageFleetBilling.js', () => ({
@@ -71,7 +72,7 @@ import { getSettings } from '../settings.js';
 import { getImageGenQuota } from '../imageGenQuota.js';
 import { getFleetQuotaEntries } from '../peerUsage.js';
 import { getApiBilledInstanceIds } from '../usageFleetBilling.js';
-import { recordLocalQuotaCards } from './providerQuotaShare.js';
+import { readLocalQuotaCards, recordLocalQuotaCards } from './providerQuotaShare.js';
 
 // Windows takes killProcessTree's tree-wide `taskkill /T` branch instead, so
 // `needsProcessGroup` is false there and these sites spawn attached. The policy
@@ -430,6 +431,28 @@ describe('getProviderQuotas', () => {
     expect(getAllProviders).not.toHaveBeenCalled();
     expect(getSettings).not.toHaveBeenCalled();
     expect(recordLocalQuotaCards).not.toHaveBeenCalled();
+    expect(scrapeTuiUsage).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])('serves only saved local and peer readings with a warm=%s local cache', async (warm) => {
+    getAllProviders.mockClear();
+    getSettings.mockClear();
+    getClaudeCodeUsage.mockClear();
+    recordLocalQuotaCards.mockClear();
+    const saved = { family: 'grok', label: 'Grok', supported: true, limits: [], fetchedAt: '2026-01-01T00:00:00.000Z' };
+    const otherFamily = { ...saved, family: 'codex', label: 'Codex' };
+    readLocalQuotaCards.mockResolvedValueOnce({ quotas: warm ? [saved, otherFamily] : [] });
+    getFleetQuotaEntries.mockResolvedValueOnce([{ instanceId: 'example-peer', name: 'Example peer', quotaReported: true, quotas: [saved, otherFamily] }]);
+
+    const result = await getProviderQuotas({ cacheOnly: true, family: 'grok', scope: 'instances' });
+    expect(result.providers).toEqual([
+      ...(warm ? [expect.objectContaining({ family: 'grok', fetchedAt: saved.fetchedAt, origin: { self: true, name: 'This instance' } })] : []),
+      expect.objectContaining({ family: 'grok', fetchedAt: saved.fetchedAt, origin: expect.objectContaining({ instanceId: 'example-peer', self: false }) }),
+    ]);
+    expect(getAllProviders).not.toHaveBeenCalled();
+    expect(getSettings).not.toHaveBeenCalled();
+    expect(recordLocalQuotaCards).not.toHaveBeenCalled();
+    expect(getClaudeCodeUsage).not.toHaveBeenCalled();
     expect(scrapeTuiUsage).not.toHaveBeenCalled();
   });
 

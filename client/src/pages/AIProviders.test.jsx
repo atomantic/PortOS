@@ -72,6 +72,24 @@ describe('AIProviders page load error handling', () => {
     await waitFor(() => expect(api.setActiveProvider).toHaveBeenCalledWith('codex-tui'));
   });
 
+  it('retains the saved Codex account when a live check requires host control', async () => {
+    api.getProviders.mockResolvedValue({
+      providers: [{ id: 'codex', name: 'Codex CLI', type: 'cli', command: 'codex', enabled: true }],
+      activeProvider: null,
+    });
+    api.getCodexAccount.mockImplementation(async ({ fresh }) => {
+      if (fresh) throw Object.assign(new Error('Host control requires an operator session'), { status: 403, code: 'HOST_CONTROL_FORBIDDEN' });
+      return { readiness: { status: 'quota-exhausted', account: { planType: 'pro' } } };
+    });
+    await renderPage();
+    expect(await screen.findByText('pro plan')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Check account' }));
+    await waitFor(() => expect(api.getCodexAccount).toHaveBeenCalledWith({ fresh: true, silent: true }));
+    expect(await findEnabledByRole('button', { name: 'Check account' })).toBeEnabled();
+    expect(screen.getByText('pro plan')).toBeInTheDocument();
+  });
+
   it('offers an install button on the card of a provider whose CLI is missing', async () => {
     api.getProviders.mockResolvedValue({
       providers: [{ id: 'opencode-ollama', name: 'OpenCode Ollama', type: 'cli', command: 'opencode', args: ['run'], enabled: true }],
