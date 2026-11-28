@@ -969,7 +969,9 @@ export default function VoiceWidget({ config, claimHeld, consoleHost }) {
           <button
             type="button"
             ref={fabRef}
-            onClick={() => { pendingFocusRef.current = 'input'; setExpanded(true); toggleCapture(); }}
+            // Restoring the minimized controls only reveals them: the mic stays
+            // in whatever state the user left it (a stopped mic stays stopped).
+            onClick={() => { pendingFocusRef.current = 'input'; setExpanded(true); }}
             className={`p-3 rounded-full border transition-colors ${fabSurface} ${
               capturing
                 ? 'bg-port-accent-2 text-port-on-accent-2 animate-pulse'
