@@ -18,6 +18,8 @@ export default function RealtimeCallPanel({ compact = false }) {
   const [call, setCall] = useState({ phase: 'idle', error: '' });
   const [captions, setCaptions] = useState([]);
   const handle = useRef(null);
+  // Bumped by hang-up and unmount, so a call still starting (mic prompt, worklet load) is stopped when it resolves.
+  const attempt = useRef(0);
 
   const refresh = useCallback(async () => {
     try {
@@ -28,7 +30,7 @@ export default function RealtimeCallPanel({ compact = false }) {
     }
   }, []);
   useEffect(() => { refresh(); }, [refresh]);
-  useEffect(() => () => handle.current?.stop(), []);
+  useEffect(() => () => { attempt.current += 1; handle.current?.stop(); }, []);
 
   const caption = (kind, text) => {
     if (!text) return;
@@ -50,8 +52,9 @@ export default function RealtimeCallPanel({ compact = false }) {
   const start = async () => {
     setCaptions([]);
     setCall({ phase: 'loading', error: '' });
+    const mine = ++attempt.current;
     try {
-      handle.current = await startRealtimeCall({
+      const started = await startRealtimeCall({
         onState: (s) => {
           if (s?.error) { setCall({ phase: 'idle', error: s.error }); handle.current?.stop(); handle.current = null; return; }
           if (s?.loading) setCall({ phase: 'loading', error: '' });
@@ -62,12 +65,15 @@ export default function RealtimeCallPanel({ compact = false }) {
         onDelegate: ({ task }) => caption('task', task),
         onResult: ({ text }) => caption('result', text),
       });
+      if (attempt.current !== mine) { started.stop(); return; }
+      handle.current = started;
     } catch (err) {
-      setCall({ phase: 'idle', error: err.message });
+      if (attempt.current === mine) setCall({ phase: 'idle', error: err.message });
     }
   };
 
   const hangUp = () => {
+    attempt.current += 1;
     handle.current?.stop();
     handle.current = null;
     setCall({ phase: 'idle', error: '' });

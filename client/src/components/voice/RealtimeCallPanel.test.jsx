@@ -65,4 +65,16 @@ describe('RealtimeCallPanel', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('did not finish loading');
     expect(stop).toHaveBeenCalled();
   });
+  it('stops a call that finishes starting after the user hung up', async () => {
+    mocks.getVoiceRealtimeStatus.mockResolvedValue(installed);
+    const stop = vi.fn();
+    let resolveStart;
+    mocks.startRealtimeCall.mockImplementation(() => new Promise((resolve) => { resolveStart = resolve; }));
+    render(<RealtimeCallPanel />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Start realtime call' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Hang up' }));
+    await act(async () => resolveStart({ stop }));
+    expect(stop).toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Start realtime call' })).toBeInTheDocument();
+  });
 });

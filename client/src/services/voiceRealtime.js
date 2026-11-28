@@ -49,11 +49,19 @@ export const startRealtimeCall = async (handlers = {}) => {
     audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 },
   });
   const Ctor = window.AudioContext || window.webkitAudioContext;
-  const micCtx = new Ctor({ sampleRate: MIC_RATE });
-  const outCtx = new Ctor({ sampleRate: OUT_RATE });
+  let micCtx;
+  let outCtx;
   const url = URL.createObjectURL(new Blob([WORKLET_SOURCE], { type: 'application/javascript' }));
   try {
+    micCtx = new Ctor({ sampleRate: MIC_RATE });
+    outCtx = new Ctor({ sampleRate: OUT_RATE });
     await micCtx.audioWorklet.addModule(url);
+  } catch (err) {
+    // Release the microphone and contexts, or the mic indicator stays on after a failed start.
+    stream.getTracks().forEach((t) => t.stop());
+    micCtx?.close().catch(() => {});
+    outCtx?.close().catch(() => {});
+    throw err;
   } finally {
     URL.revokeObjectURL(url);
   }
