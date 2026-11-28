@@ -394,6 +394,25 @@ describe('streamChat request lifecycle', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it('pins /no_think to the persona so per-turn system blocks never change the cached prefix', async () => {
+    const model = 'qwen3-7b-thinking';
+    fetchMock.mockImplementation(async (url) => (url.endsWith('/models')
+      ? Response.json({ data: [{ id: model }] })
+      : new Response('data: [DONE]\n\n')));
+    const persona = { role: 'system', content: 'Keep replies short.' };
+    const history = [{ role: 'user', content: 'hi' }, { role: 'assistant', content: 'hello' }];
+    const sent = async (messages) => {
+      await streamChat(messages, { provider: 'test-provider', model });
+      return JSON.parse(fetchMock.mock.lastCall[1].body).messages;
+    };
+
+    const plain = await sent([persona, ...history, { role: 'user', content: 'what time is it' }]);
+    const withUi = await sent([persona, ...history, { role: 'system', content: 'Current UI state: Tasks' }, { role: 'user', content: 'click new task' }]);
+    expect(plain[0].content).toBe('Keep replies short.\n/no_think');
+    expect(withUi.slice(0, 3)).toEqual(plain.slice(0, 3));
+    expect(withUi[3].content).toBe('Current UI state: Tasks');
+  });
+
   it('lets other providers choose their output budget without sending the Ollama-only effort', async () => {
     installFetch(() => Promise.resolve(new Response('data: [DONE]\n\n')));
     await streamChat([], { provider: 'test-provider', model: 'test-model' });

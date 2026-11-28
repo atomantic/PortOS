@@ -2,12 +2,14 @@ import { describe, it, expect, vi } from 'vitest';
 
 // runTurn-level pin for the system-context assembly: the memory block is
 // injected only for retrieval-shaped turns that actually find memories, and
-// an empty lookup leaves the message list untouched.
+// an empty lookup leaves the message list untouched. Per-turn blocks go after
+// the history so the prompt prefix stays cacheable across turns.
 
+const voiceTools = { enabled: false };
 vi.mock('./config.js', () => ({
   getVoiceConfig: vi.fn(async () => ({
     enabled: true,
-    llm: { model: 'test-model', usePersonality: false, systemPrompt: 'sys', tools: { enabled: false } },
+    llm: { model: 'test-model', usePersonality: false, systemPrompt: 'sys', tools: voiceTools },
   })),
 }));
 vi.mock('./stt.js', () => ({ transcribe: vi.fn() }));
@@ -15,20 +17,26 @@ vi.mock('./tts.js', () => ({
   synthesize: vi.fn(async () => ({ wav: Buffer.alloc(8), latencyMs: 1 })),
 }));
 const streamChatMock = vi.fn();
-vi.mock('./llm.js', () => ({ streamChat: (...args) => streamChatMock(...args) }));
+const resolveLlmEndpointMock = vi.fn(async () => ({ apiBase: 'http://127.0.0.1:11434/v1' }));
+vi.mock('./llm.js', () => ({
+  streamChat: (...args) => streamChatMock(...args),
+  resolveLlmEndpoint: (...args) => resolveLlmEndpointMock(...args),
+}));
 vi.mock('./echo.js', () => ({ isEchoOfRecentTts: () => false, rememberTtsSentence: () => {} }));
 vi.mock('../brainJournal.js', () => ({ appendJournal: vi.fn(), getToday: vi.fn(async () => '2026-05-12') }));
-const getRelevantMemories = vi.fn();
+const getRelevantMemories = vi.fn(async () => []);
 vi.mock('../memoryRetriever.js', () => ({ getRelevantMemories: (...a) => getRelevantMemories(...a) }));
 
-const { runTurn } = await import('./pipeline.js');
+const { runTurn, warmPromptPrefix } = await import('./pipeline.js');
 
-const sentMessages = async (text, systemContext) => {
+const sentRequest = async (text, { systemContext, history = [{ role: 'assistant', content: 'earlier' }], state = {} } = {}) => {
   streamChatMock.mockReset();
   streamChatMock.mockResolvedValueOnce({ text: 'ok', toolCalls: [], model: 'test-model', ttfbMs: 1, totalMs: 2 });
-  await runTurn({ text, history: [{ role: 'assistant', content: 'earlier' }], emit: () => {}, state: {}, systemContext });
-  return streamChatMock.mock.calls[0][0];
+  await runTurn({ text, history, emit: () => {}, state, systemContext });
+  const [messages, opts] = streamChatMock.mock.calls[0];
+  return { messages, tools: opts.tools };
 };
+const sentMessages = async (text, systemContext) => (await sentRequest(text, { systemContext })).messages;
 
 describe('runTurn — turn message assembly', () => {
   it('adds no memory block when a retrieval-shaped turn finds nothing', async () => {
@@ -37,17 +45,87 @@ describe('runTurn — turn message assembly', () => {
     expect(messages.map((m) => m.role)).toEqual(['system', 'assistant', 'user']);
   });
 
-  it('injects found memories after the persona and caller context, before history', async () => {
+  it('injects found memories after the history, keeping the persona and caller context first', async () => {
     getRelevantMemories.mockResolvedValueOnce([{ content: 'Prefers dark roast', type: 'fact' }]);
     const messages = await sentMessages('What did I say about coffee last week?', ' extra context ');
-    expect(messages.map((m) => m.role)).toEqual(['system', 'system', 'system', 'assistant', 'user']);
+    expect(messages.map((m) => m.role)).toEqual(['system', 'system', 'assistant', 'system', 'user']);
     expect(messages[1].content).toBe('extra context');
-    expect(messages[2].content).toContain('Prefers dark roast');
+    expect(messages[3].content).toContain('Prefers dark roast');
   });
 
   it('skips the memory lookup entirely for non-retrieval turns', async () => {
     getRelevantMemories.mockClear();
     await sentMessages('turn on the lights');
     expect(getRelevantMemories).not.toHaveBeenCalled();
+  });
+
+  describe('with tools enabled', () => {
+    const ui = { title: 'Tasks', path: '/tasks', elements: [{ kind: 'button', label: 'New task' }] };
+    const prefix = ({ messages, tools }, historyLength) => JSON.stringify({ tools, messages: messages.slice(0, 1 + historyLength) });
+
+    it('keeps tools and the history prefix identical across turns with different intents', async () => {
+      voiceTools.enabled = true;
+      voiceTools.trimByIntent = false;
+      const history = [{ role: 'user', content: 'hi' }, { role: 'assistant', content: 'hello' }];
+      const a = await sentRequest('what time is it', { history, state: { ui } });
+      const b = await sentRequest('click the new task button', { history, state: { ui } });
+      expect(a.tools.length).toBeGreaterThan(20);
+      expect(prefix(b, history.length)).toBe(prefix(a, history.length));
+      // The UI snapshot rides after the history, right before the new message.
+      expect(b.messages.map((m) => m.role)).toEqual(['system', 'user', 'assistant', 'system', 'user']);
+      expect(b.messages[3].content).toContain('Current UI state');
+    });
+
+    it('keeps capture tools on form-fill turns and steers with a hint after the history', async () => {
+      voiceTools.enabled = true;
+      voiceTools.trimByIntent = false;
+      const { messages, tools } = await sentRequest('fill the description with remember to buy milk');
+      expect(tools.map((t) => t.function.name)).toContain('brain_capture');
+      expect(messages.at(-2).content).toContain('call ui_fill');
+      expect(messages.at(-1)).toEqual({ role: 'user', content: 'fill the description with remember to buy milk' });
+    });
+
+    it('trims tools per utterance when trimByIntent is on', async () => {
+      voiceTools.enabled = true;
+      voiceTools.trimByIntent = true;
+      const { messages, tools } = await sentRequest('fill the description with remember to buy milk');
+      const names = tools.map((t) => t.function.name);
+      expect(names).toContain('ui_fill');
+      expect(names).not.toContain('brain_capture');
+      expect(messages.some((m) => m.content?.includes?.('call ui_fill with the field label'))).toBe(false);
+      voiceTools.enabled = false;
+      voiceTools.trimByIntent = false;
+    });
+  });
+
+  describe('warmPromptPrefix', () => {
+    it('prefills exactly the persona and the full tool list a turn will start with, then dedupes', async () => {
+      voiceTools.enabled = true;
+      voiceTools.trimByIntent = false;
+      streamChatMock.mockReset();
+      streamChatMock.mockResolvedValue({ text: '', toolCalls: [] });
+      const first = await warmPromptPrefix({ reason: 'test' });
+      expect(first.warmed).toBe(true);
+      const [warmMessages, warmOpts] = streamChatMock.mock.calls[0];
+      expect(warmOpts.maxTokens).toBe(1);
+
+      const turn = await sentRequest('what time is it', { history: [] });
+      expect(turn.messages[0]).toEqual(warmMessages[0]);
+      expect(warmMessages).toHaveLength(1);
+      expect(JSON.stringify(warmOpts.tools)).toBe(JSON.stringify(turn.tools));
+
+      streamChatMock.mockReset();
+      streamChatMock.mockResolvedValue({ text: '', toolCalls: [] });
+      expect(await warmPromptPrefix({ reason: 'test' })).toMatchObject({ warmed: false, reason: 'recent' });
+      expect(streamChatMock).not.toHaveBeenCalled();
+      voiceTools.enabled = false;
+    });
+
+    it('skips hosted providers so a warm-up is never billed', async () => {
+      resolveLlmEndpointMock.mockResolvedValueOnce({ apiBase: 'https://api.example.com/v1' });
+      streamChatMock.mockReset();
+      expect(await warmPromptPrefix({ reason: 'test' })).toMatchObject({ warmed: false, reason: 'not-local' });
+      expect(streamChatMock).not.toHaveBeenCalled();
+    });
   });
 });

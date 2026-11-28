@@ -18,8 +18,8 @@ vi.mock('../brainJournal.js', () => ({ appendJournal: mocks.appendJournal, getTo
 vi.mock('./echo.js', () => ({ isEchoOfRecentTts: () => false, rememberTtsSentence: vi.fn() }));
 vi.mock('./tools.js', () => ({
   dispatchTool: mocks.dispatchTool,
-  getToolSpecsForIntent: () => ({ specs: [], activeGroups: new Set(['ui']) }),
-  classifyIntent: () => new Set(),
+  getTurnToolSpecs: () => ({ specs: [], activeGroups: new Set(['ui']) }),
+  resolveTurnIntent: () => ({ activeGroups: new Set(), formFill: false }),
   getAllToolNames: () => [],
   UI_KINDS: ['tab', 'button', 'link', 'input', 'textarea', 'select', 'checkbox', 'radio'],
 }));

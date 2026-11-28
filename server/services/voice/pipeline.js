@@ -8,9 +8,9 @@
 
 import { transcribe } from './stt.js';
 import { createTurnTtsSpeaker, emitSyntheticReply } from './turnTtsSpeaker.js';
-import { streamChat } from './llm.js';
+import { streamChat, resolveLlmEndpoint } from './llm.js';
 import { getAgentVoiceConfig } from './channelAgent.js';
-import { getToolSpecsForIntent, classifyIntent, dispatchTool, getAllToolNames, UI_KINDS } from './tools.js';
+import { getTurnToolSpecs, getToolSpecs, resolveTurnIntent, dispatchTool, getAllToolNames, UI_KINDS } from './tools.js';
 import { isEchoOfRecentTts } from './echo.js';
 import { appendJournal, getToday } from '../brainJournal.js';
 import { resolvePending, isExpired } from './confirmGate.js';
@@ -556,6 +556,16 @@ const resolvePendingConfirmation = async ({ state, userText, turnId, emit, tlog,
 const filterToolSpecs = (specs, cfg) =>
   specs && !cfg.llm.codeAgent?.enabled ? specs.filter((s) => s.function?.name !== 'dispatch_code_agent') : specs;
 
+// Message order is cache-driven. Backends reuse their prompt cache only up to
+// the first token that differs from the previous request, and the history is
+// the bulk of a call's prompt. So everything that is the same for the whole
+// call (persona, caller context) goes first, then the history, and only then
+// the blocks that change per turn (UI snapshot, recalled memories, the
+// form-fill hint). Putting a per-turn block ahead of the history would make
+// every turn re-process the full conversation.
+const FORM_FILL_HINT = 'This turn puts text into a field on the page: call ui_fill with the field label and the value. '
+  + 'Do not call brain_capture or daily_log_append, even if the value says remember, note, or save.';
+
 const buildTurnMessages = async ({ cfg, systemContext, userText, intent, state, history, tlog }) => {
   const messages = [
     { role: 'system', content: buildSystemPrompt(cfg) },
@@ -565,6 +575,7 @@ const buildTurnMessages = async ({ cfg, systemContext, userText, intent, state, 
   if (typeof systemContext === 'string' && systemContext.trim()) {
     messages.push({ role: 'system', content: systemContext.trim().slice(0, MAX_SYSTEM_CONTEXT_CHARS) });
   }
+  messages.push(...history);
   if (shouldIncludeUi(userText, intent.activeGroups)) {
     const uiSummary = summarizeUi(state?.ui);
     if (uiSummary) {
@@ -588,7 +599,12 @@ const buildTurnMessages = async ({ cfg, systemContext, userText, intent, state, 
       tlog(`memory.none +${Date.now() - tMem}ms`);
     }
   }
-  messages.push(...history, { role: 'user', content: userText });
+  // The trimmed tool list already drops the capture tools on form-fill turns;
+  // the full list keeps them, so say it in words instead.
+  if (intent.formFill && intent.specs?.some((s) => s.function?.name === 'brain_capture')) {
+    messages.push({ role: 'system', content: FORM_FILL_HINT });
+  }
+  messages.push({ role: 'user', content: userText });
   return messages;
 };
 
@@ -696,6 +712,48 @@ const executeTurnLlmLoop = async ({
   return { firstLlm, lastLlm, finalText, toolRuns, confirmationPrompt };
 };
 
+// Prefill the fixed part of every turn's prompt (persona + tool schemas,
+// about 7k tokens with all tools) so the first turn of a call starts from a
+// cached prefix instead of paying several seconds of prompt processing. Ollama
+// only reuses its cache from saved checkpoints, and a request that ends right
+// at the end of the persona leaves one exactly where every turn's prompt
+// diverges. Local backends only: a hosted provider would bill the warm-up.
+const PREFIX_WARM_DEDUPE_MS = 30_000;
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
+let lastPrefixWarm = { key: '', at: 0, pending: null };
+
+export const warmPromptPrefix = async ({ reason = 'call' } = {}) => {
+  const cfg = await getAgentVoiceConfig();
+  if (!cfg?.enabled) return { warmed: false, reason: 'voice-disabled' };
+  const toolsEnabled = !!cfg.llm.tools?.enabled;
+  if (toolsEnabled && cfg.llm.tools?.trimByIntent === true) return { warmed: false, reason: 'per-turn-tools' };
+  const { apiBase } = await resolveLlmEndpoint(cfg.llm.provider);
+  let host = '';
+  try { host = new URL(apiBase).hostname; } catch { host = ''; }
+  if (!LOOPBACK_HOSTS.has(host)) return { warmed: false, reason: 'not-local' };
+
+  const messages = [{ role: 'system', content: buildSystemPrompt(cfg) }];
+  const tools = toolsEnabled ? filterToolSpecs(getToolSpecs(), cfg) : undefined;
+  const key = JSON.stringify([cfg.llm.provider, cfg.llm.model, messages, tools]);
+  if (lastPrefixWarm.key === key && (lastPrefixWarm.pending || Date.now() - lastPrefixWarm.at < PREFIX_WARM_DEDUPE_MS)) {
+    return { warmed: false, reason: 'recent' };
+  }
+  const started = Date.now();
+  // onModelLoading opts into the cold-load timeout: at call start the model
+  // may still have to load before the prefill can run.
+  const pending = streamChat(messages, {
+    provider: cfg.llm.provider, model: cfg.llm.model, tools, maxTokens: 1, tag: `warm:${reason}`, onModelLoading: () => {},
+  });
+  lastPrefixWarm = { key, at: started, pending };
+  try {
+    await pending;
+    console.log(`🎙️ voice.prefix.warm ${reason} tools=${tools?.length || 0} ${Date.now() - started}ms`);
+    return { warmed: true, ms: Date.now() - started };
+  } finally {
+    lastPrefixWarm = { key, at: Date.now(), pending: null };
+  }
+};
+
 /**
  * Run one turn.
  *
@@ -786,7 +844,9 @@ export const runTurn = async ({ audio, text, mimeType, source, history = [], emi
   if (confirmed) return confirmed;
 
   const toolsEnabled = !!cfg.llm.tools?.enabled;
-  const intent = toolsEnabled ? getToolSpecsForIntent(userText) : { specs: undefined, activeGroups: classifyIntent(userText) };
+  const intent = toolsEnabled
+    ? getTurnToolSpecs(userText, { trimByIntent: cfg.llm.tools?.trimByIntent === true })
+    : { specs: undefined, ...resolveTurnIntent(userText) };
   const toolSpecs = filterToolSpecs(intent.specs, cfg);
   const messages = await buildTurnMessages({ cfg, systemContext, userText, intent, state, history, tlog });
   const maxIterations = Math.max(1, cfg.llm.tools?.maxIterations ?? 3);

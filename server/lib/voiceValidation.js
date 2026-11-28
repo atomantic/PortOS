@@ -129,6 +129,7 @@ export const voiceConfigPatchSchema = z.object({
     tools: z.object({
       enabled: z.boolean().optional(),
       maxIterations: z.number().int().min(1).max(10).optional(),
+      trimByIntent: z.boolean().optional(),
     }).partial().optional(),
     codeAgent: z.object({
       enabled: z.boolean().optional(),

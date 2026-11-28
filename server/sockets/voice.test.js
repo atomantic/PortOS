@@ -35,7 +35,7 @@ vi.mock('../services/voice/stt.js', () => ({ transcribe: vi.fn() }));
 // The call-host audio path (runCallUtterance) drives the full LLM/tools
 // pipeline; stub it so the barge-in test below can observe exactly what
 // signal a call turn was given without a real STT/LLM/TTS round trip.
-vi.mock('../services/voice/pipeline.js', () => ({ runTurn: vi.fn(async () => ({})) }));
+vi.mock('../services/voice/pipeline.js', () => ({ runTurn: vi.fn(async () => ({})), warmPromptPrefix: vi.fn(async () => ({})) }));
 // Partial-mock the call session so one test can make detachHost() reject the
 // way a failing teardown does. endCall()'s own hangup/journal/mind steps are
 // each internally guarded, so no dependency seam can force that rejection from
@@ -65,7 +65,7 @@ const {
 } = await import('../services/voice/voiceOutput.js');
 const { transcribe } = await import('../services/voice/stt.js');
 const { synthesize } = await import('../services/voice/tts.js');
-const { runTurn } = await import('../services/voice/pipeline.js');
+const { runTurn, warmPromptPrefix } = await import('../services/voice/pipeline.js');
 const { isAuthEnabled, verifyRequestSession } = await import('../services/auth.js');
 const { PEER_SOCKET_ROOM } = await import('../services/socketIo.js');
 const { getVoiceConfig } = await import('../services/voice/config.js');
@@ -690,6 +690,20 @@ describe('voice:call:detach', () => {
     const states = host.emitted.filter((e) => e.event === 'voice:call:state');
     expect(states.length).toBeGreaterThanOrEqual(1);
     expect(states.at(-1).payload.hostAttached).toBe(false);
+  });
+
+  it('warms the prompt prefix when a call starts, not on attach alone', async () => {
+    warmPromptPrefix.mockClear();
+    const host = makeFakeSocket();
+    registerVoiceHandlers(host);
+    await host.fire('voice:call:attach');
+    await vi.waitFor(() => expect(host.emitted.some((e) => e.event === 'voice:call:state')).toBe(true));
+    expect(warmPromptPrefix).not.toHaveBeenCalled();
+
+    await startCall();
+
+    await vi.waitFor(() => expect(warmPromptPrefix).toHaveBeenCalledWith({ reason: 'call' }));
+    await host.fire('voice:call:hangup');
   });
 });
 

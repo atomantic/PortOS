@@ -37,8 +37,8 @@ vi.mock('./llm.js', () => ({
 
 const dispatchToolMock = vi.fn();
 vi.mock('./tools.js', () => ({
-  getToolSpecsForIntent: () => ({ specs: [], activeGroups: new Set() }),
-  classifyIntent: () => new Set(),
+  getTurnToolSpecs: () => ({ specs: [], activeGroups: new Set() }),
+  resolveTurnIntent: () => ({ activeGroups: new Set(), formFill: false }),
   dispatchTool: (...args) => dispatchToolMock(...args),
   getAllToolNames: () => ['ui_click', 'ui_check', 'ui_fill'],
   UI_KINDS: ['tab', 'button', 'link', 'input', 'textarea', 'select', 'checkbox', 'radio'],

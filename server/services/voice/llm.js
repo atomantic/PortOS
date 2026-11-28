@@ -364,7 +364,7 @@ export const streamChat = async (messages, opts = {}) => {
   // When the resolved model has a reasoning mode, try every known disable
   // switch — different model families honor different ones and unknown fields
   // are silently ignored by LM Studio:
-  //   - Qwen3:    `/no_think` directive appended to last system message
+  //   - Qwen3:    `/no_think` directive appended to the first system message
   //   - Granite:  `chat_template_kwargs: { thinking: false }`
   //   - vLLM:     `chat_template_kwargs: { enable_thinking: false }`
   //   - generic:  `extra_body.thinking = false`, `reasoning_effort = "minimal"`
@@ -379,8 +379,12 @@ export const streamChat = async (messages, opts = {}) => {
   // interactive Voice request to Ollama; other callers keep their own effort.
   const ollamaVoice = (opts.provider || DEFAULT_VOICE_BACKEND) === 'ollama';
   const legacyReasoning = !ollamaVoice && isReasoningModel(model);
-  const sentMessages = legacyReasoning ? messages.map((m, i, arr) => {
-    if (m.role !== 'system' || i !== arr.findLastIndex((x) => x.role === 'system')) return m;
+  // The directive rides on the first system message (the persona), not the last:
+  // Voice puts per-turn system blocks after the history, so the last one moves
+  // from turn to turn and a directive there would change the cached prefix.
+  const firstSystem = messages.findIndex((x) => x.role === 'system');
+  const sentMessages = legacyReasoning ? messages.map((m, i) => {
+    if (i !== firstSystem) return m;
     const directive = (m.content || '').includes('/no_think') ? '' : '\n/no_think';
     return { ...m, content: (m.content || '') + directive };
   }) : messages;

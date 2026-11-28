@@ -20,8 +20,8 @@ vi.mock('./stt.js', () => ({ transcribe: vi.fn() }));
 vi.mock('./tts.js', () => ({ synthesize: (...args) => mocks.synthesize(...args) }));
 vi.mock('./llm.js', () => ({ streamChat: (...args) => mocks.streamChat(...args) }));
 vi.mock('./tools.js', () => ({
-  getToolSpecsForIntent: () => ({ specs: undefined, activeGroups: new Set() }),
-  classifyIntent: () => new Set(),
+  getTurnToolSpecs: () => ({ specs: undefined, activeGroups: new Set() }),
+  resolveTurnIntent: () => ({ activeGroups: new Set(), formFill: false }),
   dispatchTool: vi.fn(),
   getAllToolNames: () => [],
   UI_KINDS: ['tab', 'button', 'link', 'input', 'textarea', 'select', 'checkbox', 'radio'],
