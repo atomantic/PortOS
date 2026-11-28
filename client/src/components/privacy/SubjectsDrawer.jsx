@@ -206,7 +206,7 @@ export default function SubjectsDrawer({ open, subjects, onClose, onCreated, onU
     const updated = await updatePrivacySubject(subject.id, patch, { silent: true });
     if (updated) {
       toast.success(`${updated.displayName} updated`);
-      setEditingId(null);
+      setEditingId((prev) => (prev === subject.id ? null : prev));
       onUpdated?.(updated);
     }
     return updated;
@@ -289,9 +289,10 @@ export default function SubjectsDrawer({ open, subjects, onClose, onCreated, onU
                   <button
                     type="button"
                     onClick={() => (editingId === s.id ? setEditingId(null) : startEdit(s))}
+                    disabled={savingEdit}
                     title={`Edit ${s.displayName}`}
                     aria-label={`Edit ${s.displayName}`}
-                    className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-2 rounded text-gray-400 hover:text-white hover:bg-port-border/50"
+                    className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-2 rounded text-gray-400 hover:text-white hover:bg-port-border/50 disabled:opacity-40"
                   >
                     <Pencil size={16} />
                   </button>
