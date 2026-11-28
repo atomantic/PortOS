@@ -88,7 +88,7 @@ export default function VoiceCallConsole({
   sfxEnabled = true, onToggleSfx, signalLevel = 0, visionEnabled = false, onToggleVision,
 }) {
   const [avatar, setAvatar] = useState(() => safeReadStorage(DISPLAY_KEY) !== 'audio');
-    const { data, error, updateData, refetch } = useAvatarRuntime(avatar);
+  const { data, error, updateData, refetch } = useAvatarRuntime(avatar);
   const runningAvatar = Boolean(!error && data?.supported && data.phase === 'running');
 
   const toggleAvatar = () => {
