@@ -323,16 +323,16 @@ export const SERVER_HEAVY_SHARD_OWNERS = {
 };
 
 /**
- * Pin 5–6 real-Chromium suites per client shard. The assignments use hosted
- * durations from four-shard runs to balance the browser load against each
- * shard's hashed non-browser files (#18795). New suites stay on the hash
- * until they are pinned.
+ * Pin real-Chromium suites using hosted durations to balance browser load
+ * against each shard's hashed non-browser files (#18795, #20302). New suites
+ * stay on the hash until they are pinned.
  */
 export const CLIENT_BROWSER_SHARD_OWNERS = Object.freeze({
   'client/src/components/DownloadManager.browser.test.js': 1,
   'client/src/components/media/MediaLightbox.browser.test.js': 1,
   'client/src/components/musicVideo/BlenderFilmPanel.browser.test.js': 1,
   'client/src/components/musicVideo/CastAndSetsGreybox.browser.test.js': 1,
+  'client/src/components/ui/ConfirmModal.browser.test.js': 1,
   'client/src/components/ui/InfoTooltip.browser.test.js': 1,
   'client/src/lib/musicVideoFlyer.browser.test.js': 1,
   'client/src/components/ProviderModelSelector.browser.test.js': 2,
@@ -352,6 +352,7 @@ export const CLIENT_BROWSER_SHARD_OWNERS = Object.freeze({
   'client/src/components/catalog/CatalogMergePanel.browser.test.js': 4,
   'client/src/components/catalog/GreyboxGlb.browser.test.js': 4,
   'client/src/components/musicVideo/SceneClipCoverageLayout.browser.test.js': 4,
+  'client/src/pages/VoiceCall.browser.test.js': 4,
   'client/src/components/catalog/CatalogCard.browser.test.js': 5,
   'client/src/components/catalog/CatalogReferenceVideo.browser.test.js': 5,
   'client/src/components/media/AssetReferences.browser.test.js': 5,

@@ -361,7 +361,13 @@ export function runCli(argv, env = process.env) {
   }
   if (command === 'build' && rest[0] === 'supercollider') {
     const { recipeHash } = loadTargets().supercollider;
-    execFileSync('docker', buildSuperColliderBuildArgs({ recipeDir: join(REPO_ROOT, SUPERCOLLIDER_RECIPE_DIR), recipeHash }), { stdio: 'inherit' });
+    const args = buildSuperColliderBuildArgs({
+      recipeDir: join(REPO_ROOT, SUPERCOLLIDER_RECIPE_DIR),
+      recipeHash,
+      cacheFrom: env.PORTOS_SUPERCOLLIDER_BUILDX_CACHE_FROM,
+      cacheTo: env.PORTOS_SUPERCOLLIDER_BUILDX_CACHE_TO,
+    });
+    execFileSync('docker', args, { stdio: 'inherit' });
     return 0;
   }
   if (command === 'rapier-project') {
