@@ -1,11 +1,18 @@
-# FLUX.3 Klein MLX runtime: direct pins for <data>/python/venv-flux3.
-# Installed only from requirements-flux3-mlx.lock.txt, which pins and hashes
-# every transitive package. After editing this file, regenerate the lock with
-# the command in the lock header.
-mflux==0.24.0
+# FLUX.3 Klein MLX runtime: direct inference inputs for <data>/python/venv-flux3.
+# Install only from requirements-flux3-mlx.lock.txt. Regenerate using the recipe
+# in its header: resolve the inference dependencies below, then hash-pin mflux
+# with --no-deps to omit torch, GUI opencv-python, matplotlib, release requests,
+# hf-transfer, sentencepiece, and protobuf that FLUX.3 MLX inference never uses.
 mlx==0.32.4
 mlx-metal==0.32.4
 transformers==5.22.2
 tokenizers==0.23.3
 huggingface-hub==1.33.0
 pillow==13.0.0
+jinja2==3.1.6
+piexif==1.1.3
+platformdirs==4.14.3
+toml==0.10.2
+
+# Hash-pin this wheel with --no-deps (see lock header).
+mflux==0.24.0
