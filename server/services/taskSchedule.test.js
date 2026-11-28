@@ -969,6 +969,34 @@ describe('taskSchedule', () => {
       ])
     })
 
+    it('backfills audit-slice-history and lane-health once on persisted v2 schedules lacking auditDataInputsVersion', async () => {
+      mockSchedule({
+        version: 2,
+        tasks: {
+          security: { type: 'on-demand', enabled: true, dataInputs: ['open-issues'] },
+          privacy: { type: 'on-demand', enabled: true, dataInputs: ['open-issues', 'open-pull-requests'] },
+          'plan-feature': { type: 'on-demand', enabled: true, dataInputs: ['open-issues'] },
+        },
+      })
+      const loaded = await loadSchedule()
+      expect(loaded.auditDataInputsVersion).toBe(1)
+      expect(loaded.tasks.security.dataInputs).toEqual(['open-issues', 'audit-slice-history', 'lane-health'])
+      expect(loaded.tasks.privacy.dataInputs).toEqual(['open-issues', 'open-pull-requests', 'audit-slice-history', 'lane-health'])
+      // Non-audit tasks are untouched.
+      expect(loaded.tasks['plan-feature'].dataInputs).toEqual(['open-issues'])
+
+      // Once auditDataInputsVersion: 1 is stamped, an explicit user removal is respected.
+      mockSchedule({
+        version: 2,
+        auditDataInputsVersion: 1,
+        tasks: {
+          security: { type: 'on-demand', enabled: true, dataInputs: ['open-issues'] },
+        },
+      })
+      const respected = await loadSchedule()
+      expect(respected.tasks.security.dataInputs).toEqual(['open-issues'])
+    })
+
     it('surfaces fileIssuesCapable on audit types in getScheduleStatus', async () => {
       mockSchedule()
       const status = await getScheduleStatus()

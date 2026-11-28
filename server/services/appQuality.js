@@ -13,8 +13,9 @@ import { ensureSchema, query } from '../lib/db.js';
 import { doneSentinelPath, parseSentinelPayload } from '../lib/agent/agentSentinel.js';
 import { tryReadFile } from '../lib/jsonIo.js';
 import { CONSOLIDATED_AUDIT_DOMAINS } from '../lib/auditDomains.js';
-import { normalizeAuditTaskType } from '../lib/auditCatalog.js';
-import { AUDIT_FRESHNESS_MS, parseAuditQualityReport, parseAuditSlice, summarizeAppQuality, buildAppQualityHistory, dailyQualityRecords } from '../lib/auditQuality.js';
+import { isFileIssuesMode, normalizeAuditTaskType } from '../lib/auditCatalog.js';
+import { PR_COMPLETIONS, resolvePrCompletion } from '../lib/prDisposition.js';
+import { AUDIT_FRESHNESS_MS, parseAuditQualityReport, parseAuditSlice, qualityRunScore, qualityWorstSeverity, summarizeAppQuality, buildAppQualityHistory, dailyQualityRecords } from '../lib/auditQuality.js';
 import { collectAppQuality, collectAppsQualityBatch, qualityRecord, readQualityRecords, readReleaseQuality } from './appQualityFederation.js';
 import { toPgJson } from '../lib/pgJson.js';
 
@@ -29,6 +30,15 @@ export async function recordAuditQuality({ task, taskType, agentId, workspacePat
     return false;
   }
   if (isLegacyDeepAudit(task.metadata) && !deepDiscoveryComplete && report.coverage === 'broad') report.coverage = 'partial';
+  // Only retain agent-reported post-fix scores when the run was an authorized
+  // audit-and-fix run that passed delivery criteria (never in file-issues mode
+  // or review-only leave-open PR runs where changes are not yet merged).
+  const allowPostFix = !isFileIssuesMode(taskType, task.metadata)
+    && resolvePrCompletion(task.metadata) !== PR_COMPLETIONS.LEAVE_OPEN;
+  if (!allowPostFix && report.version === 2) {
+    delete report.postFixSliceScore;
+    delete report.postFixWorstSeverity;
+  }
   // Immutable run measurements make completion replay idempotent.
   if (!Number.isFinite(Date.parse(assessedAt))) {
     console.warn(`⚠️ Audit quality skipped for ${agentId}: no valid run start time`);
@@ -66,9 +76,10 @@ export async function readRecentAuditSlices(appId, taskType, deps = {}) {
   );
   return result.rows.map(row => {
     const report = row.report; // jsonb column, already parsed by pg
-    const score = report && typeof report === 'object' ? (report.version === 2 ? report.sliceScore : report.score) : null;
+    const score = qualityRunScore(report);
+    const worstSeverity = qualityWorstSeverity(report);
     return { assessedAt: new Date(row.assessed_at).toISOString(), slice: row.slice, sliceScore: Number.isFinite(score) ? score : null,
-      worstSeverity: Number.isFinite(report?.worstSeverity) ? report.worstSeverity : null };
+      worstSeverity: Number.isFinite(worstSeverity) ? worstSeverity : null };
   });
 }
 

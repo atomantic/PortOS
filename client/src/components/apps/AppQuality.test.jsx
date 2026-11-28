@@ -30,7 +30,7 @@ it('shows zero as a real score up front and keeps the scoring explanation in a t
   fireEvent.click(screen.getByRole('button', { name: 'How the quality score works' }));
   const tooltip = screen.getByRole('tooltip');
   expect(tooltip).toHaveTextContent(/Recency-weighted equal-weight mean/);
-  expect(tooltip).toHaveTextContent(/up to three qualifying runs from the last 30 days/);
+  expect(tooltip).toHaveTextContent(/up to five qualifying runs from the last 30 days/);
   expect(tooltip).toHaveTextContent(/seven-day half-life/);
   expect(tooltip).toHaveTextContent(/supersedes an older slice if it shares the primary path or covers all of the older slice’s paths/);
   expect(tooltip).toHaveTextContent('96–100 Exceptional quality demonstrated by inspection (optional) · 90–95 High quality, with no verified material defects · 85–89 Healthy, with minor localized polish only · 75–84 Mostly healthy, with localized moderate defects in secondary paths · 60–74 Material defects contained within a feature area · 40–59 Systemic or recurring defects across core workflows · 0–39 Severe core workflow breakage, data loss, or verified reachable exploits');

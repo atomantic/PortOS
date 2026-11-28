@@ -3,6 +3,9 @@
 /** Pragmatic healthy floor of the 85-95 target band; chasing 100/100 is discouraged. */
 export const QUALITY_HEALTHY_THRESHOLD = 85;
 
+/** Maximum length of a recorded `AUDIT_SLICE` string across storage and prompt preload. */
+export const MAX_AUDIT_SLICE_CHARS = 500;
+
 /** Scoring anchors shared by the audit prompt and Quality tab. */
 export const QUALITY_SCORE_BANDS = Object.freeze([
   ['96–100', 'Exceptional quality demonstrated by inspection (optional)'],
