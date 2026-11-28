@@ -521,9 +521,12 @@ stage_wan22_source() {
   local python="$1" revision="$2" build_dir="$3"
   git archive "$revision" -- pyproject.toml README.md LICENSE src | tar -xf - -C "$build_dir"
   # Pillow 13's private typing module fails to import on CPython 3.11.
-  # MLX-Gen only uses the alias in an annotation. Build from the archive with
-  # the equivalent stdlib type, keeping the upstream checkout pristine.
-  "$python" -I -S - "$build_dir/src/mflux/utils/image_util.py" <<'PY'
+  # MLX-Gen only uses the alias in an annotation. Also omit unused upstream
+  # mflux/release/controlnet dependencies (GUI opencv-python, fonttools,
+  # requests, urllib3, hf-transfer) from the staged metadata so `uv pip check`
+  # stays clean against the trimmed Wan 2.2 inference lock. Keep the upstream
+  # checkout pristine.
+  "$python" -I -S - "$build_dir/src/mflux/utils/image_util.py" "$build_dir/pyproject.toml" <<'PY'
 from pathlib import Path
 import sys
 
@@ -540,6 +543,20 @@ source = source.replace(
     1,
 )
 path.write_text(source, encoding="utf-8")
+
+pyproject = Path(sys.argv[2])
+meta = pyproject.read_text(encoding="utf-8")
+for unused in (
+    '    "fonttools>=4.60.2",\n',
+    '    "hf-transfer>=0.1.9,<1.0",\n',
+    '    "opencv-python>=4.10.0,<5.0",\n',
+    '    "requests>=2.32.4",\n',
+    '    "urllib3>=2.6.0",\n',
+):
+    if meta.count(unused) != 1:
+        raise SystemExit(f"Unexpected MLX-Gen dependency metadata: {unused.strip()}")
+    meta = meta.replace(unused, "")
+pyproject.write_text(meta, encoding="utf-8")
 PY
 }
 

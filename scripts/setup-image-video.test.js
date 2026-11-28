@@ -888,6 +888,17 @@ source "$1"
     expect(result.stdout).not.toContain('venv ready');
   });
 
+  it('omits unused GUI opencv-python, fonttools, release HTTP, and hf-transfer packages from the Wan 2.2 MLX lock', () => {
+    const lock = readFileSync(join(REQUIREMENTS_DIR, 'requirements-wan22-mlx.lock.txt'), 'utf8');
+    const names = new Set(Array.from(lock.matchAll(/^([a-z0-9][a-z0-9._-]*)==/gim), ([, name]) => name.toLowerCase()));
+    for (const omitted of ['opencv-python', 'fonttools', 'requests', 'urllib3', 'charset-normalizer', 'hf-transfer']) {
+      expect(names.has(omitted), omitted).toBe(false);
+    }
+    for (const kept of ['av', 'ftfy', 'mlx', 'mlx-metal', 'torch', 'transformers', 'huggingface-hub', 'pillow', 'piexif', 'toml']) {
+      expect(names.has(kept), kept).toBe(true);
+    }
+  });
+
   it('reports a missing bootstrap prerequisite before mutating the private tool or runtime venv', () => {
     const install = installer('INSTALL_LTX2');
     const result = install.run({ NO_BOOTSTRAP_MODULES: '1' });
