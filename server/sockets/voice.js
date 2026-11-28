@@ -235,7 +235,7 @@ export const registerVoiceHandlers = (socket) => {
   socket.on('voice:turn', async (payload = {}) => {
     try {
       if (!(await ensureEnabled('turn'))) return;
-      const { audio, mimeType: rawMime } = payload;
+      const { audio, mimeType: rawMime } = payload && typeof payload === 'object' ? payload : {};
       if (!audio) {
         socket.emit('voice:error', { stage: 'turn', message: 'audio is required' });
         return;
@@ -283,7 +283,8 @@ export const registerVoiceHandlers = (socket) => {
         socket.emit('voice:error', { stage: 'text', message: `text too long (${text.length} > ${MAX_TEXT_LEN} chars)` });
         return;
       }
-      await runTurnWithState({ text, source: payload?.source, errorStage: 'text' });
+      const source = payload?.source === 'voice' || payload?.source === 'text' ? payload.source : undefined;
+      await runTurnWithState({ text, source, errorStage: 'text' });
     } catch (err) {
       console.error(`❌ voice:text failed: ${err.message}`);
       socket.emit('voice:error', { stage: 'text', message: err.message });
@@ -357,8 +358,21 @@ export const registerVoiceHandlers = (socket) => {
     // module-level constant for the rationale.)
     const MAX_ELEMENTS = 200;
     const filtered = elements
-      .filter((e) => e && typeof e === 'object' && typeof e.ref === 'number' && typeof e.label === 'string')
-      .slice(0, MAX_ELEMENTS);
+      .filter((e) => e && typeof e === 'object' && Number.isFinite(e.ref) && typeof e.label === 'string')
+      .slice(0, MAX_ELEMENTS)
+      .map((e) => ({
+        ref: e.ref,
+        ...(typeof e.kind === 'string' && { kind: e.kind.slice(0, 32) }),
+        label: e.label.slice(0, 160),
+        ...(e.guard === 'confirm' && { guard: 'confirm' }),
+        ...(e.active === true && { active: true }),
+        ...(typeof e.type === 'string' && { type: e.type.slice(0, 32) }),
+        ...(typeof e.value === 'string' && { value: e.value.slice(0, 160) }),
+        ...(typeof e.checked === 'boolean' && { checked: e.checked }),
+        ...(Array.isArray(e.options) && {
+          options: e.options.filter((option) => typeof option === 'string').slice(0, 30).map((option) => option.slice(0, 120)),
+        }),
+      }));
     state.ui = {
       path: typeof path === 'string' ? path.slice(0, 256) : null,
       title: typeof title === 'string' ? title.slice(0, 120) : null,
