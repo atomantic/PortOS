@@ -258,6 +258,9 @@ describe('remote desktop broker', () => {
 
       resolvePendingProbe(true);
       await expect(pendingCreation).rejects.toMatchObject({ code: 'REMOTE_DESKTOP_SESSION_REVOKED' });
+      // A creation that enters after targeted revocation already fired must also fail closed.
+      await expect(broker.createSession({ ownerSessionId: 'session-a' }))
+        .rejects.toMatchObject({ code: 'REMOTE_DESKTOP_SESSION_REVOKED' });
 
       const echoed = nextEvent(keptClient, 'message');
       keptClient.send(Buffer.from('RFB 003.008\n'));

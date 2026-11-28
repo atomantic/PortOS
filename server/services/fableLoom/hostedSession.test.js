@@ -1116,6 +1116,9 @@ describe('fableLoom hostedSession', () => {
 
         loomRead.resolve(mockLoom);
         await expect(pendingOwnedByRevoked).rejects.toMatchObject({ code: 'HOSTED_SESSION_REVOKED', status: 409 });
+        // A creation that enters after targeted revocation already fired must also fail closed.
+        await expect(createHostedSession('loom-1', 'ep-1', { ownerSessionId: 'op-a' }))
+          .rejects.toMatchObject({ code: 'HOSTED_SESSION_REVOKED', status: 409 });
         expect(getHostedSession(ownedByRevoked.session.id)).toBeNull();
         expect(verifyHostedHostToken(ownedByRevoked.session.id, ownedByRevoked.hostToken)).toBe(false);
         expect(keptHost.connected).toBe(true);

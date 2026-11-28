@@ -52,6 +52,17 @@ const protagonistVoiceCharacter = (loom, universe) => loom.protagonistCharacterI
 // Active hosted sessions in memory (ephemeral, machine-local)
 const activeSessions = new Map();
 const pendingCreations = new Set();
+// Recently revoked operator session IDs (128-bit random, never reused); catches
+// revocations that fired between authGate admission and createHostedSession entry.
+const revokedOwnerSessions = new Set();
+const MAX_REVOKED_OWNER_SESSIONS = 1024;
+const recordRevokedOwner = (id) => {
+  if (!id) return;
+  revokedOwnerSessions.add(id);
+  if (revokedOwnerSessions.size > MAX_REVOKED_OWNER_SESSIONS) {
+    revokedOwnerSessions.delete(revokedOwnerSessions.values().next().value);
+  }
+};
 let revocationGeneration = 0;
 
 // Default session time-to-live: 30 minutes
@@ -258,6 +269,12 @@ export async function createHostedSession(loomId, episodeId, {
   ownerSessionId = null,
 } = {}) {
   const generation = revocationGeneration;
+  if (ownerSessionId && revokedOwnerSessions.has(ownerSessionId)) {
+    throw new ServerError('PortOS sessions were revoked while preparing hosted play', {
+      status: 409,
+      code: 'HOSTED_SESSION_REVOKED',
+    });
+  }
   const pending = { ownerSessionId, revoked: false };
   pendingCreations.add(pending);
   try {
@@ -627,6 +644,7 @@ export function revokeAllHostedSessions({ reason = 'sessions_revoked', io } = {}
 export function revokeHostedSessionsByOwner(sessionIds, { reason = 'sessions_revoked', io } = {}) {
   const revoked = new Set(sessionIds);
   if (!revoked.size) return 0;
+  for (const id of revoked) recordRevokedOwner(id);
   for (const pending of pendingCreations) {
     if (pending.ownerSessionId && revoked.has(pending.ownerSessionId)) pending.revoked = true;
   }
@@ -1308,4 +1326,5 @@ export function _resetHostedSessions() {
   }
   activeSessions.clear();
   pendingCreations.clear();
+  revokedOwnerSessions.clear();
 }

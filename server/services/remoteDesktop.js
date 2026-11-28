@@ -43,6 +43,17 @@ export const createRemoteDesktopBroker = ({
   const liveBridges = new Set();
   // Pending createSession calls awaiting the loopback VNC probe; prevents a revoked session from minting after probe resolves.
   const pendingCreations = new Set();
+  // Recently revoked operator session IDs (128-bit random, never reused); catches
+  // revocations that fired between authGate admission and createSession entry.
+  const revokedOwnerSessions = new Set();
+  const MAX_REVOKED_OWNER_SESSIONS = 1024;
+  const recordRevokedOwner = (id) => {
+    if (!id) return;
+    revokedOwnerSessions.add(id);
+    if (revokedOwnerSessions.size > MAX_REVOKED_OWNER_SESSIONS) {
+      revokedOwnerSessions.delete(revokedOwnerSessions.values().next().value);
+    }
+  };
   const mountedServers = new WeakMap();
 
   const deleteExpiredSessions = () => {
@@ -62,6 +73,12 @@ export const createRemoteDesktopBroker = ({
   });
 
   const createSession = async ({ ownerSessionId = null } = {}) => {
+    if (ownerSessionId && revokedOwnerSessions.has(ownerSessionId)) {
+      throw codedError(
+        'PortOS session was revoked before preparing remote desktop access.',
+        'REMOTE_DESKTOP_SESSION_REVOKED',
+      );
+    }
     const pending = { ownerSessionId, revoked: false };
     pendingCreations.add(pending);
     try {
@@ -227,6 +244,7 @@ export const createRemoteDesktopBroker = ({
   const revokeByOwnerSessions = (sessionIds, reason = 'Remote desktop access revoked') => {
     const revoked = new Set(sessionIds);
     if (!revoked.size) return 0;
+    for (const id of revoked) recordRevokedOwner(id);
     for (const pending of pendingCreations) {
       if (pending.ownerSessionId && revoked.has(pending.ownerSessionId)) pending.revoked = true;
     }
