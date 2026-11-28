@@ -130,8 +130,12 @@ async function activePortrait() {
   return filename ? { key: filename, load: () => loadAvatarPortrait(filename) } : { key: DEFAULT_PORTRAIT_KEY };
 }
 
+const workerRunning = () => Boolean(worker) && phase === 'running';
+
+// A stopped, starting or crashed worker is a state the operator controls, not a server fault:
+// refuse with a 409 so the request logs as a refusal instead of a route error.
 function runningWorker() {
-  if (!worker || phase !== 'running') throw avatarError('Start AvatarForcing before animating.', 503);
+  if (!workerRunning()) throw avatarError('Start AvatarForcing before animating.');
   return worker;
 }
 
@@ -141,8 +145,11 @@ export async function renderAvatar(wav, options) {
   return runningWorker().render(wav, { ...options, portrait });
 }
 
+// Idle motion is optional presence: a view whose status is a beat behind the worker (a restart,
+// a stop or a crash not yet pushed) gets no frames and keeps its still portrait.
 export async function renderAvatarIdle(options) {
-  runningWorker();
+  if (!workerRunning()) return;
   const portrait = await activePortrait();
-  return runningWorker().renderIdle({ ...options, portrait });
+  if (!workerRunning()) return;
+  return worker.renderIdle({ ...options, portrait });
 }

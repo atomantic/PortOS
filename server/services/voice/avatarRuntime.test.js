@@ -180,10 +180,13 @@ it('sanitizes install failure messages and blocks concurrent actions during inst
   }));
 });
 
-it('wires active channel portraits into render calls and refuses renders when stopped or crashed', async () => {
+it('wires active channel portraits into render calls, refuses speech and skips idle when stopped or crashed', async () => {
   const { getAvatarStatus, manageAvatar, renderAvatar, renderAvatarIdle } = await import('./avatarRuntime.js');
   await expect(renderAvatar(Buffer.from('wav'), { onFrame: vi.fn(), signal: new AbortController().signal }))
-    .rejects.toMatchObject({ status: 503 });
+    .rejects.toMatchObject({ status: 409 });
+  const earlyIdleFrame = vi.fn();
+  await expect(renderAvatarIdle({ stage: 'idle', onFrame: earlyIdleFrame, signal: new AbortController().signal })).resolves.toBeUndefined();
+  expect(earlyIdleFrame).not.toHaveBeenCalled();
 
   let notifyClose;
   const render = vi.fn(async () => {});
@@ -213,8 +216,10 @@ it('wires active channel portraits into render calls and refuses renders when st
   // Unexpected worker crash transitions to failed and blocks further renders.
   notifyClose(false);
   expect(await getAvatarStatus()).toMatchObject({ phase: 'failed', detail: expect.stringContaining('worker stopped') });
-  await expect(renderAvatarIdle({ stage: 'idle', onFrame: vi.fn(), signal: new AbortController().signal }))
-    .rejects.toMatchObject({ status: 503 });
+  await expect(renderAvatar(Buffer.from('wav'), { onFrame: vi.fn(), signal: new AbortController().signal }))
+    .rejects.toMatchObject({ status: 409 });
+  await renderAvatarIdle({ stage: 'idle', onFrame: vi.fn(), signal: new AbortController().signal });
+  expect(renderIdle).toHaveBeenCalledTimes(1);
 });
 
 it('starts an installed, stopped worker when a call view opens, unless the operator turned auto-start off', async () => {
