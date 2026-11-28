@@ -1,5 +1,5 @@
 import { beforeEach, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
 const mocks = vi.hoisted(() => {
@@ -84,6 +84,35 @@ it('assigns an avatar, names a channel and puts it on air', async () => {
   fireEvent.click(screen.getByRole('button', { name: 'CH3' }));
   await waitFor(() => expect(saveAvatarChannels).toHaveBeenLastCalledWith({ active: 2 }));
   await waitFor(() => expect(screen.getByRole('button', { name: 'CH3' })).toHaveAttribute('aria-pressed', 'true'));
+});
+
+it('preserves both edits when a channel name save overlaps another channel’s avatar assignment', async () => {
+  let finishNameSave;
+  saveAvatarChannels.mockImplementationOnce(({ channels }) => new Promise((resolve) => {
+    finishNameSave = () => resolve(library({ channels }));
+  })).mockImplementation(async ({ channels }) => library({ channels }));
+
+  renderPanel();
+  fireEvent.click(await screen.findByRole('button', { name: 'Choose the avatar for channel 2' }));
+  const name = screen.getByLabelText('Channel 1 name');
+  fireEvent.change(name, { target: { value: 'Scout' } });
+  fireEvent.blur(name);
+  await waitFor(() => expect(saveAvatarChannels).toHaveBeenCalledTimes(1));
+
+  await act(async () => {
+    fireEvent.click(screen.getByRole('button', { name: 'Assign avatar 1' }));
+  });
+  expect(saveAvatarChannels).toHaveBeenCalledTimes(1);
+  await act(async () => { finishNameSave(); });
+
+  const expected = library().channels;
+  expected[0] = { label: 'Scout', avatar: null };
+  expected[1] = { label: '', avatar: 'face.png' };
+  expect(saveAvatarChannels).toHaveBeenCalledTimes(2);
+  expect(saveAvatarChannels).toHaveBeenLastCalledWith({ channels: expected });
+  expect(name).toHaveValue('Scout');
+  fireEvent.click(screen.getByRole('button', { name: 'Choose the avatar for channel 2' }));
+  expect(screen.getByRole('button', { name: 'Assign avatar 1' })).toHaveAttribute('aria-pressed', 'true');
 });
 
 it('generates a square avatar from the prompt as written and files it into the collection', async () => {

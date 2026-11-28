@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useLayoutEffect, useRef, useState } from 'react';
 import { Link } from 'react-router';
 import { ImagePlus, Images, ScanFace, Sparkles, Trash2 } from 'lucide-react';
 import { generateImage } from '../../services/apiSystem.js';
@@ -186,10 +186,25 @@ export default function AvatarChannelsPanel() {
   const [removing, setRemoving] = useState(false);
   const removingRef = useRef(false);
 
-  const saveChannels = useCallback((patch) => saveAvatarChannels(patch).then(updateData).catch(() => {}), [updateData]);
-  const editChannel = (index, change) => saveChannels({
-    channels: library.channels.map((channel, i) => (i === index ? { ...channel, ...change } : channel)),
-  });
+  const savedChannels = useRef(null);
+  const channelSaves = useRef(Promise.resolve());
+
+  useLayoutEffect(() => {
+    savedChannels.current = library?.channels;
+  }, [library]);
+
+  const saveChannels = (buildPatch) => {
+    // The API replaces the full array. Build each patch after the prior write
+    // settles, using its response even if React has yet to render it.
+    channelSaves.current = channelSaves.current.then(async () => {
+      const next = await saveAvatarChannels(buildPatch(savedChannels.current));
+      savedChannels.current = next.channels;
+      updateData(next);
+    }).catch(() => {});
+  };
+  const editChannel = (index, change) => saveChannels((channels) => ({
+    channels: channels.map((channel, i) => (i === index ? { ...channel, ...change } : channel)),
+  }));
   const fileAvatar = useCallback((filename) => {
     addAvatarToLibrary(filename).then((next) => {
       updateData(next);
@@ -245,7 +260,7 @@ export default function AvatarChannelsPanel() {
                 channel={channel}
                 active={library.active === index}
                 avatars={avatars}
-                onSelect={() => saveChannels({ active: index })}
+                onSelect={() => saveChannels(() => ({ active: index }))}
                 onLabel={(label) => editChannel(index, { label })}
                 onAvatar={(avatar) => editChannel(index, { avatar })}
               />
