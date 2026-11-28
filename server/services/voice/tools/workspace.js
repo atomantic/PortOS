@@ -14,6 +14,7 @@ export const WORKSPACE_INTENT_RE = /\b(?:switch|change|move|jump|flip|go|take me
 export const WORKSPACE_TOOLS = [
   {
     name: 'workspace_switch',
+    hostControl: true,
     description:
       'Switch your active project workspace: first save a snapshot of the workspace you are leaving, then restore the named project\'s saved context — its git branch, the shell sessions rooted in its repo, and the tasks scoped to it. Use when the user says "switch workspace to BookLoom", "switch to the finance tracker project", "take me back to the PortOS workspace", or "restore my BookLoom context". Restoring only REPORTS which saved shell sessions are still live to re-attach and whether the saved git branch is still checked out — it never checks out branches or spawns shells for the user (that stays a manual action). Name the target project as `workspace`.',
     parameters: {

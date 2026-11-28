@@ -936,6 +936,9 @@ describe('host control by default on /api writes (#16018)', () => {
       '/api/image-gen/setup/python',
       '/api/image-gen/setup/flux2-status',
       '/api/image-gen/setup/flux2-install',
+      '/api/video-gen/status',
+      '/api/workspace-contexts',
+      '/api/workspace-contexts/example-app',
     ];
     const header = authority === 'remote' ? null : await authorityHeader(authority);
     const { app, sink } = await buildApp(authority === 'local' ? '127.0.0.1' : '192.0.2.10');
