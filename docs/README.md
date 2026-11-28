@@ -23,6 +23,8 @@ Enable GSD project planning, [Beeper](features/beeper.md), [OpenClaw Operator Ch
 
 [JIRA](features/jira-sprint-manager.md) and DataDog are disabled on unconfigured installs. Their features can turn on automatically when an integration is configured, or you can set them explicitly in **Settings → Features**.
 
+[YouTube comment notifications](features/youtube-comment-notifications.md) can watch a channel for new published comments and replies.
+
 ## Operate an install
 
 - [Troubleshooting](TROUBLESHOOTING.md) covers startup and runtime failures. Run `npm run doctor` to check installation prerequisites. See [Windows console flashing](WINDOWS_CONSOLE.md) and the [iTerm2 Shell view](ITERM.md) for platform-specific guidance.

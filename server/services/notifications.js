@@ -168,20 +168,18 @@ export async function addNotification(notification) {
     const action = adaptNotification(newNotification);
     if (action) newNotification.metadata = { ...newNotification.metadata, actionId: action.id };
 
-    data.notifications.push(newNotification);
-
+    // Retry and deduplication callers should see new events only after the durable write.
+    let records = [...data.notifications, newNotification];
     // Bound event history without dropping an unresolved source obligation.
-    if (data.notifications.length > 500) {
-      const recentIds = new Set(data.notifications.filter(n => !n.historyHidden).slice(-500).map(n => n.id));
-      data.notifications = data.notifications.filter(n => {
-        if (recentIds.has(n.id)) return true;
-        if (!adaptNotification(n)) return false;
-        n.historyHidden = true;
-        return true;
+    if (records.length > 500) {
+      const recentIds = new Set(records.filter(n => !n.historyHidden).slice(-500).map(n => n.id));
+      records = records.flatMap(n => {
+        if (recentIds.has(n.id)) return [n];
+        return adaptNotification(n) ? [{ ...n, historyHidden: true }] : [];
       });
     }
 
-    await saveNotifications(data);
+    await saveNotifications({ ...data, notifications: records });
 
     console.log(`🔔 Notification added: ${newNotification.type} - ${newNotification.title}`);
     notificationEvents.emit('added', newNotification);

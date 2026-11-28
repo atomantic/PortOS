@@ -19,6 +19,7 @@ export const NOTIFICATION_CATALOG = {
   MUSIC_VIDEO_ATTENTION: { key: 'music_video_attention', label: 'Music Video Attention' },
   ACTION_DUE: { key: 'action_due', label: 'Scheduled Actions Due' },
   SHARE_BLOCKED: { key: 'share_blocked', label: 'Blocked Shares' },
+  YOUTUBE_COMMENT: { key: 'youtube_comment', label: 'YouTube Comments' },
   GITHUB_AUDIT: { key: 'github_audit', label: 'GitHub Audit Reports' },
   MEDIA_DELETE_FAILED: { key: 'media_delete_failed', label: 'Media Delete Outcomes' }
 };

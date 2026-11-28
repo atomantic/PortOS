@@ -18,6 +18,7 @@ import { startImessageScheduler } from '../imessageScheduler.js';
 import { startSignalScheduler } from '../signalScheduler.js';
 import { startSpotifyScheduler } from '../spotifyScheduler.js';
 import { startYoutubeScheduler } from '../youtubeScheduler.js';
+import { startYoutubeCommentWatcher } from '../youtubeCommentWatcher.js';
 import { startActivityDigestScheduler } from '../activityDigestScheduler.js';
 import { startTwinEnrichmentScheduler } from '../twinEnrichmentScheduler.js';
 import { startOrphanShellGc } from '../importerOrphanGc.js';
@@ -136,6 +137,7 @@ export function startBackgroundSchedulers({ io, armHostedSessions }) {
   // the signed-in history page in the managed browser when the user opts in via
   // Settings → YouTube (#2153).
   startYoutubeScheduler().catch(err => logBootstrapFailure('❌ YouTube sync scheduler init failed', err));
+  startYoutubeCommentWatcher().catch(err => logBootstrapFailure('❌ YouTube comment watcher init failed', err));
   // Initialize the Beeper ingestion sweep — OFF by default; registers only when
   // the Beeper instance feature is on AND a token is configured, and then only
   // runs when `settings.beeper.enabled` is set (fork issue #32). Deliberately
