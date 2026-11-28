@@ -96,6 +96,8 @@ describe('SecurityTab', () => {
     render(<SecurityTab />);
 
     expect(await screen.findByText('Login password disabled')).toBeInTheDocument();
+    expect(screen.getByText(/host control stays restricted to loopback/i)).toBeInTheDocument();
+    expect(screen.getByText(/First-time setup requires a loopback URL/i)).toBeInTheDocument();
     expect(screen.getByText('Set a password')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Enable login' })).toBeInTheDocument();
     expect(screen.queryByLabelText('Current password')).not.toBeInTheDocument();

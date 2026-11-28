@@ -21,7 +21,7 @@ PortOS runs on your own computer and you open it from your phone, tablet, or lap
 | 🎬 **Create** | Write stories, build universes, make images, video, music, music videos, 3D, and games. |
 | 🤖 **Chief of Staff** | Hands work to coding agents, runs schedules, learns which model does what best. |
 | 🪞 **Identity** | A digital twin: genome, taste, writing style, goals, and a private vault. |
-| 💬 **Comms & Calendar** | Inbox for connected Gmail, Outlook, and Teams accounts, with review-before-send email drafts. Browse iMessage in Messages → iMessage and imported Signal activity in the Activity Timeline and Tribe. Calendar sync and a lifetime view. See the [Product Surface Map](./docs/features/product-surfaces.md#6-communications-voice-social--spatial-ui). |
+| 💬 **Comms & Calendar** | Inbox for connected Gmail, Outlook, and Teams accounts, with review-before-send email drafts. Browse iMessage in Comms → iMessage, inspect Signal sync in Comms → Signal, and view imported activity in the Activity Timeline and Tribe. Calendar sync and a lifetime view. See the [Product Surface Map](./docs/features/product-surfaces.md#6-communications-voice-social--spatial-ui). |
 | 💪 **Health & POST** | Blood work, body metrics, and daily brain-training drills. |
 | 🛠️ **Dev Tools** | Your apps and their processes, a web shell, GitHub, usage and cost tracking. |
 | 🧪 **Models** | Install, run, and compare local LLMs and media models side by side. |

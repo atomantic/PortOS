@@ -2,6 +2,7 @@
  * Review-loop configuration, reviewer CLI and prompt contracts, and slashdo argv construction.
  */
 import { isPlainObject } from './objects.js';
+import { CODE_REVIEWERS_PAGE_BREADCRUMB } from './navManifest.js';
 import { isTruthyMeta } from './metadataFlags.js';
 import { EFFORT_LEVELS, buildEffortArgs, foldCursorEffortIntoModel, splitAntigravityModel } from './provider/providerModels.js';
 import { providersForReviewer } from './reviewerProviderMatchers.js';
@@ -90,7 +91,7 @@ export const FORGE_REVIEWER_WAIT_NOTE = 'An `@<login>` is often a person, not a 
  * `REVIEW_UNAVAILABLE_REPORTING_NOTE`: the rule reaches prompt sites and run-summary builders, and
  * spelled out at each one it drifts.
  */
-export const ZERO_REVIEWER_COVERAGE_NOTE = 'No reviewer reviewed this branch — every configured reviewer returned a configuration fault. The review loop is currently a no-op. Check Settings → Code Reviewers for the setting that fixes each reviewer.';
+export const ZERO_REVIEWER_COVERAGE_NOTE = `No reviewer reviewed this branch — every configured reviewer returned a configuration fault. The review loop is currently a no-op. Check ${CODE_REVIEWERS_PAGE_BREADCRUMB} for the setting that fixes each reviewer.`;
 
 /**
  * Vendors PortOS can spawn that are deliberately NOT reviewers, each mapped to the reason. The
