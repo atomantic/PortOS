@@ -7,6 +7,7 @@ import { createInterface } from 'node:readline';
 import { spawn } from '../../lib/childProcess.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { expandHome } from '../../lib/fileUtils.js';
+import { scrubHomePath } from '../../lib/homePath.js';
 import { PATHS } from '../../lib/paths.js';
 import { PORTS } from '../../lib/ports.js';
 
@@ -44,22 +45,27 @@ const stopCurrent = (reason = 'stop') => {
 };
 
 /**
- * Start (or reuse) the sidecar for this install and resolve its loopback endpoint once the model has loaded.
- * @returns {Promise<{ url: string }>}
+ * Start (or reuse) the sidecar for this install and resolve its loopback endpoint and auth token once loaded.
+ * @returns {Promise<{ url: string, token: string }>}
  */
 export const ensureRealtimeSidecar = async (realtime = {}, { persona = '', launch = spawn } = {}) => {
   const install = describeInstall(realtime);
   if (!install.installed) {
     const missing = Object.entries(install.parts).filter(([, ok]) => !ok).map(([part]) => part).join(', ');
-    throw realtimeError(`Realtime voice is not installed at ${install.home} (missing ${missing}).`, 503);
+    throw realtimeError(`Realtime voice is not installed at ${scrubHomePath(install.home)} (missing ${missing}).`, 503);
   }
   const key = JSON.stringify([install.home, install.size, persona]);
   if (current && current.key !== key) stopCurrent('config-changed');
   if (!current) {
     const token = randomBytes(18).toString('hex');
     const port = PORTS.VOICE_REALTIME;
+    // Pass the bearer token and custom persona via child env rather than argv so they stay out of process listings.
     const child = launch(install.python, ['-u', SIDECAR_SCRIPT, '--app', install.app, '--models', install.models,
-      '--port', String(port), '--token', token, '--lang', 'en', '--persona', persona], { shell: false, stdio: ['ignore', 'pipe', 'pipe'] });
+      '--port', String(port), '--lang', 'en'], {
+      shell: false,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, PORTOS_REALTIME_TOKEN: token, PORTOS_REALTIME_PERSONA: persona },
+    });
     const proc = { child, port, token, key, idleTimer: null };
     proc.ready = new Promise((resolve, reject) => {
       const timer = setTimeout(() => { reject(realtimeError('Realtime voice did not finish loading.', 503)); child.kill('SIGKILL'); }, START_TIMEOUT_MS);
@@ -68,7 +74,7 @@ export const ensureRealtimeSidecar = async (realtime = {}, { persona = '', launc
         if (line.startsWith('{"ready"')) { clearTimeout(timer); resolve(); }
       });
       child.stderr.resume(); // Model diagnostics stay out of the server log.
-      child.on('error', (err) => { clearTimeout(timer); reject(realtimeError(`Could not launch realtime voice: ${err.message}`, 503)); });
+      child.on('error', (err) => { clearTimeout(timer); reject(realtimeError(`Could not launch realtime voice: ${scrubHomePath(err.message)}`, 503)); });
       child.once('close', (code) => {
         clearTimeout(timer);
         if (current === proc) current = null;
@@ -81,7 +87,7 @@ export const ensureRealtimeSidecar = async (realtime = {}, { persona = '', launc
   const proc = current;
   await proc.ready;
   clearTimeout(proc.idleTimer);
-  return { url: `ws://127.0.0.1:${proc.port}/?token=${proc.token}` };
+  return { url: `ws://127.0.0.1:${proc.port}/`, token: proc.token };
 };
 
 /** Keep the model loaded between calls, then free its ~26 GB once nobody has called for a while. */
@@ -96,5 +102,12 @@ export const stopRealtimeSidecar = () => stopCurrent('shutdown');
 
 export const realtimeStatus = (realtime = {}) => {
   const install = describeInstall(realtime);
-  return { ...install, running: Boolean(current) };
+  return {
+    ...install,
+    home: scrubHomePath(install.home),
+    python: scrubHomePath(install.python),
+    app: scrubHomePath(install.app),
+    models: scrubHomePath(install.models),
+    running: Boolean(current),
+  };
 };

@@ -8,7 +8,7 @@ speaks it as a follow-up turn. This is the Mac-side counterpart of Sophon's GPU 
 The Sophon engine is imported from its install folder (--app), not vendored. `_speak` adapts `Brain.reply` from that engine
 (Apache-2.0, adventists-ai/sophon-realtime mac/engine.py) so a reply can follow a tool result instead of new user speech.
 
-Wire protocol (one WebSocket, loopback only, `?token=` must match --token):
+Wire protocol (one WebSocket, loopback only, `Authorization: Bearer <token>` or `?token=` must match PORTOS_REALTIME_TOKEN / --token):
   in  binary   PCM16 mono at --rate (microphone, after the browser's own echo cancellation)
   in  text     {"type": "tool_result", "call_id": str, "output": str}   result of a delegated task, spoken as the next reply
                {"type": "interrupt"}                                    stop talking now
@@ -17,21 +17,25 @@ Wire protocol (one WebSocket, loopback only, `?token=` must match --token):
                {"type": "delegate", "call_id": str, "task": str} | {"type": "reply", "text": str, "cancelled": bool}
                {"type": "event", ...engine event...}
 
-    python portos_sophon.py --app ~/.portos/sophon-mac/app --models ~/.portos/sophon-mac/models --port 5569 --token T
+    PORTOS_REALTIME_TOKEN=T python portos_sophon.py --app ~/.portos/sophon-mac/app --models ~/.portos/sophon-mac/models --port 5569
 """
-import argparse, asyncio, json, os, re, sys, threading, time, uuid
+import argparse, asyncio, hmac, json, os, re, sys, threading, time, uuid
 from urllib.parse import parse_qs, urlparse
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--app", required=True, help="the Sophon Mac install's app folder (engine.py)")
 ap.add_argument("--models", required=True, help="the Sophon Mac model folder")
 ap.add_argument("--port", type=int, required=True)
-ap.add_argument("--token", required=True)
+ap.add_argument("--token", default=None, help="auth token (defaults to PORTOS_REALTIME_TOKEN env var)")
 ap.add_argument("--rate", type=int, default=16000, help="sample rate of the incoming PCM16")
 ap.add_argument("--lang", default="en")
 ap.add_argument("--voice", default="chelsie")
-ap.add_argument("--persona", default="", help="extra system prompt text (name, style)")
+ap.add_argument("--persona", default=None, help="extra system prompt text (defaults to PORTOS_REALTIME_PERSONA env var)")
 a = ap.parse_args()
+token = a.token if a.token is not None else os.environ.get("PORTOS_REALTIME_TOKEN", "")
+if not token:
+    ap.error("--token or PORTOS_REALTIME_TOKEN is required")
+persona = a.persona if a.persona is not None else os.environ.get("PORTOS_REALTIME_PERSONA", "")
 sys.path.insert(0, a.app)
 
 import numpy as np  # noqa: E402
@@ -266,13 +270,18 @@ class ToolSession(Session):
 
 async def main():
     print("Loading the model...", flush=True)
-    brain = ToolBrain(a.models, lang=a.lang, voice=a.voice, sys_prompt=os.path.join(a.app, "system_prompt.json"), persona=a.persona)
+    brain = ToolBrain(a.models, lang=a.lang, voice=a.voice, sys_prompt=os.path.join(a.app, "system_prompt.json"), persona=persona)
     brain.warmup()
     busy = {"on": False}
 
     async def handle(ws):
-        path = getattr(getattr(ws, "request", None), "path", None) or getattr(ws, "path", "")
-        if parse_qs(urlparse(path).query).get("token", [""])[0] != a.token:
+        headers = getattr(getattr(ws, "request", None), "headers", None) or getattr(ws, "request_headers", None)
+        auth = headers.get("Authorization", "") if headers is not None else ""
+        presented = auth[7:] if auth.startswith("Bearer ") else ""
+        if not presented:
+            path = getattr(getattr(ws, "request", None), "path", None) or getattr(ws, "path", "")
+            presented = parse_qs(urlparse(path).query).get("token", [""])[0]
+        if not hmac.compare_digest(presented.encode("utf-8"), token.encode("utf-8")):
             await ws.close(4401, "bad token"); return
         if busy["on"]:
             await ws.close(1013, "one conversation at a time"); return
