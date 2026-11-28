@@ -48,7 +48,7 @@ import { PeerNotes, UsedIn, NegativePrompt, VariantSwitch, MetaList } from './Li
 
 // The side pane stacks under the media on phones and sits beside it from md up.
 // Film look gets a wider pane (two slider columns) and more of a phone screen.
-const ASIDE_CLASSES = 'shrink-0 flex flex-col border-t md:border-t-0 md:border-l border-port-border min-h-0 max-h-dvh-cap md:[--dvh-cap:92vh] md:[--dvh-cap-dynamic:92dvh] [--dvh-inset:2rem]';
+const ASIDE_CLASSES = 'port-themed-surface shrink-0 flex flex-col border-t md:border-t-0 md:border-l border-port-border min-h-0 max-h-dvh-cap md:[--dvh-cap:92vh] md:[--dvh-cap-dynamic:92dvh] [--dvh-inset:2rem]';
 const DETAILS_ASIDE_SIZE = 'md:w-80 lg:w-96 [--dvh-cap:40vh] [--dvh-cap-dynamic:40dvh]';
 // The live-look image is a plain <img> inside a wrapper, so it cannot shrink
 // to the flex row the way MediaImage does; cap it to what the pane leaves.
