@@ -2,7 +2,7 @@
 
 import { join } from 'path';
 import { existsSync } from 'fs';
-import { link } from 'fs/promises';
+import { link, stat } from 'fs/promises';
 import { pipeline } from 'node:stream/promises';
 import { createHash, randomUUID } from 'node:crypto';
 import { PATHS, atomicWrite, ensureDir, sha256File, createWriteStreamGuarded, unlinkGuarded } from '../../lib/fileUtils.js';
@@ -18,6 +18,7 @@ import { WRITERS_ROOM_DRAFT_ASSET_KIND } from '../writersRoom/syncLogic.js';
 import { WORK_ID_RE, DRAFT_ID_RE } from '../writersRoom/_shared.js';
 import { getWorkForSync } from '../writersRoom/sync.js';
 import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
+import { mapWithConcurrency } from '../../lib/mapWithConcurrency.js';
 import { peerSyncEvents, findPeerById } from './peerSyncShared.js';
 import { isStr } from '../../lib/textUtils.js';
 import { detectMediaManifest } from '../../lib/mimeTypes.js';
@@ -51,7 +52,32 @@ import {
 //
 // `row.thumbnail` rode the wire from a peer, so it goes through
 // `sanitizeAssetFilename` before it can become a path segment.
-async function videoThumbnailNameForVideo(filename) {
+function createVideoThumbnailLookup() {
+  let cachedStamp = null;
+  let byFilenamePromise = null;
+  const videoHistoryStamp = () => stat(join(PATHS.data, 'video-history.json'))
+    .then((info) => `${info.mtimeMs}:${info.size}:${info.ino}:${info.ctimeMs}`, () => 'missing');
+  return async (filename) => {
+    const stamp = await videoHistoryStamp();
+    if (!byFilenamePromise || stamp !== cachedStamp) {
+      cachedStamp = stamp;
+      byFilenamePromise = readVideoHistoryRows()
+        .then((rows) => {
+          const map = new Map();
+          for (const row of rows) {
+            if (!isStr(row?.filename) || map.has(row.filename)) continue;
+            map.set(row.filename, isStr(row?.thumbnail) ? sanitizeAssetFilename(row.thumbnail) : null);
+          }
+          return map;
+        })
+        .catch(() => new Map());
+    }
+    return (await byFilenamePromise).get(filename) ?? null;
+  };
+}
+
+async function videoThumbnailNameForVideo(filename, lookupVideoThumbnail) {
+  if (lookupVideoThumbnail) return lookupVideoThumbnail(filename);
   for (const row of await readVideoHistoryRows()) {
     if (row?.filename !== filename) continue;
     return isStr(row?.thumbnail) ? sanitizeAssetFilename(row.thumbnail) : null;
@@ -63,8 +89,8 @@ async function videoThumbnailNameForVideo(filename) {
 // also runs for a hash-matched video: metadata and bytes can arrive in either
 // order, and a first pull may have made only the filename-stem fallback before
 // a later videoHistory sync declared an independent poster name.
-async function reconcileVideoThumbnail(filename, videoPath, peerId) {
-  const rowThumbnail = await videoThumbnailNameForVideo(filename).catch(() => null);
+async function reconcileVideoThumbnail(filename, videoPath, peerId, lookupVideoThumbnail) {
+  const rowThumbnail = await videoThumbnailNameForVideo(filename, lookupVideoThumbnail).catch(() => null);
   const jobId = (rowThumbnail || filename).replace(/\.[a-z0-9]+$/i, '');
   const expectedFilename = `${jobId}.jpg`;
   if (existsSync(join(PATHS.videoThumbnails, expectedFilename))) return null;
@@ -95,6 +121,7 @@ const ASSET_KIND_TO_URL_PREFIX = Object.freeze({
 });
 
 export const ASSET_PULL_TIMEOUT_MS = 60000;
+const ASSET_PULL_CONCURRENCY = 4;
 
 // In-flight pull dedup. A peer can push multiple records that reference the
 // same asset in quick succession (universe edit → child collection re-link
@@ -136,9 +163,8 @@ export function assetDestinationKey(kind, filename) {
  * still report it as missing). The 60s loop's snapshot path also catches
  * up if push-driven pulls keep failing — defense in depth.
  *
- * Stage 4 keeps this simple — sequential per-asset fetches, no parallelism
- * cap. A future enhancement could pool 2-4 concurrent fetches if individual
- * universes routinely ship hundreds of assets.
+ * Pools up to ASSET_PULL_CONCURRENCY concurrent fetches while preserving
+ * per-peer in-flight dedup and per-destination write serialization.
  */
 export async function pullMissingAssetsFromPeer(senderInstanceId, missingAssets, { includeMismatched = true } = {}) {
   if (!isStr(senderInstanceId) || !Array.isArray(missingAssets) || missingAssets.length === 0) return;
@@ -163,12 +189,15 @@ export async function pullMissingAssetsFromPeer(senderInstanceId, missingAssets,
   const base = peerBaseUrl(peer);
   const deletedImages = await deletedImageStamps(missingAssets);
   const deletedVideos = await deletedVideoIds(missingAssets);
-  for (const entry of missingAssets) {
-    if (blockedByImageTombstone(deletedImages, entry) || blockedByVideoTombstone(deletedVideos, entry)) continue;
-    await pullOneAsset(peer, base, entry, includeMismatched).catch((err) => {
+  const eligible = missingAssets.filter(
+    (entry) => !blockedByImageTombstone(deletedImages, entry) && !blockedByVideoTombstone(deletedVideos, entry),
+  );
+  const lookupVideoThumbnail = createVideoThumbnailLookup();
+  await mapWithConcurrency(eligible, ASSET_PULL_CONCURRENCY, (entry) =>
+    pullOneAsset(peer, base, entry, includeMismatched, lookupVideoThumbnail).catch((err) => {
       console.log(`⚠️ peerSync: asset pull ${entry.filename} from ${peer.name || senderInstanceId} failed: ${err.message}`);
-    });
-  }
+    }),
+  );
 }
 
 // Explicit collection moves can include long video renders. Stream them into
@@ -297,11 +326,11 @@ export async function pullMissingWorkBodies(senderInstanceId, missingBodies) {
     return;
   }
   const base = peerBaseUrl(peer);
-  for (const entry of missingBodies) {
-    await pullOneWorkBody(peer, base, entry).catch((err) => {
+  await mapWithConcurrency(missingBodies, ASSET_PULL_CONCURRENCY, (entry) =>
+    pullOneWorkBody(peer, base, entry).catch((err) => {
       console.log(`⚠️ peerSync: draft-body pull ${entry?.draftId} from ${peer.name || senderInstanceId} failed: ${err.message}`);
-    });
-  }
+    }),
+  );
 }
 
 async function pullOneWorkBody(peer, base, entry) {
@@ -342,7 +371,7 @@ async function pullOneWorkBody(peer, base, entry) {
   }
 }
 
-async function pullOneAsset(peer, base, entry, includeMismatched) {
+async function pullOneAsset(peer, base, entry, includeMismatched, lookupVideoThumbnail) {
   const urlPrefix = ASSET_KIND_TO_URL_PREFIX[entry.kind];
   const localDir = directoryForAssetKind(entry.kind);
   // Re-validate the filename here even though the receiver already
@@ -365,14 +394,14 @@ async function pullOneAsset(peer, base, entry, includeMismatched) {
     // (#3929). See assetWriteQueue.
     await assetWriteQueue(
       assetDestinationKey(entry.kind, safeName),
-      () => doPullOneAsset(peer, base, entry, urlPrefix, localDir, safeName, includeMismatched),
+      () => doPullOneAsset(peer, base, entry, urlPrefix, localDir, safeName, includeMismatched, lookupVideoThumbnail),
     );
   } finally {
     inflightPulls.delete(key);
   }
 }
 
-async function doPullOneAsset(peer, base, entry, urlPrefix, localDir, safeName, includeMismatched) {
+async function doPullOneAsset(peer, base, entry, urlPrefix, localDir, safeName, includeMismatched, lookupVideoThumbnail) {
   // A missing asset can arrive while this stale push waits on the write queue.
   // Preserve its bytes and sidecar once another writer has filled the gap.
   const fullPath = join(localDir, safeName);
@@ -401,7 +430,7 @@ async function doPullOneAsset(peer, base, entry, urlPrefix, localDir, safeName, 
         // the declared poster even though the mp4 itself does not need a pull.
         await withBackupAssetPublication(async () => {
           if (entry.kind === 'image') await pullSidecarForImage(peer, base, safeName).catch(() => {});
-          if (entry.kind === 'video') await reconcileVideoThumbnail(safeName, localFullPath, peer.instanceId);
+          if (entry.kind === 'video') await reconcileVideoThumbnail(safeName, localFullPath, peer.instanceId, lookupVideoThumbnail);
         });
         return;
       }
@@ -425,10 +454,10 @@ async function doPullOneAsset(peer, base, entry, urlPrefix, localDir, safeName, 
   // The download stays outside the backup lease. Replacing the file, its sidecar
   // and poster, and the media_assets row that indexes them hold it together, so
   // a cut never captures a row for bytes it did not copy, or the reverse.
-  await withBackupAssetPublication(() => commitPulledAsset(peer, base, entry, localDir, fullPath, safeName, buffer, includeMismatched));
+  await withBackupAssetPublication(() => commitPulledAsset(peer, base, entry, localDir, fullPath, safeName, buffer, includeMismatched, lookupVideoThumbnail));
 }
 
-async function commitPulledAsset(peer, base, entry, localDir, fullPath, safeName, buffer, includeMismatched) {
+async function commitPulledAsset(peer, base, entry, localDir, fullPath, safeName, buffer, includeMismatched, lookupVideoThumbnail) {
   await ensureDir(localDir);
   if (!includeMismatched && existsSync(fullPath)) return;
   const isNewHere = !existsSync(fullPath);
@@ -436,10 +465,10 @@ async function commitPulledAsset(peer, base, entry, localDir, fullPath, safeName
   // half-written file that subsequent `diffAssetManifestAgainstLocal`
   // calls would see as "present" and stop re-requesting.
   await atomicWrite(fullPath, buffer);
-  await finishPulledAsset(peer, base, entry, fullPath, safeName, buffer.length, isNewHere);
+  await finishPulledAsset(peer, base, entry, fullPath, safeName, buffer.length, isNewHere, lookupVideoThumbnail);
 }
 
-async function finishPulledAsset(peer, base, entry, fullPath, safeName, size, isNewHere) {
+async function finishPulledAsset(peer, base, entry, fullPath, safeName, size, isNewHere, lookupVideoThumbnail) {
   peerSyncEvents.emit('asset-arrived', {
     filename: safeName,
     kind: entry.kind,
@@ -463,7 +492,7 @@ async function finishPulledAsset(peer, base, entry, fullPath, safeName, size, is
   // as a sibling asset. Its own `asset-arrived` event lets a poster that already
   // 404'd leave MediaImage's "Syncing" placeholder without a remount.
   if (entry.kind === 'video') {
-    await reconcileVideoThumbnail(safeName, fullPath, peer.instanceId);
+    await reconcileVideoThumbnail(safeName, fullPath, peer.instanceId, lookupVideoThumbnail);
   }
 }
 

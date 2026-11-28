@@ -82,6 +82,7 @@ const COS_HISTORY_MANIFEST_MAX_BYTES = 32 * 1024 * 1024;
 const COS_ARCHIVE_PULL_MAX_BYTES = 64 * 1024 * 1024;
 
 const COS_ARCHIVE_CONCURRENCY = 8;
+const COS_ARCHIVE_PULL_CONCURRENCY = 4;
 const COS_ARCHIVE_WALK_BATCH = 64;
 const cosArchiveHashCache = new Map();
 const cosArchiveFederatableCache = new Map();
@@ -215,15 +216,13 @@ async function pullMissingCosArchives(senderInstanceId, missing, stagingRoot) {
     return [];
   }
   const base = peerBaseUrl(peer);
-  const landed = [];
-  for (const entry of missing) {
-    const pair = await pullOneCosArchiveFile(peer, base, entry, stagingRoot).catch((err) => {
+  const results = await mapWithConcurrency(missing, COS_ARCHIVE_PULL_CONCURRENCY, (entry) =>
+    pullOneCosArchiveFile(peer, base, entry, stagingRoot).catch((err) => {
       logFailureWithStack(`⚠️ peerSync: cos-archive pull ${entry?.agentId}/${entry?.file} from ${peer.name || senderInstanceId} failed`, err);
       return null;
-    });
-    if (pair) landed.push(pair);
-  }
-  return landed;
+    }),
+  );
+  return results.filter(Boolean);
 }
 
 async function pullOneCosArchiveFile(peer, base, entry, stagingRoot) {
@@ -339,7 +338,7 @@ export async function syncCosHistoryFromPeer(peer) {
       return await withBackupAssetPublication(async () => {
         const metadataIds = [...new Set(staged.filter(entry => entry.file === 'metadata.json').map(entry => entry.agentId))];
         const publish = async invalidate => {
-          for (const { date, agentId, file, stagedPath } of staged) {
+          await mapWithConcurrency(staged, COS_ARCHIVE_CONCURRENCY, async ({ date, agentId, file, stagedPath }) => {
             const safeLabel = `${date}/${agentId}/${file}`;
             const destDir = join(cosAgentsDir(), date, agentId);
             try {
@@ -352,7 +351,7 @@ export async function syncCosHistoryFromPeer(peer) {
             } catch (err) {
               logFailureWithStack(`⚠️ peerSync: cos-archive publication ${safeLabel} failed`, err);
             }
-          }
+          });
         };
         if (metadataIds.length) {
           const { invalidateArchivedRecord } = await import('../cos/cosAgentIndex.js');
