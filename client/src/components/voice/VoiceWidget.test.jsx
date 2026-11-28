@@ -288,7 +288,7 @@ describe('Voice Call console', () => {
     expect(ui.getByText('Mic open', { selector: '[role="status"]' })).toBeInTheDocument();
 
     fireEvent.change(ui.getByRole('textbox'), { target: { value: 'Hello' } });
-    fireEvent.click(ui.getByRole('button', { name: 'Send', exact: true }));
+    fireEvent.click(ui.getByRole('button', { name: 'Send text' }));
     expect(voiceClientMock.sendText).toHaveBeenCalledWith('Hello');
     expect(voiceClientMock.prepareVoicePlayback).toHaveBeenCalledTimes(2);
     act(() => mocks.events.get('voice:llm:delta')?.({ delta: 'Hi back' }));

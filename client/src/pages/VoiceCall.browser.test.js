@@ -448,6 +448,8 @@ describe.skipIf(!chrome)('Voice Call console in Chrome', () => {
       await consoleView.locator('canvas[width="512"]').waitFor({ state: 'visible' });
 
       // Inline Voice LLM picker lets the user select a model directly and offers one-click llama.cpp + Conversational Gemma setup.
+      // The voice brain lives behind its station chip so the handset stays above the fold.
+      await consoleView.getByRole('button', { name: /Voice brain/ }).click();
       const quickModel = consoleView.getByLabel('Voice LLM model', { exact: true });
       await quickModel.waitFor();
       expect(await quickModel.inputValue()).toBe('fixture-model');

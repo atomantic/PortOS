@@ -16,10 +16,8 @@ function AvatarActions({ data, ask, terms, pending }) {
   </>;
 }
 
-export default function AvatarRuntimeSettings({ data, error, updateData, refetch, compact = false, open, onToggleOpen }) {
-  const [localOpen, setLocalOpen] = useState(false);
-  const showControls = typeof open === 'boolean' ? open : localOpen;
-  const setShowControls = onToggleOpen || setLocalOpen;
+export default function AvatarRuntimeSettings({ data, error, updateData, refetch, compact = false }) {
+  const [showControls, setShowControls] = useState(false);
   const [terms, setTerms] = useState(false);
   const [pending, setPending] = useState(false);
   const [failure, setFailure] = useState('');
@@ -41,13 +39,6 @@ export default function AvatarRuntimeSettings({ data, error, updateData, refetch
   };
 
   const running = Boolean(data?.supported && data.phase === 'running' && !error);
-  // When embedded with an external toggle (e.g. the Voice Call telemetry card's
-  // settings icon) and AvatarForcing is already live, collapse completely until
-  // the user opens avatar settings.
-  if (typeof open === 'boolean' && running && !showControls) {
-    return null;
-  }
-
   const ledTone = running
     ? 'bg-port-success shadow-[0_0_6px_rgb(var(--port-success)/0.85)]'
     : data?.phase === 'starting' || data?.phase === 'installing'
