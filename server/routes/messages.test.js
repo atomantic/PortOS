@@ -430,7 +430,7 @@ describe('Messages Routes', () => {
       app.set('io', recordingOperatorIo(emit));
       messageAccounts.getAccount.mockResolvedValue({ id: VALID_UUID, type: 'gmail' });
       messageSync.getMessage.mockResolvedValue({ id: 'message-example', bodyText: 'Example message.', from: { email: 'alice@example.com' } });
-      generateReplyBody.mockRejectedValue(new ServerError('Configure a local API provider in Models > LLMs > Abuse Guard.', { status: 422, code: 'untrusted-content-provider-unavailable' }));
+      generateReplyBody.mockRejectedValue(new ServerError('Configure a local API provider in Models → Abuse Guard.', { status: 422, code: 'untrusted-content-provider-unavailable' }));
       const response = await request(app).post('/api/messages/drafts/generate').send({ accountId: VALID_UUID, replyToMessageId: 'message-example' });
       expect(response.status).toBe(422);
       expect(response.body.code).toBe('untrusted-content-provider-unavailable');

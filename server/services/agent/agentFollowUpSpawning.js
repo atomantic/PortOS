@@ -7,6 +7,7 @@ import { addTask, updateTask, getTaskById } from '../cos/cosTaskStore.js';
 import { isTruthyMeta } from './agentState.js';
 import { isFalsyMeta } from '../../lib/metadataFlags.js';
 import { ServerError } from '../../lib/errorHandler.js';
+import { CODE_REVIEWERS_PAGE_BREADCRUMB } from '../../lib/navManifest.js';
 import { detectForgeCli, parsePullRequestUrl } from '../../lib/gitForge.js';
 import { normalizeForkHead } from '../../lib/forkHead.js';
 import { PR_COMPLETIONS, prHeldForOperator } from '../../lib/prDisposition.js';
@@ -41,7 +42,7 @@ function resolveReviewRoster({ reviewers, usernames, optionalReviewers, selfRevi
 
 function throwRequiredReviewerFault(entries, summary, code) {
   const detail = entries.map((e) => `@${e.token}: ${e.reason}`).join('; ');
-  throw new ServerError(`${summary} — ${detail}. Fix it in Settings → Code Reviewers.`, {
+  throw new ServerError(`${summary} — ${detail}. Fix it in ${CODE_REVIEWERS_PAGE_BREADCRUMB}.`, {
     status: 409, code, context: { reviewers: entries.map((e) => e.token) },
   });
 }

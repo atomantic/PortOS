@@ -1,5 +1,6 @@
 /** Select the eligible API provider and model for an untrusted-content policy. */
 
+import { ABUSE_GUARD_PAGE_BREADCRUMB } from './navManifest.js';
 import { PRIVATE_UNTRUSTED_CONTENT_SOURCES } from './untrustedContentSources.js';
 
 /** The API completion transport offers no tools or execution loop. */
@@ -11,7 +12,7 @@ export function isUntrustedContentProvider(provider, source) {
     || ['localhost', '127.0.0.1', '[::1]'].includes(endpoint.hostname.toLowerCase());
 }
 
-const PROVIDER_UNAVAILABLE = Object.freeze({ code: 'untrusted-content-provider-unavailable', message: 'Configure an enabled text API provider in Models > LLMs > Abuse Guard. Private messages require a local API endpoint. CLI agents and provider fallback are disabled for external content.' });
+const PROVIDER_UNAVAILABLE = Object.freeze({ code: 'untrusted-content-provider-unavailable', message: `Configure an enabled text API provider in ${ABUSE_GUARD_PAGE_BREADCRUMB}. Private messages require a local API endpoint. CLI agents and provider fallback are disabled for external content.` });
 
 /** Smallest window automatic selection treats as able to hold a real PR. */
 export const MIN_VIABLE_CONTEXT_TOKENS = 16384;
@@ -38,7 +39,7 @@ export function selectUntrustedContentProvider({ providers, policy, source, prov
     const effectiveModel = model || (provider && provider.id !== policy.providerId ? null : policy.model) || selected.defaultModel;
     return effectiveModel
       ? { provider: selected, model: effectiveModel }
-      : { code: 'untrusted-content-model-required', message: 'Select an installed text model in Models > LLMs > Abuse Guard.' };
+      : { code: 'untrusted-content-model-required', message: `Select an installed text model in ${ABUSE_GUARD_PAGE_BREADCRUMB}.` };
   }
   const eligible = (providers || []).filter(item => isUntrustedContentProvider(item, source));
   if (!eligible.length) return PROVIDER_UNAVAILABLE;
@@ -50,5 +51,5 @@ export function selectUntrustedContentProvider({ providers, policy, source, prov
   if (candidates.length) {
     return (windowOf && candidates.find(item => windowOf(item.provider, item.model) >= MIN_VIABLE_CONTEXT_TOKENS)) || candidates[0];
   }
-  return { code: 'untrusted-content-model-required', message: 'No eligible API provider has a default model. Select an installed text model in Models > LLMs > Abuse Guard.' };
+  return { code: 'untrusted-content-model-required', message: `No eligible API provider has a default model. Select an installed text model in ${ABUSE_GUARD_PAGE_BREADCRUMB}.` };
 }

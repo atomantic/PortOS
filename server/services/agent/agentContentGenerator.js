@@ -10,6 +10,7 @@ import * as agentActivity from './agentActivity.js';
 import { assertProvider, runPromptThroughProvider } from '../promptRunner.js';
 import { extractJson } from '../../lib/jsonExtract.js';
 import { ServerError } from '../../lib/errorHandler.js';
+import { ABUSE_GUARD_PAGE_BREADCRUMB } from '../../lib/navManifest.js';
 import { isUntrustedContentProvider } from '../../lib/untrustedContent.js';
 import { isToolFreeOneShotProvider } from '../../lib/provider/providerVendors.js';
 import { getActiveProvider, getProviderById } from '../provider/providers.js';
@@ -120,7 +121,7 @@ export async function assertMoltbookCommentProvider(providerId) {
   if (!isUntrustedContentProvider(provider, 'moltbook')) {
     const name = provider?.name || provider?.id || providerId;
     throw new ServerError(
-      `Provider "${name}" cannot read Moltbook posts. Choose an enabled text API provider in the agent AI config or Models > LLMs > Abuse Guard. CLI and TUI agents are not permitted, and this run will not switch provider.`,
+      `Provider "${name}" cannot read Moltbook posts. Choose an enabled text API provider in the agent AI config or ${ABUSE_GUARD_PAGE_BREADCRUMB}. CLI and TUI agents are not permitted, and this run will not switch provider.`,
       { status: 422, code: 'untrusted-content-provider-unavailable' },
     );
   }

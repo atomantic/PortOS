@@ -56,7 +56,7 @@ describe('provider execution readiness', () => {
 
     await expect(ensureProviderReadyForExecution(provider)).resolves.toEqual({
       success: false,
-      error: 'Authentication unavailable for NVIDIA NIM: API key is not set. Add it in Settings > AI Providers.',
+      error: 'Authentication unavailable for NVIDIA NIM: API key is not set. Add it in Models → Providers.',
     });
     expect(mocks.ensureOllama).not.toHaveBeenCalled();
     expect(mocks.ensureMtplx).not.toHaveBeenCalled();

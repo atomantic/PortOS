@@ -212,7 +212,7 @@ describe('POST /api/code-review/local', () => {
     codeReviewSvc.runLocalCodeReview.mockResolvedValue({
       ok: false,
       code: 'NO_MODEL',
-      error: 'No model configured for mtplx reviewer and mtplx is serving no models — set one on the Settings → Code Reviewers page.',
+      error: 'No model configured for mtplx reviewer and mtplx is serving no models — set one on the Models → Code Reviewers page.',
     })
 
     const res = await request(makeApp())

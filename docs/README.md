@@ -6,7 +6,8 @@ Start with the [project overview and quick start](../README.md) or read the [pro
 
 - [Install and configure PortOS](SETUP.md) covers first launch, private Tailscale access, HTTPS, and AI providers.
 - [Product surface map](features/product-surfaces.md) shows where to find features in the app.
-- [AI providers](AI_PROVIDERS.md) explains how harnesses, services, models, and presets fit together.
+- [AI providers](AI_PROVIDERS.md) explains how harnesses, services, models, and presets fit together. See [model access](MODEL_ACCESS.md) for scoping provider catalogs and [model tiers](MODEL_TIERS.md) for tier routing.
+- [Quota Burn](QUOTA-BURN.md) explains automated consumption of expiring subscription CLI quotas.
 - [Digital Twin](features/digital-twin.md), [Brain](features/brain-system.md), and [Privacy Center](features/privacy-center.md) cover personal context, capture, and privacy.
 - [Voice Mode](features/voice.md) covers voice setup, the call console and FaceTime Audio.
 - [Writers Room](features/writers-room.md) and [Blender Models](features/blender-models.md) cover drafting and reusable 3D assets.
@@ -30,7 +31,9 @@ Enable GSD project planning, [Beeper](features/beeper.md), [OpenClaw Operator Ch
 - [App Wizard](features/app-wizard.md) registers or creates a managed app and explains its [update lifecycle](features/app-wizard.md#update-a-managed-app). See [managed-app forge accounts](MANAGED_APP_FORGE_ACCOUNTS.md) to configure a separate GitHub identity or [managed-app visitors](features/managed-visitors.md) to set up scoped visitor access.
 - [Agent skills](features/agent-skills.md) covers discovery, editing and curation.
 - [Self-improvement audits](features/self-improvement-audits.md) explains scheduled checks and Deep mode. The [development watchdog](features/development-watchdog.md) describes Persistent Mind maintainer scans and claim dispatch.
-- [Chief of Staff](features/chief-of-staff.md) and [peer administration](features/peer-administration.md) cover agent work and federation. [Tailcat peers](features/tailcat-peers.md) explains the private alternative for owned installs that cannot join your tailnet.
+- [Chief of Staff](features/chief-of-staff.md) and [peer administration](features/peer-administration.md) cover agent work and federation. [Tailcat peers](features/tailcat-peers.md) explains the private alternative for owned installs that cannot join your tailnet, and [peer push auth](PEER_PUSH_AUTH.md) documents pair-token authentication.
+- [Agent API keys](AGENT_API_KEY.md) and [ACP stdio adapter](ACP.md) cover terminal and editor agent integration.
+- [Instance features](INSTANCE_FEATURES.md) covers optional feature toggles. [Remote Desktop](REMOTE_DESKTOP.md) covers optional remote-desktop setup, and [data maintenance](DATA_MAINTENANCE.md) covers dataset and LoRA maintenance.
 - [PM2 process management](PM2.md) covers starting, stopping and inspecting PortOS processes.
 - [Runtime locks](RUNTIME_LOCKS.md) covers dependency refresh and runtime readiness. [Jev](JEV_SETUP.md) covers local decision scoring setup and recovery.
 - [Prompt Guard setup and recovery](PROMPT_GUARD_SETUP.md) covers Abuse Guard runtime checks. [SuperCollider](SUPERCOLLIDER.md) covers the Music Designer render runtime.
@@ -40,7 +43,7 @@ Enable GSD project planning, [Beeper](features/beeper.md), [OpenClaw Operator Ch
 
 ## Contribute
 
-- [Contributor guide](../CONTRIBUTING.md) covers development setup, conventions, and testing.
+- [Contributor guide](../CONTRIBUTING.md) covers development setup, conventions, and testing. See [UX design guide](UX_DESIGN_GUIDE.md) for UI patterns and [security risk assessment](SECURITY_RISK_ASSESSMENT.md) for boundary analysis.
 - [Architecture](ARCHITECTURE.md) and [API guide](API.md) explain the codebase and its interfaces.
 - [Hosted CI](GITHUB_ACTIONS.md), [local pregate](PREGATE.md) and [test memo](TEST_MEMO.md) explain test selection and pre-push verification.
 - [Dependencies](DEPS.md) lists the packages PortOS uses.

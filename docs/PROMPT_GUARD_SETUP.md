@@ -1,6 +1,6 @@
 # Prompt Guard setup and recovery
 
-Models → LLMs → Abuse Guard shows the failed runtime check, expected package
+Models → Abuse Guard shows the failed runtime check, expected package
 versions, and the last failed installation stage, diagnosis, and pip exit code.
 The last install failure is retained for the server process lifetime; after a
 restart, Refresh status still probes the installed packages without inference

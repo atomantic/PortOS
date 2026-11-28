@@ -23,7 +23,7 @@ export const SCOPE_ADHERENCE_REASONS = Object.freeze({
   'scope-adherence-corpus-unreadable': 'This repository\'s PRD.md / GOALS.md could not be read.',
   'scope-adherence-no-clause': 'No stated goal in this repository is close enough to score against.',
   'scope-adherence-abuse-blocked': 'No advisory: Abuse Guard flagged the supplied text.',
-  'scope-adherence-screening-unavailable': 'No advisory: Abuse Guard could not screen this text. Check Models > LLMs > Abuse Guard.',
+  'scope-adherence-screening-unavailable': 'No advisory: Abuse Guard could not screen this text. Check Models > Abuse Guard.',
   'jev-not-installed': 'The local scorer is not installed yet — see Models > Decision Classifiers > Jev.',
   'jev-start-failed': 'The local scorer could not start. Check Models > Decision Classifiers > Jev.',
   'jev-timeout': 'The local scorer did not answer in time.',

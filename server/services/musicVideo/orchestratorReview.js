@@ -21,6 +21,7 @@
 
 import { ServerError } from '../../lib/errorHandler.js';
 import { isVisionCapableCliProvider } from '../../lib/localModelHeuristics.js';
+import { PROVIDERS_PAGE_BREADCRUMB } from '../../lib/navManifest.js';
 
 export {
   buildArtReviewPrompt, buildFinalReviewPrompt, buildLyricsReviewPrompt, buildSongReviewPrompt,
@@ -40,7 +41,7 @@ export async function askOrchestrator({ orchestrator, prompt, images = [], sourc
   const { resolveProviderAndModel, runPromptThroughProvider, assertVisionRunUsedImages } = await import('../promptRunner.js');
   const { provider, selectedModel } = await resolveProviderAndModel(orchestrator || {});
   if (!provider || provider.enabled === false || (orchestrator?.providerId && provider.id !== orchestrator.providerId)) {
-    throw new ServerError('The orchestrator provider is not available. Pick another one in Settings > AI Providers, then retry.', { status: 503, code: 'ORCHESTRATOR_UNAVAILABLE' });
+    throw new ServerError(`The orchestrator provider is not available. Pick another one in ${PROVIDERS_PAGE_BREADCRUMB}, then retry.`, { status: 503, code: 'ORCHESTRATOR_UNAVAILABLE' });
   }
   const effort = orchestrator?.effort || undefined;
   const visual = images.length > 0 && canSeeImages(provider);

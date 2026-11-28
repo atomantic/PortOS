@@ -20,6 +20,7 @@ import {
   messageTokenProviderBodySchema,
 } from '../lib/messagesValidation.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
+import { ABUSE_GUARD_PAGE_BREADCRUMB } from '../lib/navManifest.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import { UUID_RE } from '../lib/fileUtils.js';
 import { MESSAGE_ACCOUNT_TRANSPORT, sendViaForAccountType } from '../lib/messageTransport.js';
@@ -182,7 +183,7 @@ router.post('/drafts/generate', asyncHandler(async (req, res) => {
     useVoice: data.useVoice,
     threadMessages
   });
-  if (!aiResult?.body?.trim()) throw new ServerError('The selected model did not produce a reply draft. Check Models > LLMs > Abuse Guard.', { status: 422, code: 'UNTRUSTED_REPLY_UNAVAILABLE' });
+  if (!aiResult?.body?.trim()) throw new ServerError(`The selected model did not produce a reply draft. Check ${ABUSE_GUARD_PAGE_BREADCRUMB}.`, { status: 422, code: 'UNTRUSTED_REPLY_UNAVAILABLE' });
 
   const draft = await messageDrafts.createDraft({
     accountId: data.accountId,

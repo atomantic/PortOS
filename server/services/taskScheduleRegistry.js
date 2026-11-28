@@ -11,6 +11,7 @@ import { CONSOLIDATED_AUDIT_DOMAINS } from '../lib/auditDomains.js';
 import { isAuditTaskType } from '../lib/auditCatalog.js';
 import { DEFAULT_ISSUE_MIN_AGE_MINUTES } from '../lib/issueClaimEvidence.js';
 import { MODEL_ABUSE_GUARD_ID } from '../lib/modelAbuseGuard.js';
+import { ABUSE_GUARD_PAGE_BREADCRUMB } from '../lib/navManifest.js';
 import {
   PUBLIC_REVIEW_GATE_EXECUTION_PROFILE,
 } from '../lib/agent/agentExecutionProfiles.js';
@@ -523,7 +524,7 @@ export const TASK_TYPE_PROMPT_INFO = Object.freeze({
   }),
   'issue-watcher': Object.freeze({
     mode: 'runtime-generated',
-    description: 'Three enforced server phases: screen external issue activity, analyze it through a text-only API with no tools or private context, then validate current content before replies or assignments. Configure the source policy in Models → LLMs → Abuse Guard.'
+    description: `Three enforced server phases: screen external issue activity, analyze it through a text-only API with no tools or private context, then validate current content before replies or assignments. Configure the source policy in ${ABUSE_GUARD_PAGE_BREADCRUMB}.`
   }),
   'error-log-triage': Object.freeze({
     mode: 'runtime-generated',
