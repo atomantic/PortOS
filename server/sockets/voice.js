@@ -128,6 +128,13 @@ const audioByteLength = (audio) => {
   return 0;
 };
 
+// An incoming binary payload as a Buffer, copying a view's bytes so the buffer never aliases a larger backing store.
+const audioBuffer = (audio) => {
+  if (Buffer.isBuffer(audio)) return audio;
+  if (ArrayBuffer.isView(audio)) return Buffer.from(audio.buffer.slice(audio.byteOffset, audio.byteOffset + audio.byteLength));
+  return Buffer.from(audio);
+};
+
 // Reinterpret an incoming audio payload as Int16 samples WITHOUT aliasing a
 // misaligned backing store. A websocket frame's payload is a subarray of the
 // receiver's read buffer, so its byteOffset is routinely ODD — `ws` advances
@@ -986,11 +993,14 @@ export const registerVoiceHandlers = (socket) => {
     }
   });
 
+  // `far` is the playback reference for the same frame (what the speaker played), and must match the mic frame's length.
+  // A missing or mismatched reference sends the frame without one (browser echo cancellation only).
   socket.on('voice:realtime:audio', (payload = {}) => {
     const pcm = payload?.pcm;
     const bytes = audioByteLength(pcm);
     if (!realtime || !bytes || bytes > MAX_CALL_FRAME_BYTES) return;
-    realtime.pushAudio(Buffer.isBuffer(pcm) ? pcm : Buffer.from(ArrayBuffer.isView(pcm) ? pcm.buffer.slice(pcm.byteOffset, pcm.byteOffset + pcm.byteLength) : pcm));
+    const far = audioByteLength(payload?.far) === bytes ? audioBuffer(payload.far) : undefined;
+    realtime.pushAudio(audioBuffer(pcm), far);
   });
 
   socket.on('voice:realtime:interrupt', () => realtime?.interrupt());

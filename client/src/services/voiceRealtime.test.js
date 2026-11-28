@@ -46,19 +46,30 @@ describe('startRealtimeCall', () => {
   let scheduledSources;
   let addModuleError;
   let workletNodeError;
+  let tapNode;
+  let gains;
+  let outputTimestamps;
+  let tapAddModuleError;
 
   const makeAudioContext = (opts) => {
     const sourceNode = { connect: vi.fn(), disconnect: vi.fn() };
+    const isOutput = opts?.sampleRate === 24000;
     const ctx = {
       sampleRate: opts?.sampleRate,
       currentTime: 0,
       destination: {},
-      createGain: vi.fn(() => ({ gain: { value: 1 }, connect: vi.fn() })),
+      createGain: vi.fn(() => {
+        const gain = { gain: { value: 1 }, connect: vi.fn() };
+        gains.push(gain);
+        return gain;
+      }),
       audioWorklet: {
         addModule: vi.fn(async () => {
           if (addModuleError) throw addModuleError;
+          if (isOutput && tapAddModuleError) throw tapAddModuleError;
         }),
       },
+      ...(outputTimestamps && { getOutputTimestamp: () => outputTimestamps }),
       createMediaStreamSource: vi.fn(() => sourceNode),
       createBuffer: vi.fn((_ch, length, rate) => ({
         duration: length / rate,
@@ -87,6 +98,10 @@ describe('startRealtimeCall', () => {
     workletNodeError = null;
     track = { stop: vi.fn() };
     workletNode = null;
+    tapNode = null;
+    gains = [];
+    outputTimestamps = null;
+    tapAddModuleError = null;
     playbackMock.visualizer = undefined;
 
     Object.defineProperty(navigator, 'mediaDevices', {
@@ -98,9 +113,14 @@ describe('startRealtimeCall', () => {
     });
     vi.stubGlobal('window', { AudioContext: AudioContextCtor });
     vi.stubGlobal('AudioContext', AudioContextCtor);
-    vi.stubGlobal('AudioWorkletNode', vi.fn(function AudioWorkletNodeMock() {
+    vi.stubGlobal('AudioWorkletNode', vi.fn(function AudioWorkletNodeMock(_ctx, name) {
+      const created = { port: { onmessage: null }, connect: vi.fn(), disconnect: vi.fn() };
+      if (name === 'portos-realtime-tap') {
+        tapNode = created;
+        return created;
+      }
       if (workletNodeError) throw workletNodeError;
-      workletNode = { port: { onmessage: null } };
+      workletNode = created;
       return workletNode;
     }));
     vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:realtime-worklet');
@@ -133,19 +153,22 @@ describe('startRealtimeCall', () => {
     expect(socketMock.emit).toHaveBeenCalledWith('voice:realtime:start');
 
     // Mic audio before state.active=true is ignored.
-    workletNode.port.onmessage({ data: new Float32Array(640) });
+    workletNode.port.onmessage({ data: { ch: new Float32Array(640), frame: 0 } });
     expect(socketMock.emit).not.toHaveBeenCalledWith('voice:realtime:audio', expect.anything());
 
     // Activate call and send 500 samples -> emits 1 full 320-sample frame (640 bytes), buffers 180.
     socketListeners.get('voice:realtime:state')({ active: true });
     expect(onState).toHaveBeenCalledWith({ active: true });
-    workletNode.port.onmessage({ data: new Float32Array(500).fill(0.5) });
+    workletNode.port.onmessage({ data: { ch: new Float32Array(500).fill(0.5), frame: 0 } });
     const audioEmits = () => socketMock.emit.mock.calls.filter(([ev]) => ev === 'voice:realtime:audio');
     expect(audioEmits()).toHaveLength(1);
     expect(audioEmits()[0][1].pcm.byteLength).toBe(640);
+    // No output timestamps: browser echo cancellation only, and no playback reference goes up.
+    expect(tapNode).toBeNull();
+    expect(audioEmits()[0][1]).not.toHaveProperty('far');
 
     // Sending 140 more completes a second 320-sample frame.
-    workletNode.port.onmessage({ data: new Float32Array(140).fill(0.5) });
+    workletNode.port.onmessage({ data: { ch: new Float32Array(140).fill(0.5), frame: 128 } });
     expect(audioEmits()).toHaveLength(2);
 
     // Incoming reply audio schedules gapless playback; server interrupt stops scheduled sources.
@@ -178,6 +201,59 @@ describe('startRealtimeCall', () => {
     expect(track.stop).toHaveBeenCalledTimes(1);
     expect(contexts[0].close).toHaveBeenCalledTimes(1);
     expect(contexts[1].close).toHaveBeenCalledTimes(1);
+  });
+
+  describe('playback reference', () => {
+    const farRms = (payload) => {
+      const far = new Int16Array(payload.far);
+      return Math.sqrt(far.reduce((sum, v) => sum + (v / 0x8000) ** 2, 0) / far.length);
+    };
+    const audioPayloads = () => socketMock.emit.mock.calls.filter(([ev]) => ev === 'voice:realtime:audio').map(([, p]) => p);
+
+    beforeEach(() => {
+      // Context time 0 is heard at performance time 1000 ms, and the mic's render position is at context time 0 then.
+      outputTimestamps = { contextTime: 0, performanceTime: 1000 };
+      vi.spyOn(performance, 'now').mockReturnValue(1000);
+    });
+
+    it('sends each mic frame with what the speaker played over the same span, post-volume and only once rendered', async () => {
+      const handle = await startRealtimeCall();
+      socketListeners.get('voice:realtime:state')({ active: true });
+      // The tap sits between the output gain and the speaker.
+      expect(gains[0].connect).toHaveBeenCalledWith(tapNode);
+      expect(tapNode.connect).toHaveBeenCalledWith(contexts[1].destination);
+
+      // Nothing rendered yet: the reference is silent even though reply audio is queued.
+      socketListeners.get('voice:realtime:audio')({ pcm: new Int16Array(4800).fill(9000).buffer });
+      workletNode.port.onmessage({ data: { ch: new Float32Array(320).fill(0.02), frame: 0 } });
+      expect(farRms(audioPayloads()[0])).toBe(0);
+
+      // The tap renders 40 ms of playback at 0.3 from context time 0; the echo of it is captured from 1000 ms.
+      tapNode.port.onmessage({ data: { ch: new Float32Array(960).fill(0.3), frame: 0 } });
+      workletNode.port.onmessage({ data: { ch: new Float32Array(320).fill(0.02), frame: 0 } });
+      expect(farRms(audioPayloads()[1])).toBeCloseTo(0.3, 3);
+      expect(audioPayloads()[1].far.byteLength).toBe(audioPayloads()[1].pcm.byteLength);
+
+      // Muted output renders silence through the tap, so the reference for that span is silent.
+      tapNode.port.onmessage({ data: { ch: new Float32Array(960), frame: 960 } });
+      workletNode.port.onmessage({ data: { ch: new Float32Array(320).fill(0.02), frame: 640 } });
+      expect(farRms(audioPayloads()[2])).toBe(0);
+
+      handle.stop();
+      expect(tapNode.port.onmessage).toBeNull();
+      expect(tapNode.disconnect).toHaveBeenCalledTimes(1);
+    });
+
+    it('falls back to browser echo cancellation alone when the output tap cannot load', async () => {
+      tapAddModuleError = new Error('no worklet on the output context');
+      const handle = await startRealtimeCall();
+      socketListeners.get('voice:realtime:state')({ active: true });
+      expect(tapNode).toBeNull();
+      expect(gains[0].connect).toHaveBeenCalledWith(contexts[1].destination);
+      workletNode.port.onmessage({ data: { ch: new Float32Array(320), frame: 0 } });
+      expect(audioPayloads()[0]).not.toHaveProperty('far');
+      handle.stop();
+    });
   });
 
   it('with the avatar running, renders reply audio in segments before playing each, and drops them on interrupt', async () => {

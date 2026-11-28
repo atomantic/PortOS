@@ -9,8 +9,10 @@ The Sophon engine is imported from its install folder (--app), not vendored. `_s
 (Apache-2.0, adventists-ai/sophon-realtime mac/engine.py) so a reply can follow a tool result instead of new user speech.
 
 Wire protocol (one WebSocket, loopback only, `Authorization: Bearer <token>` must match PORTOS_REALTIME_TOKEN / --token, no browser Origin):
-  in  binary   PCM16 mono at --rate (microphone, after the browser's own echo cancellation)
-  in  text     {"type": "tool_result", "call_id": str, "output": str}   result of a delegated task, spoken as the next reply
+  in  binary   PCM16 mono at --rate (microphone, after the browser's own echo cancellation); while a reference is on, the
+               microphone bytes followed by as many playback-reference bytes (see portos_sophon_frames.py)
+  in  text     {"type": "reference", "on": bool}                       whether the next binary messages carry a reference
+               {"type": "tool_result", "call_id": str, "output": str}   result of a delegated task, spoken as the next reply
                {"type": "interrupt"}                                    stop talking now
   out binary   PCM16 mono at 24 kHz (reply audio, sent as soon as it is generated)
   out text     {"type": "ready"} | {"type": "interrupt"} (drop buffered audio: the user barged in)
@@ -39,12 +41,14 @@ if not token:
 env_persona = os.environ.pop("PORTOS_REALTIME_PERSONA", "")
 persona = a.persona if a.persona is not None else env_persona
 sys.path.insert(0, a.app)
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))   # portos_sophon_frames, also under python -P / -I
 
 import numpy as np  # noqa: E402
 import mlx.core as mx  # noqa: E402
 import websockets  # noqa: E402
 import engine  # noqa: E402
 from engine import Brain, Session, SR  # noqa: E402
+from portos_sophon_frames import FrameFeeder  # noqa: E402
 
 OUT_RATE = 24000
 TC_OPEN, TC_CLOSE = "<tool_call>", "</tool_call>"
@@ -362,7 +366,7 @@ async def main():
             except (websockets.ConnectionClosed, asyncio.CancelledError):
                 pass
 
-        tx = asyncio.ensure_future(sender()); buf = np.zeros(0, np.float32); FR = 320
+        tx = asyncio.ensure_future(sender()); feeder = FrameFeeder(sess.feed, rate=a.rate, sr=SR, resample=engine.resample)
         try:
             await ws.send(json.dumps({"type": "ready"}))
             async for m in ws:
@@ -370,14 +374,11 @@ async def main():
                     try: o = json.loads(m)
                     except ValueError: continue
                     if o.get("type") == "tool_result": sess.tool_result(str(o.get("call_id", "")), str(o.get("output", "")))
+                    elif o.get("type") == "reference": feeder.set_reference(o.get("on") is True)
                     elif o.get("type") == "interrupt":
                         with sess.lock: sess._onset()
                     continue
-                x = np.frombuffer(m[: len(m) // 2 * 2], "<i2").astype(np.float32) / 32768.0
-                if a.rate != SR: x = engine.resample(x, a.rate, SR).astype(np.float32)
-                buf = np.concatenate([buf, x])
-                while len(buf) >= FR:
-                    f, buf = buf[:FR], buf[FR:]; sess.feed(f)
+                feeder.push(m)
         except websockets.ConnectionClosed:
             pass
         finally:

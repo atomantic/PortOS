@@ -1447,7 +1447,7 @@ describe('realtime speech-to-speech voice call', () => {
     socket.fire('voice:realtime:audio', { pcm: Buffer.alloc(65 * 1024) });
 
     expect(session.pushAudio).toHaveBeenCalledTimes(2);
-    expect(session.pushAudio.mock.calls[0][0]).toEqual(buf);
+    expect(session.pushAudio.mock.calls[0]).toEqual([buf, undefined]);
     expect(session.pushAudio.mock.calls[1][0]).toEqual(Buffer.from([10, 11]));
 
     socket.fire('voice:realtime:interrupt');
@@ -1462,6 +1462,21 @@ describe('realtime speech-to-speech voice call', () => {
     socket.fire('disconnect');
     expect(session.pushAudio).toHaveBeenCalledTimes(2);
     expect(session.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('relays a same-length playback reference with each mic frame and drops a mismatched one', async () => {
+    const session = makeSession();
+    openRealtimeCall.mockResolvedValue(session);
+    const socket = makeLocalSocket();
+    registerVoiceHandlers(socket);
+    await socket.fire('voice:realtime:start');
+
+    const pcm = Buffer.from([1, 2, 3, 4]);
+    socket.fire('voice:realtime:audio', { pcm, far: new Uint8Array([0, 5, 6, 7, 8]).subarray(1) });
+    socket.fire('voice:realtime:audio', { pcm, far: Buffer.from([5, 6]) });
+    socket.fire('voice:realtime:audio', { pcm });
+
+    expect(session.pushAudio.mock.calls).toEqual([[pcm, Buffer.from([5, 6, 7, 8])], [pcm, undefined], [pcm, undefined]]);
   });
 
   it('closes an active realtime session on socket disconnect', async () => {

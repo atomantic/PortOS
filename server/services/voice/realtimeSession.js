@@ -1,5 +1,5 @@
 // One realtime (speech-to-speech) Voice call: relays microphone and reply audio between a browser socket and the
-// sidecar, and answers the voice's `delegate` hand-offs with the regular Voice tool pipeline (text only), whose
+// sidecar (with the browser's playback reference when it has one), and answers the voice's `delegate` hand-offs with the regular Voice tool pipeline (text only), whose
 // result the voice then speaks. The voice handles turn-taking and barge-in itself.
 import WebSocket from 'ws';
 import { ensureRealtimeSidecar, scheduleRealtimeIdleStop } from './realtimeRuntime.js';
@@ -151,10 +151,22 @@ export const openRealtimeCall = async ({
   }
   emit('voice:realtime:state', { active: true });
 
+  // Whether binary frames to the sidecar currently carry a playback reference; the sidecar is told before the framing changes.
+  let referenceOn = false;
+
   return {
-    /** Microphone PCM16 mono at 16 kHz. */
-    pushAudio(buf) {
-      if (!closed && ws.readyState === WebSocket.OPEN) ws.send(buf);
+    /**
+     * Microphone PCM16 mono at 16 kHz, with `far` (same length) when the browser has a playback reference for that frame:
+     * then one binary message holds the mic bytes followed by the reference bytes.
+     */
+    pushAudio(buf, far) {
+      if (closed || ws.readyState !== WebSocket.OPEN) return;
+      const withReference = Boolean(far) && far.length === buf.length;
+      if (withReference !== referenceOn) {
+        referenceOn = withReference;
+        ws.send(JSON.stringify({ type: 'reference', on: withReference }));
+      }
+      ws.send(withReference ? Buffer.concat([buf, far]) : buf);
     },
     interrupt() {
       if (!closed && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'interrupt' }));
