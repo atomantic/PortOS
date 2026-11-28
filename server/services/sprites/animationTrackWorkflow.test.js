@@ -604,6 +604,92 @@ describe('registry-derived authoring shape (#3136)', () => {
   });
 });
 
+describe('unreadable durable animation records', () => {
+  const selectionPath = (recordDir, id) => join(recordDir, SCANNER_TRACK, `${id}-scanner-selection-v1.json`);
+  const setPath = (recordDir, id) => join(recordDir, trackSetRelPath(SCANNER_TRACK, id));
+  const candidateArgs = { direction: 'east', runId: 'scanner-east-candidate' };
+  const storeError = { status: 500, code: 'UNREADABLE_STORE' };
+  const damagedBytes = '{"directions":';
+
+  async function candidateOnDisk() {
+    const id = await characterWithEastAnchor(newId());
+    const recordDir = join(TEST_ROOT, 'sprites', id);
+    const runRel = `runs/${candidateArgs.runId}`;
+    const runDir = join(recordDir, runRel);
+    const runPath = join(runDir, 'animation-run.json');
+    const postprocessManifest = `${runRel}/manifest.json`;
+    await mkdir(join(recordDir, SCANNER_TRACK), { recursive: true });
+    await mkdir(runDir, { recursive: true });
+    await writeFile(runPath, JSON.stringify({
+      id: candidateArgs.runId, track: SCANNER_TRACK, direction: 'east',
+      status: 'candidate', postprocessManifest, frameCount: 1, fps: 8,
+    }));
+    await writeFile(join(runDir, 'frame.png'), 'packaged frame');
+    await writeFile(join(recordDir, postprocessManifest), JSON.stringify({
+      track: SCANNER_TRACK, direction: 'east', characterId: id,
+      frameCount: 1, frameRate: 8, frames: [{ path: `${runRel}/frame.png` }],
+    }));
+    return { id, recordDir, runPath };
+  }
+
+  describe.each([
+    { damage: 'malformed JSON', damagePath: async (path) => path },
+    { damage: 'a directory where the file belongs', damagePath: async (path) => {
+      await mkdir(path);
+      return join(path, 'preserve');
+    } },
+  ])('$damage', ({ damagePath }) => {
+    it('preserves an unreadable selection during approval, reopen and track-use scans', async () => {
+      const { id, recordDir } = await candidateOnDisk();
+      const evidencePath = await damagePath(selectionPath(recordDir, id));
+      await writeFile(evidencePath, damagedBytes);
+
+      await expect(approveTrackRun(SCANNER_TRACK, id, candidateArgs)).rejects.toMatchObject(storeError);
+      await expect(recordsCarryingTrack(SCANNER_TRACK)).rejects.toMatchObject(storeError);
+
+      const finalizedPath = setPath(recordDir, id);
+      const finalized = JSON.stringify({
+        directions: { east: { status: 'approved', runId: candidateArgs.runId } },
+      });
+      await writeFile(finalizedPath, finalized);
+      await expect(reopenTrackDirection(SCANNER_TRACK, id, candidateArgs)).rejects.toMatchObject(storeError);
+      expect(await readFile(evidencePath, 'utf8')).toBe(damagedBytes);
+      expect(await readFile(finalizedPath, 'utf8')).toBe(finalized);
+    });
+
+    it('refuses a render or approval when the finalized set cannot be read', async () => {
+      const { id, recordDir } = await candidateOnDisk();
+      const evidencePath = await damagePath(setPath(recordDir, id));
+      await writeFile(evidencePath, damagedBytes);
+
+      await expect(startTrackGeneration(SCANNER_TRACK, id, { direction: 'east' })).rejects.toMatchObject(storeError);
+      expect(executeTuiRun).not.toHaveBeenCalled();
+      await expect(approveTrackRun(SCANNER_TRACK, id, candidateArgs)).rejects.toMatchObject(storeError);
+      await expect(recordsCarryingTrack(SCANNER_TRACK)).rejects.toMatchObject(storeError);
+      await expect(readFile(selectionPath(recordDir, id))).rejects.toMatchObject({ code: 'ENOENT' });
+      expect(await readFile(evidencePath, 'utf8')).toBe(damagedBytes);
+    });
+  });
+
+  it('checks a selected run before removing its finalized set or approval', async () => {
+    const { id, recordDir, runPath } = await candidateOnDisk();
+    await writeFile(runPath, damagedBytes);
+    await expect(approveTrackRun(SCANNER_TRACK, id, candidateArgs)).rejects.toMatchObject(storeError);
+
+    const approved = JSON.stringify({
+      directions: { east: { status: 'approved', runId: candidateArgs.runId } },
+    });
+    const selection = selectionPath(recordDir, id);
+    const finalized = setPath(recordDir, id);
+    await writeFile(selection, approved);
+    await writeFile(finalized, approved);
+    await expect(reopenTrackDirection(SCANNER_TRACK, id, candidateArgs)).rejects.toMatchObject(storeError);
+    expect(await readFile(selection, 'utf8')).toBe(approved);
+    expect(await readFile(finalized, 'utf8')).toBe(approved);
+    expect(await readFile(runPath, 'utf8')).toBe(damagedBytes);
+  });
+});
+
 describe('recordsCarryingTrack (#3153)', () => {
   // The evidence scan behind the CRUD surface's in-use refusal: deleting a track (or
   // flipping its facing mode) with approved renders on disk would orphan artifacts
