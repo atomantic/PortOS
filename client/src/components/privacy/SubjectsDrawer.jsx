@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Plus, Trash2, ShieldCheck, ShieldOff, ChevronDown, ChevronRight } from 'lucide-react';
+import { Plus, Pencil, Trash2, ShieldCheck, ShieldOff, ChevronDown, ChevronRight } from 'lucide-react';
 import Drawer from '../Drawer';
 import FormField from '../ui/FormField';
 import InlineConfirmRow from '../ui/InlineConfirmRow';
@@ -8,6 +8,7 @@ import { useAsyncAction } from '../../hooks/useAsyncAction';
 import useConfirmDelete from '../../hooks/useConfirmDelete';
 import {
   createPrivacySubject,
+  updatePrivacySubject,
   deletePrivacySubject,
   getPrivacySubjectConsents,
   grantPrivacySubjectConsent,
@@ -170,14 +171,46 @@ function BrokerPurposeRow({ subject, purpose, granted, onChanged }) {
 // Consent is captured at creation because the engine refuses to scan or submit
 // opt-outs for a subject with no consent row — the form cannot create a subject
 // that the rest of the feature would then silently refuse to act on.
-export default function SubjectsDrawer({ open, subjects, onClose, onCreated, onDeleted, onConsentChanged }) {
+export default function SubjectsDrawer({ open, subjects, onClose, onCreated, onUpdated, onDeleted, onConsentChanged }) {
   const [form, setForm] = useState(EMPTY);
   const [adding, setAdding] = useState(false);
+  const [editingId, setEditingId] = useState(null);
+  const [editForm, setEditForm] = useState({ displayName: '', relationship: 'partner' });
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
 
-  useEffect(() => { if (open) { setForm(EMPTY); setAdding(false); cancelDelete(); } }, [open, cancelDelete]);
+  useEffect(() => {
+    if (open) {
+      setForm(EMPTY);
+      setAdding(false);
+      setEditingId(null);
+      cancelDelete();
+    }
+  }, [open, cancelDelete]);
 
   const set = (k, v) => setForm((prev) => ({ ...prev, [k]: v }));
+  const startEdit = (subject) => {
+    cancelDelete();
+    setEditingId(subject.id);
+    setEditForm({
+      displayName: subject.displayName ?? '',
+      relationship: subject.relationship ?? 'other',
+    });
+  };
+
+  const [saveEdit, savingEdit] = useAsyncAction(async (subject) => {
+    const displayName = editForm.displayName.trim();
+    if (!displayName) { toast.error('Name is required'); return null; }
+    const patch = subject.isSelf
+      ? { displayName }
+      : { displayName, relationship: editForm.relationship };
+    const updated = await updatePrivacySubject(subject.id, patch, { silent: true });
+    if (updated) {
+      toast.success(`${updated.displayName} updated`);
+      setEditingId((prev) => (prev === subject.id ? null : prev));
+      onUpdated?.(updated);
+    }
+    return updated;
+  }, { errorMessage: 'Failed to update household member' });
 
   const [save, saving] = useAsyncAction(async () => {
     if (!form.displayName.trim()) { toast.error('Name is required'); return null; }
@@ -252,17 +285,77 @@ export default function SubjectsDrawer({ open, subjects, onClose, onCreated, onD
                   </div>
                   <ConsentTrail subjectId={s.id} version={(s.activeScopes ?? []).join(',')} />
                 </div>
-                {!s.isSelf && (
+                <div className="flex items-center gap-1 shrink-0">
                   <button
-                    onClick={() => requestDelete(s.id)}
-                    title={`Remove ${s.displayName}`}
-                    aria-label={`Remove ${s.displayName}`}
-                    className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-2 rounded text-gray-400 hover:text-port-error hover:bg-port-border/50 shrink-0"
+                    type="button"
+                    onClick={() => (editingId === s.id ? setEditingId(null) : startEdit(s))}
+                    disabled={savingEdit}
+                    title={`Edit ${s.displayName}`}
+                    aria-label={`Edit ${s.displayName}`}
+                    className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-2 rounded text-gray-400 hover:text-white hover:bg-port-border/50 disabled:opacity-40"
                   >
-                    <Trash2 size={16} />
+                    <Pencil size={16} />
                   </button>
-                )}
+                  {!s.isSelf && (
+                    <button
+                      type="button"
+                      onClick={() => { setEditingId(null); requestDelete(s.id); }}
+                      title={`Remove ${s.displayName}`}
+                      aria-label={`Remove ${s.displayName}`}
+                      className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-2 rounded text-gray-400 hover:text-port-error hover:bg-port-border/50"
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  )}
+                </div>
               </div>
+              {editingId === s.id && (
+                <form
+                  className="mt-3 pt-3 border-t border-port-border space-y-3"
+                  onSubmit={(e) => { e.preventDefault(); saveEdit(s); }}
+                >
+                  <div className={s.isSelf ? '' : 'grid grid-cols-1 sm:grid-cols-2 gap-3'}>
+                    <FormField label="Name" htmlFor={`edit-subject-name-${s.id}`}>
+                      <input
+                        id={`edit-subject-name-${s.id}`}
+                        type="text"
+                        value={editForm.displayName}
+                        onChange={(e) => setEditForm((prev) => ({ ...prev, displayName: e.target.value }))}
+                        className={INPUT_CLS}
+                        maxLength={200}
+                      />
+                    </FormField>
+                    {!s.isSelf && (
+                      <FormField label="Relationship" htmlFor={`edit-subject-rel-${s.id}`}>
+                        <select
+                          id={`edit-subject-rel-${s.id}`}
+                          value={editForm.relationship}
+                          onChange={(e) => setEditForm((prev) => ({ ...prev, relationship: e.target.value }))}
+                          className={INPUT_CLS}
+                        >
+                          {ADDABLE_RELATIONSHIPS.map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
+                        </select>
+                      </FormField>
+                    )}
+                  </div>
+                  <div className="flex items-center justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setEditingId(null)}
+                      className="px-3 py-1.5 text-xs rounded border border-port-border text-gray-300 hover:text-white"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={savingEdit}
+                      className="px-3 py-1.5 text-xs rounded bg-port-accent text-white hover:bg-port-accent/80 disabled:opacity-50"
+                    >
+                      {savingEdit ? 'Saving…' : 'Save'}
+                    </button>
+                  </div>
+                </form>
+              )}
               {isConfirming(s.id) && (
                 <InlineConfirmRow
                   className="mt-3"

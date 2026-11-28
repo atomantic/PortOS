@@ -18,6 +18,7 @@ export default function DeclareChangeDrawer({ open, vaultRecords, onClose, onDec
   );
 
   const [oldRecordId, setOldRecordId] = useState('');
+  const [removalOnly, setRemovalOnly] = useState(false);
   const [label, setLabel] = useState('');
   const [value, setValue] = useState('');
   const [note, setNote] = useState('');
@@ -26,6 +27,7 @@ export default function DeclareChangeDrawer({ open, vaultRecords, onClose, onDec
     if (!open) return;
     const first = eligible[0]?.id ?? '';
     setOldRecordId(first);
+    setRemovalOnly(false);
     setLabel('');
     setValue('');
     setNote('');
@@ -36,14 +38,15 @@ export default function DeclareChangeDrawer({ open, vaultRecords, onClose, onDec
 
   const [declare, declaring] = useAsyncAction(async () => {
     if (!oldRecordId) { toast.error('Pick the record that changed'); return null; }
-    if (!label.trim()) { toast.error('New value label is required'); return null; }
-    if (!value.trim()) { toast.error('New value is required'); return null; }
-    const event = await declarePrivacyChange({
+    if (!removalOnly && !label.trim()) { toast.error('New value label is required'); return null; }
+    if (!removalOnly && !value.trim()) { toast.error('New value is required'); return null; }
+    const payload = {
       vaultRecordId: oldRecordId,
-      replacement: { label: label.trim(), value: value.trim() },
+      ...(removalOnly ? {} : { replacement: { label: label.trim(), value: value.trim() } }),
       kind: derivedKind,
       note: note.trim() || undefined,
-    }, { silent: true });
+    };
+    const event = await declarePrivacyChange(payload, { silent: true });
     if (!event) return null;
     toast.success('Change declared — orgs flagged for update');
     onDeclared(event);
@@ -85,29 +88,44 @@ export default function DeclareChangeDrawer({ open, vaultRecords, onClose, onDec
             Change type: <span className="text-gray-300">{labelFor(CHANGE_KINDS, derivedKind)}</span>
           </div>
 
-          <FormField label="New value label">
+          <label htmlFor="declare-removal-only" className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
             <input
-              id="declare-new-label"
-              type="text"
-              value={label}
-              onChange={(e) => setLabel(e.target.value)}
-              placeholder="e.g. New home address"
-              className={INPUT_CLS}
-              maxLength={200}
+              id="declare-removal-only"
+              type="checkbox"
+              checked={removalOnly}
+              onChange={(e) => setRemovalOnly(e.target.checked)}
+              className="accent-port-accent"
             />
-          </FormField>
+            Removed with no replacement
+          </label>
 
-          <FormField label="New value">
-            <input
-              id="declare-new-value"
-              type="text"
-              value={value}
-              onChange={(e) => setValue(e.target.value)}
-              placeholder="The new value (encrypted at rest)"
-              className={INPUT_CLS}
-              maxLength={10000}
-            />
-          </FormField>
+          {!removalOnly && (
+            <>
+              <FormField label="New value label">
+                <input
+                  id="declare-new-label"
+                  type="text"
+                  value={label}
+                  onChange={(e) => setLabel(e.target.value)}
+                  placeholder="e.g. New home address"
+                  className={INPUT_CLS}
+                  maxLength={200}
+                />
+              </FormField>
+
+              <FormField label="New value">
+                <input
+                  id="declare-new-value"
+                  type="text"
+                  value={value}
+                  onChange={(e) => setValue(e.target.value)}
+                  placeholder="The new value (encrypted at rest)"
+                  className={INPUT_CLS}
+                  maxLength={10000}
+                />
+              </FormField>
+            </>
+          )}
 
           <FormField label="Note (optional)">
             <textarea
