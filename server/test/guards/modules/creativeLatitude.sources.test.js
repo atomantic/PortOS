@@ -46,7 +46,7 @@ function collectSimpleCallSites(dir, found = []) {
       // A mention in a comment or an import is not a call with options.
       if (!/^\s*callProviderAISimple\s*\(\s*[\w{]/.test(window) || /^callProviderAISimple\s*\(\s*\)/.test(window)) continue;
       const hit = /source:\s*'([^']+)'/.exec(window);
-      found.push({ file: path.slice(SERVER_ROOT.length + 1), source: hit ? hit[1] : null });
+      found.push({ file: path.slice(SERVER_ROOT.length + 1).replaceAll('\\', '/'), source: hit ? hit[1] : null });
     }
   }
   return found;

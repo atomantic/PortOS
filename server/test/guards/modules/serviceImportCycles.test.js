@@ -278,7 +278,7 @@ describe('server/services — static import graph (#5693)', () => {
       if (!edgeCache.has(file)) {
         edgeCache.set(file, [
           ...read(file).matchAll(/export\s*(?:\*|\{[^}]*\})\s*(?:as\s+\w+\s*)?from\s*['"]([^'"]+)['"]/g),
-        ].map(m => relative(SERVICES_DIR, resolve(dirname(join(SERVICES_DIR, file)), m[1]))));
+        ].map(m => relative(SERVICES_DIR, resolve(dirname(join(SERVICES_DIR, file)), m[1])).replaceAll('\\', '/')));
       }
       return edgeCache.get(file);
     };
@@ -305,7 +305,7 @@ describe('server/services — static import graph (#5693)', () => {
     for (const file of graph.keys()) {
       if (file === FACADE) continue;
       const src = read(file);
-      const resolveSpec = (spec) => relative(SERVICES_DIR, resolve(dirname(join(SERVICES_DIR, file)), spec));
+      const resolveSpec = (spec) => relative(SERVICES_DIR, resolve(dirname(join(SERVICES_DIR, file)), spec)).replaceAll('\\', '/');
 
       // Named imports: the binding's LEFT side is the transition name.
       for (const [, names, spec] of src.matchAll(/import\s*\{([^}]*)\}\s*from\s*['"]([^'"]+)['"]/g)) {

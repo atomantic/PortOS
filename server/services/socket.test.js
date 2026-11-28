@@ -1659,7 +1659,7 @@ describe('socket.js — initSocket', () => {
       expect(socket.emitted).toContainEqual(['shell:started', { sessionId: 'sess-1' }]);
       const [, opts] = vi.mocked(shellService.createShellSession).mock.calls.at(-1);
       expect(opts.env.ANTHROPIC_BASE_URL).toBe('http://127.0.0.1:11434');
-      expect(opts.initialCommand).toMatch(/^claude\b/);
+      expect(opts.initialCommand).toMatch(process.platform === 'win32' ? /^& 'claude' / : /^claude\b/);
       expect(opts.waitForPromptReady).toBe(true);
     });
 
@@ -1670,7 +1670,7 @@ describe('socket.js — initSocket', () => {
 
       const [, opts] = vi.mocked(shellService.createShellSession).mock.calls.at(-1);
       expect(opts.initialCommand).not.toContain('rm -rf');
-      expect(opts.initialCommand).toMatch(/^claude\b/);
+      expect(opts.initialCommand).toMatch(process.platform === 'win32' ? /^& 'claude' / : /^claude\b/);
       expect(opts.waitForPromptReady).toBe(true);
       expect(opts).not.toHaveProperty('exitWithCommand');
     });

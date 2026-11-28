@@ -574,7 +574,7 @@ describe('server suite import growth (#7993)', () => {
 // audience filter so it can send UI frames without pulling in services.
 it('keeps the validateRequest closure limited to the error handler and audience filter', () => {
   const closure = staticImportClosure(abs('lib/validateRequest.js')).files;
-  expect([...closure].map((file) => relative(SERVER_DIR, file)).sort()).toEqual([
+  expect([...closure].map((file) => relative(SERVER_DIR, file).replaceAll('\\', '/')).sort()).toEqual([
     'lib/errorHandler.js',
     'lib/socketAudience.js',
     'lib/validateRequest.js',
