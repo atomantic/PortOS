@@ -1,3 +1,4 @@
+import { openExternalUrl } from '../../../utils/openExternalUrl.js';
 import { useCallback, useEffect, useState } from 'react';
 import { Save, Loader2, MessageCircle, ShieldCheck, ShieldAlert, RefreshCw, Clock, Link2, Unlink, HardDrive, Download, CheckCheck } from 'lucide-react';
 import toast from '../../ui/Toast';
@@ -104,11 +105,10 @@ export default function BeeperSettingsPanel({ realtime: realtimeProp = null, onR
       .catch((err) => ({ error: err?.message || 'Could not start the Beeper connect flow' }));
     if (!mountedRef.current) return;
     setConnecting(false);
-    if (result?.error || !result?.authorizationUrl) {
+    if (result?.error || !openExternalUrl(result?.authorizationUrl)) {
       toast.error(result?.error || 'Could not start the Beeper connect flow');
       return;
     }
-    window.open(result.authorizationUrl, '_blank', 'noopener');
     toast.success('Approve the request in the opened Beeper window');
   };
 

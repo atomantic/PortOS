@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 
@@ -32,6 +32,37 @@ const conversation = (id, text, promoted = true) => ({
 
 describe('Ask across conversation route changes', () => {
   beforeEach(() => vi.clearAllMocks());
+
+  it('opens only HTTP(S) external citations and retains in-app source navigation', async () => {
+    const id = 'ask_111111111_aaaaaaaa';
+    const fixture = conversation(id, 'Answer with sources');
+    fixture.conversation.turns[0].sources = [
+      { id: '1', kind: 'brain-note', title: 'Unsafe citation', href: 'javascript:;' },
+      { id: '2', kind: 'brain-note', title: 'External citation', href: 'https://example.com/source' },
+      { id: '3', kind: 'brain-note', title: 'Local citation', href: '/brain/notes' },
+      { id: '4', kind: 'brain-note', title: 'Network-path citation', href: '//example.com/source' },
+    ];
+    getAskConversation.mockResolvedValue(fixture);
+    const router = createMemoryRouter([
+      { path: '/ask/:conversationId', element: <Ask /> },
+      { path: '/brain/notes', element: <h1>Notes</h1> },
+    ], { initialEntries: [`/ask/${id}`] });
+    const open = vi.spyOn(window, 'open').mockReturnValue(null);
+    try {
+      render(<RouterProvider router={router} />);
+
+      fireEvent.click(await screen.findByRole('button', { name: /Unsafe citation/ }));
+      fireEvent.click(screen.getByRole('button', { name: /Network-path citation/ }));
+      expect(open).not.toHaveBeenCalled();
+      expect(router.state.location.pathname).toBe(`/ask/${id}`);
+      fireEvent.click(screen.getByRole('button', { name: /External citation/ }));
+      expect(open).toHaveBeenCalledExactlyOnceWith('https://example.com/source', '_blank', 'noopener,noreferrer');
+      fireEvent.click(screen.getByRole('button', { name: /Local citation/ }));
+      expect(await screen.findByRole('heading', { name: 'Notes' })).toBeInTheDocument();
+    } finally {
+      open.mockRestore();
+    }
+  });
 
   it('clears the previous transcript and mutation target while the next conversation loads', async () => {
     let resolveNext;

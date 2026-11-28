@@ -1,3 +1,4 @@
+import { openExternalUrl } from '../../utils/openExternalUrl.js';
 import { useState, useEffect, useLayoutEffect, useRef, useId } from 'react';
 import { useSearchParams } from 'react-router';
 import { Plus, Trash2, RefreshCw, Globe, Calendar, Eye, EyeOff, ChevronDown, ChevronRight, Search, Key, ExternalLink, Wand2, Monitor } from 'lucide-react';
@@ -101,16 +102,14 @@ export default function ConfigTab({ accounts, setAccounts }) {
     toast.success('OAuth credentials saved');
     fetchGoogleAuth();
     const authResult = await getGoogleAuthUrl().catch(() => null);
-    if (authResult?.url) {
-      window.open(authResult.url, '_blank');
+    if (openExternalUrl(authResult?.url)) {
       toast.success('Complete authorization in the opened browser tab');
     }
   };
 
   const handleStartOAuth = async () => {
     const result = await getGoogleAuthUrl({ silent: true }).catch(() => null);
-    if (result?.url) {
-      window.open(result.url, '_blank');
+    if (openExternalUrl(result?.url)) {
       toast.success('Complete authorization in the opened browser tab');
     } else {
       toast.error(result?.error || 'Failed to get auth URL');
@@ -161,8 +160,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
     }
     setAutoConfigStep('done');
     fetchGoogleAuth();
-    if (result.authUrl) {
-      window.open(result.authUrl, '_blank');
+    if (openExternalUrl(result.authUrl)) {
       toast.success('Complete Google authorization in the opened tab');
     }
   };

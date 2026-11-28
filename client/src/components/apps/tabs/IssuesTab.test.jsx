@@ -160,7 +160,7 @@ describe('IssuesTab', () => {
     expect(linkButton).toBeInTheDocument();
     expect(linkButton).toHaveAttribute('href', 'https://github.com/acme/widget/issues/42');
     expect(linkButton).toHaveAttribute('target', '_blank');
-    expect(linkButton).toHaveAttribute('rel', 'noreferrer');
+    expect(linkButton).toHaveAttribute('rel', 'noopener noreferrer');
     expect(linkButton.className).toContain('pointer-coarse:min-h-9');
     expect(linkButton).toHaveTextContent('GitHub');
   });
@@ -171,8 +171,16 @@ describe('IssuesTab', () => {
 
     const linkButton = await screen.findByRole('button', { name: 'Open issue 42 on GitHub' });
     fireEvent.keyDown(linkButton, { key: ' ' });
-    expect(openSpy).toHaveBeenCalledWith('https://github.com/acme/widget/issues/42', '_blank', 'noreferrer');
+    expect(openSpy).toHaveBeenCalledWith('https://github.com/acme/widget/issues/42', '_blank', 'noopener,noreferrer');
     openSpy.mockRestore();
+  });
+
+  it.each(['javascript:;', 'data:text/plain,example'])('omits the forge link for %s', async (url) => {
+    getAppIssues.mockResolvedValue(okPayload([{ ...ISSUE, url }]));
+    await renderTab();
+
+    expect(await screen.findByText('Crash on save')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Open issue 42 on GitHub' })).not.toBeInTheDocument();
   });
 
   // The AA guarantee itself is `lib/chipContrast.test.js`'s job. What this suite
