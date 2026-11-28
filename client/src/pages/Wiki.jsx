@@ -145,8 +145,8 @@ export default function Wiki() {
         header="bar"
         label="Loading wiki"
         fullHeight
-        // Browse owns its own list/detail scroll and takes no body padding.
-        padded={activeTab !== 'browse'}
+        // Browse and Graph own their own viewport-fill layout and take no body padding.
+        padded={activeTab !== 'browse' && activeTab !== 'graph'}
         bodyClassName="p-4"
         titleWidthClass="w-24"
         showSubtitle
@@ -243,9 +243,9 @@ export default function Wiki() {
         <ListLoadError what="this vault's notes" onRetry={loadNotes} className="m-3" />
       )}
 
-      {/* Tab content — Browse manages its own list/detail scroll, so it gets a
-          bare flex-fill parent (no padding/scroll) instead of the padded scroller. */}
-      <div className={activeTab === 'browse' ? 'flex-1 min-h-0 flex' : 'flex-1 overflow-auto p-4'}>
+      {/* Tab content — Browse and Graph manage their own viewport-fill layout,
+          so they get a bare flex-fill parent (no padding/scroll) instead of the padded scroller. */}
+      <div className={activeTab === 'browse' || activeTab === 'graph' ? 'flex-1 min-h-0 flex' : 'flex-1 overflow-auto p-4'}>
         {renderTabContent()}
       </div>
     </div>

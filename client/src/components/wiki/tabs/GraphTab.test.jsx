@@ -177,4 +177,32 @@ describe('GraphTab viewport and controls', () => {
     fireEvent.pointerUp(canvas, touch(NODE_POINT));
     expect(screen.getByTestId('location').textContent).toBe('/wiki/browse?note=wiki%2Falpha.md');
   });
+
+  it('fills its flex container without a hardcoded calc() viewport height', async () => {
+    const canvas = await renderCanvas();
+    const wrapper = canvas.parentElement;
+    expect(wrapper.className).toContain('flex-1');
+    expect(wrapper.className).toContain('min-h-0');
+    expect(wrapper.getAttribute('style')).toBeNull();
+  });
+
+  it('shows a retryable error instead of an empty state when loading the graph fails', async () => {
+    getNotesVaultGraph.mockRejectedValueOnce(new Error('vault offline')).mockResolvedValueOnce({
+      nodes: [{ path: 'wiki/alpha.md', name: 'alpha', folder: 'wiki' }],
+      edges: [],
+      totalNodes: 1,
+      totalEdges: 0,
+    });
+    render(
+      <MemoryRouter initialEntries={['/wiki/graph']}>
+        <GraphTab vaultId="v1" />
+      </MemoryRouter>
+    );
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load the knowledge graph');
+    expect(screen.queryByText('No pages to graph yet')).toBeNull();
+    expect(getNotesVaultGraph).toHaveBeenCalledWith('v1', { silent: true });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('1 nodes, 0 edges')).toBeInTheDocument();
+  });
 });

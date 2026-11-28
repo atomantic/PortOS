@@ -29,6 +29,7 @@ export default function BrowseTab({ vaultId, notes, rawNotes, allNotes, onRefres
   const [expandedFolders, setExpandedFolders] = useState(new Set(['wiki/sources', 'wiki/entities', 'wiki/concepts']));
   const [activeSection, setActiveSection] = useState('wiki');
   const [tags, setTags] = useState([]);
+  const [tagsStatus, setTagsStatus] = useState('idle');
   // Tag counts under-report when iCloud hasn't downloaded some notes.
   const [skippedTagNotes, setSkippedTagNotes] = useState(0);
   const [showTags, setShowTags] = useState(false);
@@ -83,10 +84,24 @@ export default function BrowseTab({ vaultId, notes, rawNotes, allNotes, onRefres
   };
 
   const loadTags = async () => {
-    const data = await getNotesVaultTags(vaultId).catch(() => null);
+    setTagsStatus('loading');
+    const data = await getNotesVaultTags(vaultId, { silent: true }).catch(() => null);
     if (!mountedRef.current) return;
-    if (data?.tags) setTags(data.tags);
-    setSkippedTagNotes(data?.skippedUnavailable || 0);
+    if (data && !data.error && Array.isArray(data.tags)) {
+      setTags(data.tags);
+      setSkippedTagNotes(data.skippedUnavailable || 0);
+      setTagsStatus('ready');
+    } else {
+      setTags([]);
+      setSkippedTagNotes(0);
+      setTagsStatus('error');
+    }
+  };
+
+  const toggleTags = () => {
+    const next = !showTags;
+    setShowTags(next);
+    if (next) loadTags();
   };
 
   const toggleFolder = (folder) => {
@@ -125,8 +140,10 @@ export default function BrowseTab({ vaultId, notes, rawNotes, allNotes, onRefres
           <button
             type="button"
             onClick={() => setActiveSection('wiki')}
-            className={`flex-1 whitespace-nowrap px-3 py-1.5 rounded text-sm font-medium transition-colors ${
-              activeSection === 'wiki' ? 'bg-port-accent text-white' : 'bg-port-bg text-gray-400 hover:text-white'
+            className={`flex-1 whitespace-nowrap px-3 py-1.5 rounded border text-sm font-medium transition-colors ${
+              activeSection === 'wiki'
+                ? 'bg-port-accent border-port-accent text-white'
+                : 'bg-port-card border-port-border text-gray-400 hover:text-white hover:border-port-accent/50'
             }`}
           >
             Wiki ({notes.length})
@@ -134,15 +151,23 @@ export default function BrowseTab({ vaultId, notes, rawNotes, allNotes, onRefres
           <button
             type="button"
             onClick={() => setActiveSection('raw')}
-            className={`flex-1 whitespace-nowrap px-3 py-1.5 rounded text-sm font-medium transition-colors ${
-              activeSection === 'raw' ? 'bg-port-accent text-white' : 'bg-port-bg text-gray-400 hover:text-white'
+            className={`flex-1 whitespace-nowrap px-3 py-1.5 rounded border text-sm font-medium transition-colors ${
+              activeSection === 'raw'
+                ? 'bg-port-accent border-port-accent text-white'
+                : 'bg-port-card border-port-border text-gray-400 hover:text-white hover:border-port-accent/50'
             }`}
           >
             Raw ({rawNotes.length})
           </button>
           <button
-            onClick={() => { loadTags(); setShowTags(!showTags); }}
-            className={`min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 rounded ${showTags ? 'text-port-accent' : 'text-gray-500 hover:text-white'}`}
+            type="button"
+            onClick={toggleTags}
+            aria-pressed={showTags}
+            className={`min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 rounded border transition-colors ${
+              showTags
+                ? 'border-port-accent bg-port-accent/15 text-port-accent'
+                : 'border-port-border bg-port-bg/50 text-gray-400 hover:text-white hover:border-port-accent/50'
+            }`}
             title="Tags" aria-label="Tags"
           >
             <Tag size={14} />
@@ -151,13 +176,32 @@ export default function BrowseTab({ vaultId, notes, rawNotes, allNotes, onRefres
 
         {/* Tags */}
         {showTags && <OfflineNotesNotice count={skippedTagNotes} className="mx-3 mt-2" />}
-        {showTags && tags.length > 0 && (
-          <div className="px-3 py-2 border-b border-port-border flex flex-wrap gap-1 max-h-24 overflow-auto">
-            {tags.map(t => (
-              <span key={t.tag} className="px-1.5 py-0.5 rounded text-xs bg-port-accent/20 text-port-accent">
-                #{t.tag} <span className="text-gray-500">{t.count}</span>
-              </span>
-            ))}
+        {showTags && (
+          <div className="px-3 py-2 border-b border-port-border max-h-24 overflow-auto">
+            {tagsStatus === 'loading' ? (
+              <p className="text-xs text-gray-500">Loading tags...</p>
+            ) : tagsStatus === 'error' ? (
+              <div className="flex items-center justify-between gap-2 text-xs text-gray-400">
+                <span>Could not load tags</span>
+                <button
+                  type="button"
+                  onClick={loadTags}
+                  className="px-2 py-0.5 rounded border border-port-border bg-port-card text-port-accent hover:border-port-accent/50 hover:text-white transition-colors"
+                >
+                  Retry
+                </button>
+              </div>
+            ) : tags.length === 0 ? (
+              <p className="text-xs text-gray-500">No tags found</p>
+            ) : (
+              <div className="flex flex-wrap gap-1">
+                {tags.map(t => (
+                  <span key={t.tag} className="px-1.5 py-0.5 rounded text-xs bg-port-accent/20 text-port-accent">
+                    #{t.tag} <span className="text-gray-500">{t.count}</span>
+                  </span>
+                ))}
+              </div>
+            )}
           </div>
         )}
 
