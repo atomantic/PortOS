@@ -7,6 +7,7 @@ import { SatPhoneActionKeys, SatPhoneTalkPaddle, SatPhoneTelemetry } from './Sat
 import SatPhoneConversation from './SatPhoneConversation';
 import SatPhoneComposer from './SatPhoneComposer';
 import useVoiceLlmResidency from '../../hooks/useVoiceLlmResidency';
+import useRealtimeConnecting from './useRealtimeConnecting';
 
 /**
  * Video-enabled Satellite Phone / Tactical Transceiver Handset.
@@ -78,6 +79,7 @@ export default function SatPhoneHandset({
   const isFloating = variant === 'floating';
   const ownResidency = useVoiceLlmResidency({ provider: onAirLlm.provider, model: onAirLlm.model, stage, enabled: llmResidency === undefined });
   const residency = llmResidency === undefined ? ownResidency : llmResidency;
+  const realtimeConnecting = useRealtimeConnecting();
   const caption = interimTranscript || history.at(-1)?.text;
   const liveAttr = capturing ? 'tx' : (stage === 'speaking' || stage === 'thinking' || stage === 'loading') ? 'rx' : 'idle';
 
@@ -135,6 +137,7 @@ export default function SatPhoneHandset({
             avatarFilename={channel?.avatar ?? null}
             channel={channel}
             runningAvatar={runningAvatar}
+            connecting={avatarData?.phase === 'starting' || realtimeConnecting}
             stage={stage}
             capturing={capturing}
             caption={caption}

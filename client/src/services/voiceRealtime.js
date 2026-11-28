@@ -26,12 +26,25 @@ registerProcessor('portos-realtime-mic', RealtimeMic);
 // listening and speech, so the regular pipeline does not answer the same words as a second conversation.
 export const REALTIME_ACTIVE_EVENT = 'portos:voice-realtime';
 let activeCalls = 0;
-const announce = (delta) => {
-  activeCalls = Math.max(0, activeCalls + delta);
+let liveCall = false;
+const broadcast = () => {
   if (typeof window.dispatchEvent === 'function') {
-    window.dispatchEvent(new CustomEvent(REALTIME_ACTIVE_EVENT, { detail: { active: activeCalls > 0 } }));
+    const active = activeCalls > 0;
+    window.dispatchEvent(new CustomEvent(REALTIME_ACTIVE_EVENT, { detail: { active, connecting: active && !liveCall } }));
   }
 };
+const announce = (delta) => {
+  activeCalls = Math.max(0, activeCalls + delta);
+  if (!activeCalls) liveCall = false;
+  broadcast();
+};
+const announceLive = (live) => {
+  if (live === liveCall) return;
+  liveCall = live;
+  broadcast();
+};
+/** True while a realtime call has started but its voice model is not answering yet (loading). */
+export const isRealtimeCallConnecting = () => activeCalls > 0 && !liveCall;
 /** True from the moment a realtime call starts (model still loading included) until it ends. */
 export const isRealtimeCallActive = () => activeCalls > 0;
 
@@ -152,6 +165,7 @@ export const startRealtimeCall = async (handlers = {}) => {
   const onState = (state) => {
     markVoiceTiming(`rt.state ${state?.error ? 'error' : state?.loading ? 'loading' : state?.active ? 'live' : (state?.reason || 'off')}`);
     live = Boolean(state?.active);
+    announceLive(live);
     if (state?.error || state?.reason === 'sidecar-closed') teardown({ emitStop: false });
     handlers.onState?.(state);
   };

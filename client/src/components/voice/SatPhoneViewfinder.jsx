@@ -7,6 +7,7 @@ const STATUS_LABELS = {
   handsfree: 'Mic open',
   capturing: 'Listening',
   loading: 'Loading model',
+  connecting: 'Connecting',
   thinking: 'Thinking',
   speaking: 'Speaking',
 };
@@ -15,6 +16,7 @@ const STATUS_DOTS = {
   idle: 'bg-port-text-muted',
   speaking: 'bg-port-success animate-pulse',
   loading: 'bg-port-warning animate-ping',
+  connecting: 'bg-port-warning animate-ping',
   thinking: 'bg-port-warning animate-pulse',
 };
 
@@ -22,11 +24,14 @@ export default function SatPhoneViewfinder({
   avatarFilename = null,
   channel,
   runningAvatar,
+  connecting = false,
   stage,
   capturing,
   caption,
 }) {
-  const statusText = STATUS_LABELS[stage] || STATUS_LABELS.idle;
+  // Connecting wins over the idle states: the call is not usable yet. A turn in progress still shows its own stage.
+  const shownStage = connecting && (stage === 'idle' || !STATUS_LABELS[stage]) ? 'connecting' : stage;
+  const statusText = STATUS_LABELS[shownStage] || STATUS_LABELS.idle;
   const channelBadge = `CH${(channel?.index ?? 0) + 1}`;
   const screenBadge = `${channelBadge} · ${runningAvatar ? 'AVATAR LIVE' : 'PORTRAIT'}`;
 
@@ -36,6 +41,7 @@ export default function SatPhoneViewfinder({
       <VoiceCallGenerativePortrait
         key={`${runningAvatar ? 'animated' : 'still'}:${avatarFilename || 'default'}`}
         running={runningAvatar}
+        connecting={connecting}
         stage={stage}
         avatarFilename={avatarFilename}
         fill
@@ -66,7 +72,7 @@ export default function SatPhoneViewfinder({
         >
           <span
             aria-hidden="true"
-            className={`h-1.5 w-1.5 rounded-full ${capturing ? 'bg-port-accent-2 animate-pulse' : STATUS_DOTS[stage] || STATUS_DOTS.idle}`}
+            className={`h-1.5 w-1.5 rounded-full ${capturing ? 'bg-port-accent-2 animate-pulse' : STATUS_DOTS[shownStage] || STATUS_DOTS.idle}`}
           />
           {statusText}
         </p>
