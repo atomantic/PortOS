@@ -1692,6 +1692,11 @@ describe('AudioLDM2 Apple Silicon install is hash-pinned', () => {
   });
 });
 
+it.each(['windows', 'linux'])('omits unused scipy from the AudioLDM2 %s CUDA lock', (target) => {
+  const lock = readFileSync(join(REQUIREMENTS_DIR, `requirements-audioldm2-cuda-${target}.lock.txt`), 'utf8');
+  expect(lock).not.toMatch(/^scipy==/m);
+});
+
 describe.each([
   { runtime: 'AudioLDM2', lockName: 'audioldm2', flag: 'INSTALL_AUDIOLDM2', probe: 'AudioLDM2Pipeline', probeImport: 'from diffusers import AudioLDM2Pipeline' },
   { runtime: 'MuScriptor', lockName: 'muscriptor', flag: 'INSTALL_MUSCRIPTOR', probe: 'TranscriptionModel', probeImport: 'from muscriptor import TranscriptionModel' },
