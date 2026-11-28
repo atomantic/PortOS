@@ -34,7 +34,8 @@ import {
   directoryForAssetKind,
   hasAllowedAssetExtension,
   isTransferMediaFilename,
-  readVideoHistoryRows
+  readVideoHistoryRows,
+  sha256FileCached
 } from './peerSyncAssetMetadata.js';
 
 // The reverse lookup (#4162): given an on-disk video basename, what THUMBNAIL
@@ -422,7 +423,7 @@ async function doPullOneAsset(peer, base, entry, urlPrefix, localDir, safeName, 
     if (existsSync(localFullPath)) {
       const localHash = entry.kind === 'image'
         ? (await getOrComputeImageSha256(localFullPath))?.hash ?? null
-        : await sha256File(localFullPath).catch(() => null);
+        : await sha256FileCached(localFullPath);
       if (localHash === entry.sha256) {
         // Bytes already up-to-date. Images still reconcile their sidecar, since
         // that may be the only reason this entry was flagged.
