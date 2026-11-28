@@ -106,7 +106,7 @@
     "voice.default": {
       "promptTokens": 0,
       "toolCount": 42,
-      "toolTokens": 8166,
+      "toolTokens": 8254,
       "tools": [
         "brain_capture",
         "brain_list_recent",
