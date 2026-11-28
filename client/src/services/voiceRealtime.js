@@ -144,7 +144,8 @@ export const startRealtimeCall = async (handlers = {}) => {
   };
   for (const [event, fn] of Object.entries(listeners)) socket.on(event, fn);
   await Promise.all([micCtx.resume(), outCtx.resume()]).catch(() => {});
-  if (!stopped) socket.emit('voice:realtime:start');
+  if (!stopped && socket.connected === false) onDisconnect();
+  else if (!stopped) socket.emit('voice:realtime:start');
 
   return {
     stop: () => teardown({ emitStop: true }),

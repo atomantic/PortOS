@@ -37,13 +37,7 @@ export const describeInstall = (realtime = {}) => {
 let current = null; // { child, port, token, key, ready: Promise, exited: Promise, idleTimer }
 let pendingStop = null;
 
-const stopCurrent = (reason = 'stop') => {
-  const proc = current;
-  current = null;
-  if (!proc) return Promise.resolve();
-  clearTimeout(proc.idleTimer);
-  console.log(`🗣️ voice.realtime.stop reason=${reason}`);
-  proc.child.kill('SIGTERM');
+const trackPendingStop = (proc, { escalate = false } = {}) => {
   const waitExit = new Promise((resolve) => {
     let settled = false;
     const done = () => {
@@ -52,11 +46,10 @@ const stopCurrent = (reason = 'stop') => {
       clearTimeout(killTimer);
       resolve();
     };
-    const killTimer = setTimeout(() => {
-      proc.child.kill('SIGKILL');
-      done();
-    }, STOP_TIMEOUT_MS);
-    killTimer.unref?.();
+    const killTimer = escalate
+      ? setTimeout(() => { proc.child.kill('SIGKILL'); }, STOP_TIMEOUT_MS)
+      : null;
+    killTimer?.unref?.();
     proc.exited.then(done, done);
   });
   const stopPromise = waitExit.finally(() => {
@@ -64,6 +57,16 @@ const stopCurrent = (reason = 'stop') => {
   });
   pendingStop = stopPromise;
   return stopPromise;
+};
+
+const stopCurrent = (reason = 'stop') => {
+  const proc = current;
+  current = null;
+  if (!proc) return Promise.resolve();
+  clearTimeout(proc.idleTimer);
+  console.log(`🗣️ voice.realtime.stop reason=${reason}`);
+  proc.child.kill('SIGTERM');
+  return trackPendingStop(proc, { escalate: true });
 };
 
 /**
@@ -97,8 +100,9 @@ export const ensureRealtimeSidecar = async (realtime = {}, { persona = '', launc
     proc.ready = new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         if (current === proc) current = null;
-        reject(realtimeError('Realtime voice did not finish loading.', 503));
         child.kill('SIGKILL');
+        trackPendingStop(proc);
+        reject(realtimeError('Realtime voice did not finish loading.', 503));
       }, START_TIMEOUT_MS);
       timer.unref?.();
       createInterface({ input: child.stdout, crlfDelay: Infinity }).on('line', (line) => {

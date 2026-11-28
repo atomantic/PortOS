@@ -186,4 +186,14 @@ describe('startRealtimeCall', () => {
     expect(onState).toHaveBeenCalledWith({ active: false, error: 'Connection to PortOS was lost.' });
     expect(socketListeners.size).toBe(0);
   });
+
+  it('tears down immediately if the socket disconnected during audio setup', async () => {
+    socketMock.connected = false;
+    const onState = vi.fn();
+    await startRealtimeCall({ onState });
+    expect(socketMock.emit).not.toHaveBeenCalledWith('voice:realtime:start');
+    expect(track.stop).toHaveBeenCalledTimes(1);
+    expect(contexts[0].close).toHaveBeenCalledTimes(1);
+    expect(onState).toHaveBeenCalledWith({ active: false, error: 'Connection to PortOS was lost.' });
+  });
 });
