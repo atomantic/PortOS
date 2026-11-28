@@ -1,3 +1,4 @@
+import { openExternalUrl } from '../utils/openExternalUrl.js';
 import { useState, useRef } from 'react';
 import { Link } from 'react-router';
 import { ExternalLink, Gamepad2, Play, Square, RotateCcw, RefreshCw, Archive, ArchiveRestore, Trash2, AlertTriangle } from 'lucide-react';
@@ -112,7 +113,7 @@ export default function Apps() {
   };
 
   const handleWebLaunch = (url) => {
-    if (url) window.open(url, '_blank');
+    openExternalUrl(url);
   };
 
   // Archive/unarchive gate their success toast on a response, the way

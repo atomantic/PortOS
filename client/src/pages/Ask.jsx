@@ -18,6 +18,7 @@ import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
 import { useConfirmDelete } from '../hooks/useConfirmDelete';
 import useMounted from '../hooks/useMounted';
 import { modKey } from '../utils/platform';
+import { openExternalUrl } from '../utils/openExternalUrl.js';
 
 // Mirrors the server-side ID_RE in askConversations.js (9-char base36 ms +
 // 8-char hex suffix) so this regex stays in lockstep with the production
@@ -44,8 +45,15 @@ function SourceChip({ source, index }) {
   const Icon = meta.icon;
   const navigate = useNavigate();
   const onClick = () => {
-    if (source.href?.startsWith('/')) navigate(source.href);
-    else if (source.href) window.open(source.href, '_blank', 'noopener,noreferrer');
+    const { href } = source;
+    const base = window.location.href;
+    // A leading slash can also introduce a network-path reference.
+    if (typeof href === 'string' && href.startsWith('/') && !href.startsWith('//')
+        && URL.canParse(href, base) && new URL(href, base).origin === window.location.origin) {
+      navigate(href);
+    } else {
+      openExternalUrl(href);
+    }
   };
   return (
     <button

@@ -1,3 +1,4 @@
+import { openExternalUrl } from '../../utils/openExternalUrl.js';
 import { Link } from 'react-router';
 import { useState, useEffect, useCallback } from 'react';
 import { useSearchParams } from 'react-router';
@@ -134,7 +135,7 @@ export default function ConfigTab({ accounts, setAccounts, accountsUnavailable =
     setReauthorizing(true);
     getGoogleAuthUrl({ returnTo: 'messages', silent: true })
       .then(({ url }) => {
-        window.open(url, '_blank');
+        if (!openExternalUrl(url)) return toast.error('Could not get the Google authorization URL');
         toast.success('Complete authorization in the opened browser tab');
       })
       .catch(err => toast.error(failureMessage('Could not get the Google authorization URL', err)))
