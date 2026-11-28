@@ -24,6 +24,7 @@ export function useVoiceSocketEvents({
   enabled,
   navigate,
   disposedRef,
+  turnGenerationRef,
   handleStartRef,
   handleStopRef,
   activeStages,
@@ -55,6 +56,7 @@ export function useVoiceSocketEvents({
         // In web-speech mode, user text is already appended client-side when
         // onFinal fires. Server echoes it back with source='text' — skip the
         // duplicate append but still advance the stage.
+        if (turnGenerationRef) turnGenerationRef.current += 1;
         if (d.text && d.source !== 'text') appendHistory({ role: 'user', text: d.text });
         setStage('thinking');
       }),
@@ -76,12 +78,14 @@ export function useVoiceSocketEvents({
       }),
       onVoiceEvent('voice:idle', (d) => {
         if (!isLive()) return;
+        const idleGeneration = turnGenerationRef?.current;
         // voice:idle fires when the server finishes *sending* TTS; local
         // playback may still be running. Wait for drain so stage doesn't
         // flip off 'speaking' while audio is still playing.
         if (d?.reason === 'reset') clearHistory();
         whenVoiceTurnAudioDrained().then(() => {
           if (!isLive()) return;
+          if (turnGenerationRef && idleGeneration !== turnGenerationRef.current) return;
           if (d?.reason === 'turn-complete') markVoiceTiming('audio.drained (turn end)');
           setStage((current) => (activeStages.has(current) ? current : restState()));
         });
@@ -160,6 +164,7 @@ export function useVoiceSocketEvents({
     enabled,
     navigate,
     disposedRef,
+    turnGenerationRef,
     handleStartRef,
     handleStopRef,
     activeStages,
