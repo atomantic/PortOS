@@ -22,7 +22,7 @@ async function getCollectionInventoryReferences(kind, { alternateNamesOnly = fal
   let cached = collectionInventoryCache;
   if (!cached || !fingerprintsEqual(cached.fingerprints, fingerprints)) {
     // A failed parent read cannot safely classify these collections for a peer.
-    const collections = await getWireCollections(undefined, { strictParents: true });
+    const collections = await getWireCollections();
     const items = collections.filter((collection) => !collection.deleted).flatMap((collection) => collection.items);
     cached = {
       fingerprints,

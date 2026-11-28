@@ -30,7 +30,7 @@ export const mediaCollectionsChecksumSources = {
 // so image bytes flow via the existing asset-pull worker — the snapshot path
 // covers the JSON, the push path covers the image bytes.
 
-export async function getWireCollections(exclude, { strictParents = false } = {}) {
+export async function getWireCollections(exclude) {
   // includeDeleted:true so tombstones cross the wire — matches getUniverseSnapshot
   // / getPipelineSnapshot. Without it, a peer that missed the live delete push
   // (offline/unsubscribed at delete time) never learns the collection was deleted
@@ -44,16 +44,11 @@ export async function getWireCollections(exclude, { strictParents = false } = {}
   // item refs for records the user explicitly opted out of sync. Tombstoned
   // ephemeral parents also drop their collection (sender wouldn't bundle them
   // anyway, but the snapshot path is independent).
-  // Independent reads — fetch the universe and series lists concurrently.
+  // Fail closed when either parent store cannot be read: collapsing a storage
+  // failure into [] would empty the ephemeral filter and leak private collections.
   const [allUniversesForEphemeral, allSeriesForEphemeral] = await Promise.all([
-    listUniverses({ includeDeleted: true }).catch((error) => {
-      if (strictParents) throw error;
-      return [];
-    }),
-    listSeries({ includeDeleted: true }).catch((error) => {
-      if (strictParents) throw error;
-      return [];
-    }),
+    listUniverses({ includeDeleted: true }),
+    listSeries({ includeDeleted: true }),
   ]);
   const ephemeralUniverseIds = new Set(
     allUniversesForEphemeral.filter((u) => u?.ephemeral === true).map((u) => u.id),
@@ -116,9 +111,12 @@ export async function applyMediaCollectionsRemote(remoteData, source) {
   // the parent live could otherwise ship a newer collection snapshot
   // with the old parent id and re-link the collection to our tombstone,
   // undoing the cleanup.
+  // Fail closed when either parent store cannot be read: collapsing a storage
+  // failure into [] would empty the refused sets and let remote snapshots
+  // mutate private ephemeral collections or re-link collections to tombstones.
   const [allUniverses, allSeries] = await Promise.all([
-    listUniverses({ includeDeleted: true }).catch(() => []),
-    listSeries({ includeDeleted: true }).catch(() => []),
+    listUniverses({ includeDeleted: true }),
+    listSeries({ includeDeleted: true }),
   ]);
   const refusedUniverseIds = new Set(
     allUniverses.filter((u) => u?.ephemeral === true || u?.deleted === true).map((u) => u.id),
