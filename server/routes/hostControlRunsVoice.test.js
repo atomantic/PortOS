@@ -47,6 +47,13 @@ vi.mock('../services/brainStorage.js', async (importOriginal) => ({
   ...await importOriginal(),
   getInboxLog: vi.fn(async () => [])
 }));
+vi.mock('../services/apps.js', () => ({
+  getActiveApps: vi.fn(async () => [{ id: 'example-app', name: 'Example App' }]),
+}));
+vi.mock('../services/workspaceContext.js', () => ({
+  snapshotOnRepoSwitch: vi.fn(async () => ({ appId: 'previous-app' })),
+  restoreContext: vi.fn(async () => ({ saved: true, restorable: { shellSessions: [] } })),
+}));
 vi.mock('../services/imageGen/index.js', async () => ({
   ...await vi.importActual('../lib/generationModes.js'),
   generateImage: vi.fn(async () => ({ mode: 'external', path: '/data/images/example.png', filename: 'example.png' })),
@@ -89,6 +96,7 @@ import { restartApp } from '../services/pm2.js';
 import { addTask } from '../services/cos/cosTaskStore.js';
 import { captureThought } from '../services/brain.js';
 import { generateImage } from '../services/imageGen/index.js';
+import { snapshotOnRepoSwitch } from '../services/workspaceContext.js';
 import { getProviderById } from '../services/provider/providers.js';
 import { describeImageViaCli } from '../services/visionCli.js';
 
@@ -107,10 +115,11 @@ const runBody = { providerId: 'example-provider', prompt: 'Fix the example test'
 const hostTools = [
   ['pm2_restart', { name: 'example-api' }, restartApp],
   ['dispatch_code_agent', { task: 'Fix the example test' }, addTask],
-  // HTTP twins are gated whole-operation: POST /api/brain/capture (#11036)
-  // and POST /api/image-gen/generate (#9667).
+  // HTTP twins are gated whole-operation: POST /api/brain/capture (#11036),
+  // POST /api/image-gen/generate (#9667), and POST /api/workspace-contexts/:appId/*.
   ['brain_capture', { text: 'https://github.com/example/example-repo' }, captureThought],
   ['image_generate', { prompt: 'An example lighthouse at dusk' }, generateImage],
+  ['workspace_switch', { workspace: 'Example App' }, snapshotOnRepoSwitch],
 ];
 const expectNoHostEffects = () => {
   for (const [, , effect] of hostTools) expect(effect).not.toHaveBeenCalled();
