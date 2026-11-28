@@ -39,12 +39,14 @@ export async function getCredentials() {
 export async function saveCredentials({ clientId, clientSecret }) {
   authGeneration++;
   oAuth2Client = null;
-  await ensureAuthDir();
   const credentials = { clientId, clientSecret, redirectUri: OAUTH_REDIRECT_URI };
-  await writeSecureJson(CREDENTIALS_FILE, credentials);
-  // Fence any getAuthenticatedClient() that read the previous credentials mid-write.
-  authGeneration++;
-  oAuth2Client = null;
+  await queueTokenWrite(async () => {
+    await ensureAuthDir();
+    await writeSecureJson(CREDENTIALS_FILE, credentials);
+    // Re-bump after serializing so any overlapping exchange or reader is invalidated.
+    authGeneration++;
+    oAuth2Client = null;
+  });
   console.log('📅 Google OAuth credentials saved');
   return { hasCredentials: true, redirectUri: credentials.redirectUri };
 }
@@ -152,6 +154,14 @@ async function exchangeAuthorizationCode(code) {
     if (generation !== authGeneration || activeClears > 0) return;
     await ensureAuthDir();
     await writeSecureJson(TOKENS_FILE, tokens);
+    // Re-check after the write: clearAuth() or saveCredentials() may have started
+    // while writeSecureJson was in flight. When saveCredentials() superseded the
+    // exchange without a queued clearAuth(), clear the mismatched-client tokens
+    // rather than leaving them paired with the new credentials.
+    if (generation !== authGeneration || activeClears > 0) {
+      if (activeClears === 0) await writeSecureJson(TOKENS_FILE, {});
+      return;
+    }
     client.setCredentials(tokens);
     attachTokenPersistence(client, generation);
     oAuth2Client = client;

@@ -437,4 +437,53 @@ describe('googleAuth credentials and disconnect', () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(storedTokens).toEqual({});
   });
+
+  it('does not cache or retain tokens when saveCredentials overlaps callback persistence', async () => {
+    let storedCredentials = CREDENTIALS;
+    let storedTokens = null;
+    tryReadFile.mockImplementation(async (file) => {
+      if (file.endsWith('credentials.json')) return JSON.stringify(storedCredentials);
+      if (file.endsWith('tokens.json')) return storedTokens ? JSON.stringify(storedTokens) : null;
+      return null;
+    });
+    const writeStarted = Promise.withResolvers();
+    const releaseWrite = Promise.withResolvers();
+    let holdFirstTokenWrite = true;
+    atomicWrite.mockImplementation(async (file, value) => {
+      if (file.endsWith('credentials.json')) {
+        storedCredentials = value;
+        return;
+      }
+      if (!file.endsWith('tokens.json')) return;
+      if (holdFirstTokenWrite) {
+        holdFirstTokenWrite = false;
+        writeStarted.resolve();
+        await releaseWrite.promise;
+      }
+      storedTokens = value;
+    });
+
+    const realCreate = createGoogleOAuthClient;
+    vi.spyOn(googleOAuthClient, 'createGoogleOAuthClient').mockImplementation((options) => {
+      const client = realCreate(options);
+      client.getToken = vi.fn().mockResolvedValue({
+        tokens: { access_token: 'old-app-access', refresh_token: 'old-app-refresh', expiry_date: Date.now() + 3_600_000 },
+      });
+      return client;
+    });
+
+    const { url } = await getAuthUrl('calendar');
+    const state = new URL(url).searchParams.get('state');
+    const callback = handleCallback({ code: 'auth-code', state });
+    await writeStarted.promise;
+
+    const replacing = saveCredentials({ clientId: 'new-client-id', clientSecret: 'new-secret' });
+    releaseWrite.resolve();
+    const [callbackResult] = await Promise.all([callback, replacing]);
+
+    expect(callbackResult).toMatchObject({ returnTo: 'calendar', error: expect.stringMatching(/credentials changed/i) });
+    expect(storedCredentials).toMatchObject({ clientId: 'new-client-id', clientSecret: 'new-secret' });
+    expect(storedTokens).toEqual({});
+    expect(await getAuthenticatedClient()).toBeNull();
+  });
 });
