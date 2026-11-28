@@ -183,10 +183,24 @@ export default function MessageDetail({ message, accounts, onBack }) {
   const threadStateRef = useRef(threadState);
   useEffect(() => { threadStateRef.current = threadState; }, [threadState]);
   const refreshGeneration = useRef(0);
+  const messageGeneration = useRef(0);
+  const generatingRef = useRef(false);
+  const actioningRef = useRef(false);
   useEffect(() => {
     setRefreshing(false);
     setRefreshedThread([]);
-    return () => { refreshGeneration.current += 1; };
+    setShowReply(false);
+    setReplyBody('');
+    setReplyEmail('');
+    setGeneratedDraftId(null);
+    setGenerating(false);
+    setActioning(null);
+    generatingRef.current = false;
+    actioningRef.current = false;
+    return () => {
+      refreshGeneration.current += 1;
+      messageGeneration.current += 1;
+    };
   }, [message.id, accountId, threadId]);
 
   const handleRefresh = async () => {
@@ -214,6 +228,9 @@ export default function MessageDetail({ message, accounts, onBack }) {
 
   const handleGenerateReply = async () => {
     if (!account) return toast.error('No account available');
+    if (generatingRef.current) return;
+    const generation = messageGeneration.current;
+    generatingRef.current = true;
     setGenerating(true);
     const draft = await generateMessageDraft({
       accountId: account.id,
@@ -223,6 +240,8 @@ export default function MessageDetail({ message, accounts, onBack }) {
       instructions: '',
       ...(voiceOverride === undefined ? {} : { useVoice: voiceOverride })
     }).catch(() => null);
+    if (generation !== messageGeneration.current) return;
+    generatingRef.current = false;
     setGenerating(false);
     if (draft) {
       setReplyBody(draft.body);
@@ -259,15 +278,21 @@ export default function MessageDetail({ message, accounts, onBack }) {
   });
 
   const handleAction = (action) => {
-    if (!displayedMessage.accountId) return;
+    if (!displayedMessage.accountId || actioningRef.current) return;
+    const generation = messageGeneration.current;
+    actioningRef.current = true;
     setActioning(action);
     executeMessageAction(displayedMessage.accountId, displayedMessage.id, action)
       .then(() => {
         toast.success(`Message ${action}d`);
-        onBack();
+        if (generation === messageGeneration.current) onBack();
       })
       .catch(() => toast.error(`Failed to ${action} message`))
-      .finally(() => setActioning(null));
+      .finally(() => {
+        if (generation !== messageGeneration.current) return;
+        actioningRef.current = false;
+        setActioning(null);
+      });
   };
 
   // Show thread or single message
