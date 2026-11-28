@@ -62,6 +62,12 @@ describe('locked runtime profiles', () => {
     }
   });
 
+  it('omits the PyTorch AuK stack and its exclusive dependencies from the MLX lock', () => {
+    for (const name of ['torchaudio', 'torchdiffeq', 'x-transformers', 'einops', 'einx', 'frozendict', 'loguru', 'torch-einops-utils']) {
+      expect(lockEntryText(LOCK_PROFILES['auk-mlx'], name), name).toBe('');
+    }
+  });
+
   it('pins the private uv bootstrap to the version PortOS runs, with a digest for every distribution', () => {
     const { lockFile } = LOCK_PROFILES['uv-bootstrap'];
     expect(directPins(lockFile)).toEqual([`uv==${PRIVATE_UV_VERSION}`]);

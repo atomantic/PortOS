@@ -1,4 +1,3 @@
-# Bounded #16047 regeneration: cutoff 2026-11-07T00:00:00Z; Transformers 5.22.2 only; retained companion versions and artifact hashes.
 # AuK-Flash MLX runtime — fully-resolved, hash-pinned lock for the
 # Apple Silicon (arm64 macOS) auk-mlx virtualenv. Do not edit by hand.
 #
@@ -9,8 +8,7 @@
 # reported as unsupported before anything is installed.
 # AuK itself is the commit-pinned checkout; setuptools below is its locked build
 # backend. requirements-auk-mlx.txt overrides upstream AuK's torch<2.8 and
-# transformers<5 ranges, whose every release carries OSV advisories (#15670):
-# conversion and voice rendering were validated on Apple Silicon with this lock.
+# transformers<5 ranges, whose every release carries OSV advisories (#15670).
 # Universal across CPython 3.11+ (filelock's security fix needs 3.11), arm64
 # macOS wheels only. A cross-platform resolve is not a runtime certification.
 #
@@ -24,8 +22,10 @@
 #     --generate-hashes --no-header --annotation-style line \
 #     --exclude-newer <UTC date at least 3 days ago> -o "$LOCK")
 # then check the result against OSV (including MAL- malicious-package records).
-# This lock was generated with --exclude-newer 2026-11-03; OSV reported no
-# advisories for any pin on 2026-11-10.
+# Bounded #20311 regeneration used uv 0.8.4 with --exclude-newer 2026-11-25
+# and an explicit PyAV 19.0.2 pin for Python 3.12+ in the compile input.
+# Retained pins and artifact hashes are identical. OSV reported no advisories
+# on 2026-11-28.
 annotated-doc==0.0.5 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
     --hash=sha256:117bac03a25ede5df5440e855b32d556049ca169ead221505badf432fed4b101 \
     --hash=sha256:c7e58ce09192557605d8bbd92836d7e1d520ac9580096042c0bfd197efacf1bb
@@ -372,74 +372,10 @@ decorator==5.3.1 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
     --hash=sha256:4cbcdd55a6efadb9dbea26b858f4fb3264567b52d69ca0d25b721b553f60ea82 \
     --hash=sha256:f47fe6fdbd2edd623ecfe36875d37aba411624e2670dd395dddae1358689bb3c
     # via librosa
-einops==0.8.2 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
-    --hash=sha256:54058201ac7087911181bfec4af6091bb59380360f069276601256a76af08193 \
-    --hash=sha256:609da665570e5e265e27283aab09e7f279ade90c4f01bcfca111f3d3e13f2827
-    # via torch-einops-utils, x-transformers
-einx==0.4.3 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
-    --hash=sha256:47ce54a0144f6dffcfacdd8fe2cc9e2e5e6485dda2471330ab75ee747dd22f39 \
-    --hash=sha256:be7d81ea1908b9f00e4a467840998fc483c33aa32aaaaa3ada6c8386f693edf9
-    # via x-transformers
 filelock==4.2.7 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
     --hash=sha256:31f6f7e3a8b6f0bd89114d30c5d5218ea1cfb63e5c4aa695b7559314a209bc7f \
     --hash=sha256:d08972bbca2b8767ee552aff877b091dd111ffb1d22de7de885766ea7d719d5e
     # via huggingface-hub, torch
-frozendict==2.5.1 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
-    --hash=sha256:0321bfcaaa30654b358000d1e395dca4710a8202f2e5d4ac228cd22867b7dab9 \
-    --hash=sha256:03ac45992f8a11bca91641858216b41381f08df7990b843b8719faba40ccafa5 \
-    --hash=sha256:06ef3d03b853527c29603a4c3433f94a14cc08041061ce8231d7101a55006320 \
-    --hash=sha256:0e2803b9f41dcd3ee6c1680cc425a0e5115b34d26e21f2b167832eac84f6926f \
-    --hash=sha256:10c706277990e80d520df2b3d4c4bc3d17d8e75e1fd278f5cab976d1c40e7182 \
-    --hash=sha256:10f3c12ca91910f97c29197372eb11bf1bc4e64ffbff8eb3bc4ca965ecfef1fc \
-    --hash=sha256:11e8070834a81b14ffaef809f4a061dcd0fbab898f9ea07fb8d972b59648771a \
-    --hash=sha256:1dd1512f0f1907a63df39fef970b3ddf2c70b95eb16faccdd2cc9a951a5f25c9 \
-    --hash=sha256:22fd0dab2479b5f8bd9e0697351caeb8278b71d790e2aca6ae005c17c7050f41 \
-    --hash=sha256:258f1ce2eecaa9bf48d4a6fe5d67ee6780e2b1dadddcc3dcb97eb1610268aa7b \
-    --hash=sha256:268ff626de7d8e740233fba372099e355bffbc7e0a217f7949fda359ad3a51ba \
-    --hash=sha256:2f085ad897a9fdecb3a13eccb8739809204f39b16dc7c63329d492e4fb133661 \
-    --hash=sha256:301cfca94c4f09202488274cbd648cb32a10f3b0c64f830012f045fedb04b72c \
-    --hash=sha256:34e4449bd9d382701ccb64436534712055f1025fb0f294724eecbc3e768771bc \
-    --hash=sha256:35a01d3607f8faa2e85daa888941331e044c4b595c5972090669bf2dc42d4199 \
-    --hash=sha256:3b291e54c17740ee02798d7f18290882f36a10b0388b76d89ab51d6fe716399d \
-    --hash=sha256:3c484e2853f049d9b15f5901fad749e0e506e909a2a09dd4bed208f747768fd9 \
-    --hash=sha256:3ec77c06a741bf5b3ec7c6e8bfb2462760941fff01d3605479d989b31dac06de \
-    --hash=sha256:44b40357abcafe4e12d8065a6166910be81b3ecaf320b9ef117b8f64653f1edf \
-    --hash=sha256:4ac6100e4065316d954a6d921178d09e6dc50ac20e49f0848f1a9fa4f2d44352 \
-    --hash=sha256:4c952945ed419af55f0fb80777fdd67c61f80734891cab28e6164bd7d05a877a \
-    --hash=sha256:4f8b7638dd090267de7f3197395fbc2e78a05fc3ecf8c900c9f190476c142238 \
-    --hash=sha256:4fc9ff72a431efab83f2bf655e2af96d4c709eda3ebef54cd4b6d05e3b7c3940 \
-    --hash=sha256:509db063b2b1ecddd328b0aee0e855cedac08b637f3a7b5fe80b6e2535126e9f \
-    --hash=sha256:52618b53539e2c4f8dd9ba0427b970acca305e99515618b9e37911104f1067a2 \
-    --hash=sha256:53a8fdc807db8d7e9c05e76b89057b2bcd40f8eb198aeb28138ea33564c7ee0f \
-    --hash=sha256:545b7ad020c291f7889215e67484e15064a21d2338e6758cdf81479d42cb61c9 \
-    --hash=sha256:586bd91b6f08c1cce823a724da4eab2a758eb739109a278c3ed427bac2d1a224 \
-    --hash=sha256:6823bd6af19771b7081794ee63e2f1af04bd8181d7f4f945df8d006cecf8d3a9 \
-    --hash=sha256:6cf2059c7cc631810587ee59e22d4d31d34bc53cea995750c02b2c8fb874a417 \
-    --hash=sha256:6e99aacacd020ad70207553a97a82761eecafea5786bb1a9fc721af5027c2dd9 \
-    --hash=sha256:75a50a8e4fd232fb242c32b7d78975a7aee2828baa5e9b1e0151d91fda61e2b1 \
-    --hash=sha256:8b6cd673dda267d716f6b44a19aa2dbbe43cb0759b2785f224b41c401947f732 \
-    --hash=sha256:8cae5bfba358da3991168560e2455f5df3c11667c8e185b026178a0bbd84a30e \
-    --hash=sha256:9621fa37304a5fbeaccacd9e5bd4cf601d7d39a1464b6310e04dc07cc9c4eab9 \
-    --hash=sha256:9c8f1f2a776c16d89b40f7648d01ce06fd398031e98e244851616409ed08b54e \
-    --hash=sha256:9e2e693e28d1cfb8df26cdeb877c763ceafecaa32cdcfaee513b000bf67727cd \
-    --hash=sha256:a0228985e8099f44416bdd949ac4ccf7d916944f11db03e07fefa0835c98a9a3 \
-    --hash=sha256:a05b2be37c3abbb385df5662f5083a1b88e5bf4237180a45e430d54d4cd44206 \
-    --hash=sha256:a4852ff0507b0aefc1f7956c5724dcbbfdbd298cb7e2fb0e9973a427b3e47936 \
-    --hash=sha256:a7596eacbba13713b82c851bcb5c1da7b44f6a166ef1cf887c4d5fd6d6e9c7d6 \
-    --hash=sha256:acd3e0c1c296d181b6a58d006b55083fccc1483d1f763e8e040cb1076b72ae23 \
-    --hash=sha256:b2521d1e4278ddfaefb2704170a58142e29df48ad4c83c651470985b10cfb792 \
-    --hash=sha256:b49f3c24b6ebca99521cfd63a54e49e3b99ba298eaddee712cfb823b446683b7 \
-    --hash=sha256:b6db50744d31396e2950195aeb1ab4beb7766f277845f4654c871d38b824f5bf \
-    --hash=sha256:b6e602e286b912beca1e12615f50eda6c74646b440c8cfde34221adee6c98c5e \
-    --hash=sha256:b79b0c133220c5976ff05b8bfe3c1215119caa6255f477a309151fd5e2c2c0c3 \
-    --hash=sha256:bd54d261eeb5764e86486a624ea9fdbd76540222a0957fae2f92b2eb1adbb2b9 \
-    --hash=sha256:bf31d18fbbe835bc043f8a0b984023987cdf6f3f64879e4c73d099ca890d9ff3 \
-    --hash=sha256:c5b320ea059125678f0dc0a821ac5d4f2b42bbba5f95fe7b3830b7a063d960c6 \
-    --hash=sha256:c8da4d485d2c1cf7e79291a4c38f35d69adbca75829b8b2ef4ef9d6216cada0f \
-    --hash=sha256:ddaa5c7538e688e161e2695293c4e2aca0d439594cf4ae2949ac0b323b68f7e9 \
-    --hash=sha256:fec61966881770afbb3bfd3ce8566a2b42941a8a45ef622501e2599bb61e3790 \
-    --hash=sha256:ff31f60c91b8fa91ff1bc8d802f94be3a2386b5250ba19622f06eec9bdabb8f7
-    # via einx
 fsspec==2026.9.0 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
     --hash=sha256:0f08147951c8cb31d844c3547d631053b127863b60be04cf06e121333ee0e2fe \
     --hash=sha256:8dd6e646e99ea382bd85f97a45e6b526a442d79423a7dc673f1e2756d05fcb5f
@@ -541,10 +477,6 @@ llvmlite==0.50.0 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
     --hash=sha256:f2a2cd6ec9ffcc1b7147dea0d7a49efebf17a2b434e0c2844fe175999d571eb4 \
     --hash=sha256:ffe46ef508df226e54b5fe1f7bf11122e5297bcdbb3902cc5b670a429d56ff47
     # via numba
-loguru==0.7.3 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
-    --hash=sha256:19480589e77d47b8d85b2c827ad95d49bf31b0dcde16593892eb51dd18706eb6 \
-    --hash=sha256:31a33c10c8e1e10422bfd431aeb5d351c7cf7fa671e3c4df004162264b28220c
-    # via x-transformers
 markdown-it-py==4.2.0 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
     --hash=sha256:04a21681d6fbb623de53f6f364d352309d4094dd4194040a10fd51833e418d49 \
     --hash=sha256:9f7ebbcd14fe59494226453aed97c1070d83f8d24b6fc3a3bcf9a38092641c4a
@@ -991,7 +923,7 @@ numpy==2.4.6 ; python_full_version < '3.12' and platform_machine == 'arm64' and 
     --hash=sha256:f3a3570c4a2a16746ac2c31a7c7c7b0c186b95ce902e33db6f28094ed7387dda \
     --hash=sha256:f407cb6b8e9d6d8c626bc73c945db1706035af8fd632295547bf1c9e46d092d6 \
     --hash=sha256:f74a575920ab21fe304421a3fc28793d82e299cae9eccb37084e9fc7f3617c20
-    # via einx, librosa, numba, scikit-learn, scipy, soundfile, soxr, torchvision, transformers
+    # via librosa, numba, scikit-learn, scipy, soundfile, soxr, torchvision, transformers
 numpy==2.5.4 ; python_full_version >= '3.12' and platform_machine == 'arm64' and sys_platform == 'darwin' \
     --hash=sha256:067374eb538c34c745436365cf7b0112595c1d326f21ce4ff340f61230239fbb \
     --hash=sha256:0b4724a19de67bea8cfc4970798efa78bcbbe2ac2613cfac16721a42d44de2a5 \
@@ -1059,7 +991,7 @@ numpy==2.5.4 ; python_full_version >= '3.12' and platform_machine == 'arm64' and
     --hash=sha256:fbde6962867ee75b48b0ee29b2b9372ec5d617799dbaf38e82dc0596f2f7738a \
     --hash=sha256:fe4d21ab149f15e4e6043dfb0de87e6e5f34ac176cde83060e9802981fca2ac2 \
     --hash=sha256:ffa6ce09a1c6a08e9667dd9c97aa0b14184e8d18f2a14b78b2a2328c9147f076
-    # via einx, librosa, numba, scikit-learn, scipy, soundfile, soxr, torchvision, transformers
+    # via librosa, numba, scikit-learn, scipy, soundfile, soxr, torchvision, transformers
 omegaconf==2.4.0 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
     --hash=sha256:7e219a70bea371da250285b9c01c7db027bc421722799c2cc4ff14bc4a2a753b \
     --hash=sha256:f141a664c777582405e3cc6e0545ecc79429e79f844995b1a6e71c35946a025c
@@ -1067,7 +999,7 @@ omegaconf==2.4.0 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
 packaging==26.3 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
     --hash=sha256:94edc256424af38762eb31306eed28beb9f0efc50a8837492c9d6fd6004aed79 \
     --hash=sha256:d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c
-    # via huggingface-hub, lazy-loader, pooch, qwen-omni-utils, transformers, x-transformers
+    # via huggingface-hub, lazy-loader, pooch, qwen-omni-utils, transformers
 pillow==13.0.0 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
     --hash=sha256:02464da86f561f410e13b061ec37c3068a9cb557a095494157742d07b3c24a27 \
     --hash=sha256:04a63720f79e22fd54d897c233a68314c50ca0603360f54ce2bd5db8f0f43782 \
@@ -1514,7 +1446,7 @@ scipy==1.17.1 ; python_full_version < '3.12' and platform_machine == 'arm64' and
     --hash=sha256:f590cd684941912d10becc07325a3eeb77886fe981415660d9265c4c418d0bea \
     --hash=sha256:f8885db0bc2bffa59d5c1b72fad7a6a92d3e80e7257f967dd81abb553a90d293 \
     --hash=sha256:fcb310ddb270a06114bb64bbe53c94926b943f5b7f0842194d585c65eb4edd76
-    # via librosa, scikit-learn, torchdiffeq
+    # via librosa, scikit-learn
 scipy==1.18.1 ; python_full_version >= '3.12' and platform_machine == 'arm64' and sys_platform == 'darwin' \
     --hash=sha256:011413b7426b75012840e35649e00fe0a2c3bae89fed433876e3a99251572efc \
     --hash=sha256:0ac49ea97594532dd44b7136094d35f5440fa06e6d9c6384a74c01764df388c5 \
@@ -1577,7 +1509,7 @@ scipy==1.18.1 ; python_full_version >= '3.12' and platform_machine == 'arm64' an
     --hash=sha256:f29633129f9fa7e88a3f0fca835de2d030bfc9643f7799e1a0c46cee24d38fc7 \
     --hash=sha256:f55fa87b6c612ecd6b058f167c53231b1d14e412efe361d3d6e38b3631c73218 \
     --hash=sha256:fdaf5ea890a6183d0565f51a61799d67081bd5b1cf03c5f4b3fd3732108625c9
-    # via librosa, scikit-learn, torchdiffeq
+    # via librosa, scikit-learn
 setuptools==84.2.1 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
     --hash=sha256:3ff8b3b5492a0aa66960f4419365a86b84e013070d4313e4d4a6894f5d64d6bc \
     --hash=sha256:ca140b45d5325a9478f880e351484f62fef15f336462e449ca0c03c873d589c2
@@ -1628,7 +1560,7 @@ soxr==1.1.0 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
 sympy==1.14.0 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
     --hash=sha256:d3d3fe8df1e5a0b42f0e7bdf50541697dbe7d23746e894990c030e2b05e72517 \
     --hash=sha256:e091cc3e99d2141a0ba2847328f5479b05d94a6635cb96148ccb3f34671bd8f5
-    # via einx, torch
+    # via torch
 threadpoolctl==3.7.0 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
     --hash=sha256:61348cfb77d53b9242e0017029244b559b810c142ced65b4e21eeca1843959a7 \
     --hash=sha256:cd8b60b5641b45c67bbf73c64c843235fc2d8a480c87389f52f5dbee893b86be
@@ -1688,21 +1620,7 @@ torch==2.15.0 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
     --hash=sha256:f2bd0a3709a7493a6ef2ac5a654111242a854439f7558f910b6b653b56f7504d \
     --hash=sha256:fbefd73b521d3c75c5a1d7c77056b2c6339b81468d14d4e33c55f525418a5855 \
     --hash=sha256:fbf74b432a5c1cac0824af3d482ecc64a0a8187a3d58cc6733efe349697daac4
-    # via torch-einops-utils, torchaudio, torchdiffeq, torchvision, x-transformers, -r requirements-auk-mlx.txt
-torch-einops-utils==0.2.4 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
-    --hash=sha256:068b40e5a53528ba6c1484f065ebbcda9f5d525ab00016484246f6a4c19241b1 \
-    --hash=sha256:ad31b62f543ed3e319381e678a14b238ae032c5e8d9c8abfa4176000af2ba874
-    # via x-transformers
-torchaudio==2.11.1 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
-    --hash=sha256:0173b5b51e1368aa88de3cbe4e98508b5e9df4d8d59356c4e1fbc830c96191ef \
-    --hash=sha256:46ea71634d181f797370f046075ea982043c228b38d674fd7d9fc1c855a37b6a \
-    --hash=sha256:917667ab3e357d286b0e2405a33dc538e4344d554b72e1b2b03382a4352ca857 \
-    --hash=sha256:ad1175202b5cdb7585a38c1330845430e128c4ed8ceb770639318aa40fc1994b
-    # via -r requirements-auk-mlx.txt
-torchdiffeq==0.2.5 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
-    --hash=sha256:aa1db4bed13bd04952f28a53cdf4336d1ab60417c1d9698d7a239fec1cf2bcf8 \
-    --hash=sha256:b50d3760d13fd138dcceac651f4b80396f44fefcebd037a033fecfeaa9cc12e7
-    # via -r requirements-auk-mlx.txt
+    # via torchvision, -r requirements-auk-mlx.txt
 torchvision==0.29.2 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
     --hash=sha256:0875f7a23bd298813240f716c56df44ce72ddb45146589442a38edd0e1f59637 \
     --hash=sha256:5812c312d4401c3587a045fa4c6228d982ebc4faa9b472275d11afe5852e24f9 \
@@ -1733,7 +1651,3 @@ urllib3==2.8.0 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
     --hash=sha256:0cf3cae568d36aa9576b28dfb35f11328f1cb974ca7647d9475ebb86c75ac6e3 \
     --hash=sha256:63bf2ead4c879426ebf22ef2a781eeb4aa3b4ae798a0435506f8687fd5bb9b63
     # via requests
-x-transformers==2.31.11 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
-    --hash=sha256:43bdc1d4016c1b7fc99fea11c8f6d89fa774b413229971ee1264f0ea7d103c29 \
-    --hash=sha256:faf0b862d9e892a81a0760b617ca40438b6d691fee961949318e0eda57491df5
-    # via -r requirements-auk-mlx.txt
