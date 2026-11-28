@@ -98,7 +98,7 @@ vi.mock('../notifications.js', () => ({
 }));
 vi.mock('../brainTaskThreads.js', () => ({ reconcileCleanupThreads: vi.fn(async () => ({ candidates: 0, archived: 0 })) }));
 vi.mock('../../lib/execGit.js', () => ({ execGit: vi.fn() }));
-vi.mock('fs', () => ({ existsSync: vi.fn().mockReturnValue(false) }));
+vi.mock('fs', async (original) => ({ ...await original(), existsSync: vi.fn().mockReturnValue(false) }));
 vi.mock('../cos/cosState.js', async (importOriginal) => {
   const actual = await importOriginal();
   return {

@@ -634,12 +634,16 @@ describe('resolveFailedTaskDecision', () => {
     });
 
     it('blocks once failureCount reaches MAX_TASK_RETRIES', () => {
-      const decision = resolveFailedTaskDecision(task({ failureCount: MAX_TASK_RETRIES - 1 }), { actionable: false, category: 'network-error', message: 'Network failed' });
+      const decision = resolveFailedTaskDecision(
+        task({ failureCount: MAX_TASK_RETRIES - 1, lastErrorCategory: 'task-blocked' }),
+        { actionable: false, category: 'network-error', message: 'Network failed' }
+      );
       expect(decision.status).toBe('blocked');
       expect(decision.metadataUpdates.failureCount).toBe(MAX_TASK_RETRIES);
       expect(decision.metadataUpdates.blockedReason).toContain('Max retries exceeded');
       expect(decision.metadataUpdates.blockedCategory).toBe('network-error');
       expect(decision.investigationAnalysis.message).toContain(`failed ${MAX_TASK_RETRIES} times`);
+      expect(decision.investigationAnalysis.suggestedFix).toContain('The latest failure was classified as network-error.');
     });
 
     it('blocks on the total-spawn ceiling even when the retry count is low (the gap the inline copy missed)', () => {

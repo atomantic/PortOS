@@ -376,6 +376,8 @@ export default function MakingOfStage({ board }) {
                 post={post}
                 items={items}
                 busy={busy}
+                projectName={project.name}
+                publishedVideoXUrl={project.publishKit?.posts?.x?.url || ''}
                 defaultEditing={post.id === recentlyCreatedPostId}
                 xDraft={xDrafts.drafts[post.id] || null}
                 xDraftBusy={xDrafts.busy[post.id] || null}

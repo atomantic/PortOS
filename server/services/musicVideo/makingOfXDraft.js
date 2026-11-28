@@ -15,6 +15,7 @@ import { PATHS } from '../../lib/fileUtils.js';
 import { safeUnder } from '../../lib/ffmpeg.js';
 import {
   MAKING_OF_X_MAX_MEDIA_PER_POST,
+  buildMakingOfVideoLinkPost,
   normalizeMakingOfStory,
   resolveMakingOfPostParts,
 } from '../../lib/musicVideo/musicVideoMakingOfStory.js';
@@ -150,7 +151,17 @@ export async function buildMakingOfXThreadPayload(post, items, deps = {}) {
     attachments += mediaFiles.length;
     posts.push(mediaFiles.length ? { text: part.text, mediaFiles } : { text: part.text });
   }
-  return { posts, attachments };
+  let videoLink = null;
+  if (deps.includeVideoLink && deps.videoXUrl) {
+    const trimmedUrl = String(deps.videoXUrl).trim();
+    const alreadyLinked = posts.some((entry) => entry.text.includes(trimmedUrl));
+    const closingText = alreadyLinked ? null : buildMakingOfVideoLinkPost(deps.projectName, trimmedUrl);
+    if (closingText) {
+      posts.push({ text: closingText });
+      videoLink = trimmedUrl;
+    }
+  }
+  return { posts, attachments, videoLink };
 }
 
 /**
@@ -172,7 +183,12 @@ export async function prepareMakingOfXDraft(projectId, postId, options = {}, dep
   }
 
   const platforms = deps.platforms || await getPublishPlatforms();
-  const payload = await buildMakingOfXThreadPayload(post, story.items, deps);
+  const payload = await buildMakingOfXThreadPayload(post, story.items, {
+    ...deps,
+    includeVideoLink: options.includeVideoLink === true,
+    projectName: project.name,
+    videoXUrl: project.publishKit?.posts?.x?.url || '',
+  });
   const adapter = deps.adapter || xAdapter;
 
   const progress = (state, message) => musicVideoEvents.emit('making-of-draft', { projectId, postId, state, message });
@@ -198,6 +214,7 @@ export async function prepareMakingOfXDraft(projectId, postId, options = {}, dep
         ...adapterSummary,
         attachments: payload.attachments,
         mediaPerPost: payload.posts.map((entry) => entry.mediaFiles?.length || 0),
+        ...(payload.videoLink ? { videoLink: payload.videoLink } : {}),
       };
       const shot = await page.screenshot({ type: 'jpeg', quality: 70 }).catch(() => null);
       const id = `mvmof-${randomUUID()}`;

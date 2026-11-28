@@ -53,6 +53,24 @@ import {
 } from './tuiHandshake.js';
 
 const NO_MCP_BOOT = Object.freeze({ active: false });
+const WINDOWS_CODEX_MS_PER_CODE_UNIT = 2;
+const WINDOWS_CODEX_MAX_COMMIT_MS = 150000;
+const CODEX_PASTE_CHIP_PATTERN = /\[Pasted\s*Content\s*(\d+)\s*chars\](?:[ \t]*#(\d+))?/gi;
+
+// Native Codex reads ConPTY input records one character at a time. A task-sized
+// paste can take over a minute to drain and may render as separate paste chips.
+// The numeric suffix distinguishes equal-sized chips from ordinary repaints.
+function countCodexPastedCharacters(buffer, promptChipSizes) {
+  const counts = new Map();
+  for (const [, size, suffix] of buffer.matchAll(CODEX_PASTE_CHIP_PATTERN)) {
+    const chars = Number(size);
+    if (promptChipSizes.has(chars)) continue;
+    counts.set(chars, Math.max(counts.get(chars) || 0, Number(suffix ?? 1)));
+  }
+  let total = 0;
+  for (const [size, count] of counts) total += size * count;
+  return total;
+}
 
 /**
  * @param {object} options
@@ -107,15 +125,27 @@ export function createPasteSubmitDriver({
   logError = (message) => console.error(message),
 }) {
   const codexSettle = settleRule === 'codex';
+  const windowsCommitMs = codexSettle && process.platform === 'win32'
+    ? Math.min(prompt.length * WINDOWS_CODEX_MS_PER_CODE_UNIT, WINDOWS_CODEX_MAX_COMMIT_MS)
+    : 0;
+  const slowWindowsPaste = windowsCommitMs > PASTE_COMMIT_PATIENCE_MS;
+  // ConPTY can deliver CR and LF as two separate key events. Use the same line
+  // endings Codex's paste handler uses and count Unicode scalar values as it does.
+  const pasteText = slowWindowsPaste ? prompt.replace(/\r\n?/g, '\n') : prompt;
+  const expectedChars = slowWindowsPaste ? [...pasteText].length : 0;
   // Markers already present in the prompt itself (a transcript-analysis task can
   // echo `[Pasted text #N]` back). The commit fast path waits for the TUI's OWN
   // marker — the count must EXCEED this — so an echoed marker can't fire the
   // submit Enters mid-reflow (#1229 review). Counted on the STRIPPED prompt so a
   // cursor-positioned marker in a raw transcript counts the way it echoes back.
-  const promptMarkerCount = countPasteMarkers(stripAnsi(prompt));
+  const strippedPrompt = stripAnsi(prompt);
+  const promptMarkerCount = countPasteMarkers(strippedPrompt);
+  // Literal examples in the prompt cannot establish how many characters landed.
+  const promptChipSizes = slowWindowsPaste
+    ? new Set(Array.from(strippedPrompt.matchAll(CODEX_PASTE_CHIP_PATTERN), ([, size]) => Number(size)))
+    : null;
   // One verification target for every attempt (#2192).
   const verifiablePrefix = extractVerifiablePromptPrefix(prompt);
-  const pasteConfirmed = (buffer) => isPasteConfirmed(buffer, { verifiablePrefix, promptMarkerCount });
   // isPasteConfirmed minus its "nothing to verify against" pass: the commit wait
   // keeps WAITING for a short prompt that has not visibly landed. Memoized on
   // buffer identity — the poll re-asks every PASTE_MARKER_POLL_MS for up to
@@ -123,13 +153,22 @@ export function createPasteSubmitDriver({
   // only rebound when output arrives.
   let lastCommitBuffer = null;
   let lastCommitVerdict = false;
+  let visiblePasteChars = 0;
   const pasteCommitted = (buffer) => {
     if (buffer !== lastCommitBuffer) {
       lastCommitBuffer = buffer;
-      lastCommitVerdict = isPasteCommitted(buffer, { verifiablePrefix, promptMarkerCount });
+      if (promptChipSizes) {
+        visiblePasteChars = countCodexPastedCharacters(buffer, promptChipSizes);
+        lastCommitVerdict = visiblePasteChars === expectedChars;
+      } else {
+        lastCommitVerdict = isPasteCommitted(buffer, { verifiablePrefix, promptMarkerCount });
+      }
     }
     return lastCommitVerdict;
   };
+  const pasteConfirmed = (buffer) => slowWindowsPaste
+    ? pasteCommitted(buffer)
+    : isPasteConfirmed(buffer, { verifiablePrefix, promptMarkerCount });
 
   // Paste-confirmation state:
   //   idle            no attempt in flight; incoming output is ignored
@@ -259,7 +298,7 @@ export function createPasteSubmitDriver({
     pasteState.buffer = '';
     pasteState.lastOutputAt = Date.now();
     try {
-      write(`\x1b[200~${prompt}\x1b[201~`);
+      write(`\x1b[200~${pasteText}\x1b[201~`);
     } catch (err) {
       clearPaste();
       fail('write-failed', `Failed to write prompt: ${err.message}`);
@@ -273,7 +312,13 @@ export function createPasteSubmitDriver({
     // time window at a fixed cadence (MCP_BOOT_PASTE_DEADLINE_MS).
     const retryOrFailPaste = () => {
       if (isFinalized()) return;
-      const bootActive = mcpBoot.active;
+      if (slowWindowsPaste && (visiblePasteChars > 0
+        || isPasteCommitted(pasteState.buffer, { verifiablePrefix, promptMarkerCount }))) {
+        clearPaste();
+        fail('paste-not-rendered', 'Codex did not confirm the full Windows TUI paste. No prompt was submitted.');
+        return;
+      }
+      const bootActive = mcpBoot.active && !slowWindowsPaste;
       const sinceFirst = Date.now() - firstPasteStartedAt;
       const withinBudget = bootActive
         ? sinceFirst < MCP_BOOT_PASTE_DEADLINE_MS
@@ -302,15 +347,18 @@ export function createPasteSubmitDriver({
       clearPaste();
       fail('paste-not-rendered', bootActive
         ? `${command} did not finish booting its MCP servers within ${seconds}s, so the prompt was never delivered. A slow or hung MCP server in your ~/.codex config (e.g. playwright via npx, or a node_repl) blocks codex from accepting input — disable or fix it, or remove it for headless runs.`
-        : `${command} was still initializing and the paste was silently swallowed. The prompt never appeared in the TUI buffer after ${attemptNum} attempts.`);
+        : `${command} did not confirm the prompt in the TUI buffer after ${attemptNum} attempts. No prompt was submitted.`);
     };
 
     const pasteSentAt = Date.now();
-    // Read live: codex's MCP-boot banner can latch after the paste went out, and
-    // a swallowing codex must not spend the patient window.
-    const commitWaitMs = () => (codexSettle && attemptNum <= 1 && !mcpBoot.active
-      ? PASTE_COMMIT_PATIENCE_MS
-      : PASTE_TO_ENTER_FALLBACK_MS);
+    // The MCP banner can latch after the write. A large Windows paste still
+    // needs time to drain even if an earlier repaint showed that banner.
+    const commitWaitMs = () => {
+      if (slowWindowsPaste) return windowsCommitMs;
+      return codexSettle && attemptNum === 1 && !mcpBoot.active
+        ? PASTE_COMMIT_PATIENCE_MS
+        : PASTE_TO_ENTER_FALLBACK_MS;
+    };
     pasteEnterTimer = setInterval(() => {
       if (isFinalized()) {
         clearInterval(pasteEnterTimer);

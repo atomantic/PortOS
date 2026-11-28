@@ -658,6 +658,9 @@ function cachedStoreOwner(path, loadOwner) {
  *   refuses a busy daemon/mind/agent with `COS_RESTORE_BUSY`.
  * - The media registry refuses edits for the whole hold and is acquired after
  *   CoS, so its write fence never outlives a refused CoS restore.
+ * - Taste answer and summary writes acquire the backup lease, then the taste
+ *   profile queue, then `metaMutex` while publishing `AESTHETICS.md`, so the
+ *   taste profile owner precedes `digital twin` (`metaMutex`).
  * - Journal edits acquire the Brain record queue, which can append to the
  *   sync log. Bridge commits only read Brain records and journal locations.
  * - Apple Health admission is acquired last, for the same reason: it closes
@@ -732,6 +735,7 @@ const LIVE_FILE_RESTORE_OWNERS = Object.freeze([
       return withLiveGenomeRestore(inner);
     },
   },
+  cachedStoreOwner('digital-twin/taste-profile.json', () => import('../taste-questionnaire.js')),
   {
     name: 'digital twin',
     refreshLabel: 'digital twin cache invalidation',
@@ -743,7 +747,6 @@ const LIVE_FILE_RESTORE_OWNERS = Object.freeze([
   },
   cachedStoreOwner('digital-twin/social-accounts.json', () => import('../socialAccounts.js')),
   cachedStoreOwner('digital-twin/feedback.json', () => import('../feedbackStore.js')),
-  cachedStoreOwner('digital-twin/taste-profile.json', () => import('../taste-questionnaire.js')),
   {
     name: 'voice timers',
     refreshLabel: 'voice timers reload',

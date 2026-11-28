@@ -26,6 +26,7 @@ export {
   MAKING_OF_STORY_LIMITS,
   MAKING_OF_X_MAX_MEDIA_PER_POST,
   autoDistributeMakingOfPartItems,
+  buildMakingOfVideoLinkPost,
   emptyMakingOfStory,
   formatMakingOfPostCopy,
   isMakingOfMediaItem,
@@ -168,6 +169,7 @@ export const makingOfPostPatchSchema = z.object({
 
 export const makingOfXDraftPrepareSchema = z.object({
   again: z.boolean().optional(),
+  includeVideoLink: z.boolean().optional(),
 }).strict();
 
 /** Dedupe items/posts by id and drop dangling post.itemIds / post.partItemIds references. */
