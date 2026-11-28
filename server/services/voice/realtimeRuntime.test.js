@@ -4,7 +4,13 @@ import { join } from 'node:path';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { describeInstall, ensureRealtimeSidecar, realtimeStatus, stopRealtimeSidecar } from './realtimeRuntime.js';
+import {
+  describeInstall,
+  ensureRealtimeSidecar,
+  realtimeStatus,
+  scheduleRealtimeIdleStop,
+  stopRealtimeSidecar,
+} from './realtimeRuntime.js';
 
 const roots = [];
 const tempRoot = () => { const dir = mkdtempSync(join(tmpdir(), 'realtime-')); roots.push(dir); return dir; };
@@ -103,6 +109,74 @@ describe('ensureRealtimeSidecar', () => {
     expect(err.message).toContain('~/.portos/sophon-mac/.venv/bin/python');
     if (osHome && osHome !== '/' && osHome !== '\\') {
       expect(err.message).not.toContain(osHome);
+    }
+  });
+
+  it('restarts the sidecar with SIGTERM when persona or model size changes', async () => {
+    const home = fakeInstall();
+    const firstChild = fakeChild();
+    const secondChild = fakeChild();
+    const launch = vi.fn().mockReturnValueOnce(firstChild).mockReturnValueOnce(secondChild);
+
+    const first = ensureRealtimeSidecar({ home }, { persona: 'Persona A', launch });
+    firstChild.stdout.write('{"ready": true}\n');
+    await first;
+
+    const second = ensureRealtimeSidecar({ home }, { persona: 'Persona B', launch });
+    secondChild.stdout.write('{"ready": true}\n');
+    await second;
+
+    expect(firstChild.kill).toHaveBeenCalledWith('SIGTERM');
+    expect(launch).toHaveBeenCalledTimes(2);
+  });
+
+  it('clears state when the sidecar exits before ready so a retry can launch cleanly', async () => {
+    const home = fakeInstall();
+    const crashed = fakeChild();
+    const healthy = fakeChild();
+    const launch = vi.fn().mockReturnValueOnce(crashed).mockReturnValueOnce(healthy);
+
+    const failed = ensureRealtimeSidecar({ home }, { launch });
+    crashed.emit('close', 1);
+    await expect(failed).rejects.toThrow(/stopped \(exit 1\)/);
+    expect(realtimeStatus({ home }).running).toBe(false);
+
+    const retry = ensureRealtimeSidecar({ home }, { launch });
+    healthy.stdout.write('{"ready": true}\n');
+    await expect(retry).resolves.toMatchObject({
+      url: expect.stringMatching(/^ws:\/\/127\.0\.0\.1:/),
+      token: expect.stringMatching(/^[0-9a-f]{36}$/),
+    });
+    expect(realtimeStatus({ home }).running).toBe(true);
+    expect(launch).toHaveBeenCalledTimes(2);
+  });
+
+  it('stops the sidecar after the idle timer elapses, and cancels the timer on reuse', async () => {
+    vi.useFakeTimers();
+    try {
+      const home = fakeInstall();
+      const child = fakeChild();
+      const launch = vi.fn(() => child);
+
+      const start = ensureRealtimeSidecar({ home }, { launch });
+      child.stdout.write('{"ready": true}\n');
+      await start;
+      expect(realtimeStatus({ home }).running).toBe(true);
+
+      // Reusing the sidecar before the idle timer fires cancels the pending stop.
+      scheduleRealtimeIdleStop(500);
+      vi.advanceTimersByTime(300);
+      await ensureRealtimeSidecar({ home }, { launch });
+      vi.advanceTimersByTime(300);
+      expect(child.kill).not.toHaveBeenCalled();
+
+      // Once idle without reuse, SIGTERM frees the sidecar and running flips false.
+      scheduleRealtimeIdleStop(500);
+      vi.advanceTimersByTime(500);
+      expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+      expect(realtimeStatus({ home }).running).toBe(false);
+    } finally {
+      vi.useRealTimers();
     }
   });
 });

@@ -36,6 +36,7 @@ vi.mock('../services/voice/stt.js', () => ({ transcribe: vi.fn() }));
 // pipeline; stub it so the barge-in test below can observe exactly what
 // signal a call turn was given without a real STT/LLM/TTS round trip.
 vi.mock('../services/voice/pipeline.js', () => ({ runTurn: vi.fn(async () => ({})), warmPromptPrefix: vi.fn(async () => ({})) }));
+vi.mock('../services/voice/realtimeSession.js', () => ({ openRealtimeCall: vi.fn() }));
 // Partial-mock the call session so one test can make detachHost() reject the
 // way a failing teardown does. endCall()'s own hangup/journal/mind steps are
 // each internally guarded, so no dependency seam can force that rejection from
@@ -66,6 +67,7 @@ const {
 const { transcribe } = await import('../services/voice/stt.js');
 const { synthesize } = await import('../services/voice/tts.js');
 const { runTurn, warmPromptPrefix } = await import('../services/voice/pipeline.js');
+const { openRealtimeCall } = await import('../services/voice/realtimeSession.js');
 const { isAuthEnabled, verifyRequestSession } = await import('../services/auth.js');
 const { PEER_SOCKET_ROOM } = await import('../services/socketIo.js');
 const { getVoiceConfig } = await import('../services/voice/config.js');
@@ -1326,4 +1328,190 @@ describe('voice host startup cancellation', () => {
     expect(getState().hostAttached).toBe(true);
   });
 
+});
+
+describe('realtime speech-to-speech voice call', () => {
+  const makeSession = () => ({
+    pushAudio: vi.fn(),
+    interrupt: vi.fn(),
+    close: vi.fn(),
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getVoiceConfig.mockResolvedValue({ enabled: true, realtime: { enabled: true, size: '4B' } });
+  });
+
+  it.each([
+    ['voice disabled', { enabled: false, realtime: { enabled: true } }],
+    ['realtime disabled', { enabled: true, realtime: { enabled: false } }],
+    ['realtime omitted', { enabled: true }],
+  ])('refuses voice:realtime:start when %s without opening a sidecar', async (_label, cfg) => {
+    getVoiceConfig.mockResolvedValue(cfg);
+    const socket = makeFakeSocket();
+    registerVoiceHandlers(socket);
+
+    await socket.fire('voice:realtime:start');
+
+    expect(openRealtimeCall).not.toHaveBeenCalled();
+    expect(socket.emitted).toContainEqual({
+      event: 'voice:realtime:state',
+      payload: { active: false, error: 'Realtime voice is turned off in Voice settings.' },
+    });
+  });
+
+  it('starts one session, relays valid PCM frames, forwards interrupts, and tears down on stop or disconnect', async () => {
+    const session = makeSession();
+    openRealtimeCall.mockResolvedValue(session);
+    const socket = makeFakeSocket();
+    registerVoiceHandlers(socket);
+
+    await socket.fire('voice:realtime:start');
+    await socket.fire('voice:realtime:start'); // duplicate start ignored while active
+
+    expect(openRealtimeCall).toHaveBeenCalledTimes(1);
+    expect(socket.emitted).toContainEqual({
+      event: 'voice:realtime:state',
+      payload: { active: false, loading: true },
+    });
+
+    const buf = Buffer.from([1, 2, 3, 4]);
+    socket.fire('voice:realtime:audio', { pcm: buf });
+    const view = new Uint8Array([9, 10, 11, 12]).subarray(1, 3);
+    socket.fire('voice:realtime:audio', { pcm: view });
+    // Empty and oversized frames are dropped before reaching the sidecar.
+    socket.fire('voice:realtime:audio', { pcm: Buffer.alloc(0) });
+    socket.fire('voice:realtime:audio', { pcm: Buffer.alloc(65 * 1024) });
+
+    expect(session.pushAudio).toHaveBeenCalledTimes(2);
+    expect(session.pushAudio.mock.calls[0][0]).toEqual(buf);
+    expect(session.pushAudio.mock.calls[1][0]).toEqual(Buffer.from([10, 11]));
+
+    socket.fire('voice:realtime:interrupt');
+    expect(session.interrupt).toHaveBeenCalledTimes(1);
+
+    socket.fire('voice:realtime:stop');
+    expect(session.close).toHaveBeenCalledTimes(1);
+
+    // After stop, audio/interrupt no-op and disconnect does not double-close.
+    socket.fire('voice:realtime:audio', { pcm: buf });
+    socket.fire('voice:realtime:interrupt');
+    socket.fire('disconnect');
+    expect(session.pushAudio).toHaveBeenCalledTimes(2);
+    expect(session.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('closes an active realtime session on socket disconnect', async () => {
+    const session = makeSession();
+    openRealtimeCall.mockResolvedValue(session);
+    const socket = makeFakeSocket();
+    registerVoiceHandlers(socket);
+
+    await socket.fire('voice:realtime:start');
+    socket.fire('disconnect');
+    expect(session.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('delegates tool turns text-only, filters speech/transcript events, and aborts in-flight turns on hang-up', async () => {
+    const session = makeSession();
+    let capturedDelegate;
+    openRealtimeCall.mockImplementation(async ({ runDelegate }) => {
+      capturedDelegate = runDelegate;
+      return session;
+    });
+    runTurn.mockImplementationOnce(async ({ emit, speak, source, text, signal }) => {
+      expect(speak).toBe(false);
+      expect(source).toBe('delegate');
+      expect(text).toBe('Open dashboard');
+      expect(signal.aborted).toBe(false);
+      // Dropped events must not reach the browser tab during a realtime call.
+      emit('voice:tts:audio', { wav: Buffer.from('x') });
+      emit('voice:transcript', { text: 'Open dashboard' });
+      emit('voice:llm:delta', { text: 'Opening' });
+      emit('voice:llm:done', { text: 'Opening' });
+      emit('voice:llm:loading', { loading: true });
+      emit('voice:idle', {});
+      // Tool side effects must pass through.
+      emit('voice:navigate', { path: '/dashboard' });
+      emit('voice:tool', { name: 'navigate' });
+      return { reply: 'Opened the dashboard.' };
+    });
+
+    const socket = makeFakeSocket();
+    registerVoiceHandlers(socket);
+    await socket.fire('voice:realtime:start');
+
+    const reply = await capturedDelegate('Open dashboard');
+    expect(reply).toBe('Opened the dashboard.');
+    const events = socket.emitted.map((e) => e.event);
+    expect(events).toContain('voice:navigate');
+    expect(events).toContain('voice:tool');
+    expect(events).not.toContain('voice:tts:audio');
+    expect(events).not.toContain('voice:transcript');
+    expect(events).not.toContain('voice:llm:delta');
+    expect(events).not.toContain('voice:llm:done');
+    expect(events).not.toContain('voice:llm:loading');
+    expect(events).not.toContain('voice:idle');
+
+    // Hanging up mid-delegate aborts the turn signal and suppresses post-hangup emissions.
+    let resolveTurn;
+    let turnSignal;
+    let turnEmit;
+    runTurn.mockImplementationOnce(({ signal, emit }) => {
+      turnSignal = signal;
+      turnEmit = emit;
+      return new Promise((resolve) => { resolveTurn = resolve; });
+    });
+    const inFlight = capturedDelegate('Long running tool');
+    await vi.waitFor(() => expect(turnSignal).toBeDefined());
+    socket.fire('voice:realtime:stop');
+    expect(turnSignal.aborted).toBe(true);
+    turnEmit('voice:navigate', { path: '/after-hangup' });
+    resolveTurn({ reply: 'Too late' });
+    await expect(inFlight).resolves.toBe('');
+    expect(socket.emitted.filter((e) => e.event === 'voice:navigate')).toHaveLength(1);
+    // Calling delegate after hang-up returns empty without invoking runTurn.
+    await expect(capturedDelegate('After close')).resolves.toBe('');
+    expect(runTurn).toHaveBeenCalledTimes(2);
+  });
+
+  it('closes a late-resolved session and ignores stale rejections when the user hangs up while loading', async () => {
+    let resolveOpen;
+    openRealtimeCall.mockImplementationOnce(() => new Promise((resolve) => { resolveOpen = resolve; }));
+    const socket = makeFakeSocket();
+    registerVoiceHandlers(socket);
+
+    const starting = socket.fire('voice:realtime:start');
+    await vi.waitFor(() => expect(openRealtimeCall).toHaveBeenCalledTimes(1));
+    socket.fire('voice:realtime:stop');
+    const lateSession = makeSession();
+    resolveOpen(lateSession);
+    await starting;
+    expect(lateSession.close).toHaveBeenCalledTimes(1);
+
+    // Hang-up during getVoiceConfig never starts the sidecar at all.
+    let resolveCfg;
+    getVoiceConfig.mockImplementationOnce(() => new Promise((resolve) => { resolveCfg = resolve; }));
+    const abortedStart = socket.fire('voice:realtime:start');
+    socket.fire('voice:realtime:stop');
+    resolveCfg({ enabled: true, realtime: { enabled: true } });
+    await abortedStart;
+    expect(openRealtimeCall).toHaveBeenCalledTimes(1);
+
+    // A superseded opening rejection must not emit an error or clobber a newer start.
+    let rejectFirst;
+    openRealtimeCall.mockImplementationOnce(() => new Promise((_, reject) => { rejectFirst = reject; }));
+    const secondSession = makeSession();
+    openRealtimeCall.mockResolvedValueOnce(secondSession);
+    const first = socket.fire('voice:realtime:start');
+    await vi.waitFor(() => expect(rejectFirst).toBeDefined());
+    socket.fire('voice:realtime:stop');
+    await socket.fire('voice:realtime:start');
+    rejectFirst(new Error('stale sidecar closed'));
+    await first;
+
+    expect(socket.emitted.filter((e) => e.event === 'voice:realtime:state' && e.payload?.error)).toEqual([]);
+    socket.fire('voice:realtime:interrupt');
+    expect(secondSession.interrupt).toHaveBeenCalledTimes(1);
+  });
 });

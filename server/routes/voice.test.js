@@ -7,6 +7,10 @@ const { request } = await import('../lib/testHelper.js');
 vi.mock('../lib/uploadLimits.js', async (importActual) => ({ ...(await importActual()), MAX_BASE64_UPLOAD_BYTES: 8 }));
 vi.mock('../services/voice/aukRuntime.js', () => ({ cancelAukSetup: vi.fn() }));
 vi.mock('../services/voice/studio.js', () => ({ createStudioVoice: vi.fn(), assignStudioVoice: vi.fn() }));
+vi.mock('../services/voice/realtimeRuntime.js', () => ({
+  realtimeStatus: vi.fn(),
+  ensureRealtimeSidecar: vi.fn(),
+}));
 
 // Mock all voice service modules before importing the router so the route
 // file's top-level imports resolve to the mocks.
@@ -771,5 +775,56 @@ describe('Voice Studio HTTP contract', () => {
     const valid = await request(app).post('/api/voice/studio/design').send({ label: 'Example', instructions: 'Alto', text: 'Hello' });
     expect(valid.status).toBe(201);
     expect(emit).toHaveBeenCalledWith('voice-studio:changed', {});
+  });
+});
+
+describe('GET /api/voice/realtime/status', () => {
+  it('reports realtime install and running status without starting the sidecar', async () => {
+    const runtime = await import('../services/voice/realtimeRuntime.js');
+    config.getVoiceConfig.mockResolvedValue({
+      ...DEFAULT_CFG,
+      enabled: true,
+      realtime: { enabled: true, home: '/tmp/sophon-mac', size: '4B' },
+    });
+    runtime.realtimeStatus.mockReturnValue({
+      home: '/tmp/sophon-mac',
+      size: '4B',
+      parts: { python: true, engine: true, weights: true },
+      installed: true,
+      running: false,
+    });
+
+    const res = await request(buildApp()).get('/api/voice/realtime/status');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      enabled: true,
+      home: '/tmp/sophon-mac',
+      size: '4B',
+      parts: { python: true, engine: true, weights: true },
+      installed: true,
+      running: false,
+    });
+    expect(runtime.realtimeStatus).toHaveBeenCalledWith({ enabled: true, home: '/tmp/sophon-mac', size: '4B' });
+    expect(runtime.ensureRealtimeSidecar).not.toHaveBeenCalled();
+  });
+
+  it('reports enabled: false when realtime is omitted from config', async () => {
+    const runtime = await import('../services/voice/realtimeRuntime.js');
+    config.getVoiceConfig.mockResolvedValue(DEFAULT_CFG);
+    runtime.realtimeStatus.mockReturnValue({
+      home: '/tmp/sophon-mac',
+      size: '32B',
+      parts: { python: false, engine: false, weights: false },
+      installed: false,
+      running: false,
+    });
+
+    const res = await request(buildApp()).get('/api/voice/realtime/status');
+
+    expect(res.status).toBe(200);
+    expect(res.body.enabled).toBe(false);
+    expect(res.body.installed).toBe(false);
+    expect(runtime.ensureRealtimeSidecar).not.toHaveBeenCalled();
   });
 });
