@@ -108,7 +108,7 @@ export default function VoiceCallConsole({
   voiceLabel, llmProvider, llmModel, onLlmSaved, agentDefaults, volume = 0.85, muted = false, onVolumeChange, onToggleMute,
   sfxEnabled = true, onToggleSfx, signalLevel = 0, visionEnabled = false, onToggleVision, images,
 }) {
-  const { data, error, updateData, refetch } = useAvatarRuntime();
+  const { data, error, updateData, refetch } = useAvatarRuntime(true, { autoStart: true });
   const runningAvatar = Boolean(!error && data?.supported && data.phase === 'running');
   // The on-air channel may run its own LLM; the server reads the same channel.
   const { data: library } = useAvatarLibrary();

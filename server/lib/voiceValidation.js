@@ -15,7 +15,7 @@ import { AVATAR_CHANNEL_COUNT, AVATAR_CHANNEL_LABEL_MAX, CHANNEL_AGENT_LIMITS } 
 export const voicePiperFetchBodySchema = z.object({ voice: nonEmptyString });
 
 export const voiceAvatarCommandSchema = z.object({
-  action: z.enum(['install', 'update', 'cancel', 'start', 'stop', 'uninstall']),
+  action: z.enum(['install', 'update', 'cancel', 'start', 'stop', 'uninstall', 'autostart']),
   acceptTerms: z.literal(true).optional(),
 }).strict();
 
@@ -85,6 +85,9 @@ export const voiceConfigPatchSchema = z.object({
     escalateCritical: z.boolean().optional(),
     escalateAfterMinutes: z.number().int().min(1).max(1440).optional(),
     autoAnswer: z.boolean().optional(),
+  }).partial().optional(),
+  avatar: z.object({
+    autoStart: z.boolean().optional(),
   }).partial().optional(),
   realtime: z.object({
     enabled: z.boolean().optional(),
