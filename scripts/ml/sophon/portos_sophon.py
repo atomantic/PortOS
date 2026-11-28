@@ -52,20 +52,35 @@ TOOL_RE = re.compile(r"<tool_call>\s*(.*?)\s*(?:</tool_call>|$)", re.S)
 
 DELEGATE = {"type": "function", "function": {
     "name": "delegate",
-    "description": "Hand the user's request to the assistant's back office, which can read the clock and date, the weather, the user's "
-                   "calendar, goals, daily log, notes and brain inbox, the server and app status, and can make changes in the PortOS app. "
-                   "It cannot hear the call: write everything it needs in task.",
+    "description": "Hand the user's request to the assistant's back office: a stronger model that reasons carefully, knows far more than "
+                   "you, and can read the clock and date, the weather, the user's calendar, goals, daily log, notes and brain inbox, the "
+                   "server and app status, and make changes in the PortOS app. It cannot hear the call: write everything it needs in task.",
     "parameters": {"type": "object", "properties": {"task": {"type": "string", "description":
-        "The user's full request in their own words, with every detail they said (names, numbers, dates, the exact text to save)."}},
+        "The user's full request exactly as asked, with every detail they said (names, numbers, dates, the exact text to save)."}},
         "required": ["task"]}}}
 
-# The wording the Flash engine's tool prompt uses (sophon_realtime/tools.py SYS_TOOL), which the model follows; the last sentence
-# stops the voice claiming an action or a fact it never got from a tool.
-TOOL_RULES = ("You can call the tools listed above. When you need one: first say one very short spoken phrase about what you're doing "
-              "(e.g. \"Let me check that\"), then immediately output the tool call in the required format; the tool name, arguments and "
-              "format are never spoken, so don't repeat them out loud. When the tool result comes back, tell the user the result in one or "
-              "two natural spoken sentences. For chit-chat or anything you can answer yourself, don't call a tool. Never claim you did "
-              "something, and never state the time, date, a calendar entry, a log entry or a status, unless a tool result told you.")
+# Built on the Flash engine's tool prompt (sophon_realtime/tools.py SYS_TOOL), which the model follows, widened the way Sophon's
+# Live mode does with its "all" back-office scope: the voice is the front of the call and answers only small talk itself, because
+# the back office (the user's Voice model with its tools) knows and reasons far better than the voice model does.
+TOOL_RULES = ("You are the voice on the call; a back office does the thinking. You can call the tool listed above. Answer only small "
+              "talk yourself: greetings, thanks, acknowledgements, and short social replies. For everything else (any question that needs "
+              "a fact, knowledge, advice, reasoning, a recommendation, the time or date, the user's own data, or an action) first say one "
+              "very short spoken lead-in (e.g. \"Let me check that\" or \"Let me think about that\"), then immediately call delegate "
+              "with the user's full request; the tool name, arguments and format are never spoken, so don't repeat them out loud. When the "
+              "tool result comes back, tell the user that result in one or two natural spoken sentences, keeping its facts exactly. Never "
+              "claim you did something, and never answer a factual question from your own knowledge.")
+
+
+TRANSCRIBE_ASK = "Write down exactly what the user said in this audio, word for word. Output only their words."
+# A reply that announces a lookup or claims an action. When the voice says one of these without calling delegate, the sidecar
+# delegates for it (see ToolSession._run_reply).
+LEADIN_RE = re.compile(r"\b(let me (check|think|look|see|find|get|pull|open|add|note|save|log)|one (moment|sec|second)|hold on|"
+                       r"i'?ll (check|look|find|get|add|note|save|log|open|set|put|take|pull)|i (will|am going to) (check|look|add|save|log|set)|"
+                       r"i'?ve (added|saved|logged|noted|set|opened|put)|i have (added|saved|logged|noted|set|opened)|checking)\b", re.I)
+
+
+def promises_action(text):
+    return bool(LEADIN_RE.search(text or ""))
 
 
 def cut_tool(text, final=False):
@@ -140,6 +155,23 @@ class ToolBrain(Brain):
             elif h.get("a_text"):
                 msgs.append({"role": "assistant", "content": h["a_text"]})
         return msgs, audios
+
+    def transcribe(self, key, audio, max_tok=80):
+        """What the user said, word for word, read back by the thinker from the audio it already embedded. Runs in its own
+        KV cache so the conversation's cached prefix is untouched."""
+        msgs = [{"role": "user", "content": "<|audio|>\n\n" + TRANSCRIBE_ASK}]
+        s = self.tok.apply_chat_template(msgs, add_generation_prompt=True, tokenize=False, enable_thinking=False)
+        head, tail = s.split("<|audio|>", 1)
+        h = self.tok.encode(head, add_special_tokens=False); t = self.tok.encode(tail, add_special_tokens=False)
+        e = self.embed(key, audio).astype(mx.bfloat16)
+        ids = h + [engine.AUD] * e.shape[0] + t
+        E = mx.concatenate([self.lm.model.embed_tokens(mx.array(h)), e, self.lm.model.embed_tokens(mx.array(t))])
+        cache = engine.make_prompt_cache(self.lm)
+        self.lm(mx.array([ids[:-1]]), cache=cache, input_embeddings=E[:-1][None]); mx.eval([c.state for c in cache])
+        out = ""
+        for r in _stream_generate(self.lm, self.tok, mx.array(ids[-1:]), input_embeddings=E[-1:], prompt_cache=cache, max_tokens=max_tok):
+            out += r.text
+        return " ".join(out.replace("<|im_end|>", "").split()).strip().strip('"')
 
     def followup(self, history, emit, cancelled):
         """Speak the reply that follows a tool result: the same streaming as Brain.reply, from the history alone (no new user audio)."""
@@ -220,6 +252,13 @@ class ToolSession(Session):
     def _run_reply(self, r):
         super()._run_reply(r)
         calls = parse_calls(self.b.last_raw)
+        if not calls and not r.get("cancel") and r.get("user") is not None and promises_action(cut_tool(self.b.last_raw, True)):
+            # The voice said "Let me check" (or claimed an action) and then ended its turn without calling the tool, which the
+            # Mac build does often. Hand off what the user actually said, read back from their audio by the same model.
+            heard = self.b.transcribe(r["ukey"], r["user"])
+            if heard:
+                calls = [{"id": uuid.uuid4().hex[:12], "name": "delegate", "arguments": {"task": heard}}]
+                self.ev("delegate_fallback", said=cut_tool(self.b.last_raw, True)[:120], heard=heard[:200])
         with self.lock:
             e = r.get("entry")
             if e is not None: e["a_text"] = cut_tool(e.get("a_text") or "", True).strip()   # history keeps the spoken part only
