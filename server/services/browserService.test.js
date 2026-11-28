@@ -100,6 +100,34 @@ describe('browserService config persistence', () => {
     expect(reloaded.headless).toBe(false);
   });
 
+  it('keeps cached config unchanged when atomicWrite fails', async () => {
+    let failWrite = false;
+    vi.doMock('../lib/fileUtils.js', async (importOriginal) => {
+      const actual = await importOriginal();
+      const proxied = makePathsProxy(actual, {
+        dataRoot: tempRoot,
+        extraOverrides: (root) => ({ browserDownloads: join(root, 'downloads') }),
+      });
+      return {
+        ...proxied,
+        atomicWrite: vi.fn(async (...args) => {
+          if (failWrite) throw new Error('ENOSPC: no space left on device');
+          return actual.atomicWrite(...args);
+        }),
+      };
+    });
+    const service = await import('./browserService.js');
+    await service.saveConfig({ cdpPort: 5556, headless: false });
+
+    failWrite = true;
+    await expect(service.updateConfig({ cdpPort: 6111, headless: true }))
+      .rejects.toThrow('ENOSPC: no space left on device');
+
+    const loaded = await service.getConfig();
+    expect(loaded.cdpPort).toBe(5556);
+    expect(loaded.headless).toBe(false);
+  });
+
   it('refuses lifecycle and config changes while a restart review is in progress', async () => {
     const service = await importService();
     let finish;
