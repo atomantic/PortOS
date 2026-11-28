@@ -81,6 +81,44 @@ describe('openRealtimeCall', () => {
     ws.close();
     await expect(pending).rejects.toThrow('closed before it was ready');
   });
+
+  it('aborts cleanly during ready without emitting active state', async () => {
+    const ws = new FakeSocket();
+    const emit = vi.fn();
+    const ctrl = new AbortController();
+    const pending = openRealtimeCall({
+      cfg: {},
+      emit,
+      runDelegate: vi.fn(),
+      signal: ctrl.signal,
+      connect: () => ws,
+      ensureSidecar: vi.fn().mockResolvedValue({ url: 'ws://x' }),
+    });
+    await Promise.resolve();
+    ctrl.abort();
+    expect(await pending).toBeNull();
+    expect(emit).not.toHaveBeenCalledWith('voice:realtime:state', expect.anything());
+  });
+
+  it('notifies onClose when the sidecar closes unexpectedly', async () => {
+    const ws = new FakeSocket();
+    const emit = vi.fn();
+    const onClose = vi.fn();
+    const pending = openRealtimeCall({
+      cfg: {},
+      emit,
+      runDelegate: vi.fn(),
+      onClose,
+      connect: () => ws,
+      ensureSidecar: vi.fn().mockResolvedValue({ url: 'ws://x' }),
+    });
+    await Promise.resolve();
+    ws.text({ type: 'ready' });
+    await pending;
+    ws.close();
+    expect(onClose).toHaveBeenCalledWith('sidecar-closed');
+    expect(emit).toHaveBeenCalledWith('voice:realtime:state', { active: false, reason: 'sidecar-closed' });
+  });
 });
 
 describe('realtimePersona', () => {

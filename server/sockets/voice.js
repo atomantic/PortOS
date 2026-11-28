@@ -16,6 +16,10 @@
 // Meeting capture (same page, same audio bridge, no LLM — STT only):
 // Inbound:  voice:capture:start | voice:call:audio | voice:capture:stop
 // Outbound: voice:capture:state
+// Realtime speech-to-speech call:
+// Inbound:  voice:realtime:start | voice:realtime:audio | voice:realtime:interrupt | voice:realtime:stop
+// Outbound: voice:realtime:state | voice:realtime:audio | voice:realtime:interrupt
+//           | voice:realtime:reply | voice:realtime:delegate | voice:realtime:result | voice:realtime:event
 
 import { SOCKET_MEDIA_MAX_BYTES } from '../lib/socketPayloadLimits.js';
 import { socketHasCurrentHostControl } from '../services/authGate.js';
@@ -828,18 +832,19 @@ export const registerVoiceHandlers = (socket) => {
   // regular Voice tool pipeline as a text-only turn, and the voice speaks the
   // result. One realtime call per socket.
   let realtime = null;
-  let realtimeOpening = null;
+  let realtimeStarting = false;
   let realtimeGeneration = 0;
-  // Aborts delegated turns still running when the call ends, so their tool
-  // actions stop and nothing reaches the tab after hang-up.
+  // Aborts startup and delegated turns still running when the call ends, so
+  // tool actions stop and nothing reaches the tab after hang-up or sidecar exit.
   let realtimeCtrl = null;
   const closeRealtime = () => {
     realtimeGeneration += 1;
-    realtimeOpening = null;
+    realtimeStarting = false;
+    const session = realtime;
+    realtime = null;
     realtimeCtrl?.abort();
     realtimeCtrl = null;
-    realtime?.close();
-    realtime = null;
+    session?.close();
   };
   // Pipeline events a delegated turn may send the tab: tool side effects
   // (navigation, UI actions, dictation, errors). Its own speech, transcript and
@@ -866,31 +871,50 @@ export const registerVoiceHandlers = (socket) => {
   };
 
   const startRealtime = async () => {
-    if (realtime || realtimeOpening) return;
-    const generation = ++realtimeGeneration;
+    if (realtime || realtimeStarting) return;
+    realtimeStarting = true;
+    const gen = ++realtimeGeneration;
+    const ctrl = new AbortController();
+    realtimeCtrl = ctrl;
     try {
       const cfg = await getVoiceConfig();
-      if (realtimeGeneration !== generation) return;
+      if (realtimeGeneration !== gen) return;
       if (!cfg.enabled || !cfg.realtime?.enabled) {
-        socket.emit('voice:realtime:state', { active: false, error: 'Realtime voice is turned off in Voice settings.' });
+        realtimeStarting = false;
+        if (realtimeCtrl === ctrl) realtimeCtrl = null;
+        const error = !cfg.enabled
+          ? 'Voice mode is turned off in Voice settings.'
+          : 'Realtime voice is turned off in Voice settings.';
+        socket.emit('voice:realtime:state', { active: false, error });
         return;
       }
-      if (realtime || realtimeOpening) return;
-      realtimeCtrl = new AbortController();
       socket.emit('voice:realtime:state', { active: false, loading: true });
       const { openRealtimeCall } = await import('../services/voice/realtimeSession.js');
-      if (realtimeGeneration !== generation) return;
-      const opening = openRealtimeCall({ cfg, emit: (event, data) => socket.emit(event, data), runDelegate: runRealtimeDelegate });
-      realtimeOpening = opening;
-      const session = await opening;
-      if (realtimeGeneration !== generation || realtimeOpening !== opening) { session.close(); return; }   // hung up while the model was loading
-      realtimeOpening = null;
+      if (realtimeGeneration !== gen) return;
+      const session = await openRealtimeCall({
+        cfg,
+        signal: ctrl.signal,
+        emit: (event, data) => { if (realtimeGeneration === gen) socket.emit(event, data); },
+        runDelegate: runRealtimeDelegate,
+        onClose: () => {
+          if (realtimeGeneration !== gen) return;
+          realtime = null;
+          if (realtimeCtrl === ctrl) {
+            realtimeCtrl = null;
+            ctrl.abort();
+          }
+        },
+      });
+      if (realtimeGeneration !== gen) { session?.close(); return; }
+      realtimeStarting = false;
       realtime = session;
     } catch (err) {
-      if (realtimeGeneration !== generation) return;
-      realtimeOpening = null;
-      realtimeCtrl?.abort();
-      realtimeCtrl = null;
+      if (realtimeGeneration !== gen) return;
+      realtimeStarting = false;
+      if (realtimeCtrl === ctrl) {
+        realtimeCtrl = null;
+        ctrl.abort();
+      }
       console.error(`🗣️ voice:realtime:start failed: ${err.message}`);
       socket.emit('voice:realtime:state', { active: false, error: err.message });
     }

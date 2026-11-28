@@ -1343,10 +1343,10 @@ describe('realtime speech-to-speech voice call', () => {
   });
 
   it.each([
-    ['voice disabled', { enabled: false, realtime: { enabled: true } }],
-    ['realtime disabled', { enabled: true, realtime: { enabled: false } }],
-    ['realtime omitted', { enabled: true }],
-  ])('refuses voice:realtime:start when %s without opening a sidecar', async (_label, cfg) => {
+    ['voice disabled', { enabled: false, realtime: { enabled: true } }, 'Voice mode is turned off in Voice settings.'],
+    ['realtime disabled', { enabled: true, realtime: { enabled: false } }, 'Realtime voice is turned off in Voice settings.'],
+    ['realtime omitted', { enabled: true }, 'Realtime voice is turned off in Voice settings.'],
+  ])('refuses voice:realtime:start when %s without opening a sidecar', async (_label, cfg, expectedError) => {
     getVoiceConfig.mockResolvedValue(cfg);
     const socket = makeFakeSocket();
     registerVoiceHandlers(socket);
@@ -1356,7 +1356,7 @@ describe('realtime speech-to-speech voice call', () => {
     expect(openRealtimeCall).not.toHaveBeenCalled();
     expect(socket.emitted).toContainEqual({
       event: 'voice:realtime:state',
-      payload: { active: false, error: 'Realtime voice is turned off in Voice settings.' },
+      payload: { active: false, error: expectedError },
     });
   });
 
@@ -1513,5 +1513,42 @@ describe('realtime speech-to-speech voice call', () => {
     expect(socket.emitted.filter((e) => e.event === 'voice:realtime:state' && e.payload?.error)).toEqual([]);
     socket.fire('voice:realtime:interrupt');
     expect(secondSession.interrupt).toHaveBeenCalledTimes(1);
+  });
+
+  it('deduplicates concurrent voice:realtime:start while config is loading', async () => {
+    let resolveCfg;
+    getVoiceConfig.mockImplementationOnce(() => new Promise((resolve) => { resolveCfg = resolve; }));
+    openRealtimeCall.mockResolvedValue(makeSession());
+
+    const socket = makeFakeSocket();
+    registerVoiceHandlers(socket);
+    const first = socket.fire('voice:realtime:start');
+    const second = socket.fire('voice:realtime:start');
+    resolveCfg({ enabled: true, realtime: { enabled: true } });
+    await Promise.all([first, second]);
+
+    expect(openRealtimeCall).toHaveBeenCalledTimes(1);
+  });
+
+  it('clears the session, aborts delegated turns, and allows restart after sidecar-closed', async () => {
+    let capturedOpts;
+    openRealtimeCall.mockImplementation(async (opts) => {
+      capturedOpts = opts;
+      return makeSession();
+    });
+
+    const socket = makeFakeSocket();
+    registerVoiceHandlers(socket);
+    await socket.fire('voice:realtime:start');
+    expect(openRealtimeCall).toHaveBeenCalledTimes(1);
+    expect(capturedOpts.signal.aborted).toBe(false);
+
+    // Sidecar closes unexpectedly -> aborts signal and clears active session.
+    capturedOpts.onClose('sidecar-closed');
+    expect(capturedOpts.signal.aborted).toBe(true);
+
+    // A fresh start succeeds without requiring a prior voice:realtime:stop.
+    await socket.fire('voice:realtime:start');
+    expect(openRealtimeCall).toHaveBeenCalledTimes(2);
   });
 });

@@ -24,24 +24,47 @@ export const realtimePersona = (cfg) => {
  * @param {object} args.cfg  merged Voice config
  * @param {(event: string, data?: any) => void} args.emit  to the caller's socket
  * @param {(task: string) => Promise<string>} args.runDelegate  runs one delegated task, resolves the text to speak
+ * @param {AbortSignal} [args.signal]  aborts startup and prevents emitting live state after hang-up
+ * @param {(reason: string) => void} [args.onClose]  called when the session closes (hang-up or sidecar close)
  * @param {Function} [args.connect]  WebSocket factory (tests)
  * @param {Function} [args.ensureSidecar]
  */
-export const openRealtimeCall = async ({ cfg, emit, runDelegate, connect = (url, options) => new WebSocket(url, options), ensureSidecar = ensureRealtimeSidecar }) => {
+export const openRealtimeCall = async ({ cfg, emit, runDelegate, signal, onClose, connect = (url, options) => new WebSocket(url, options), ensureSidecar = ensureRealtimeSidecar }) => {
+  if (signal?.aborted) return null;
   const { url, token } = await ensureSidecar(cfg.realtime, { persona: realtimePersona(cfg) });
+  if (signal?.aborted) {
+    scheduleRealtimeIdleStop();
+    return null;
+  }
   const ws = connect(url, token ? { headers: { Authorization: `Bearer ${token}` } } : undefined);
   ws.binaryType = 'nodebuffer';
   let closed = false;
   const pending = new Set();
 
   const ready = new Promise((resolve, reject) => {
-    const fail = (err) => reject(err instanceof Error ? err : new Error('Realtime voice closed before it was ready'));
+    const cleanup = () => {
+      ws.off('error', fail);
+      ws.off('close', fail);
+      signal?.removeEventListener('abort', onAbort);
+    };
+    const onAbort = () => {
+      cleanup();
+      closed = true;
+      ws.close();
+      scheduleRealtimeIdleStop();
+      resolve(false);
+    };
+    const fail = (err) => {
+      cleanup();
+      reject(err instanceof Error ? err : new Error('Realtime voice closed before it was ready'));
+    };
     ws.once('error', fail);
     ws.once('close', fail);
+    signal?.addEventListener('abort', onAbort, { once: true });
     ws.on('message', function first(data, isBinary) {
       if (isBinary) return;
       try {
-        if (JSON.parse(String(data)).type === 'ready') { ws.off('message', first); ws.off('error', fail); resolve(); }
+        if (JSON.parse(String(data)).type === 'ready') { ws.off('message', first); cleanup(); resolve(true); }
       } catch { /* not JSON: keep waiting */ }
     });
   });
@@ -76,11 +99,20 @@ export const openRealtimeCall = async ({ cfg, emit, runDelegate, connect = (url,
   ws.on('close', () => {
     if (closed) return;
     closed = true;
+    onClose?.('sidecar-closed');
     emit('voice:realtime:state', { active: false, reason: 'sidecar-closed' });
   });
   ws.on('error', (err) => console.log(`🗣️ voice.realtime.socket ${err.message}`));
 
-  await ready;
+  const isReady = await ready;
+  if (!isReady || closed || signal?.aborted) {
+    if (!closed) {
+      closed = true;
+      ws.close();
+      scheduleRealtimeIdleStop();
+    }
+    return null;
+  }
   emit('voice:realtime:state', { active: true });
 
   return {
@@ -96,6 +128,7 @@ export const openRealtimeCall = async ({ cfg, emit, runDelegate, connect = (url,
       closed = true;
       ws.close();
       scheduleRealtimeIdleStop();
+      onClose?.('hangup');
       emit('voice:realtime:state', { active: false, reason: 'hangup' });
     },
   };

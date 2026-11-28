@@ -95,13 +95,16 @@ export default function RealtimeCallPanel({ compact = false }) {
             </span>
           </h2>
         </div>
-        {status?.installed && status.enabled && (live || call.phase === 'loading'
+        {status?.installed && status.enabled && status.voiceEnabled !== false && (live || call.phase === 'loading'
           ? <button type="button" className={button} onClick={hangUp}>Hang up</button>
           : <button type="button" className={button} onClick={start}>Start realtime call</button>)}
       </div>
       <p className="text-xs text-port-text-muted">
         Speech to speech: you can interrupt it, and it hands lookups and actions to your Voice tools. The first call loads the model (about a minute).
       </p>
+      {status?.installed && status.enabled && status.voiceEnabled === false && (
+        <p role="status" className="text-xs text-port-text-muted">Turn on Voice mode in Voice settings to start a realtime call.</p>
+      )}
       {loadError && <p role="alert" className="text-xs text-port-error-text">{loadError}</p>}
       {!status && !loadError && <p role="status" className="text-xs">Checking realtime voice…</p>}
       {status && !status.installed && (

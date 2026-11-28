@@ -799,6 +799,7 @@ describe('GET /api/voice/realtime/status', () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual({
       enabled: true,
+      voiceEnabled: true,
       home: '/tmp/sophon-mac',
       size: '4B',
       parts: { python: true, engine: true, weights: true },
@@ -807,6 +808,29 @@ describe('GET /api/voice/realtime/status', () => {
     });
     expect(runtime.realtimeStatus).toHaveBeenCalledWith({ enabled: true, home: '/tmp/sophon-mac', size: '4B' });
     expect(runtime.ensureRealtimeSidecar).not.toHaveBeenCalled();
+  });
+
+  it('surfaces voiceEnabled: false when top-level Voice mode is off', async () => {
+    const runtime = await import('../services/voice/realtimeRuntime.js');
+    config.getVoiceConfig.mockResolvedValue({ enabled: false, realtime: { enabled: true, size: '4B' } });
+    runtime.realtimeStatus.mockReturnValue({
+      home: '/models/sophon',
+      size: '4B',
+      parts: { python: true, engine: true, weights: true },
+      installed: true,
+      running: false,
+    });
+    const res = await request(buildApp()).get('/api/voice/realtime/status');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      enabled: true,
+      voiceEnabled: false,
+      home: '/models/sophon',
+      size: '4B',
+      parts: { python: true, engine: true, weights: true },
+      installed: true,
+      running: false,
+    });
   });
 
   it('reports enabled: false when realtime is omitted from config', async () => {
@@ -824,6 +848,7 @@ describe('GET /api/voice/realtime/status', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.enabled).toBe(false);
+    expect(res.body.voiceEnabled).toBe(false);
     expect(res.body.installed).toBe(false);
     expect(runtime.ensureRealtimeSidecar).not.toHaveBeenCalled();
   });
