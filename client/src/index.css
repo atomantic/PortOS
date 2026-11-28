@@ -1311,21 +1311,26 @@ html[data-port-theme-mode="day"] :is(.bg-black, [class^="bg-black/"], [class*=" 
   color: rgb(255 255 255) !important;
 }
 
-/* Keep text contrast on always-dark panels (e.g. video overlays, 3D canvas control panels, HUDs) in day mode */
-html[data-port-theme-mode="day"] .always-dark :is(.text-white, .text-zinc-50, .text-zinc-100, .text-neutral-50, .text-neutral-100, .text-gray-50, .text-gray-100, .text-slate-50, .text-slate-100) {
+/* Keep text contrast on always-dark panels (e.g. video overlays, 3D canvas control panels, HUDs) in day mode.
+   A themed panel nested inside an always-dark region (the lightbox's settings
+   pane sits on `bg-port-card`, not on the black backdrop) carries
+   `.port-themed-surface` so its utility ink follows the theme again — pinning
+   light ink there renders the editable prompt, metadata values and icon
+   buttons as near-white text on a white card. */
+html[data-port-theme-mode="day"] .always-dark :is(.text-white, .text-zinc-50, .text-zinc-100, .text-neutral-50, .text-neutral-100, .text-gray-50, .text-gray-100, .text-slate-50, .text-slate-100):not(.port-themed-surface *) {
   color: rgb(255 255 255) !important;
 }
-html[data-port-theme-mode="day"] .always-dark :is(.text-zinc-200, .text-zinc-300, .text-neutral-200, .text-neutral-300, .text-gray-200, .text-gray-300, .text-slate-200, .text-slate-300) {
+html[data-port-theme-mode="day"] .always-dark :is(.text-zinc-200, .text-zinc-300, .text-neutral-200, .text-neutral-300, .text-gray-200, .text-gray-300, .text-slate-200, .text-slate-300):not(.port-themed-surface *) {
   color: rgb(212 212 216) !important;
 }
-html[data-port-theme-mode="day"] .always-dark :is(.text-zinc-400, .text-zinc-500, .text-neutral-400, .text-neutral-500, .text-gray-400, .text-gray-500, .text-slate-400, .text-slate-500) {
+html[data-port-theme-mode="day"] .always-dark :is(.text-zinc-400, .text-zinc-500, .text-neutral-400, .text-neutral-500, .text-gray-400, .text-gray-500, .text-slate-400, .text-slate-500):not(.port-themed-surface *) {
   color: rgb(161 161 170) !important;
 }
-html[data-port-theme-mode="day"] .always-dark [class~="hover:text-white"]:hover,
-html[data-port-theme-mode="day"] .always-dark [class~="hover:text-zinc-100"]:hover,
-html[data-port-theme-mode="day"] .always-dark [class~="hover:text-neutral-100"]:hover,
-html[data-port-theme-mode="day"] .always-dark [class~="hover:text-gray-100"]:hover,
-html[data-port-theme-mode="day"] .always-dark [class~="hover:text-slate-100"]:hover {
+html[data-port-theme-mode="day"] .always-dark [class~="hover:text-white"]:not(.port-themed-surface *):hover,
+html[data-port-theme-mode="day"] .always-dark [class~="hover:text-zinc-100"]:not(.port-themed-surface *):hover,
+html[data-port-theme-mode="day"] .always-dark [class~="hover:text-neutral-100"]:not(.port-themed-surface *):hover,
+html[data-port-theme-mode="day"] .always-dark [class~="hover:text-gray-100"]:not(.port-themed-surface *):hover,
+html[data-port-theme-mode="day"] .always-dark [class~="hover:text-slate-100"]:not(.port-themed-surface *):hover {
   color: rgb(255 255 255) !important;
 }
 

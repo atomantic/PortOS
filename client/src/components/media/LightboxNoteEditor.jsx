@@ -78,7 +78,7 @@ export default function LightboxNoteEditor({ itemKey, annotation, onAnnotationCh
         placeholder="Add a note — use this for cover, reshoot at 24fps, etc."
         rows={3}
         maxLength={NOTE_MAX}
-        className="w-full bg-port-bg border border-port-border rounded p-2 text-xs text-gray-200 placeholder:text-gray-600 focus:outline-none focus:border-port-accent resize-y"
+        className="w-full bg-port-bg border border-port-border rounded p-2 text-xs text-port-text placeholder:text-port-text-subtle focus:outline-none focus:border-port-accent resize-y"
       />
     </div>
   );

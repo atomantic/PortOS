@@ -186,21 +186,31 @@ describe.skipIf(!chrome)('MediaLightbox native video keyboard controls', () => {
       await page.goto(`${origin}lightbox-test?theme=${theme}`);
       await page.getByRole('button', { name: 'Open image gallery' }).click();
       const dialog = page.getByRole('dialog');
-      await dialog.getByRole('button', { name: 'Edit', exact: true }).click();
-      const form = dialog.locator('form').filter({ has: page.getByLabel('What should change?') });
-      const instruction = form.getByLabel('What should change?');
-      await instruction.fill('Edit the sample');
-      const expectInk = async (locator, role, pseudo = null) => {
-        const { actual, expected } = await locator.evaluate((element, { role, pseudo }) => {
+      // `alpha` matches the theme remap for mid-weight utility ink (text-gray-200/300).
+      const expectInk = async (locator, role, pseudo = null, alpha = null) => {
+        const { actual, expected } = await locator.evaluate((element, { role, pseudo, alpha }) => {
           const ink = document.createElement('span');
-          ink.style.color = `rgb(var(--port-${role}))`;
+          ink.style.color = alpha == null ? `rgb(var(--port-${role}))` : `rgb(var(--port-${role}) / ${alpha})`;
           element.after(ink);
           const expected = getComputedStyle(ink).color;
           ink.remove();
           return { actual: getComputedStyle(element, pseudo).color, expected };
-        }, { role, pseudo });
+        }, { role, pseudo, alpha });
         expect(actual, `${role} for ${locator}`).toBe(expected);
       };
+      // The settings pane is a themed card inside the always-dark lightbox, so
+      // its utility ink must follow the theme rather than the dark-overlay pin.
+      await expectInk(dialog.getByLabel('Prompt', { exact: true }), 'text');
+      await expectInk(dialog.getByLabel('Note', { exact: true }), 'text');
+      await expectInk(dialog.locator('dt', { hasText: /^Seed$/ }), 'text-muted');
+      await expectInk(dialog.locator('dd', { hasText: /^123$/ }), 'text', null, 0.85);
+      await expectInk(dialog.getByText('Quality & Anatomy Verification', { exact: true }), 'text', null, 0.85);
+      await expectInk(dialog.getByLabel('Verification profile'), 'text', null, 0.85);
+      await expectInk(dialog.getByRole('link', { name: 'Download' }), 'text');
+      await dialog.getByRole('button', { name: 'Edit', exact: true }).click();
+      const form = dialog.locator('form').filter({ has: page.getByLabel('What should change?') });
+      const instruction = form.getByLabel('What should change?');
+      await instruction.fill('Edit the sample');
       await expectInk(instruction, 'text');
       await expectInk(instruction, 'text', '::selection');
       await expectInk(form.getByLabel('Edit with'), 'text');
