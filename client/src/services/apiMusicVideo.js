@@ -33,6 +33,13 @@ export const updateMusicVideoMakingOfPost = (id, postId, patch, options = {}) =>
 export const deleteMusicVideoMakingOfPost = (id, postId, options = {}) => request(`/music-video/${encodeURIComponent(id)}/making-of/posts/${encodeURIComponent(postId)}`, {
   method: 'DELETE', ...options,
 });
+export const getMusicVideoMakingOfXDrafts = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}/making-of/x-drafts`, options);
+export const prepareMusicVideoMakingOfXDraft = (id, postId, body = {}, options = {}) => request(`/music-video/${encodeURIComponent(id)}/making-of/posts/${encodeURIComponent(postId)}/x-draft`, {
+  method: 'POST', body: JSON.stringify(body), ...options,
+});
+export const discardMusicVideoMakingOfXDraft = (id, draftId, options = {}) => request(`/music-video/${encodeURIComponent(id)}/making-of/x-drafts/${encodeURIComponent(draftId)}`, {
+  method: 'DELETE', ...options,
+});
 
 // Music Video production mode (#1760). Director scene-board project CRUD + the
 // offline beat/tempo/section analysis. `options` lets a caller suppress

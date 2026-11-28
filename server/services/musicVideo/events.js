@@ -44,6 +44,9 @@ import { EventEmitter } from 'events';
 //     A publish draft's tab was filled ('open'), closed ('closed') or discarded.
 //     'posted' adds `url` and `project`. 'queued' / 'filling' carry no draftId,
 //     only a `message` (what the fill waits on or is doing).
+//   'making-of-draft' -> { projectId, postId, draftId?, state, message? }
+//     A Making-Of X thread draft was queued, filling, filled ('open'), closed,
+//     discarded, or marked posted.
 //   'cover-art' -> { projectId, project }
 //     Release cover art was composed, or a cover source image was queued, landed or failed.
 //   'blender' -> { projectId, kind: 'job', job } | { projectId, kind: 'state' }

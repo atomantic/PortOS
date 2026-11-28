@@ -4,11 +4,13 @@ import {
 } from 'lucide-react';
 import ConfirmButtonPair from '../../ui/ConfirmButtonPair.jsx';
 import FilePickerButton from '../../ui/FilePickerButton.jsx';
+import ListLoadError from '../../ui/ListLoadError.jsx';
 import Pill from '../../ui/Pill.jsx';
 import toast from '../../ui/Toast.jsx';
 import GalleryImagePicker from '../../imageGen/GalleryImagePicker.jsx';
 import MakingOfExportPanel from '../MakingOfExportPanel.jsx';
 import MakingOfPostCard from '../MakingOfPostCard.jsx';
+import useMakingOfXDrafts from '../useMakingOfXDrafts.js';
 import { shotNumbers as numberShots } from '../ShotStepper.jsx';
 import { videoPosterForJob } from '../../../lib/creativeDirectorPreview.js';
 import { IMAGE_ACCEPT, readFileAsBase64, validateImageFile } from '../../../utils/fileUpload.js';
@@ -91,6 +93,7 @@ export default function MakingOfStage({ board }) {
   const [recentlyCreatedPostId, setRecentlyCreatedPostId] = useState(null);
   const [uploading, setUploading] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
+  const xDrafts = useMakingOfXDrafts({ projectId });
 
   const allTags = useMemo(() => {
     const counts = new Map();
@@ -355,6 +358,10 @@ export default function MakingOfStage({ board }) {
           </div>
         </div>
 
+        {xDrafts.draftsError && (
+          <ListLoadError what="the Making-Of X drafts already filled" error={xDrafts.draftsError} onRetry={xDrafts.retryDrafts} />
+        )}
+
         {filteredPosts.length === 0 ? (
           <div className="rounded-lg border border-dashed border-port-border p-4 text-xs text-port-text-muted">
             {posts.length === 0
@@ -370,6 +377,12 @@ export default function MakingOfStage({ board }) {
                 items={items}
                 busy={busy}
                 defaultEditing={post.id === recentlyCreatedPostId}
+                xDraft={xDrafts.drafts[post.id] || null}
+                xDraftBusy={xDrafts.busy[post.id] || null}
+                xDraftProgress={xDrafts.progress[post.id] || null}
+                xDraftError={xDrafts.errors[post.id] || null}
+                onPrepareXDraft={xDrafts.prepare}
+                onDiscardXDraft={xDrafts.discard}
                 onUpdate={handleUpdatePost}
                 onDelete={handleDeletePost}
                 onOpenPreview={openPreview}
