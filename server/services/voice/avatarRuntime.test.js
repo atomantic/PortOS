@@ -4,7 +4,7 @@ const bundle = 'a'.repeat(24);
 const staleBundle = 'b'.repeat(24);
 const {
   readMarker, rmMock, avatarFilesPresent, installAvatar, openAvatarWorker, isHostShuttingDown,
-  getActiveAvatarFilename, loadAvatarPortrait, emitToOperators,
+  getActiveAvatarFilename, loadAvatarPortrait, emitToOperators, getVoiceConfig, updateVoiceConfig,
 } = vi.hoisted(() => ({
   readMarker: vi.fn(),
   rmMock: vi.fn(),
@@ -15,12 +15,15 @@ const {
   getActiveAvatarFilename: vi.fn(),
   loadAvatarPortrait: vi.fn(),
   emitToOperators: vi.fn(),
+  getVoiceConfig: vi.fn(),
+  updateVoiceConfig: vi.fn(),
 }));
 
 vi.mock('node:os', () => ({ release: () => '25.0.0' }));
 vi.mock('node:fs/promises', () => ({ readFile: readMarker, rm: rmMock }));
 vi.mock('../../lib/hostShutdown.js', () => ({ isHostShuttingDown }));
 vi.mock('../socketIo.js', () => ({ emitToOperators }));
+vi.mock('./config.js', () => ({ getVoiceConfig, updateVoiceConfig }));
 vi.mock('./avatarInstall.js', () => ({
   avatarBundle: () => bundle,
   avatarFilesPresent,
@@ -50,6 +53,8 @@ beforeEach(() => {
   avatarFilesPresent.mockResolvedValue(true);
   rmMock.mockResolvedValue(undefined);
   getActiveAvatarFilename.mockResolvedValue(null);
+  getVoiceConfig.mockResolvedValue({ avatar: { autoStart: true } });
+  updateVoiceConfig.mockResolvedValue({});
 });
 
 afterEach(() => vi.unstubAllGlobals());
@@ -210,4 +215,35 @@ it('wires active channel portraits into render calls and refuses renders when st
   expect(await getAvatarStatus()).toMatchObject({ phase: 'failed', detail: expect.stringContaining('worker stopped') });
   await expect(renderAvatarIdle({ stage: 'idle', onFrame: vi.fn(), signal: new AbortController().signal }))
     .rejects.toMatchObject({ status: 503 });
+});
+
+it('starts an installed, stopped worker when a call view opens, unless the operator turned auto-start off', async () => {
+  const { manageAvatar } = await import('./avatarRuntime.js');
+  openAvatarWorker.mockReturnValue({ warmed: new Promise(() => {}), stop: vi.fn() });
+
+  getVoiceConfig.mockResolvedValue({ avatar: { autoStart: false } });
+  await expect(manageAvatar('autostart')).resolves.toMatchObject({ phase: 'stopped', autoStart: false });
+  expect(openAvatarWorker).not.toHaveBeenCalled();
+
+  getVoiceConfig.mockResolvedValue({ avatar: { autoStart: true } });
+  await expect(manageAvatar('autostart')).resolves.toMatchObject({ phase: 'starting', autoStart: true });
+  expect(openAvatarWorker).toHaveBeenCalledTimes(1);
+
+  // Already starting: a second view opening does not launch another worker.
+  await manageAvatar('autostart');
+  expect(openAvatarWorker).toHaveBeenCalledTimes(1);
+});
+
+it('does not auto-start a stale install, and remembers Start and Stop as the auto-start choice', async () => {
+  const { manageAvatar } = await import('./avatarRuntime.js');
+  readMarker.mockResolvedValue(staleBundle);
+  await manageAvatar('autostart');
+  expect(openAvatarWorker).not.toHaveBeenCalled();
+
+  readMarker.mockResolvedValue(bundle);
+  openAvatarWorker.mockReturnValue({ warmed: new Promise(() => {}), stop: vi.fn() });
+  await manageAvatar('start');
+  expect(updateVoiceConfig).toHaveBeenLastCalledWith({ avatar: { autoStart: true } });
+  await manageAvatar('stop');
+  expect(updateVoiceConfig).toHaveBeenLastCalledWith({ avatar: { autoStart: false } });
 });
