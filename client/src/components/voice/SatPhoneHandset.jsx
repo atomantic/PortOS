@@ -3,6 +3,7 @@ import { SatPhoneFaceplate, SatPhoneSetup, SatPhoneSpeaker } from './SatPhoneFac
 import SatPhoneViewfinder from './SatPhoneViewfinder';
 import { SatPhoneActionKeys, SatPhoneTalkPaddle, SatPhoneTelemetry } from './SatPhoneControls';
 import SatPhoneConversation from './SatPhoneConversation';
+import SatPhoneComposer from './SatPhoneComposer';
 
 /**
  * Video-enabled Satellite Phone / Tactical Transceiver Handset.
@@ -168,6 +169,10 @@ export default function SatPhoneHandset({
           onInterrupt={onInterrupt}
           onEnd={onEnd}
         />
+
+        {/* Page handset: type without scrolling to the log below. The floating
+            handset's composer sits under its own log instead. */}
+        {!isFloating && <SatPhoneComposer draft={draft} onDraft={onDraft} onSend={onSend} inputRef={inputRef} />}
 
         <SatPhoneSpeaker
           isFloating={isFloating}
