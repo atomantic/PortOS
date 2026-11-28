@@ -2,18 +2,21 @@ import { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback, use
 import { createPortal } from 'react-dom';
 import { Link, useNavigate } from 'react-router';
 import VoiceCallConsole from './VoiceCallConsole';
+import VoiceImageChips from './VoiceImageChips';
+import FilePickerButton from '../ui/FilePickerButton';
+import { useVoiceImages } from './useVoiceImages';
 import SatPhoneHandset from './SatPhoneHandset';
 import { useAvatarRuntime } from './useAvatarRuntime';
 import { activeChannelOf, useAvatarLibrary } from './useAvatarLibrary';
 import { applyChannelPersonality, hasChannelPersona } from '../../../../server/lib/voiceChannels.js';
 import { useSidebarContext } from '../SidebarContext';
-import { Mic, MicOff, Brain, Hourglass, Volume2, VolumeX, Square, Trash2, ChevronDown, ChevronUp, Send, Infinity as InfinityIcon, NotebookPen, X, EyeOff, Monitor, MonitorOff, Radio, Maximize2 } from 'lucide-react';
+import { Mic, MicOff, Brain, Hourglass, Volume2, VolumeX, Square, Trash2, ChevronDown, ChevronUp, Send, Infinity as InfinityIcon, NotebookPen, X, EyeOff, Monitor, MonitorOff, Radio, Maximize2, ImagePlus } from 'lucide-react';
 import {
   startCapture, stopCapture, interrupt, resetConversation, sendText, onVoiceEvent, isCapturing,
   startContinuous, stopContinuous, isContinuous, whenPlaybackDrained, whenVoiceTurnAudioDrained, getVadLevel,
   webSpeechSupported, startWebSpeechCapture, stopWebSpeechCapture, isWebSpeechCapturing,
   disposeCaptureOwner,
-  onProactiveSpeech, captureScreenForVision, sendScreenshotResult,
+  onProactiveSpeech, captureVisionFrame, sendScreenshotResult,
   enableVisionCapture, disableVisionCapture, isVisionCaptureEnabled, onVisionCaptureEnded,
   speakSynthesized, onVoiceOutputPrimary, claimVoiceOutput, prepareVoicePlayback,
   getVoiceVolume, setVoiceVolume, isVoiceMuted, setVoiceMuted, onVoiceAudioPrefs, getVoiceOutputLevel,
@@ -140,6 +143,17 @@ export default function VoiceWidget({ config, claimHeld, consoleHost }) {
   // ui_describe_visually ("what's on this chart?"). Must be enabled from a click
   // (user gesture) — getDisplayMedia can't run from the server-initiated turn.
   const [visionEnabled, setVisionEnabled] = useState(false);
+  // Images queued for the next turn; a sent image moves onto the user's turn
+  // in the conversation so its chip shows what the agent was told.
+  const images = useVoiceImages({
+    enabled,
+    onSent: (image) => setHistory((h) => {
+      const at = h.findLastIndex((turn) => turn.role === 'user');
+      if (at === -1) return h;
+      const turn = h[at];
+      return [...h.slice(0, at), { ...turn, images: [...(turn.images || []), image] }, ...h.slice(at + 1)];
+    }),
+  });
   // Whether THIS tab is the current recipient of proactive voice output. The
   // server routes server-initiated speech (reminders/briefings) to a single
   // tab; this reflects (and lets the user claim) that role so the same line
@@ -334,12 +348,13 @@ export default function VoiceWidget({ config, claimHeld, consoleHost }) {
         if (!res.ok) toast.error(`Voice: couldn't toggle "${d?.target?.label}"`);
         else pushUiIndexAfterAction();
       }),
-      // ui_describe_visually: server asks the client to grab a frame of the
-      // authorized screen-capture stream. The stream must have been authorized
-      // earlier via the monitor button (a user gesture) — getDisplayMedia can't
-      // run from this server-initiated event. captureScreenForVision returns a
-      // data URL, or null when no stream is authorized / a frame grab failed;
-      // always reply so the server-side waiter resolves rather than timing out.
+      // A turn while sharing, or ui_describe_visually: the server asks for a
+      // frame of the authorized screen-capture stream. The stream must have
+      // been authorized earlier via the Vision button (a user gesture);
+      // getDisplayMedia can't run from this server-initiated event.
+      // captureVisionFrame returns { dataUrl, signature }, or null when no
+      // stream is authorized or the grab failed; always reply so the
+      // server-side waiter resolves rather than timing out.
       onVoiceEvent('voice:screenshot:request', async (payload) => {
         if (disposedRef.current) return;
         const requestId = payload && typeof payload === 'object' ? payload.requestId : undefined;
@@ -349,13 +364,13 @@ export default function VoiceWidget({ config, claimHeld, consoleHost }) {
           sendScreenshotResult(requestId, null);
           return;
         }
-        const dataUrl = await captureScreenForVision();
+        const frame = await captureVisionFrame();
         if (disposedRef.current) return;
-        if (!dataUrl) {
+        if (!frame) {
           toast('Voice: screen capture was unavailable.', { icon: '📷' });
           setVisionEnabled(isVisionCaptureEnabled());
         }
-        sendScreenshotResult(requestId, dataUrl);
+        sendScreenshotResult(requestId, frame);
       }),
     ];
     return () => offs.forEach((off) => off());
@@ -433,6 +448,9 @@ export default function VoiceWidget({ config, claimHeld, consoleHost }) {
     const generation = turnGenerationRef.current;
     const fp = fastPathRef.current;
     if (!fp?.enabled) return false;
+    // The on-device tiers can't see: a turn about a shared tab or a queued
+    // image goes to the server, which attaches the image descriptions.
+    if (isVisionCaptureEnabled() || images.pendingRef.current.length) return false;
     // Ensure the nav manifest is loaded (retries if an earlier fetch failed) so
     // tier-1 trigger nav works even when the prefetch didn't land.
     if (fp.triggers) await ensureNavEntries();
@@ -955,6 +973,7 @@ export default function VoiceWidget({ config, claimHeld, consoleHost }) {
         signalLevel={level}
         visionEnabled={visionEnabled}
         onToggleVision={toggleVision}
+        images={images}
       />,
       consoleHost,
     );
@@ -1060,6 +1079,7 @@ export default function VoiceWidget({ config, claimHeld, consoleHost }) {
             signalLevel={level}
             visionEnabled={visionEnabled}
             onToggleVision={toggleVision}
+            images={images}
             isVoiceOutputTab={isVoiceOutputTab}
             onClaimVoiceOutput={() => { if (!isVoiceOutputTab) claimVoiceOutput(); }}
             collapsed={collapsed}
@@ -1096,6 +1116,7 @@ export default function VoiceWidget({ config, claimHeld, consoleHost }) {
                         {turn.role === 'user' ? 'you' : 'assistant'}
                       </span>
                       {turn.text}
+                      <VoiceImageChips images={turn.images} className="mt-1" />
                     </div>
                   ))}
                 </div>
@@ -1108,10 +1129,23 @@ export default function VoiceWidget({ config, claimHeld, consoleHost }) {
               </div>
             </div>
           )}
+          {images.pending.length > 0 && (
+            <VoiceImageChips images={images.pending} onRemove={images.remove} className={`w-full bg-port-card/95 backdrop-blur border rounded-xl p-1.5 ${fabSurface}`} />
+          )}
           <form
             onSubmit={(e) => { e.preventDefault(); handleSend(); }}
-            className={`flex items-center gap-1 bg-port-card/95 backdrop-blur border rounded-full pl-4 pr-1 py-1 w-full focus-within:border-port-accent ${fabSurface}`}
+            className={`flex items-center gap-1 bg-port-card/95 backdrop-blur border rounded-full pl-1 pr-1 py-1 w-full focus-within:border-port-accent ${fabSurface}`}
           >
+            <FilePickerButton
+              accept="image/*"
+              multiple
+              onChange={(e) => images.attachFiles(e.target.files)}
+              ariaLabel="Attach an image for the voice assistant"
+              title="Show the assistant an image"
+              className="inline-flex shrink-0 cursor-pointer items-center justify-center pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-2 rounded-full text-port-text-muted hover:text-port-text hover:bg-port-border/70"
+            >
+              <ImagePlus size={14} aria-hidden="true" />
+            </FilePickerButton>
             <input
               ref={inputRef}
               type="text"

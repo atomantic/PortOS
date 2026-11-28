@@ -4,6 +4,7 @@ import { voiceModelDisplayName } from '../../../../server/lib/voiceModelCatalog.
 import AvatarChannelsPanel from './AvatarChannelsPanel';
 import AvatarRuntimeSettings from './AvatarRuntimeSettings';
 import SatPhoneHandset from './SatPhoneHandset';
+import VoiceImageChips from './VoiceImageChips';
 import ChannelBrainPicker from './ChannelBrainPicker';
 import { useAvatarRuntime } from './useAvatarRuntime';
 import { activeChannelOf, channelLlm, useAvatarLibrary } from './useAvatarLibrary';
@@ -94,7 +95,7 @@ export default function VoiceCallConsole({
   stage, history, scrollRef, interimTranscript, capturing, handsFree, canChangeMicMode,
   hotkey, draft, onDraft, onSend, onMic, onMode, onInterrupt, onEnd, onClear,
   voiceLabel, llmProvider, llmModel, onLlmSaved, agentDefaults, volume = 0.85, muted = false, onVolumeChange, onToggleMute,
-  sfxEnabled = true, onToggleSfx, signalLevel = 0, visionEnabled = false, onToggleVision,
+  sfxEnabled = true, onToggleSfx, signalLevel = 0, visionEnabled = false, onToggleVision, images,
 }) {
   const { data, error, updateData, refetch } = useAvatarRuntime();
   const runningAvatar = Boolean(!error && data?.supported && data.phase === 'running');
@@ -148,6 +149,7 @@ export default function VoiceCallConsole({
           signalLevel={signalLevel}
           visionEnabled={visionEnabled}
           onToggleVision={onToggleVision}
+          images={images}
         />
       </div>
 
@@ -212,7 +214,7 @@ export default function VoiceCallConsole({
                 </p>
               )}
               {history.map((turn, i) => (
-                <p key={i} className={turn.role === 'user' ? 'opacity-80' : ''}>
+                <div key={i} className={turn.role === 'user' ? 'opacity-80' : ''}>
                   <span
                     className={`mr-2 inline-block rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider ${
                       turn.role === 'user'
@@ -223,7 +225,8 @@ export default function VoiceCallConsole({
                     {turn.role === 'user' ? 'You' : 'Agent'}
                   </span>
                   {turn.text}
-                </p>
+                  <VoiceImageChips images={turn.images} className="mt-1" />
+                </div>
               ))}
             </div>
             {interimTranscript && (

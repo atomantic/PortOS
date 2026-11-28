@@ -83,7 +83,10 @@ vi.mock('../../services/voiceClient', () => ({
   isWebSpeechCapturing: vi.fn(() => false),
   disposeCaptureOwner: mocks.disposeCaptureOwner,
   onProactiveSpeech: vi.fn(() => vi.fn()),
-  captureScreenForVision: vi.fn(),
+  captureVisionFrame: vi.fn(),
+  imageFileToDataUrl: vi.fn(),
+  attachVoiceImage: vi.fn(),
+  removeVoiceImage: vi.fn(),
   sendScreenshotResult: vi.fn(),
   enableVisionCapture: vi.fn(),
   disableVisionCapture: vi.fn(),
@@ -348,6 +351,42 @@ describe('Voice Call console', () => {
     rerender(<VoiceWidgetGate><main /></VoiceWidgetGate>);
     expect(voiceClientMock.disposeCaptureOwner).toHaveBeenCalledTimes(2);
     expect(screen.queryByRole('region', { name: 'PortOS call console' })).not.toBeInTheDocument();
+  });
+});
+
+describe('Voice Call images', () => {
+  function ConsoleHost() {
+    const ref = useVoiceConsole();
+    return <main ref={ref} />;
+  }
+
+  it('uploads an image, shows its description chip, and moves it onto the turn it was sent with', async () => {
+    localStorage.setItem(HIDDEN_KEY, '1');
+    voiceClientMock.imageFileToDataUrl.mockResolvedValue('data:image/jpeg;base64,AAAA');
+    voiceClientMock.attachVoiceImage.mockReturnValue('img_1');
+    render(<VoiceWidgetGate><ConsoleHost /></VoiceWidgetGate>);
+    const ui = within(await screen.findByRole('region', { name: 'PortOS call console' }));
+    await settle();
+
+    const file = new File(['x'], 'chart.png', { type: 'image/png' });
+    await act(async () => {
+      fireEvent.change(ui.getByLabelText('Attach an image for the voice assistant'), { target: { files: [file] } });
+    });
+    expect(voiceClientMock.attachVoiceImage).toHaveBeenCalledWith({ dataUrl: 'data:image/jpeg;base64,AAAA', source: 'upload', name: 'chart.png' });
+    expect(ui.getByRole('button', { name: /chart\.png.*Reading/ })).toBeDisabled();
+
+    const added = '[Attached image: an image the user attached ("chart.png")]\nA bar chart of weekly sales.';
+    act(() => mocks.events.get('voice:image')?.({ id: 'img_1', source: 'upload', name: 'chart.png', status: 'ready', model: 'vision-model', text: added }));
+    fireEvent.click(ui.getByRole('button', { name: /chart\.png.*Ready/ }));
+    expect(ui.getByText(/A bar chart of weekly sales/)).toBeInTheDocument();
+    expect(ui.getByText(/Added to your message · vision-model/)).toBeInTheDocument();
+
+    fireEvent.change(ui.getByRole('textbox', { name: 'Message to the voice assistant' }), { target: { value: 'What does it show?' } });
+    fireEvent.click(ui.getByRole('button', { name: 'Send text' }));
+    act(() => mocks.events.get('voice:image')?.({ id: 'img_1', source: 'upload', name: 'chart.png', status: 'sent', model: 'vision-model', text: added }));
+    expect(ui.queryByRole('button', { name: 'Remove chart.png' })).not.toBeInTheDocument();
+    const log = ui.getByRole('log', { name: 'Transmission log' });
+    expect(within(log).getByRole('button', { name: /chart\.png/ })).toBeInTheDocument();
   });
 });
 
