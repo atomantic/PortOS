@@ -76,3 +76,18 @@ export async function probeOpenAiModels(baseUrl, { timeoutMs = 2_000, apiKey = '
   }
   return { reachable: true, models, contextWindows, error: null };
 }
+
+/**
+ * `probeOpenAiModels`, retried once under `/v1` when a base URL with no version
+ * segment answers 404. Service connections can carry a bare daemon host (Ollama's
+ * `http://localhost:11434` is what Codex's OSS mode is configured with), whose
+ * OpenAI surface lives under `/v1`. The retry only replaces the first answer when
+ * it actually lists models, so a host that 404s on both keeps its original error.
+ */
+export async function probeOpenAiModelsWithVersionFallback(baseUrl, options = {}, probe = probeOpenAiModels) {
+  const first = await probe(baseUrl, options);
+  const trimmed = String(baseUrl || '').replace(/\/+$/, '');
+  if (first.error !== 'HTTP 404' || /\/v\d+[a-z0-9]*$/i.test(trimmed)) return first;
+  const retry = await probe(`${trimmed}/v1`, options);
+  return Array.isArray(retry.models) ? retry : first;
+}

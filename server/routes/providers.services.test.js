@@ -50,7 +50,7 @@ vi.mock('../lib/aiToolkitState.js', async (importOriginal) => ({
 }));
 
 const probe = vi.fn();
-vi.mock('../lib/openAiModelsProbe.js', () => ({ probeOpenAiModels: probe }));
+vi.mock('../lib/openAiModelsProbe.js', async (importOriginal) => ({ ...(await importOriginal()), probeOpenAiModels: probe }));
 
 const harnessModels = vi.fn();
 vi.mock('../services/harnesses.js', () => ({ refreshHarnessModels: harnessModels, harnessCatalogRuntime: vi.fn(() => null) }));
