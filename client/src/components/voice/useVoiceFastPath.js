@@ -136,14 +136,14 @@ export function useVoiceFastPath({
     // A fast tier owns this turn. Stop any lingering playback, speak the reply
     // through the same queue as server TTS, and settle the stage on drain.
     const speak = (line) => {
-      if (disposedRef.current) return;
+      if (disposedRef.current || generation !== turnGenerationRef.current) return;
       interrupt();
       appendHistory({ role: 'assistant', text: line });
       setStage('speaking');
       speakSynthesized(line, { ...ttsRef.current, animate: true })
         .catch(() => {})
         .finally(() => whenPlaybackDrained().then(() => {
-          if (disposedRef.current) return;
+          if (disposedRef.current || generation !== turnGenerationRef.current) return;
           setStage((current) => (
             activeStages.has(current) ? current : (isWebSpeechCapturing() ? 'listening' : 'idle')
           ));

@@ -198,6 +198,7 @@ export default function VoiceWidget({ config, claimHeld, consoleHost }) {
     enabled,
     navigate,
     disposedRef,
+    turnGenerationRef,
     handleStartRef,
     handleStopRef,
     activeStages: ACTIVE_STAGES,
@@ -213,6 +214,7 @@ export default function VoiceWidget({ config, claimHeld, consoleHost }) {
   // `useWebSpeech` so a mid-capture engine switch cannot strand a live mic)
   // and drop queued TTS once mic teardown settles.
   const handleCancel = useCallback(async ({ updateUi = true } = {}) => {
+    turnGenerationRef.current += 1;
     if (isWebSpeechCapturing()) stopWebSpeechCapture();
     if (updateUi && !disposedRef.current) setInterimTranscript('');
     const stops = [];
@@ -314,7 +316,7 @@ export default function VoiceWidget({ config, claimHeld, consoleHost }) {
         },
         routeFinal: async (text) => {
           if (disposedRef.current) return;
-          const generation = turnGenerationRef.current;
+          const generation = ++turnGenerationRef.current;
           const handled = fastPathRef.current?.enabled ? await runFastPath(text) : false;
           if (!disposedRef.current && generation === turnGenerationRef.current && !handled) sendText(text, 'voice');
         },
@@ -412,9 +414,20 @@ export default function VoiceWidget({ config, claimHeld, consoleHost }) {
   }, [trackCancel]);
 
   const handleClear = useCallback(() => {
+    turnGenerationRef.current += 1;
     resetConversation();
     clearHistory();
   }, [clearHistory]);
+
+  const handleInterrupt = useCallback(() => {
+    turnGenerationRef.current += 1;
+    interrupt();
+    setStage((current) => (
+      ACTIVE_STAGES.has(current)
+        ? current
+        : (isWebSpeechCapturing() ? 'listening' : isContinuous() ? 'handsfree' : 'idle')
+    ));
+  }, []);
 
   const handleSend = useCallback(async () => {
     const text = draft.trim();
@@ -422,7 +435,7 @@ export default function VoiceWidget({ config, claimHeld, consoleHost }) {
     appendHistory({ role: 'user', text });
     setDraft('');
     setStage('thinking');
-    const generation = turnGenerationRef.current;
+    const generation = ++turnGenerationRef.current;
     const handled = fastPathRef.current?.enabled ? await runFastPath(text) : false;
     if (disposedRef.current || generation !== turnGenerationRef.current || handled) return;
     sendText(text);
@@ -644,7 +657,7 @@ export default function VoiceWidget({ config, claimHeld, consoleHost }) {
     onSend: sendFromConsole,
     onMic: toggleConsoleMic,
     onMode: toggleHandsFree,
-    onInterrupt: interrupt,
+    onInterrupt: handleInterrupt,
     onEnd: endCall,
     onClear: handleClear,
     voiceLabel: tts?.voice || tts?.engine,
@@ -754,7 +767,7 @@ export default function VoiceWidget({ config, claimHeld, consoleHost }) {
           visionEnabled={visionEnabled}
           isVoiceOutputTab={isVoiceOutputTab}
           onFullMode={() => handleSetVisualMode('full')}
-          onInterrupt={interrupt}
+          onInterrupt={handleInterrupt}
           onToggleCapture={toggleCapture}
           onMinimizeMobile={minimizeMobile}
           onHideWidget={hideWidget}
