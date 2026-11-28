@@ -14,7 +14,8 @@ import { convertLegacyQuotaBurnPatch } from '../services/quotaBurnConversion.js'
 import { saveQuotaBurnConfig } from '../services/quotaBurnStore.js';
 import { getQuotaBurnStatus, runQuotaBurnCycle } from '../services/quotaBurnRunner.js';
 import { getActiveApps } from '../services/apps.js';
-import { listProviders } from '../services/provider/providers.js';
+import { listSelectableProviders } from '../services/provider/providers.js';
+import { sanitizeProvider } from '../lib/provider/sanitizeProvider.js';
 
 const router = Router();
 
@@ -40,11 +41,11 @@ router.get('/', asyncHandler(async (req, res) => {
 router.get('/catalog', asyncHandler(async (_req, res) => {
   const [apps, providers] = await Promise.all([
     getActiveApps(),
-    listProviders().catch(() => []),
+    listSelectableProviders().catch(() => []),
   ]);
   res.json({
     apps: (apps || []).map((app) => ({ id: app.id, name: app.name })),
-    providers: providers || [],
+    providers: (providers || []).map(sanitizeProvider),
   });
 }));
 
