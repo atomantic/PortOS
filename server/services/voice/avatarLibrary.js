@@ -118,14 +118,15 @@ export async function loadAvatarPortrait(filename) {
   if (!isSafeFilename(filename)) return null;
   const bytes = await readFile(join(PATHS.images, filename)).catch(() => null);
   if (!bytes || bytes.length > MAX_PORTRAIT_SOURCE_BYTES) return null;
-  const { default: sharp } = await import('sharp');
-  return sharp(bytes, { limitInputPixels: 64_000_000 })
-    .rotate()
-    .resize(PORTRAIT_EDGE, PORTRAIT_EDGE, { fit: 'cover', position: 'centre' })
-    .jpeg({ quality: 92 })
-    .toBuffer()
-    .catch((error) => {
-      console.log(`🎭 Avatar portrait ${filename} could not be decoded; using the default portrait (${error.message})`);
-      return null;
-    });
+  try {
+    const { default: sharp } = await import('sharp');
+    return await sharp(bytes, { limitInputPixels: 64_000_000 })
+      .rotate()
+      .resize(PORTRAIT_EDGE, PORTRAIT_EDGE, { fit: 'cover', position: 'centre' })
+      .jpeg({ quality: 92 })
+      .toBuffer();
+  } catch (error) {
+    console.log(`🎭 Avatar portrait ${filename} could not be decoded; using the default portrait (${error.message})`);
+    return null;
+  }
 }

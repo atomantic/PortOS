@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { Link } from 'react-router';
 import { ImagePlus, Images, ScanFace, Sparkles, Trash2 } from 'lucide-react';
 import { generateImage } from '../../services/apiSystem.js';
@@ -107,23 +107,29 @@ function AvatarCreator({ onCreated }) {
   const [prompt, setPrompt] = useState('');
   const [job, setJob] = useState(null);
   const [submitting, setSubmitting] = useState(false);
+  const submittingRef = useRef(false);
 
   const generate = async (event) => {
     event?.preventDefault();
     const text = prompt.trim();
-    if (!text || submitting) return;
+    if (!text || submittingRef.current) return;
+    submittingRef.current = true;
     setSubmitting(true);
-    // The prompt is sent exactly as written; the saved Image Gen backend and model render it.
-    // `collectionName` files the render into Avatars even if this view closes first.
-    const result = await generateImage({ prompt: text, width: AVATAR_EDGE, height: AVATAR_EDGE, collectionName: 'Avatars' })
-      .catch(() => null);
-    setSubmitting(false);
-    if (!result) return;
-    setPrompt((current) => (current === text ? '' : current));
-    if (result.jobId) setJob({ jobId: result.jobId, filename: null });
-    else if (result.filename) {
-      setJob({ jobId: null, filename: result.filename });
-      onCreated(result.filename);
+    try {
+      // The prompt is sent exactly as written; the saved Image Gen backend and model render it.
+      // `collectionName` files the render into Avatars even if this view closes first.
+      const result = await generateImage({ prompt: text, width: AVATAR_EDGE, height: AVATAR_EDGE, collectionName: 'Avatars' })
+        .catch(() => null);
+      if (!result) return;
+      setPrompt((current) => (current === text ? '' : current));
+      if (result.jobId) setJob({ jobId: result.jobId, filename: null });
+      else if (result.filename) {
+        setJob({ jobId: null, filename: result.filename });
+        onCreated(result.filename);
+      }
+    } finally {
+      submittingRef.current = false;
+      setSubmitting(false);
     }
   };
 
@@ -178,6 +184,7 @@ export default function AvatarChannelsPanel() {
   const [galleryOpen, setGalleryOpen] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(null);
   const [removing, setRemoving] = useState(false);
+  const removingRef = useRef(false);
 
   const saveChannels = useCallback((patch) => saveAvatarChannels(patch).then(updateData).catch(() => {}), [updateData]);
   const editChannel = (index, change) => saveChannels({
@@ -190,10 +197,19 @@ export default function AvatarChannelsPanel() {
     }).catch(() => {});
   }, [updateData]);
   const remove = async (filename) => {
+    if (removingRef.current) return;
+    removingRef.current = true;
     setRemoving(true);
-    await removeAvatarFromLibrary(filename).then(updateData).catch(() => {});
-    setRemoving(false);
-    setConfirmRemove(null);
+    try {
+      const next = await removeAvatarFromLibrary(filename);
+      updateData(next);
+      setConfirmRemove(null);
+    } catch {
+      // request() already toasted the failure; keep confirmation open so the user can retry or cancel.
+    } finally {
+      removingRef.current = false;
+      setRemoving(false);
+    }
   };
 
   const avatars = library?.avatars ?? [];

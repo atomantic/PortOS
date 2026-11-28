@@ -161,3 +161,33 @@ it('keeps animating the current face when the model refuses a portrait', async (
     worker.stop();
   }
 });
+
+it('does not start a speak render or kill the worker when aborted during a portrait swap', async () => {
+  const { worker, child, messages, send } = workerFixture();
+  try {
+    await worker.warmed;
+    const controller = new AbortController();
+    const portrait = { key: 'face.png', load: vi.fn(async () => Buffer.from('face-jpeg')) };
+    const speak = worker.render(Buffer.from('speech'), { onFrame: vi.fn(), signal: controller.signal, portrait });
+    await vi.waitFor(() => expect(messages[0]?.type).toBe('portrait'));
+
+    // Client disconnects while the non-interruptible portrait swap is running.
+    controller.abort();
+    expect(messages).toHaveLength(1);
+    expect(child.kill).not.toHaveBeenCalled();
+
+    // When the swap completes, the aborted speak must NOT be sent to the worker.
+    send({ type: 'done', id: messages[0].id });
+    await speak;
+    expect(messages).toHaveLength(1);
+    expect(worker.portraitKey).toBe('face.png');
+
+    // A subsequent live speak uses the already-loaded portrait without waiting on a phantom render.
+    const next = worker.render(Buffer.from('live'), { onFrame: vi.fn(), signal: new AbortController().signal, portrait });
+    expect(messages[1]?.type).toBe('speak');
+    send({ type: 'done', id: messages[1].id });
+    await next;
+  } finally {
+    worker.stop();
+  }
+});

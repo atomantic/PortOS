@@ -101,4 +101,17 @@ describe('VoiceLlmQuickPicker', () => {
     expect(mocks.setLlamaServerAutoStart).toHaveBeenCalledWith(true, { silent: true });
     expect(screen.getByRole('status')).toHaveTextContent('llama.cpp running');
   });
+
+  it('refreshes status when Start with PortOS persists the toggle but immediate start fails', async () => {
+    mocks.setLlamaServerAutoStart.mockRejectedValue(new Error('Model file missing'));
+    renderPicker({ provider: 'llama-server', model: 'auto' });
+    const toggle = await screen.findByRole('checkbox', { name: 'Start with PortOS' });
+    expect(toggle).not.toBeChecked();
+
+    mocks.getLlamaServerStatus.mockResolvedValue({ installed: true, running: false, autoStart: true, savedLaunch: SAVED_LAUNCH });
+    fireEvent.click(toggle);
+
+    await waitFor(() => expect(screen.getByRole('checkbox', { name: 'Start with PortOS' })).toBeChecked());
+    expect(screen.getByRole('status')).toHaveTextContent('llama.cpp stopped');
+  });
 });

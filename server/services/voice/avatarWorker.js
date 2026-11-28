@@ -34,6 +34,10 @@ export function openAvatarWorker(python, onClose, launch = spawn) {
   const cancelActive = (entry) => {
     if (!entry || entry.cancelSent) return;
     entry.cancelSent = true;
+    // Portrait swaps in stream.py are non-interruptible and already bounded by
+    // portraitTimeoutMs; arming the 3s kill timer here would SIGKILL a healthy
+    // worker (forcing a 90s cold restart) when channels are switched rapidly.
+    if (entry.kind === 'portrait') return;
     send({ type: 'cancel', id: entry.id });
     if (active?.id === entry.id) {
       entry.cancelTimer = setTimeout(terminate, 3_000);
@@ -159,7 +163,14 @@ export function openAvatarWorker(python, onClose, launch = spawn) {
         if (!ready) throw avatarError('Start AvatarForcing before animating.', 503);
         if (active) throw avatarError('AvatarForcing is already animating.');
         if (signal.aborted) return;
-        if (portraitCurrent(portrait) || await ensurePortrait(portrait, signal)) break;
+        if (portraitCurrent(portrait)) break;
+        if (!await ensurePortrait(portrait, signal)) continue;
+        // Re-check after awaiting portrait swap: an abort or close during the swap
+        // must not launch a speak render with an already-aborted signal or overwrite
+        // another caller that claimed the worker.
+        if (!ready) throw avatarError('Start AvatarForcing before animating.', 503);
+        if (signal.aborted) return;
+        if (!active) break;
       }
       await startRender({
         kind: 'speak',

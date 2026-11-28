@@ -120,3 +120,24 @@ it('adds a gallery image and removes an avatar after an inline confirmation', as
   await waitFor(() => expect(removeAvatarFromLibrary).toHaveBeenCalledWith('face.png'));
   expect(await screen.findByRole('heading', { name: 'Avatars (0)' })).toBeInTheDocument();
 });
+
+it('guards against duplicate avatar generation submits and keeps confirmation open on remove failure', async () => {
+  let resolveGen;
+  generateImage.mockImplementation(() => new Promise((resolve) => { resolveGen = resolve; }));
+  removeAvatarFromLibrary.mockRejectedValue(new Error('Disk busy'));
+
+  renderPanel();
+  const prompt = await screen.findByLabelText('Create an avatar');
+  fireEvent.change(prompt, { target: { value: 'Radio operator' } });
+  const form = prompt.closest('form');
+  fireEvent.submit(form);
+  fireEvent.submit(form);
+  expect(generateImage).toHaveBeenCalledTimes(1);
+  resolveGen({ jobId: 'job-2' });
+  await screen.findByRole('button', { name: 'job job-2' });
+
+  fireEvent.click(screen.getAllByRole('button', { name: 'Remove avatar from the collection' })[0]);
+  fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+  await waitFor(() => expect(removeAvatarFromLibrary).toHaveBeenCalledWith('face.png'));
+  expect(screen.getByRole('button', { name: 'Remove' })).toBeInTheDocument();
+});
