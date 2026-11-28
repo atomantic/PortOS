@@ -6,6 +6,7 @@ import { errorMiddleware } from '../lib/errorHandler.js';
 import { isHostControlRoute } from '../lib/hostControlRoutes.js';
 import router from './voiceAvatar.js';
 import { getAvatarStatus, manageAvatar, renderAvatar, renderAvatarIdle } from '../services/voice/avatarRuntime.js';
+import { avatarError } from '../services/voice/avatarWorker.js';
 
 vi.mock('../services/voice/avatarRuntime.js', () => ({
   getAvatarStatus: vi.fn(), manageAvatar: vi.fn(), renderAvatar: vi.fn(), renderAvatarIdle: vi.fn(),
@@ -31,10 +32,13 @@ it('requires host control and explicit weight terms without exposing paths or co
   expect(isHostControlRoute('POST', base + '/idle')).toBe(true);
   expect((await request(app).get(base + '/status')).body).toEqual(canned);
   expect((await request(app).post(base + '/runtime').send({ action: 'install' })).status).toBe(400);
+  expect((await request(app).post(base + '/runtime').send({ action: 'update' })).status).toBe(400);
   expect((await request(app).post(base + '/runtime').send({ action: 'start', binary: '/bin/sh' })).status).toBe(400);
   expect(manageAvatar).not.toHaveBeenCalled();
   expect((await request(app).post(base + '/runtime').send({ action: 'install', acceptTerms: true })).status).toBe(200);
   expect(manageAvatar).toHaveBeenCalledWith('install');
+  expect((await request(app).post(base + '/runtime').send({ action: 'update', acceptTerms: true })).status).toBe(200);
+  expect(manageAvatar).toHaveBeenCalledWith('update');
 });
 
 it('accepts binary output WAV and incrementally serializes only the timestamped frames', async () => {
@@ -68,4 +72,20 @@ it('streams continuous idle avatar frames for valid stages and rejects unknown s
   expect(renderAvatarIdle).toHaveBeenCalledWith(expect.objectContaining({ stage: 'listening' }));
 
   expect((await request(app).post(base + '/idle').send({ stage: 'dancing' })).status).toBe(400);
+});
+
+it('propagates pre-header stream errors as JSON and closes cleanly on mid-stream errors', async () => {
+  renderAvatarIdle.mockRejectedValueOnce(avatarError('Start AvatarForcing before animating.', 503));
+  const preHeader = await request(app).post(base + '/idle').send({ stage: 'idle' });
+  expect(preHeader.status).toBe(503);
+  expect(preHeader.body).toMatchObject({ code: 'VOICE_AVATAR', error: expect.stringContaining('Start AvatarForcing') });
+
+  const frame = { index: 0, timeMs: 0, jpeg: 'partial-frame' };
+  renderAvatarIdle.mockImplementationOnce(async ({ onFrame }) => {
+    onFrame(frame);
+    throw avatarError('Worker stopped mid-stream.', 503);
+  });
+  const midStream = await request(app).post(base + '/idle').send({ stage: 'idle' });
+  expect(midStream.status).toBe(200);
+  expect(midStream.text).toBe(JSON.stringify(frame) + '\n');
 });

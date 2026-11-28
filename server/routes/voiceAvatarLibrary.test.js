@@ -15,7 +15,9 @@ vi.mock('../services/sharing/peerSync.js', () => mockNoPeerSync());
 vi.mock('../services/socketIo.js', () => ({ emitToOperators: vi.fn(), emitToOperatorsOn: vi.fn() }));
 
 const { default: router } = await import('./voiceAvatar.js');
-const { getActiveAvatarFilename, loadAvatarPortrait } = await import('../services/voice/avatarLibrary.js');
+const { getActiveAvatarFilename, loadAvatarPortrait, normalizeChannels } = await import('../services/voice/avatarLibrary.js');
+const { AVATAR_CHANNEL_LABEL_MAX } = await import('../lib/voiceValidation.js');
+const { emitToOperators } = await import('../services/socketIo.js');
 
 const base = '/api/voice/avatar';
 const app = express();
@@ -84,4 +86,32 @@ it('renders an assigned avatar as a 512px square JPEG and falls back to the defa
   expect(await loadAvatarPortrait('broken.png')).toBeNull();
   expect(await loadAvatarPortrait('not-synced-yet.png')).toBeNull();
   expect(await loadAvatarPortrait('../settings.json')).toBeNull();
+});
+
+it('preserves omitted fields on partial channel updates, emits library change events, and sanitizes stored channels', async () => {
+  vi.clearAllMocks();
+  await writeFile(join(PATHS.images, 'pilot.png'), await png('#224466'));
+  const added = await request(app).post(base + '/library').send({ filename: 'pilot.png' });
+  expect(emitToOperators).toHaveBeenCalledWith('voice:avatar:library:changed');
+
+  const channels = added.body.channels.map((ch, idx) => (idx === 1 ? { label: 'Pilot', avatar: 'pilot.png' } : ch));
+  await request(app).put(base + '/channels').send({ channels });
+  const activeOnly = await request(app).put(base + '/channels').send({ active: 1 });
+  expect(activeOnly.status).toBe(200);
+  expect(activeOnly.body.active).toBe(1);
+  expect(activeOnly.body.channels[1]).toEqual({ label: 'Pilot', avatar: 'pilot.png' });
+
+  const sanitized = normalizeChannels({
+    active: 99,
+    channels: [
+      { label: '  ' + 'x'.repeat(80), avatar: '../escape.png' },
+      null,
+      { label: 'Valid', avatar: 'ok.png' },
+    ],
+  });
+  expect(sanitized.active).toBe(0);
+  expect(sanitized.channels).toHaveLength(6);
+  expect(sanitized.channels[0]).toEqual({ label: 'x'.repeat(AVATAR_CHANNEL_LABEL_MAX), avatar: null });
+  expect(sanitized.channels[1]).toEqual({ label: '', avatar: null });
+  expect(sanitized.channels[2]).toEqual({ label: 'Valid', avatar: 'ok.png' });
 });
