@@ -11,11 +11,12 @@ describe('checkout-owned server Vite caches with shared dependencies', () => {
   it('keeps CI artifact-cache restores pointed at the owned test cache roots', () => {
     const jobs = readCiJobs();
     const shardSuffix = '-${{ matrix.shard }}of${{ strategy.job-total }}';
-    const serverKey = "vitest-server-${{ runner.os }}-${{ hashFiles('server/package-lock.json', 'server/vitest.config.js', 'server/vitest.config.db.js', 'scripts/vitestCiPool.js') }}";
+    const serverKey = "vitest-server-${{ runner.os }}-${{ hashFiles('server/package-lock.json') }}-${{ hashFiles('server/vitest.config.js', 'server/vitest.config.db.js', 'scripts/vitestCiPool.js') }}";
     const fallbacks = [
       "vitest-server-${{ runner.os }}-${{ hashFiles('server/package-lock.json') }}-",
       'vitest-server-${{ runner.os }}-',
     ];
+    for (const prefix of fallbacks) expect(serverKey.startsWith(prefix)).toBe(true);
     for (const [id, suffix] of [
       ['server', shardSuffix], ['database', ''], ['browser', `-browser${shardSuffix}`],
       ['windows-server', shardSuffix], ['macos-native', '-macos-native'],
@@ -30,11 +31,19 @@ describe('checkout-owned server Vite caches with shared dependencies', () => {
         expect(cache.split('restore-keys: |\n')[1].trim().split('\n').map(line => line.trim())).toEqual(fallbacks);
       }
     }
+    const clientKey = "vitest-client-${{ runner.os }}-${{ hashFiles('client/package-lock.json') }}-${{ hashFiles('client/vitest.config.js', 'scripts/vitestCiPool.js') }}";
+    const clientFallbacks = [
+      "vitest-client-${{ runner.os }}-${{ hashFiles('client/package-lock.json') }}-",
+      'vitest-client-${{ runner.os }}-',
+    ];
+    for (const prefix of clientFallbacks) expect(clientKey.startsWith(prefix)).toBe(true);
     const clientCaches = vitestCacheSteps(jobs.client);
     expect(clientCaches).toHaveLength(2);
     for (const cache of clientCaches) {
       expect(cache).not.toContain('node_modules/.vite');
       expect(cache).toContain('client/.cache/vitest\n');
+      expect(cache).toContain(`key: ${clientKey}${shardSuffix}\n`);
+      expect(cache.split('restore-keys: |\n')[1].trim().split('\n').map(line => line.trim())).toEqual(clientFallbacks);
     }
   });
 

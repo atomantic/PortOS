@@ -261,7 +261,7 @@ jobs:
       # saves on its own as soon as its tests pass, so a later failure or
       # cancellation elsewhere in the run does not lose its records.
       - name: Save the test memo
-        if: steps.server-tests.outcome == 'success' && github.event_name != 'pull_request'
+        if: steps.server-tests.outcome == 'success' && steps.server-tests.outputs.memo-written == 'true' && github.event_name != 'pull_request'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/portos-test-memo
@@ -307,7 +307,7 @@ jobs:
         with:
           path: |
             client/.cache/vitest
-          key: vitest-client-${{ runner.os }}-${{ hashFiles('client/package-lock.json', 'client/vitest.config.js', 'scripts/vitestCiPool.js') }}-${{ matrix.shard }}of${{ strategy.job-total }}
+          key: vitest-client-${{ runner.os }}-${{ hashFiles('client/package-lock.json') }}-${{ hashFiles('client/vitest.config.js', 'scripts/vitestCiPool.js') }}-${{ matrix.shard }}of${{ strategy.job-total }}
           restore-keys: |
             vitest-client-${{ runner.os }}-${{ hashFiles('client/package-lock.json') }}-
             vitest-client-${{ runner.os }}-
@@ -318,7 +318,7 @@ jobs:
         with:
           path: |
             client/.cache/vitest
-          key: vitest-client-${{ runner.os }}-${{ hashFiles('client/package-lock.json', 'client/vitest.config.js', 'scripts/vitestCiPool.js') }}-${{ matrix.shard }}of${{ strategy.job-total }}
+          key: vitest-client-${{ runner.os }}-${{ hashFiles('client/package-lock.json') }}-${{ hashFiles('client/vitest.config.js', 'scripts/vitestCiPool.js') }}-${{ matrix.shard }}of${{ strategy.job-total }}
           restore-keys: |
             vitest-client-${{ runner.os }}-${{ hashFiles('client/package-lock.json') }}-
             vitest-client-${{ runner.os }}-
@@ -350,7 +350,7 @@ jobs:
         run: node scripts/run-ci-tests.js client
 
       - name: Save the test memo
-        if: steps.client-tests.outcome == 'success' && github.event_name != 'pull_request'
+        if: steps.client-tests.outcome == 'success' && steps.client-tests.outputs.memo-written == 'true' && github.event_name != 'pull_request'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/portos-test-memo
@@ -544,7 +544,7 @@ jobs:
         run: node scripts/run-ci-tests.js db
 
       - name: Save the test memo
-        if: steps.db-tests.outcome == 'success' && github.event_name != 'pull_request'
+        if: steps.db-tests.outcome == 'success' && steps.db-tests.outputs.memo-written == 'true' && github.event_name != 'pull_request'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/portos-test-memo
@@ -805,7 +805,7 @@ jobs:
         run: node scripts/run-ci-tests.js server
 
       - name: Save the test memo
-        if: steps.windows-tests.outcome == 'success' && github.event_name != 'pull_request'
+        if: steps.windows-tests.outcome == 'success' && steps.windows-tests.outputs.memo-written == 'true' && github.event_name != 'pull_request'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/portos-test-memo

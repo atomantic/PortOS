@@ -26,7 +26,7 @@ runs:
         path: |
           server/.cache/vitest
           server/.cache/vitest-db
-        key: vitest-server-${{ runner.os }}-${{ hashFiles('server/package-lock.json', 'server/vitest.config.js', 'server/vitest.config.db.js', 'scripts/vitestCiPool.js') }}${{ inputs.vitest-key-suffix }}
+        key: vitest-server-${{ runner.os }}-${{ hashFiles('server/package-lock.json') }}-${{ hashFiles('server/vitest.config.js', 'server/vitest.config.db.js', 'scripts/vitestCiPool.js') }}${{ inputs.vitest-key-suffix }}
         restore-keys: |
           vitest-server-${{ runner.os }}-${{ hashFiles('server/package-lock.json') }}-
           vitest-server-${{ runner.os }}-
@@ -38,7 +38,7 @@ runs:
         path: |
           server/.cache/vitest
           server/.cache/vitest-db
-        key: vitest-server-${{ runner.os }}-${{ hashFiles('server/package-lock.json', 'server/vitest.config.js', 'server/vitest.config.db.js', 'scripts/vitestCiPool.js') }}${{ inputs.vitest-key-suffix }}
+        key: vitest-server-${{ runner.os }}-${{ hashFiles('server/package-lock.json') }}-${{ hashFiles('server/vitest.config.js', 'server/vitest.config.db.js', 'scripts/vitestCiPool.js') }}${{ inputs.vitest-key-suffix }}
         restore-keys: |
           vitest-server-${{ runner.os }}-${{ hashFiles('server/package-lock.json') }}-
           vitest-server-${{ runner.os }}-
