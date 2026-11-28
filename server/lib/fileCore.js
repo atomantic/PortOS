@@ -197,6 +197,13 @@ export function watchForFile(
 }
 
 // Cache __dirname calculation for services importing this module
+// Some external backup volumes expose fixed permissions and reject chmod.
+export function chmodWithPolicy(path, mode, bestEffortMode) {
+  return chmod(path, mode).catch(err => {
+    if (!bestEffortMode || !['ENOSYS', 'ENOTSUP', 'EOPNOTSUPP', 'EPERM'].includes(err.code)) throw err;
+  });
+}
+
 /**
  * Ensure a directory exists, creating it recursively if needed.
  * Uses mkdir with recursive: true which is idempotent and avoids TOCTOU races.
@@ -208,7 +215,7 @@ export function watchForFile(
  * await ensureDir(PATHS.data);
  * await ensureDir('/custom/path/to/dir');
  */
-export async function ensureDir(dir, { mode } = {}) {
+export async function ensureDir(dir, { mode, bestEffortMode } = {}) {
   // #6176 — refuse a NEW dir in the real data/ tree under the runner. Only the
   // CREATE path: `mkdir -p` on an existing directory mutates nothing.
   if (isVitestRunner()) (await loadGuard()).assertNotNewRealDataDir(dir);
@@ -234,7 +241,7 @@ export async function ensureDir(dir, { mode } = {}) {
   if (!metadata.isDirectory()) throw new Error('Expected a real directory for private storage');
   if ((metadata.mode & 0o7777) !== mode) {
     if (isVitestRunner()) (await loadGuard()).assertNotRealDataWrite(dir, 'chmod');
-    await chmod(dir, mode);
+    await chmodWithPolicy(dir, mode, bestEffortMode);
   }
 }
 
@@ -293,8 +300,9 @@ export async function ensureDirs(dirs) {
  *
  * @param {string} filePath - Destination file path
  * @param {string|object} data - String or JSON-serializable value
- * @param {{ mode?: number, dirMode?: number, onStage?: (stage: 'write'|'replace'|'dirSync') => void }} [options] -
+ * @param {{ mode?: number, dirMode?: number, bestEffortMode?: boolean, onStage?: (stage: 'write'|'replace'|'dirSync') => void }} [options] -
  *   Use `dirMode` to restrict the containing directory before writing.
+ *   `bestEffortMode` tolerates unsupported chmod on external backup volumes.
  *   `onStage` is called as each durable stage begins, for slow-write diagnostics.
  * @returns {Promise<void>}
  *
@@ -302,7 +310,7 @@ export async function ensureDirs(dirs) {
  * await atomicWrite(FILE, { version: 1, items: [] });
  * await atomicWrite(LOG_FILE, 'raw string content');
  */
-export async function atomicWrite(filePath, data, { onStage, mode, dirMode } = {}) {
+export async function atomicWrite(filePath, data, { onStage, mode, dirMode, bestEffortMode } = {}) {
   // #6176 — the filesystem analogue of db.js's row-write backstop. Refuses
   // before any bytes are produced, so a leaking suite cannot even leave a temp
   // file behind in the real tree.
@@ -311,7 +319,7 @@ export async function atomicWrite(filePath, data, { onStage, mode, dirMode } = {
   // `{"type":"Buffer","data":[...]}` which corrupts binary writes (PNG, etc.).
   const payload = typeof data === 'string' || Buffer.isBuffer(data) ? data : JSON.stringify(data, null, 2);
   onStage?.('write');
-  await ensureDir(dirname(filePath), { mode: dirMode });
+  await ensureDir(dirname(filePath), { mode: dirMode, bestEffortMode });
   // Preserve the destination's existing permission bits. A plain
   // writeFile(existing) truncated the inode in place and kept its mode, but
   // atomicWrite creates a fresh temp inode and renames it over the target —
@@ -369,7 +377,7 @@ export async function atomicWrite(filePath, data, { onStage, mode, dirMode } = {
     // `flush` fsyncs the temp file's bytes before the handle closes, so the
     // rename below never publishes an inode the disk has not yet received.
     await writeFile(tmp, payload, { ...(writeMode !== null ? { mode: writeMode } : {}), flush: durableWrites });
-    if (writeMode !== null) await chmod(tmp, writeMode);
+    if (writeMode !== null) await chmodWithPolicy(tmp, writeMode, bestEffortMode);
     onStage?.('replace');
     await replace();
   } catch (err) {

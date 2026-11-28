@@ -1,14 +1,15 @@
+import { dirname } from 'node:path';
 import { EventEmitter } from 'node:events';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('../../lib/childProcess.js', async (importOriginal) => ({ ...await importOriginal(), spawn: vi.fn() }));
 vi.mock('node:fs/promises', async (importOriginal) => ({
-  ...await importOriginal(), readFile: vi.fn(), unlink: vi.fn().mockResolvedValue(),
+  ...await importOriginal(), readFile: vi.fn(),
 }));
 vi.mock('./qwen3TtsRuntime.js', async (importOriginal) => ({
   ...await importOriginal(), resolveQwen3Python: vi.fn().mockResolvedValue('python3'),
 }));
 import { spawn } from '../../lib/childProcess.js';
-import { readFile, unlink } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import { synthesizeQwen3, listQwen3Voices } from './tts-qwen3.js';
 
 const modelId = 'Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign';
@@ -40,7 +41,10 @@ function runnerResponse(response, code = 0, inputError = null) {
 describe('tts-qwen3', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    readFile.mockResolvedValue(wav);
+    readFile.mockImplementation(async path => {
+      if (process.platform !== 'win32') expect((await stat(dirname(path))).mode & 0o777).toBe(0o700);
+      return wav;
+    });
     runnerResponse(evidence);
   });
   it('enumerates default Qwen3 voices', async () => {
@@ -66,7 +70,7 @@ describe('tts-qwen3', () => {
     expect(args.join(' ')).not.toContain(text);
     expect(args.join(' ')).not.toContain(instructions);
     expect(JSON.parse(writeInput.mock.calls[0][0])).toEqual({ text, instructions });
-    expect(unlink).toHaveBeenCalledOnce();
+    await expect(stat(dirname(args.at(-1)))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('sends the clone transcript on stdin alongside the speech text', async () => {
@@ -85,7 +89,7 @@ describe('tts-qwen3', () => {
     runnerResponse(evidence, 0, new Error('EPIPE'));
     await expect(synthesizeQwen3('Example')).rejects.toMatchObject({ status: 502, code: 'QWEN3_SYNTHESIS_FAILED' });
     expect(readFile).not.toHaveBeenCalled();
-    expect(unlink).toHaveBeenCalledOnce();
+    await expect(stat(dirname(spawn.mock.calls[0][1].at(-1)))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('refuses unsupported operations without exposing child logs', async () => {

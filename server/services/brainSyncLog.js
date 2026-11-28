@@ -65,7 +65,7 @@ function trackLoggedOp(entry) {
 }
 
 async function ensureBrainDir() {
-  await ensureDir(DATA_DIR);
+  await ensureDir(DATA_DIR, { mode: 0o700 });
 }
 
 /**
@@ -145,7 +145,7 @@ async function writeIndexedLines(lines) {
   // disk, so the next compaction pass must not be skipped either way.
   appendedSinceCompaction = true;
   const payload = (pendingNewline ? '\n' : '') + lines.map(({ text }) => text).join('\n') + '\n';
-  await appendFileGuarded(SYNC_LOG_FILE, payload).catch((err) => {
+  await appendFileGuarded(SYNC_LOG_FILE, payload, { mode: 0o600 }).catch((err) => {
     indexLoaded = false;
     throw err;
   });
@@ -522,7 +522,7 @@ export async function compactLog(minSeq = 0, { force = false } = {}) {
       if (dropped <= 0) return 0;
 
       const newContent = kept.map(i => i.rawLine).join('\n') + '\n';
-      await atomicWrite(SYNC_LOG_FILE, newContent);
+      await atomicWrite(SYNC_LOG_FILE, newContent, { mode: 0o600, dirMode: 0o700 });
 
       // Rebuild index offsets from what was written
       offsets = [];

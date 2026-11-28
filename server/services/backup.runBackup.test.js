@@ -158,6 +158,14 @@ describe('runBackup lifecycle', () => {
         pgDump.emit('close', 0);
       }
       const result = await pending;
+      if (process.platform !== 'win32') {
+        for (const path of [dirname(snapshotDir), snapshotDir, joinPath(snapshotDir, 'data')]) {
+          expect((await fsp.stat(path)).mode & 0o777).toBe(0o700);
+        }
+        const manifest = joinPath(snapshotDir, 'manifest.json');
+        expect((await fsp.stat(manifest)).mode & 0o777).toBe(0o600);
+        if (!fileMode) expect((await fsp.stat(joinPath(snapshotDir, 'portos-db.sql'))).mode & 0o777).toBe(0o600);
+      }
       const expectedStatus = legacy && !fileMode ? 'degraded' : 'ok';
       expect(result).toMatchObject({ status: expectedStatus, pgBackup: { status: fileMode ? 'skipped' : 'ok' } });
       expect(await getState()).toMatchObject({ status: expectedStatus, restoreWarning: result.restoreWarning, error: result.error });
@@ -289,6 +297,22 @@ describe('runBackup lifecycle', () => {
     }
   });
 
+  it('publishes a snapshot when an external volume rejects POSIX chmod', async () => {
+    const fsp = await actualFs();
+    const chmod = vi.spyOn(fs, 'chmod').mockImplementation(async (path, mode) => {
+      if (path.startsWith(destRoot)) throw Object.assign(new Error('Unsupported mode'), { code: 'ENOTSUP' });
+      return fsp.chmod(path, mode);
+    });
+    const proc = fakeProc();
+    spawn.mockReturnValue(proc);
+    const pending = runBackup(destRoot, recordingOperatorIo());
+    await waitFor(() => spawn.mock.calls.length === 1, 'rsync spawn');
+    proc.emit('close', 0);
+    const result = await pending;
+    expect(result.status).toBe('ok');
+    expect(chmod).toHaveBeenCalledWith(expect.stringContaining('manifest.json.'), 0o600);
+  });
+
   it('rsyncs, writes a manifest and state, and emits started/completed', async () => {
     const io = recordingOperatorIo();
     const proc = fakeProc();
@@ -304,7 +328,10 @@ describe('runBackup lifecycle', () => {
     const snapshotId = basename(snapshotDir);
     await expect(fsp.access(joinPath(destRoot, 'snapshots', machineHost, `.${snapshotId}.in-progress`)))
       .resolves.toBeUndefined();
-    await fsp.writeFile(joinPath(snapshotDir, 'data', 'settings.json'), '{"a":1}');
+    const snapshotDataDir = joinPath(snapshotDir, 'data');
+    await fsp.writeFile(joinPath(snapshotDataDir, 'settings.json'), '{"a":1}');
+    // Simulate rsync --archive copying a source root with broader permissions.
+    if (process.platform !== 'win32') await fsp.chmod(snapshotDataDir, 0o755);
 
     proc.stdout.emit('data', Buffer.from(
       '>f+++++++++ settings.json\n' +
@@ -339,6 +366,7 @@ describe('runBackup lifecycle', () => {
     expect(result.filesChanged).toBe(2);
     expect(result.status).toBe('ok');
     expect(result.pgBackup).toEqual(SKIPPED_PG);
+    if (process.platform !== 'win32') expect((await fsp.stat(snapshotDataDir)).mode & 0o777).toBe(0o700);
 
     // --- manifest ---------------------------------------------------------
     const manifest = await readJson(joinPath(snapshotDir, 'manifest.json'));

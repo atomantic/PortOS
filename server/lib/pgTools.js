@@ -12,6 +12,11 @@ import { mkdtemp, readdir, rm, writeFile } from 'fs/promises';
 import { getCACertificates } from 'node:tls';
 import { join } from 'path';
 import { execFileAsync } from './fileUtils.js';
+import { scrubHomePath } from './homePath.js';
+
+export function scrubPgToolOutput(text, password) {
+  return scrubHomePath(password ? text.replaceAll(password, '***') : text);
+}
 
 /**
  * Choose the closest client major >= the server's, preserving discovery order on ties.
