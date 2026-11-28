@@ -2,9 +2,9 @@ import { EventEmitter } from 'node:events';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-vi.mock('../../lib/childProcess.js', () => ({ spawn: vi.fn() }));
-vi.mock('../../lib/processEnv.js', () => ({
-  whichFirst: vi.fn().mockResolvedValue('python3'), safeChildProcessOptions: (options) => options,
+vi.mock('../../lib/childProcess.js', async (importOriginal) => ({ ...await importOriginal(), spawn: vi.fn() }));
+vi.mock('../../lib/processEnv.js', async (importOriginal) => ({
+  ...await importOriginal(), whichFirst: vi.fn().mockResolvedValue('python3'),
 }));
 import { existsSync } from 'node:fs';
 import { spawn } from '../../lib/childProcess.js';

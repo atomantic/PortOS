@@ -120,6 +120,28 @@ describe('describeYtDlpFailure', () => {
   });
 });
 
+describe('runYtDlp — child process', () => {
+  it('keeps runtime settings while stripping server credentials', async () => {
+    vi.stubEnv('PORTOS_API_TOKEN', 'example-session');
+    vi.stubEnv('PRIVACY_VAULT_KEY', 'example-vault-key');
+    vi.stubEnv('PGPASSWORD', 'example-db-password');
+    vi.stubEnv('OPENAI_API_KEY', 'example-provider-key');
+    vi.stubEnv('HTTPS_PROXY', 'http://proxy.example.com');
+    try {
+      spawn.mockReturnValue(fakeChild());
+      await runYtDlp(baseArgs);
+      const { env } = spawn.mock.calls[0][2];
+      expect(env.HTTPS_PROXY).toBe('http://proxy.example.com');
+      expect(env.PATH).toBe(process.env.PATH);
+      for (const key of ['PORTOS_API_TOKEN', 'PRIVACY_VAULT_KEY', 'PGPASSWORD', 'OPENAI_API_KEY']) {
+        expect(env).not.toHaveProperty(key);
+      }
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+});
+
 describe('runYtDlp — marker parsing', () => {
   it('emits one progress frame for a marker split across two stdout chunks', async () => {
     const seen = [];

@@ -74,6 +74,10 @@ export const HOST_CONTROL_GET_ROUTES = Object.freeze([
   'GET /api/image-gen/setup/flux2-status',
   'GET /api/image-gen/setup/flux2-install',
   'GET /api/video-gen/status',
+  'GET /api/video-gen/setup/runtime-status',
+  'GET /api/video-gen/setup/runtime-install',
+  'GET /api/music/supercollider/status',
+  'GET /api/voice/status',
   // Inspects host git repositories and enumerates live PTY shell sessions and host paths.
   'GET /api/workspace-contexts',
   'GET /api/workspace-contexts/:appId',

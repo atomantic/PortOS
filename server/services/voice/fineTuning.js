@@ -24,7 +24,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { atomicWrite, readJSONFileStrict } from '../../lib/fileUtils.js';
 import { PATHS } from '../../lib/paths.js';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
-import { safeChildProcessOptions } from '../../lib/processEnv.js';
+import { safeChildProcessOptions, withoutServerSecretsEnv } from '../../lib/processEnv.js';
 import { closeJobAfterDelay } from '../../lib/sseUtils.js';
 import {
   DEFAULT_CLONE_MODEL,
@@ -409,7 +409,7 @@ async function launchFineTuningJob({ profile, validation, python, trainingAdapte
   // exited, and the run must stay busy until the GPU is released.
   let child;
   try {
-    child = spawn(python, args, safeChildProcessOptions());
+    child = spawn(python, args, safeChildProcessOptions({ env: withoutServerSecretsEnv(process.env) }));
   } catch (err) {
     Object.assign(jobState, { status: 'failed', error: err.message, completedAt: new Date().toISOString() });
     finalizeJob(jobState);

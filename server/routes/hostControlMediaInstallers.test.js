@@ -170,17 +170,22 @@ describe('media installer operator authority (#9513)', () => {
     expect(spawnSetupScript).not.toHaveBeenCalled();
   });
 
-  it('keeps status aliases read-only and contained rendering separate from installation', async () => {
-    const app = await hostControlApp('192.0.2.10', mounts);
-    for (const path of [
-      '/api/video-gen/setup/runtime-status?runtime=example',
-      '/api/video-gen/setup/runtime-install?runtime=example',
-      '/api/music/supercollider/status',
-    ]) {
-      const response = await callRoute(app, ['get', path]);
-      expect(response.status, path).toBe(200);
-      expect(response.headers['content-type']).toMatch(/^application\/json/);
-    }
+  it('requires operator authority for video runtime and SuperCollider probes', async () => {
+    state.installed.add('video');
+    const workflows = [
+      ['get', '/api/video-gen/setup/runtime-status?runtime=example', undefined, isByovRuntimeReady, 200],
+      ['get', installers[1][0], undefined, isByovRuntimeReady, 200],
+      ['get', '/api/music/supercollider/status', undefined, getSuperColliderStatus, 200],
+    ];
+    for (const workflow of workflows) await expectRemoteRefusal(mounts, workflow);
+    expect(isByovRuntimeInstalled).not.toHaveBeenCalled();
+    expect(isByovRuntimeCurrent).not.toHaveBeenCalled();
+    await expectAuthorizedWorkflows({ auth: state, mounts, workflows });
+    expect(spawnSetupScript).not.toHaveBeenCalled();
+    expect(setupSuperColliderRuntime).not.toHaveBeenCalled();
+  });
+
+  it('allows contained rendering without installation', async () => {
     // Render runs caller SuperCollider source in a container, so it needs host
     // control (#13055); a local caller still renders without setup.
     const render = await callRoute(await hostControlApp('127.0.0.1', mounts),

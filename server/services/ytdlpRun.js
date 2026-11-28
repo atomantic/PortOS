@@ -9,7 +9,7 @@
  */
 
 import { spawn } from '../lib/childProcess.js';
-import { safeChildProcessOptions } from '../lib/processEnv.js';
+import { safeChildProcessOptions, withoutServerSecretsEnv } from '../lib/processEnv.js';
 import { createLineReader, createOutputTail } from '../lib/streamLines.js';
 import { isYoutubeVideoUrl } from '../lib/youtubeUrl.js';
 
@@ -100,7 +100,9 @@ export function describeYtDlpFailure(code, output, { fallback, url } = {}) {
  *   of non-marker output, for callers that compose their own reason.
  */
 export async function runYtDlp({ ytDlp, args, url, onProgress, registerProcess }) {
-  const proc = spawn(ytDlp, args, safeChildProcessOptions({ stdio: ['ignore', 'pipe', 'pipe'] }));
+  const proc = spawn(ytDlp, args, safeChildProcessOptions({
+    env: withoutServerSecretsEnv(process.env), stdio: ['ignore', 'pipe', 'pipe'],
+  }));
   registerProcess(proc);
 
   let title = '';

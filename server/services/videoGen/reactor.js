@@ -4,6 +4,7 @@ import { createMediaJobPreparation } from '../../lib/mediaJobPreparation.js';
 import { randomUUID } from 'crypto';
 import { stat, rm } from 'fs/promises';
 import { spawn } from '../../lib/childProcess.js';
+import { safeChildProcessOptions, withoutServerSecretsEnv } from '../../lib/processEnv.js';
 import { join } from 'path';
 import { ensureDir, PATHS } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
@@ -144,7 +145,9 @@ export function validateReactorRequest({
 
 function captureClip(entry, input, pythonPath, job, jobId) {
   return new Promise((resolve, reject) => {
-    const child = spawn(pythonPath, [join(PATHS.root, 'scripts', 'ml', 'reactor-render.py')], { stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn(pythonPath, [join(PATHS.root, 'scripts', 'ml', 'reactor-render.py')], safeChildProcessOptions({
+      env: withoutServerSecretsEnv(process.env), stdio: ['pipe', 'pipe', 'pipe'],
+    }));
     let buffer = '';
     let outputBytes = 0;
     let complete = null;

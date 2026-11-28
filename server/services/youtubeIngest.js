@@ -59,7 +59,7 @@ import { FINISHED_OUTPUT_ADMISSION_MS } from '../lib/backupPublicationWait.js';
 import { findFfmpeg } from '../lib/ffmpeg.js';
 import { findYtDlp } from '../lib/ytdlp.js';
 import { killWithEscalation } from '../lib/killWithEscalation.js';
-import { safeChildProcessOptions } from '../lib/processEnv.js';
+import { safeChildProcessOptions, withoutServerSecretsEnv } from '../lib/processEnv.js';
 import { attachSseClient as attachSse, broadcastSse, closeJobAfterDelay } from '../lib/sseUtils.js';
 import { vttToPlainText } from '../lib/vttTranscript.js';
 import { createMutex } from '../lib/asyncMutex.js';
@@ -254,7 +254,9 @@ export async function deleteIngest(videoId) {
 // media downloads go through the shared audio/video cores instead.
 function runYtDlp(ytDlp, args, { timeoutMs, registerProcess }) {
   return new Promise((resolve) => {
-    const proc = spawn(ytDlp, args, safeChildProcessOptions({ stdio: ['ignore', 'pipe', 'pipe'] }));
+    const proc = spawn(ytDlp, args, safeChildProcessOptions({
+      env: withoutServerSecretsEnv(process.env), stdio: ['ignore', 'pipe', 'pipe'],
+    }));
     registerProcess?.(proc);
     let stdout = '';
     let stderr = '';

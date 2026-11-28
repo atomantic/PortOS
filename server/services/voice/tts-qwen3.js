@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from '../../lib/childProcess.js';
 import { ServerError } from '../../lib/errorHandler.js';
-import { safeChildProcessOptions } from '../../lib/processEnv.js';
+import { safeChildProcessOptions, withoutServerSecretsEnv } from '../../lib/processEnv.js';
 import {
   DEFAULT_CLONE_MODEL,
   DEFAULT_DESIGN_MODEL,
@@ -96,7 +96,7 @@ export async function synthesizeQwen3(text, opts = {}, signal) {
 
   try {
     const { stdout } = await new Promise((resolve, reject) => {
-      const child = spawn(python, args, safeChildProcessOptions({ timeout: 5 * 60 * 1000, signal }));
+      const child = spawn(python, args, safeChildProcessOptions({ env: withoutServerSecretsEnv(process.env), timeout: 5 * 60 * 1000, signal }));
       let out = '';
       let err = '';
       let inputFailed = false;

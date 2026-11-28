@@ -128,6 +128,7 @@ const setInstancePassword = async () => {
 const startServer = async (engineOptions = {}, app) => {
   const { socketAuthGate } = await stage('import authGate.js', import('./authGate.js'));
   const { __testing } = await stage('import socket.js', import('./socket.js'));
+  const { registerModelObservationSocket } = await import('./modelObservation.js');
   httpServer = createServer(app);
   ioServer = new Server(httpServer, engineOptions);
   ioServer.engine.on('connection_error', (error) => {
@@ -152,6 +153,7 @@ const startServer = async (engineOptions = {}, app) => {
   ioServer.on('connection', (socket) => {
     __testing.registerAuthHandlers(socket, ioServer);
     __testing.registerSubscriptionHandlers(socket, ioServer);
+    registerModelObservationSocket(socket);
     // Stand-in for a host-control-shaped event (server/sockets/shell.js);
     // never actually reached by a peer-authenticated socket once the auth
     // middleware above disconnects it first.
@@ -486,12 +488,29 @@ describe('host-control socket events need operator authority (#8708)', () => {
     client.emit('detect:start', { path: '/example/project' });
     expect(await detectionRefused).toMatchObject({ success: false, code: 'HOST_CONTROL_FORBIDDEN' });
 
+    const voiceRefused = waitFor(client, 'voice-readiness:subscribe:error');
+    client.emit('voice-readiness:subscribe');
+    expect(await voiceRefused).toMatchObject({ code: 'HOST_CONTROL_FORBIDDEN' });
+
     // Read-only subscriptions stay open, and the refusals did not disconnect.
     const subscribed = waitFor(client, 'cos:subscribed');
     client.emit('cos:subscribe');
     await subscribed;
     expect(client.connected).toBe(true);
     expect(reached).toEqual([]);
+  });
+
+  it('auth off: a local caller can subscribe to voice readiness', async () => {
+    await startServer();
+    const { observeModelResource } = await import('./modelObservation.js');
+    const probe = vi.fn(async () => ({ enabled: true }));
+    observeModelResource('voice-readiness', probe);
+    const client = connectClient({});
+    await waitFor(client, 'connect');
+    const changed = waitFor(client, 'voice-readiness:changed');
+    client.emit('voice-readiness:subscribe');
+    await changed;
+    expect(probe).toHaveBeenCalledTimes(1);
   });
 
   it('auth off: a remote caller is refused every generated-preview action except close', async () => {

@@ -8,7 +8,7 @@ import { spawn } from '../../lib/childProcess.js';
 import { awaitWithAbort } from '../../lib/abortTimeout.js';
 import { terminateWithEscalation } from '../../lib/bufferedSpawn.js';
 import { trackDetachedGroup } from '../../lib/credentialBootstrap.js';
-import { safeChildProcessOptions } from '../../lib/processEnv.js';
+import { safeChildProcessOptions, withoutServerSecretsEnv } from '../../lib/processEnv.js';
 import { installLockedRuntime, resolvePatchedUv } from '../../lib/pythonSetup.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { withSpawnCwdEnv } from '../../lib/spawnCwd.js';
@@ -52,7 +52,7 @@ export async function getAukStatus() {
 function runSetupCommand(command, args, cwd, signal) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, safeChildProcessOptions({
-      cwd, env: withSpawnCwdEnv(process.env, cwd), stdio: 'ignore', detached: true,
+      cwd, env: withSpawnCwdEnv(withoutServerSecretsEnv(process.env), cwd), stdio: 'ignore', detached: true,
     }));
     trackDetachedGroup(child, true);
     let failure;
@@ -147,7 +147,7 @@ export function startAukSetup(notify = () => {}) {
     // Hash-pinned closure first, then the pinned checkout itself editable with no
     // resolution and its (locked) build backend: nothing unpinned is fetched.
     const locked = installLockedRuntime(python, 'auk-mlx', () => {}, {
-      verifiedUv: uv, processGroup: true, env: withSpawnCwdEnv(process.env, root),
+      verifiedUv: uv, processGroup: true, env: withSpawnCwdEnv(withoutServerSecretsEnv(process.env), root),
       sourceInstalls: [['install', '--no-deps', '--no-build-isolation', '-e', root]],
     });
     signal.addEventListener('abort', locked.kill, { once: true });
@@ -219,7 +219,7 @@ export function unloadAuk() {
 function ensureWorker() {
   if (worker) return worker;
   const child = spawn(python, [join(PATHS.root, 'scripts', 'ml', 'auk_voice_worker.py'), root],
-    safeChildProcessOptions({ cwd: root, env: withSpawnCwdEnv(process.env, root), stdio: ['pipe', 'pipe', 'pipe'] }));
+    safeChildProcessOptions({ cwd: root, env: withSpawnCwdEnv(withoutServerSecretsEnv(process.env), root), stdio: ['pipe', 'pipe', 'pipe'] }));
   worker = child;
   // Drain diagnostics without copying prompts, paths, or model data into shared logs.
   child.stderr.on('data', () => {});
