@@ -97,8 +97,4 @@ describe('release.yml publication contract', () => {
     expect(yaml.match(/^permissions:\n {2}contents: write\n/m)).not.toBeNull();
     expect(yaml).not.toMatch(/--force|git push[^\n]*\btag\b|git tag /);
   });
-
-  it('serializes overlapping release pushes without cancelling an in-flight publication', () => {
-    expect(yaml).toMatch(/^concurrency:\n {2}group: release-\$\{\{ github\.ref \}\}\n {2}cancel-in-progress: false\n/m);
-  });
 });

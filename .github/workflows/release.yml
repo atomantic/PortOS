@@ -7,11 +7,6 @@ on:
 permissions:
   contents: write
 
-# Serialize overlapping pushes to release; never cancel an in-flight publication.
-concurrency:
-  group: release-${{ github.ref }}
-  cancel-in-progress: false
-
 jobs:
   # The candidate -> release pull request already ran the complete suite on the very
   # tree this push carries. Look for that green gate instead of paying for it
