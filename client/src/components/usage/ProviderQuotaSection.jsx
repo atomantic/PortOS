@@ -139,6 +139,7 @@ export function ProviderQuotaSection({ billingRevision }) {
   const [quotas, setQuotas] = useState(null);
   const [loading, setLoading] = useState(true);
   const [localLoaded, setLocalLoaded] = useState(false);
+  const [cacheOnly, setCacheOnly] = useState(false);
   const [error, setError] = useState(false);
   const [refreshAllError, setRefreshAllError] = useState(false);
   const [coverage, setCoverage] = useState(null);
@@ -240,6 +241,7 @@ export function ProviderQuotaSection({ billingRevision }) {
     fullRequest.current.inFlight = null;
     if (result?.providers) {
       setLocalLoaded(true);
+      setCacheOnly(result.cacheOnly === true);
       const billingChanged = startingBillingEpoch !== fleetRequests.current.billingEpoch;
       if (!refresh) {
         // A family request only supersedes reads that began before it. A newer
@@ -558,7 +560,9 @@ export function ProviderQuotaSection({ billingRevision }) {
             </div>
           ))}
           {quotas.length === 0 && localLoaded && (
-            <div className="col-span-2 sm:col-span-1 text-gray-500 text-sm">No enabled providers report subscription usage.</div>
+            <div className="col-span-2 sm:col-span-1 text-gray-500 text-sm">
+              {cacheOnly ? 'No saved provider quota readings.' : 'No enabled providers report subscription usage.'}
+            </div>
           )}
         </div>
       )}

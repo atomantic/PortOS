@@ -207,6 +207,7 @@ export async function checkImageGenSetup({ pythonPath, signal } = {}) {
 
 export async function detectImageGenPython() {
   const res = await fetch('/api/image-gen/setup/python');
+  if (res.status === 403) await throwApiError(res);
   return res.ok ? res.json() : null;
 }
 

@@ -579,10 +579,13 @@ export async function getCodexAccountUsage() {
  * with it on a hot cache while a cold one publishes an honest "unprobed"
  * instead of an accusation.
  */
-export function peekCodexAccountReadiness() {
+export function peekCodexAccountReadiness({ includeDiagnostics = true } = {}) {
   if (!readinessCache) return null;
   if (Date.now() - readinessCache.at >= READINESS_TTL_MS) return null;
-  return readinessCache.readiness;
+  const { readiness } = readinessCache;
+  if (includeDiagnostics || !readiness.error) return readiness;
+  // Process and protocol diagnostics may contain absolute host paths.
+  return { ...readiness, error: { code: readiness.error.code, message: 'Codex account check failed.' } };
 }
 
 /**
@@ -792,11 +795,13 @@ export function peekCodexModels() {
  * CACHE-ONLY, like `peekCodexAccountReadiness`: this is what the providers list
  * may call on a render path, where spawning `codex app-server` is forbidden.
  */
-export function peekCodexModelCatalog() {
+export function peekCodexModelCatalog({ includeDiagnostics = true } = {}) {
   return {
     models: modelsCache ? modelsCache.models : null,
     fetchedAt: modelsCache ? modelsCache.at : null,
-    error: modelsError,
+    error: includeDiagnostics || !modelsError
+      ? modelsError
+      : { code: modelsError.code, message: 'Codex model catalog check failed.' },
   };
 }
 

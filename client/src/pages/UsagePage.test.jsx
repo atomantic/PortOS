@@ -159,6 +159,12 @@ describe('UsagePage quota billing selection', () => {
     expect(screen.queryByText('80% used')).not.toBeInTheDocument();
   });
 
+  it('describes an empty cache-only response as having no saved quota readings', async () => {
+    api.getProviderUsage.mockResolvedValue({ providers: [], cacheOnly: true });
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    expect(await screen.findByText('No saved provider quota readings.')).toBeInTheDocument();
+  });
+
   it('preserves a newer local provider removal across a billing change and older family response', async () => {
     render(<MemoryRouter><UsagePage /></MemoryRouter>);
     expect(await screen.findByText('80% used')).toBeInTheDocument();

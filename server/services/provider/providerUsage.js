@@ -20,7 +20,7 @@ import { getSettings } from '../settings.js';
 import { getImageGenQuota, IMAGE_GEN_FAMILY, isQuotaTrackedImageMode } from '../imageGenQuota.js';
 import { mergeFleetQuotaCards } from '../../lib/fleetQuotas.js';
 import { getFleetQuotaEntries } from '../peerUsage.js';
-import { recordLocalQuotaCards } from './providerQuotaShare.js';
+import { readLocalQuotaCards, recordLocalQuotaCards } from './providerQuotaShare.js';
 import { getApiBilledInstanceIds } from '../usageFleetBilling.js';
 import { enabledCloudImageModes } from '../imageGen/modes.js';
 
@@ -921,17 +921,19 @@ function instancePeerQuotas({ entries, excludedInstanceIds }, family) {
   };
 }
 
-export async function getProviderQuotas({ wait = WAIT.CACHED, family = null, period, scope } = {}) {
+export async function getProviderQuotas({ wait = WAIT.CACHED, family = null, period, scope, cacheOnly = false } = {}) {
   // Billing changes only need the already-published peer readings. Do not
   // start a local CLI scrape or rewrite the shared quota store for that read.
   if (scope === 'peers') return instancePeerQuotas(await readPeerQuotaEntries({ includeEmpty: true }), family);
-  const { cards, families, complete, imageQuotaComplete } = await readProviderQuotas({ wait, family, period });
+  const { cards, families, complete, imageQuotaComplete } = cacheOnly
+    ? await readSavedProviderQuotas(family)
+    : await readProviderQuotas({ wait, family, period });
   // Publish this machine's reading to the fleet and fold in every peer's. The
   // two are independent — the peer read excludes our own slot — so they
   // overlap. Recording is awaited rather than fired off so a caller that
   // immediately re-reads (the page's per-card Refresh) sees its own reading.
   const [, peerEntries] = await Promise.all([
-    recordLocalQuotaCards(cards, { families, complete }).catch((err) => {
+    cacheOnly ? null : recordLocalQuotaCards(cards, { families, complete }).catch((err) => {
       console.error(`❌ Could not record local quota readings: ${err?.message || err}`);
     }),
     readPeerQuotaEntries({ includeEmpty: scope === 'instances' }),
@@ -948,6 +950,17 @@ export async function getProviderQuotas({ wait = WAIT.CACHED, family = null, per
     };
   }
   return mergeFleetQuotaCards(cards, peerEntries.entries || []);
+}
+
+// Saved observations never dispatch adapters, even when cold or expired.
+async function readSavedProviderQuotas(family) {
+  const { quotas } = await readLocalQuotaCards();
+  const now = Date.now();
+  return {
+    cards: quotas.filter((card) => !family || card.family === family)
+      .map((card) => stampReadAt(pruneExpiredWindows(card, now), now)),
+    imageQuotaComplete: null,
+  };
 }
 
 /** The local readings, before any federated merge. */

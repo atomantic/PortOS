@@ -67,6 +67,12 @@ export const HOST_CONTROL_GET_ROUTES = Object.freeze([
   'GET /api/midi-runtime/install',
   'GET /api/music/setup/runtime-install',
   'GET /api/remote-desktop/status',
+  // Host version, iTerm and Python probes; image setup also returns host paths (#20300).
+  'GET /api/local-llm/llama-server/update-status',
+  'GET /api/iterm/status',
+  'GET /api/image-gen/setup/python',
+  'GET /api/image-gen/setup/flux2-status',
+  'GET /api/image-gen/setup/flux2-install',
   // Materializes generated HTML on demand and returns its host path.
   'GET /api/html-pages/runs/:id/pages/:index/path',
   // Raw backup archives export private records and credentials (#8772).

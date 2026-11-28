@@ -244,8 +244,8 @@ export const recoverProvider = (id, options) => request(`/providers/${id}/status
 // credentials: these calls report and change SIGN-IN STATE only, and no
 // response ever carries a token, an account id, or a credential path.
 //
-// `fresh` skips the server's short readiness TTL — use it for the poll that
-// follows a sign-in, not for the page's idle refresh.
+// `fresh` is an operator-only check that skips the server's short readiness
+// TTL. Readers without host control get the cached readiness.
 export const getCodexAccount = (options = {}) => {
   const { fresh = false, ...rest } = options;
   return request(`/providers/codex/account${fresh ? '?fresh=1' : ''}`, rest);
@@ -267,8 +267,8 @@ export const cancelCodexLogin = (loginId, options) => request('/providers/codex/
 });
 export const codexLogout = (options) => request('/providers/codex/account/logout', { method: 'POST', ...options });
 // The models this subscription may run, from the app-server catalog (#5590).
-// This is the LAZY read that may spawn `codex app-server` — call it only from an
-// explicit user action (the Providers page's refresh). Render paths read the
+// An operator read may lazily spawn `codex app-server`. Other readers get the
+// cached catalog. Render paths read the
 // cached catalog off `codexModelCatalog` on the `GET /providers` payload instead
 // (#6306), which spawns nothing.
 // Resolves to { models, fetchedAt, error }. `models: null` means NEVER FETCHED

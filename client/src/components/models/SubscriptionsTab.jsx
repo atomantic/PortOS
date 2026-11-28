@@ -194,7 +194,7 @@ function SubscriptionRow({ row, savingsRow, quota, draft, busy, onDraft, onSave,
       <div className="border-t border-port-border pt-2">
         {quota
           ? <ProviderQuotaBody quota={quota} showActivity={false} showNote={false} />
-          : <p className="text-xs text-gray-500">No quota reading — the plan is off, or its CLI reports no usage surface.</p>}
+          : <p className="text-xs text-gray-500">No subscription quota reading available.</p>}
       </div>
     </div>
   );

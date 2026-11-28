@@ -4,6 +4,7 @@ import { readLocalTranscriptUsage, refreshLocalTranscriptUsage } from '../servic
 import { nativeUsageEvents } from '../services/nativeUsageEvents.js';
 import { describeNativeUsageSources, refreshNativeUsageHistory } from '../services/nativeUsageHistory.js';
 import { dismissUsageRetentionTip, getUsageRetentionTips } from '../services/usageRetentionTips.js';
+import { assertHostControl, requestHasHostControl } from '../services/authGate.js';
 import { getProviderQuotas } from '../services/provider/providerUsage.js';
 import { getAllProviders } from '../services/provider/providers.js';
 import { asyncHandler } from '../lib/errorHandler.js';
@@ -150,12 +151,13 @@ router.put('/fleet-billing', asyncHandler(async (req, res) => {
 // provider family (claude, codex, agy, grok). Providers without a queryable
 // usage surface report `supported: false`.
 //
-// ONE policy for every status read: it never blocks on a slow reading. A cached
+// A regular operator read never blocks on a slow reading. A cached
 // one is served immediately (and revalidated behind the response); a cold one
 // comes back as a `pending: true` card the UI renders as "reading…" and polls.
 // Holding an HTTP response open for a 10-20s PTY spawn is what made this page —
 // and Quota Burn — look broken, and it is the shape that trips proxy timeouts.
-// `?refresh=1` is the explicit "get me a live reading" and does wait.
+// `?refresh=1` requires host control and waits for a live reading. Other
+// callers only read saved observations.
 //
 // `?family=<id>` narrows the read to a single card, so the page's per-card
 // Refresh re-reads only the provider the user clicked instead of respawning
@@ -166,13 +168,17 @@ router.put('/fleet-billing', asyncHandler(async (req, res) => {
 router.get('/providers', asyncHandler(async (req, res) => {
   const { refresh: refreshParam, family, period, scope } = validateRequest(providerUsageQuerySchema, req.query);
   const refresh = refreshParam === '1' || refreshParam === 'true';
+  if (refresh) assertHostControl(req);
+  const cacheOnly = !refresh && !requestHasHostControl(req);
   const providers = await getProviderQuotas({
     wait: refresh ? WAIT.FRESH : WAIT.NEVER,
+    ...(cacheOnly ? { cacheOnly } : {}),
     family: family ?? null,
     ...(period ? { period } : {}),
     ...(scope ? { scope } : {}),
   });
-  res.json(Array.isArray(providers) ? { providers } : providers);
+  const payload = Array.isArray(providers) ? { providers } : providers;
+  res.json(cacheOnly && scope !== 'peers' ? { ...payload, cacheOnly } : payload);
 }));
 
 // GET /api/usage/claude-code/models - Claude Code tokens per model, priced at
