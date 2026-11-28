@@ -126,6 +126,20 @@ describe('runTurn — images shown to the voice agent', () => {
 
     expect(userMessage.content).toBe('thoughts?');
     expect(result.userContent).toBeUndefined();
-    expect(h.chips.at(-1)).toMatchObject({ id: 'img_2', status: 'error', error: 'model offline' });
+    expect(h.chips.find((c) => c.status === 'error')).toMatchObject({ id: 'img_2', error: 'model offline' });
+    expect(h.chips.at(-1)).toEqual({ id: 'img_2', status: 'removed' });
+  });
+
+  it('re-sends an unchanged screen when its earlier frame was removed before a turn', async () => {
+    describeMock.mockResolvedValue('A settings page.');
+    const h = harness({ dataUrl: FRAME, signature: signature(50) });
+    setTabSharing(h.state, true);
+    const { attachTabFrame, removeImage } = await import('./imageAttachments.js');
+    const first = await attachTabFrame(h.state, { capture: async () => ({ dataUrl: FRAME, signature: signature(50) }), describe: async () => ({ text: 'x', model: 'm' }), emit: h.emit, newId: () => 'tab_a' });
+    await first.done;
+    removeImage(h.state, 'tab_a', h.emit);
+
+    const { userMessage } = await turn('what about now?', h);
+    expect(userMessage.content).toContain('A settings page.');
   });
 });

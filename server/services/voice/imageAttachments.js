@@ -149,18 +149,16 @@ export const attachTabFrame = async (state, { capture, describe, emit, newId }) 
   const signature = normalizeFrameSignature(frame.signature);
   if (framesMatch(signature, images.lastFrame)) return null;
   const item = attachImage(state, { id: newId(), dataUrl: frame.dataUrl, source: 'tab', name: cleanName(frame.name, 'tab') }, { describe, emit });
-  // Remember the frame only once it is described, so a failed description
-  // retries on the next turn instead of being skipped as unchanged.
-  item.done = item.done.then(() => {
-    if (item.status === 'ready') images.lastFrame = signature;
-  });
+  // Recorded as the conversation's last frame only once it is sent (see
+  // takePendingImages), so a failed, removed or dropped frame is retried.
+  item.signature = signature;
   return item;
 };
 
 /**
  * Wait for the pending images, remove them from the queue and return the
- * blocks to add to this turn. Failed images are dropped (their chip already
- * shows the error); each sent image's chip moves to `sent`.
+ * blocks to add to this turn. Each sent image's chip moves to `sent`; failed
+ * images leave the queue and their chips are removed.
  */
 export const takePendingImages = async (state, { emit, signal }) => {
   const images = imageState(state);
@@ -177,6 +175,10 @@ export const takePendingImages = async (state, { emit, signal }) => {
   for (const item of sent) {
     item.status = 'sent';
     emit('voice:image', publicView(item));
+    if (item.source === 'tab' && item.signature) images.lastFrame = item.signature;
+  }
+  for (const item of batch) {
+    if (item.status === 'error') emit('voice:image', { id: item.id, status: 'removed' });
   }
   return sent.map((p) => p.text);
 };
