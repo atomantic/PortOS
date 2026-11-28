@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, writeFileSync, readFileSync, mkdirSync, copyFileSync, rmSync } from 'fs';
+import { chmodSync, mkdtempSync, writeFileSync, readFileSync, mkdirSync, copyFileSync, rmSync, statSync } from 'fs';
 import { spawnSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import { tmpdir } from 'os';
@@ -124,6 +124,14 @@ describe('upsertEnvKey', () => {
     // $$ , $& , $1 would all be mangled by a string replacement arg.
     upsertEnvKey(envPath, 'PGPASSWORD', 'p$$ass$&w$1ord');
     expect(parseEnvFile(envPath)).toMatchObject({ PGPASSWORD: 'p$$ass$&w$1ord' });
+  });
+
+  it.skipIf(process.platform === 'win32')('creates .env with 0600 permissions and tightens existing 0644 files', () => {
+    upsertEnvKey(envPath, 'PGPASSWORD', 'example-secret');
+    expect(statSync(envPath).mode & 0o777).toBe(0o600);
+    chmodSync(envPath, 0o644);
+    upsertEnvKey(envPath, 'PGMODE', 'native');
+    expect(statSync(envPath).mode & 0o777).toBe(0o600);
   });
 });
 

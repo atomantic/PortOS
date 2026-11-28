@@ -133,10 +133,21 @@ describe('shared installation .env transactions', () => {
     expect(readFileSync(envPath, 'utf8')).toBe(`${original}NEXT=saved\n`);
   });
 
-  it.skipIf(process.platform === 'win32')('creates a new .env with 0600 permissions and preserves 0600 when ensureVaultKey() appends', async () => {
+  it.skipIf(process.platform === 'win32')('creates a new .env with 0600 permissions, tightens 0644 files, and passes mode 0600 to atomicWrite', async () => {
+    const spy = vi.spyOn(fileUtils, 'atomicWrite');
     await upsertPortosEnvLine('LLM_BACKEND', 'ollama', envPath);
     expect(statSync(envPath).mode & 0o777).toBe(0o600);
+    expect(spy).toHaveBeenLastCalledWith(envPath, expect.any(String), { mode: 0o600 });
+
+    // Tightens a pre-existing world-readable .env atomically without a post-rename chmod window.
+    chmodSync(envPath, 0o644);
+    await upsertPortosEnvLine('EXTRA_VAR', 'value', envPath);
+    expect(statSync(envPath).mode & 0o777).toBe(0o600);
+    expect(spy).toHaveBeenLastCalledWith(envPath, expect.any(String), { mode: 0o600 });
+
+    chmodSync(envPath, 0o644);
     await ensureVaultKey({ envPath });
     expect(statSync(envPath).mode & 0o777).toBe(0o600);
+    expect(spy).toHaveBeenLastCalledWith(envPath, expect.stringContaining('PRIVACY_VAULT_KEY='), { mode: 0o600 });
   });
 });

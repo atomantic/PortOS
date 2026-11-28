@@ -5,7 +5,7 @@
  * Do NOT import from server/lib or any installed package.
  */
 
-import { readFileSync, writeFileSync } from 'fs';
+import { chmodSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import envFileParser from './envFile.cjs';
 
@@ -46,5 +46,7 @@ export function upsertEnvKey(filePath, key, value) {
     return [`${key}=${value}${line.endsWith('\r') ? '\r' : ''}`];
   });
   content = replaced ? lines.join('\n') : `${key}=${value}\n${content}`;
-  writeFileSync(filePath, content);
+  // Enforce owner-only permissions on .env (holds PGPASSWORD / PRIVACY_VAULT_KEY).
+  writeFileSync(filePath, content, { mode: 0o600 });
+  if (process.platform !== 'win32') chmodSync(filePath, 0o600);
 }
