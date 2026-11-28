@@ -1,6 +1,7 @@
 /**
- * Playback reference for Realtime Voice: what the speaker is playing, timed against microphone capture, so the voice's
- * speech detector can tell what is left of its own reply's echo from the user talking (#20512).
+ * Playback reference for Realtime Voice: what the speaker played, timed against microphone capture.
+ *
+ * The voice's speech detector uses it to tell what is left of its own reply's echo from the user talking (#20512).
  *
  * The reference is the post-volume signal the output AudioContext renders (tapped after its gain node). Reply audio that is
  * only queued, audio held back while the avatar renders it, and muted output never count as playback. Output blocks are
