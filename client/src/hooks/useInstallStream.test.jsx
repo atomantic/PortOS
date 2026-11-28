@@ -139,6 +139,28 @@ describe('useInstallStream', () => {
     expect(result.current.logs.map((e) => e.text)).toEqual(['l3', 'l4', 'l5']);
   });
 
+  it('batches logs and continues scrolling when new lines replace old lines at the cap', () => {
+    vi.useFakeTimers();
+    const logEnd = document.createElement('div');
+    const { result } = renderHook(() => useInstallStream('/x', { maxLogLines: 2, flushMs: 100 }));
+    result.current.logsEndRef.current = logEnd;
+    act(() => {
+      last().emit({ type: 'log', message: 'first' });
+      last().emit({ type: 'log', message: 'second' });
+    });
+    expect(result.current.logs).toEqual([]);
+    act(() => vi.advanceTimersByTime(100));
+    expect(result.current.logs.map((e) => e.text)).toEqual(['first', 'second']);
+    expect(logEnd.scrollIntoView).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      last().emit({ type: 'log', message: 'third' });
+      vi.advanceTimersByTime(100);
+    });
+    expect(result.current.logs.map((e) => e.text)).toEqual(['second', 'third']);
+    expect(logEnd.scrollIntoView).toHaveBeenCalledTimes(2);
+  });
+
   it('does not tear down the stream on parent re-render with a fresh onComplete', () => {
     let onComplete = vi.fn();
     const { rerender } = renderHook(({ cb }) => useInstallStream('/x', { enabled: true, onComplete: cb }), {

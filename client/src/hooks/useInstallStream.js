@@ -14,13 +14,6 @@ import { safeParseJSON } from '../lib/genUtils';
 import { openStreamResponse, readStreamFrames } from '../services/streamResponse.js';
 
 /**
- * Shared streaming lifecycle for the BYO runtime install modals
- * (Flux2InstallModal, RuntimeInstallModal). Both streamed the same shape of
- * SSE install log — open on `open`, dispatch `stage`/`log`/`complete`/`error`
- * frames, cap the retained log, surface a "connection lost" error when the
- * socket drops before `complete`, and auto-scroll the log to the bottom — so
- * the plumbing lives here once and each modal keeps only its own chrome.
- *
  * Frame contract (matches the server emitters in pythonSetup.js /
  * setup-image-video.sh):
  *   { type: 'stage',    stage, message? }  → advances currentStage + logs it
@@ -38,10 +31,8 @@ import { openStreamResponse, readStreamFrames } from '../services/streamResponse
  * `onComplete` callback, and auto-scroll — all beyond what `useSseProgress`
  * exposes. Wrapping it would add indirection without removing code.
  *
- * `flushMs` controls log batching: 0 flushes each line synchronously (fine for
- * the structured, bounded FLUX.2 stream); >0 buffers and flushes on a debounce
- * so a chatty pip/git stream re-renders the log list at ~1/flushMs Hz instead
- * of once per line.
+ * `flushMs` controls log batching. A positive value buffers chatty pip/git
+ * output and flushes once per window instead of rendering each line.
  *
  * @param {string|null} url - SSE endpoint; null/empty leaves the stream closed.
  * @param {object} opts
@@ -88,6 +79,7 @@ export function useInstallStream(url, {
   const pendingRef = useRef([]);
   const flushTimerRef = useRef(null);
   const flush = () => {
+    if (flushTimerRef.current != null) clearTimeout(flushTimerRef.current);
     flushTimerRef.current = null;
     if (pendingRef.current.length === 0) return;
     const incoming = pendingRef.current;
@@ -247,7 +239,7 @@ export function useInstallStream(url, {
     if (logsEndRef.current) {
       logsEndRef.current.scrollIntoView({ behavior: 'auto', block: 'end' });
     }
-  }, [logs.length]);
+  }, [logs]);
 
   const close = () => {
     if (esRef.current) { esRef.current.close(); esRef.current = null; }
