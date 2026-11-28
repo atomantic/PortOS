@@ -1394,7 +1394,7 @@ describe('realtime speech-to-speech voice call', () => {
     ['voice:turn', { audio: Buffer.alloc(64), mimeType: 'audio/wav' }],
   ])('drops %s while a realtime call is live, so the pipeline does not answer as a second conversation', async (event, payload) => {
     openRealtimeCall.mockResolvedValue(makeSession());
-    const socket = makeFakeSocket();
+    const socket = makeLocalSocket();
     registerVoiceHandlers(socket);
     await socket.fire('voice:realtime:start');
     runTurn.mockClear();
