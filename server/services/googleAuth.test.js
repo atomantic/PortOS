@@ -329,4 +329,112 @@ describe('googleAuth credentials and disconnect', () => {
 
     await expect(clearAuth()).rejects.toThrow('disk write failed');
   });
+
+  it('refuses getAuthenticatedClient while clearAuth is awaiting upstream revocation', async () => {
+    let storedTokens = expiredTokens();
+    tryReadFile.mockImplementation(async (file) => {
+      if (file.endsWith('credentials.json')) return JSON.stringify(CREDENTIALS);
+      if (file.endsWith('tokens.json')) return storedTokens ? JSON.stringify(storedTokens) : null;
+      return null;
+    });
+    atomicWrite.mockImplementation(async (file, value) => {
+      if (file.endsWith('tokens.json')) storedTokens = value;
+    });
+
+    const revokeStarted = Promise.withResolvers();
+    const releaseRevoke = Promise.withResolvers();
+    fetchWithTimeout.mockImplementationOnce(() => {
+      revokeStarted.resolve();
+      return releaseRevoke.promise;
+    });
+
+    const clearing = clearAuth();
+    await revokeStarted.promise;
+
+    expect(await getAuthenticatedClient()).toBeNull();
+    releaseRevoke.resolve({ ok: true, status: 200 });
+    await clearing;
+
+    expect(storedTokens).toEqual({});
+    expect(await getAuthenticatedClient()).toBeNull();
+  });
+
+  it('discards an in-flight getAuthenticatedClient that read tokens before clearAuth completed', async () => {
+    let storedTokens = expiredTokens();
+    const tokenReadStarted = Promise.withResolvers();
+    const releaseTokenRead = Promise.withResolvers();
+    let holdFirstRead = true;
+    tryReadFile.mockImplementation(async (file) => {
+      if (file.endsWith('credentials.json')) return JSON.stringify(CREDENTIALS);
+      if (file.endsWith('tokens.json')) {
+        if (holdFirstRead) {
+          holdFirstRead = false;
+          tokenReadStarted.resolve();
+          await releaseTokenRead.promise;
+          return JSON.stringify(expiredTokens());
+        }
+        return storedTokens ? JSON.stringify(storedTokens) : null;
+      }
+      return null;
+    });
+    atomicWrite.mockImplementation(async (file, value) => {
+      if (file.endsWith('tokens.json')) storedTokens = value;
+    });
+
+    const clientPromise = getAuthenticatedClient();
+    await tokenReadStarted.promise;
+    await clearAuth();
+    releaseTokenRead.resolve();
+
+    expect(await clientPromise).toBeNull();
+    expect(storedTokens).toEqual({});
+  });
+
+  it('does not cache an exchanged client when clearAuth overlaps callback persistence', async () => {
+    let storedTokens = null;
+    tryReadFile.mockImplementation(async (file) => {
+      if (file.endsWith('credentials.json')) return JSON.stringify(CREDENTIALS);
+      if (file.endsWith('tokens.json')) return storedTokens ? JSON.stringify(storedTokens) : null;
+      return null;
+    });
+    const writeStarted = Promise.withResolvers();
+    const releaseWrite = Promise.withResolvers();
+    let holdFirstWrite = true;
+    atomicWrite.mockImplementation(async (file, value) => {
+      if (!file.endsWith('tokens.json')) return;
+      if (holdFirstWrite) {
+        holdFirstWrite = false;
+        writeStarted.resolve();
+        await releaseWrite.promise;
+      }
+      storedTokens = value;
+    });
+
+    const realCreate = createGoogleOAuthClient;
+    let exchangedClient = null;
+    vi.spyOn(googleOAuthClient, 'createGoogleOAuthClient').mockImplementation((options) => {
+      const client = realCreate(options);
+      client.getToken = vi.fn().mockResolvedValue({
+        tokens: { access_token: 'fresh-access', refresh_token: 'fresh-refresh', expiry_date: Date.now() + 3_600_000 },
+      });
+      exchangedClient = client;
+      return client;
+    });
+
+    const { url } = await getAuthUrl('calendar');
+    const state = new URL(url).searchParams.get('state');
+    const callback = handleCallback({ code: 'auth-code', state });
+    await writeStarted.promise;
+
+    const clearing = clearAuth();
+    releaseWrite.resolve();
+    await Promise.all([callback, clearing]);
+
+    expect(storedTokens).toEqual({});
+    expect(await getAuthenticatedClient()).toBeNull();
+    // Even if the superseded client emits a refresh event, its old generation cannot resurrect tokens.
+    exchangedClient.emit('tokens', { access_token: 'stale-resurrection' });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(storedTokens).toEqual({});
+  });
 });

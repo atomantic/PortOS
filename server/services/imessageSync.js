@@ -294,7 +294,7 @@ export async function checkSetup() {
   try {
     db = new DatabaseSync(path, { readOnly: true });
     const row = db.prepare('SELECT COUNT(*) AS n FROM message').get();
-    return { ok: true, dbPath: path, messageCount: Number(row?.n || 0) };
+    return { ok: true, dbPath: scrubHomePath(path), messageCount: Number(row?.n || 0) };
   } catch (err) {
     const fullDiskAccessRequired = isFullDiskAccessError(err);
     return {

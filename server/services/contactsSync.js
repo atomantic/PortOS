@@ -320,7 +320,7 @@ export function readAddressBookDb(dbPath) {
         continue;
       }
       contacts.push({
-        id: r.unique_id || `ab:${dbPath}:${r.pk}`,
+        id: r.unique_id || `ab:${scrubHomePath(dbPath)}:${r.pk}`,
         uniqueId: r.unique_id || `ab:${r.pk}`,
         firstName: r.first_name,
         lastName: r.last_name,

@@ -437,14 +437,26 @@ describe('the token value never reaches a response or a log line', () => {
     vi.mocked(disconnectBeeper).mockResolvedValue({ deleted: true, tokenConfigured: false });
 
     const app = buildApp();
+    let callbackCacheControl = null;
+    const probeApp = express();
+    probeApp.use((req, res, next) => {
+      if (req.path === '/api/beeper/oauth/callback') {
+        res.on('finish', () => { callbackCacheControl = res.getHeader('cache-control'); });
+      }
+      next();
+    });
+    probeApp.use(app);
     const responses = [
-      await request(app).post('/api/beeper/oauth/start'),
-      await request(app).get('/api/beeper/oauth/callback?code=abc&state=s'),
-      await request(app).post('/api/beeper/token').send({ token: TOKEN }),
-      await request(app).get('/api/beeper/status'),
-      await request(app).post('/api/beeper/status/check'),
-      await request(app).delete('/api/beeper/token'),
+      await request(probeApp).post('/api/beeper/oauth/start'),
+      await request(probeApp).get('/api/beeper/oauth/callback?code=abc&state=s'),
+      await request(probeApp).post('/api/beeper/token').send({ token: TOKEN }),
+      await request(probeApp).get('/api/beeper/status'),
+      await request(probeApp).post('/api/beeper/status/check'),
+      await request(probeApp).delete('/api/beeper/token'),
     ];
+    expect(responses[0].headers['cache-control']).toBe('no-store');
+    expect(callbackCacheControl).toBe('no-store');
+    expect(responses[2].headers['cache-control']).toBe('no-store');
 
     logSpy.mockRestore();
     errSpy.mockRestore();

@@ -417,6 +417,7 @@ router.post('/oauth/start', asyncHandler(async (req, res) => {
   }
   const result = await startBeeperOAuth({ redirectUri: redirectUriFrom(origin), clientUri: origin })
     .catch((err) => { throw mapBeeperWriteError(err); });
+  res.set('Cache-Control', 'no-store');
   res.json(result);
 }));
 
@@ -426,6 +427,7 @@ router.post('/oauth/start', asyncHandler(async (req, res) => {
 // error middleware would send. The `code` never reaches the client: it is
 // exchanged here and only the outcome flag rides the redirect.
 router.get('/oauth/callback', asyncHandler(async (req, res) => {
+  res.set('Cache-Control', 'no-store');
   const tabUrl = (error) => (error
     ? `/messages/beeper?beeperOauthError=${encodeURIComponent(error)}`
     : '/messages/beeper?beeperConnected=1');
@@ -462,6 +464,7 @@ router.get('/oauth/callback', asyncHandler(async (req, res) => {
 router.post('/token', asyncHandler(async (req, res) => {
   const { token } = validateRequest(beeperPastedTokenSchema, req.body);
   const result = await connectWithPastedToken(token).catch((err) => { throw mapBeeperWriteError(err); });
+  res.set('Cache-Control', 'no-store');
   res.json(result);
 }));
 

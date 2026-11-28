@@ -222,6 +222,7 @@ describe('contactsSync cache security and erasure (#18130)', () => {
     const cache = await readContactCache();
     expect(cache.contacts).toHaveLength(1);
     expect('sourcePath' in cache.contacts[0]).toBe(false);
+    expect(readFileSync(cacheFile, 'utf8')).not.toContain(homedir());
 
     const firstClear = await clearContactCache();
     expect(firstClear).toEqual({ ok: true, cleared: true, cacheRemoved: true, stateRemoved: true });
@@ -237,6 +238,24 @@ describe('contactsSync cache security and erasure (#18130)', () => {
     // Idempotent second call when already absent
     const secondClear = await clearContactCache();
     expect(secondClear).toEqual({ ok: true, cleared: true, cacheRemoved: false, stateRemoved: false });
+  });
+
+  it('scrubs the home directory from fallback contact IDs when ZUNIQUEID is absent', async () => {
+    const dbPath = join(abRoot, 'AddressBook-v22.abcddb');
+    createFakeAddressBookDb(dbPath, [
+      { pk: 9, uniqueId: null, firstName: 'No', lastName: 'Uid', emails: ['nouid@example.com'] },
+    ]);
+    vi.stubEnv('HOME', abRoot);
+    vi.stubEnv('USERPROFILE', abRoot);
+    try {
+      await runSync();
+      const cache = await readContactCache();
+      expect(cache.contacts).toHaveLength(1);
+      expect(cache.contacts[0].id).toBe(`ab:${join('~', 'AddressBook-v22.abcddb')}:9`);
+      expect(cache.contacts[0].id).not.toContain(abRoot);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it('reads each AddressBook SQLite database only once during checkSetup and runSync', async () => {
