@@ -64,4 +64,10 @@ describe('IMessageSettingsPanel unreadable sync state', () => {
     expect(await screen.findByText(/Sync is stopped: its saved position could not be read/)).toBeTruthy();
     expect(screen.getByRole('button', { name: /Sync now/ })).toBeTruthy();
   });
+
+  it('keeps setup and sync available while scheduled ingestion is disabled', async () => {
+    render(<MemoryRouter><IMessageSettingsPanel /></MemoryRouter>);
+    expect(await screen.findByRole('button', { name: 'Check setup' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Sync now' })).toBeEnabled();
+  });
 });
