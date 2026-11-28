@@ -44,14 +44,14 @@ export function VideoGenBackendSwitch({ laneEnabled, backend, onBackendChange })
     ...(laneEnabled.google ? [{ id: 'google', label: 'Google' }] : []),
   ];
   return (
-    <div className="bg-port-card border border-port-border rounded-xl p-1 flex gap-1" role="group" aria-label="Video generation backend">
+    <div className="bg-port-card border border-port-border rounded-xl p-1 flex flex-wrap gap-1" role="group" aria-label="Video generation backend">
       {lanes.map(({ id, label }) => (
         <button
           key={id}
           type="button"
           aria-pressed={backend === id}
           onClick={() => onBackendChange(id)}
-          className={`flex-1 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+          className={`flex-auto whitespace-nowrap px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors ${
             backend === id ? 'bg-port-accent text-white shadow' : 'text-gray-400 hover:text-white hover:bg-port-border/40'
           }`}
           title={BACKEND_TITLES[id]}
