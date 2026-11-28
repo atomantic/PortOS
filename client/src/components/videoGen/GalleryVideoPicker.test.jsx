@@ -102,11 +102,13 @@ describe('GalleryVideoPicker', () => {
   });
 
   it('starts with an unfiltered first request on reopening after a search', async () => {
+    listMediaGalleryPage.mockResolvedValueOnce(videoPage([HISTORY[0]]));
     const { rerender } = render(<GalleryVideoPicker open />);
     await screen.findByText('a neon chase');
     listMediaGalleryPage.mockResolvedValueOnce(videoPage([HISTORY[1]]));
     fireEvent.change(screen.getByLabelText('Search videos'), { target: { value: 'forest' } });
-    await waitFor(() => expect(screen.queryByText('a neon chase')).toBeNull());
+    await screen.findByText('a quiet forest walk');
+    expect(listMediaGalleryPage).toHaveBeenLastCalledWith(...pageRequest('forest'));
 
     listMediaGalleryPage.mockClear();
     rerender(<GalleryVideoPicker open={false} />);
