@@ -400,6 +400,14 @@ export const FASTMETAL_DOWNLOAD_SIZE_PROFILES = Object.freeze([
   }),
 ]);
 
+// Immutable commits for the legacy FLUX.1 mflux models (dev/schnell).
+// Pinning keeps cache status/download/verify/repair and offline mflux renders
+// bound to a reviewed commit instead of floating `main`.
+export const MFLUX_FLUX1_REVISIONS = Object.freeze({
+  'black-forest-labs/FLUX.1-dev': '45d95c497444bbaebe766e1528792fc9158c0c3a',
+  'black-forest-labs/FLUX.1-schnell': '169573f54945f633efbe126a40a5676b4228363c',
+});
+
 // Immutable commits of the community FLUX.3 Klein MLX conversions. They are
 // third-party repos, so the render loads the verified local snapshot of exactly
 // this commit instead of letting mflux follow a mutable `main`.
@@ -897,8 +905,8 @@ export const DEFAULT_REGISTRY = {
       disclosure: 'FLUX Kommunity License v1.0: non-commercial use, with a commercial-output exception for qualifying users below US$5M annualized revenue, subject to the full terms, output review/filtering and required AI disclosures. Community weights are ungated; access does not verify upstream acceptance. Write a full scene caption (or use Refine). Edits accept up to 10 reference images; init-image strength, negative prompts and LoRAs are unavailable.',
     })),
     // mflux runner — MLX-only, Flux 1 (dev/schnell). `runner` defaults to 'mflux'.
-    { id: 'dev',              name: 'Flux 1 Dev',      steps: 20, guidance: 3.5, requiresHfToken: true, licenseUrl: 'https://huggingface.co/black-forest-labs/FLUX.1-dev' },
-    { id: 'schnell',          name: 'Flux 1 Schnell',  steps: 4,  guidance: 0,   cfgDisabled: true },
+    { id: 'dev',              name: 'Flux 1 Dev',      revision: MFLUX_FLUX1_REVISIONS['black-forest-labs/FLUX.1-dev'],     steps: 20, guidance: 3.5, requiresHfToken: true, licenseUrl: 'https://huggingface.co/black-forest-labs/FLUX.1-dev' },
+    { id: 'schnell',          name: 'Flux 1 Schnell',  revision: MFLUX_FLUX1_REVISIONS['black-forest-labs/FLUX.1-schnell'], steps: 4,  guidance: 0,   cfgDisabled: true },
     // flux2 runner — PyTorch + diffusers + MPS (Apple Silicon) or CUDA (Win/Linux).
     // Models are quantized to fit on consumer hardware; tokenizer comes from the
     // gated base repo, so users must accept the license at huggingface.co and

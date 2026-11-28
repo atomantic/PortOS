@@ -224,9 +224,25 @@ const mfluxWindowsArgs = ({ pythonPath, model, prompt, negativePrompt, width, he
   };
 };
 
-const mfluxArgs = ({ pythonPath, model, prompt, negativePrompt, width, height, steps, guidance, seed, quantize, outputPath, loraPaths = [], loraScales = [], stepwiseDir, initImagePath, initImageStrength }) => {
+const mfluxArgs = ({ pythonPath, model, mfluxModelPath, prompt, negativePrompt, width, height, steps, guidance, seed, quantize, outputPath, loraPaths = [], loraScales = [], stepwiseDir, initImagePath, initImageStrength }) => {
   const bin = join(dirname(pythonPath), 'mflux-generate');
-  const args = ['--model', model?.id, '--prompt', prompt, '--height', String(height), '--width', String(width), '--steps', String(steps), '--seed', String(seed), '--quantize', String(quantize), '--output', outputPath, '--metadata'];
+  const hasPinnedRevision = typeof model?.revision === 'string' && model.revision.trim().length > 0;
+  if (hasPinnedRevision && !mfluxModelPath) {
+    throw new ServerError(
+      `mflux model "${model?.id}" needs the verified local snapshot path of its pinned revision.`,
+      { status: 500, code: 'MFLUX_MISCONFIGURED' },
+    );
+  }
+  // When pinned, pass the verified local snapshot directory with `--base-model`
+  // so mflux loads weights and tokenizers offline instead of resolving a mutable
+  // repo ref on the Hub.
+  const baseModel = model?.baseModel
+    || (model?.repo === 'black-forest-labs/FLUX.1-dev' ? 'dev'
+      : model?.repo === 'black-forest-labs/FLUX.1-schnell' ? 'schnell' : model?.id);
+  const modelArgs = mfluxModelPath
+    ? ['--model', mfluxModelPath, '--base-model', baseModel]
+    : ['--model', model?.id];
+  const args = [...modelArgs, '--prompt', prompt, '--height', String(height), '--width', String(width), '--steps', String(steps), '--seed', String(seed), '--quantize', String(quantize), '--output', outputPath, '--metadata'];
   if (guidance > 0) args.push('--guidance', String(guidance));
   if (negativePrompt) args.push('--negative-prompt', negativePrompt);
   if (loraPaths.length) args.push('--lora-paths', ...loraPaths);

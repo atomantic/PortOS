@@ -305,6 +305,7 @@ describe('Image Gen Routes', () => {
 
     it.each([
       ['a whole repo', model, [[model.repo, revision]]],
+      ['legacy mflux FLUX.1 dev', { id: 'dev', revision, steps: 20, guidance: 3.5 }, [['black-forest-labs/FLUX.1-dev', revision]]],
       ['FLUX.2 with auxiliaries', flux2, [
         [flux2.repo, revision], [flux2.textEncoderRepo, flux2.textEncoderRevision],
         [flux2.tokenizerRepo, flux2.tokenizerRevision], [flux2.basePipelineRepo, flux2.basePipelineRevision],
