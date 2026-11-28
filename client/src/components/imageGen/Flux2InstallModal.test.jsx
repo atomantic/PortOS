@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 
 // The SSE stream has its own suite; this pins that the FLUX.2 surface offers the
 // shared install-failure investigation action (#5981) and only on failure.
@@ -38,8 +38,41 @@ describe('Flux2InstallModal install target', () => {
     render(<Flux2InstallModal open onClose={vi.fn()} onComplete={vi.fn()} modelId="qwen-image-2.1" />);
     expect(useInstallStream).toHaveBeenCalledWith(
       '/api/image-gen/setup/flux2-install?modelId=qwen-image-2.1',
-      expect.objectContaining({ method: 'POST' }),
+      expect.objectContaining({ enabled: true, method: 'POST', maxLogLines: 1000, flushMs: 100 }),
     );
+  });
+});
+
+describe('Flux2InstallModal live progress', () => {
+  it('renders five stages, marks the current step and highlights stage output', () => {
+    useInstallStream.mockReturnValue(streamState({
+      currentStage: 'install',
+      logs: [{ kind: 'stage', text: 'Installing torch' }],
+    }));
+
+    render(<Flux2InstallModal open onClose={vi.fn()} />);
+
+    expect(screen.getByRole('dialog', { name: 'Installing FLUX.2 Runtime' })).toBeInTheDocument();
+    for (const label of ['Detect Python', 'Create venv', 'Upgrade pip', 'Install packages', 'Verify']) {
+      expect(screen.getByText(label)).toBeInTheDocument();
+    }
+    expect(screen.getByText('Install packages').closest('[aria-current]')).toHaveAttribute('aria-current', 'step');
+    expect(screen.getByText('▸ Installing torch')).toBeInTheDocument();
+  });
+
+  it.each([null, 'verify'])('confirms before aborting a running install at stage %s', (currentStage) => {
+    const state = streamState({ currentStage });
+    const onClose = vi.fn();
+    useInstallStream.mockReturnValue(state);
+    render(<Flux2InstallModal open onClose={onClose} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close installer' }));
+    expect(state.close).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Yes, cancel' }));
+    expect(state.close).toHaveBeenCalledOnce();
+    expect(onClose).toHaveBeenCalledOnce();
   });
 });
 

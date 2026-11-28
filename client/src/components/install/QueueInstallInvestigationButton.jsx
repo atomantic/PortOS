@@ -8,7 +8,7 @@
  * (which owns queueing, dedup, and the button states — shared with other
  * failure surfaces like the DOM-selector test).
  *
- * Rendered by `InstallErrorFooter` (both install modals) and directly by
+ * Rendered by `InstallErrorFooter` (runtime installs) and directly by
  * `LocalSetupPanel`, which draws its own error region.
  */
 
