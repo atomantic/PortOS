@@ -16,7 +16,7 @@ import { TASK_DATA_INPUT_DEFINITIONS } from '../lib/taskDataInputCatalog.js';
 import { githubApiHost, resolveAppWorkTracker } from '../lib/workTracker.js';
 import { PORTOS_APP_ID } from '../lib/appIdentity.js';
 import { isAuditTaskType, normalizeAuditTaskType } from '../lib/auditCatalog.js';
-import { QUALITY_HEALTHY_THRESHOLD } from '../lib/auditDomains.js';
+import { MAX_AUDIT_SLICE_CHARS, QUALITY_HEALTHY_THRESHOLD } from '../lib/auditDomains.js';
 import { describeLaneFlag, laneHealthFor } from '../lib/laneHealth.js';
 import { resolveForgeTokenEnv } from './forgeAuth.js';
 import { classifyGhProbe, execGh, ghRemedy } from './github.js';
@@ -339,9 +339,13 @@ const INPUT_LOADERS = {
       : 'Open issue count for this lane is unavailable.';
     const lines = runs.map(({ assessedAt, slice, sliceScore, worstSeverity }) => {
       const evidence = [Number.isFinite(sliceScore) && `score: ${sliceScore}`, Number.isFinite(worstSeverity) && `worst severity: ${worstSeverity}/10`].filter(Boolean);
-      return `- ${assessedAt.slice(0, 10)}${evidence.length ? ` (${evidence.join(', ')})` : ''}: ${redactPii(scrubSecretTokens(slice)).slice(0, 300)}`;
+      // Keep intra-day UTC minute precision when present so multiple same-day sweeps stay ordered.
+      const stamp = typeof assessedAt === 'string' && assessedAt.length > 10 && assessedAt.includes('T')
+        ? `${assessedAt.slice(0, 16).replace('T', ' ')}Z`
+        : String(assessedAt).slice(0, 10);
+      return `- ${stamp}${evidence.length ? ` (${evidence.join(', ')})` : ''}: ${redactPii(scrubSecretTokens(slice)).slice(0, MAX_AUDIT_SLICE_CHARS)}`;
     });
-    return truncateWithNotice(`Recently audited by this lane:\n${tracker} For each slice below ${QUALITY_HEALTHY_THRESHOLD}, check its own filed issues and verify the fixes in the checkout before rotating. A lane-wide count alone cannot establish a slice's remediation status.\n${lines.join('\n')}`, MAX_INPUT_CHARS);
+    return truncateWithNotice(`Recently audited by this lane:\n${tracker} For each slice below ${QUALITY_HEALTHY_THRESHOLD}, check whether its filed issues or fix PRs have landed in the checkout and re-verify it before rotating. A lane-wide issue count alone cannot establish a slice's remediation status.\n${lines.join('\n')}`, MAX_INPUT_CHARS);
   },
   'lane-health': async ({ forge, taskType, laneHealth }) => {
     if (!isAuditTaskType(taskType)) return 'This input applies to audit lanes only; no lane health applies to this task.';

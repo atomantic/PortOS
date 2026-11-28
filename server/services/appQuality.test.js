@@ -146,16 +146,18 @@ describe('scheduled audit measurement workflow', () => {
       run(2, 40, { confidence: 'medium' }), // half weight
       run(3, 90, { confidence: 'low' }), // never contributes
       { category: 'security', agentId: 'run-4', assessedAt: daysAgo(4), report: report({ category: 'security', score: 50, worstSeverity: 3 }) }, // a stored v1 run counts too
-      run(5, 10, { worstSeverity: 7 }), // fourth qualifying run: outside the window
+      run(5, 70, { worstSeverity: 4 }),
+      run(6, 60, { worstSeverity: 2 }),
+      run(7, 10, { worstSeverity: 7 }), // sixth qualifying run: outside the 5-run window
       run(40, 0), // older than the freshness window
     ];
-    expect(QUALITY_WINDOW_RUNS).toBe(3);
+    expect(QUALITY_WINDOW_RUNS).toBe(5);
     const quality = summarizeAppQuality(records, now);
-    // Confidence weights (1, 0.5, 1) each times 0.5^(ageDays/7).
-    expect(quality).toMatchObject({ score: 62, ratedCategories: 1 });
+    // Confidence weights (1, 0.5, 1, 1, 1) each times 0.5^(ageDays/7).
+    expect(quality).toMatchObject({ score: 63, ratedCategories: 1 });
     expect(quality.categories.find(c => c.id === 'security')).toMatchObject({
-      score: 62, runScore: 60, slice: 'slice-0', coverage: 'partial', worstSeverity: 9, agentId: 'run-0', stale: false,
-      window: { runs: 3, worstSeverity: 3 },
+      score: 63, runScore: 60, slice: 'slice-0', coverage: 'partial', worstSeverity: 9, agentId: 'run-0', stale: false,
+      window: { runs: 5, worstSeverity: 4 },
     });
     // No qualifying run: the row shows the newest run's own score beside its evidence label, and does not contribute.
     const unqualified = summarizeAppQuality([run(3, 90, { confidence: 'low' }), run(40, 0)], now);
@@ -440,7 +442,8 @@ describe('scheduled audit measurement workflow', () => {
 
   it('calibrates audit instructions for whole-slice scoring and below-target re-verification', () => {
     const instructions = auditQualityInstructions('code-quality');
-    expect(instructions).toContain(`Before rotating to a new offender, prefer to re-verify a slice in audit-slice-history that scored below ${QUALITY_HEALTHY_THRESHOLD} once its filed issues are closed`);
+    expect(instructions).toContain(`Check \`audit-slice-history\` FIRST for any slice that scored below ${QUALITY_HEALTHY_THRESHOLD} whose filed issues or fix PRs have landed in the checkout`);
+    expect(instructions).toContain('Scope a new rotation to a cohesive feature or subsystem slice');
     expect(instructions).toContain('A finding that led you to choose the slice is only one part of that evidence.');
     expect(instructions).toContain('For a clean slice with worstSeverity 0, score 90–95.');
     expect(instructions).toContain('75–84: Mostly healthy, with localized moderate defects in secondary paths');
@@ -448,6 +451,59 @@ describe('scheduled audit measurement workflow', () => {
     expect(instructions).toContain('0–39: Severe core workflow breakage, data loss, or verified reachable exploits');
     expect(instructions).toContain('Score the whole reviewed slice proportionally');
     expect(instructions).toContain('The pragmatic target band is 85–95. Avoid speculative hardening');
+    expect(instructions).toContain('postFixSliceScore');
+    expect(auditQualityInstructions('security')).toContain('host-local or conditional defense-in-depth gaps without a direct exploit path are severity 3–5');
+    expect(auditQualityInstructions('privacy')).toContain('Privacy calibration:');
+    expect(auditQualityInstructions('test-quality-coverage')).toContain('Coverage verification:');
+  });
+
+  it('retains postFixSliceScore only on verified fix-mode deliveries and projects it across summary, slice history, and federation', async () => {
+    const query = vi.fn().mockResolvedValue({ rows: [] });
+    const ensureSchema = vi.fn();
+    const fixReport = sliceReport({
+      category: 'security', slice: 'server/services/voice', sliceScore: 66, worstSeverity: 7,
+      postFixSliceScore: 91, postFixWorstSeverity: 1,
+    });
+    const runBase = { taskType: 'security', agentId: 'agent-fix', workspacePath: '/repo', success: true, assessedAt };
+
+    // 1. Authorized audit-and-fix run (fileIssues: false, default merge-on-green) keeps post-fix fields.
+    expect(await recordAuditQuality({
+      ...runBase, task: { metadata: { app: 'portos-default', fileIssues: false } },
+    }, { readFile: async () => sentinel(fixReport), query, ensureSchema })).toBe(true);
+    const storedFix = JSON.parse(query.mock.calls[0][1][4]);
+    expect(storedFix).toMatchObject({ sliceScore: 66, worstSeverity: 7, postFixSliceScore: 91, postFixWorstSeverity: 1 });
+
+    // 2. File-issues mode strips postFixSliceScore/postFixWorstSeverity so pre-fix score stands.
+    expect(await recordAuditQuality({
+      ...runBase, agentId: 'agent-file', task: { metadata: { app: 'portos-default', fileIssues: true } },
+    }, { readFile: async () => sentinel(fixReport), query, ensureSchema })).toBe(true);
+    const storedFile = JSON.parse(query.mock.calls[1][1][4]);
+    expect(storedFile.sliceScore).toBe(66);
+    expect(storedFile).not.toHaveProperty('postFixSliceScore');
+    expect(storedFile).not.toHaveProperty('postFixWorstSeverity');
+
+    // 3. Review-only leave-open PR strips postFixSliceScore until merged and re-verified.
+    expect(await recordAuditQuality({
+      ...runBase, agentId: 'agent-leave', task: { metadata: { app: 'portos-default', fileIssues: false, prCompletion: 'leave-open' } },
+    }, { readFile: async () => sentinel(fixReport), query, ensureSchema })).toBe(true);
+    const storedLeave = JSON.parse(query.mock.calls[2][1][4]);
+    expect(storedLeave).not.toHaveProperty('postFixSliceScore');
+
+    // 4. Summary, numeric v1 federation projection, and slice history all use the verified post-fix values.
+    const now = Date.parse('2026-09-10T12:00:00Z');
+    const summary = summarizeAppQuality([{ category: 'security', agentId: 'agent-fix', assessedAt: '2026-09-10T10:00:00Z', report: storedFix }], now);
+    expect(summary.categories.find(c => c.id === 'security')).toMatchObject({
+      score: 91, runScore: 91, worstSeverity: 1, window: { runs: 1, worstSeverity: 1 },
+    });
+    expect(numericQualityReport(storedFix)).toMatchObject({ version: 1, score: 91, worstSeverity: 1 });
+    const slices = await readRecentAuditSlices('portos-default', 'security', {
+      query: vi.fn().mockResolvedValue({ rows: [{ assessed_at: '2026-09-10T10:00:00Z', slice: 'server/services/voice', report: storedFix }] }),
+    });
+    expect(slices).toEqual([{ assessedAt: '2026-09-10T10:00:00.000Z', slice: 'server/services/voice', sliceScore: 91, worstSeverity: 1 }]);
+    // 5. Rejects a v2 report that supplies postFixSliceScore without a pre-fix sliceScore.
+    expect(parseAuditQualityReport(`QUALITY_AUDIT_JSON: ${JSON.stringify(sliceReport({
+      category: 'security', sliceScore: null, postFixSliceScore: 90,
+    }))}`, 'security')).toBeNull();
   });
 
   it('retains both same-day profile scores across snapshot serialization and counts their domain once', () => {

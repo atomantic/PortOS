@@ -79,12 +79,20 @@ describe('taskDataInputs', () => {
     const [section] = await resolveTaskDataInputs(['audit-slice-history'], options);
     expect(section.label).toBe('Recent audit slices');
     expect(section.content).toContain('Open issue count for this lane is unavailable.');
-    expect(section.content).toContain(`For each slice below ${QUALITY_HEALTHY_THRESHOLD}, check its own filed issues and verify the fixes in the checkout before rotating.`);
-    expect(section.content).toContain('- 2026-09-10 (score: 60, worst severity: 7/10): server/services/auth, server/lib/commandSecurity.js');
-    expect(section.content).toContain('- 2026-09-03: client/src/components/apps');
+    expect(section.content).toContain(`For each slice below ${QUALITY_HEALTHY_THRESHOLD}, check whether its filed issues or fix PRs have landed in the checkout and re-verify it before rotating.`);
+    expect(section.content).toContain('- 2026-09-10 10:00Z (score: 60, worst severity: 7/10): server/services/auth, server/lib/commandSecurity.js');
+    expect(section.content).toContain('- 2026-09-03 10:00Z: client/src/components/apps');
     expect(listAuditSlices).toHaveBeenCalledWith('app-1', 'better-runtime-safety');
     expect(resolveTracker).not.toHaveBeenCalled();
     expect(appendTaskDataInputs('Audit.', [section])).toContain('### Recent audit slices');
+
+    // Multi-file slices up to MAX_AUDIT_SLICE_CHARS (500) must not be truncated at 300 chars.
+    const longSlice = `${'server/services/module-'.repeat(18)}tail.js`;
+    expect(longSlice.length).toBeGreaterThan(350);
+    expect(longSlice.length).toBeLessThanOrEqual(500);
+    listAuditSlices.mockResolvedValueOnce([{ assessedAt: '2026-09-10T14:30:00.000Z', slice: longSlice, sliceScore: 68, worstSeverity: 7 }]);
+    const [longSection] = await resolveTaskDataInputs(['audit-slice-history'], options);
+    expect(longSection.content).toContain(`- 2026-09-10 14:30Z (score: 68, worst severity: 7/10): ${longSlice}`);
 
     listAuditSlices.mockResolvedValueOnce([]);
     expect((await resolveTaskDataInputs(['audit-slice-history'], options))[0].content).toContain('No slice recorded for this lane on this app yet');

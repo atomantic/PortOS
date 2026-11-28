@@ -111,8 +111,8 @@ vi.mock('./cos/cosState.js', async () => {
   }
 })
 
-const mockSchedule = ({ tasks = {}, executions = {}, templates = [], onDemandRequests = [] } = {}) => {
-  readJSONFile.mockResolvedValue({ version: 2, tasks, executions, templates, onDemandRequests })
+const mockSchedule = ({ tasks = {}, executions = {}, templates = [], onDemandRequests = [], ...rest } = {}) => {
+  readJSONFile.mockResolvedValue({ version: 2, tasks, executions, templates, onDemandRequests, ...rest })
 }
 
 // loadSchedule merges DEFAULT_TASK_INTERVALS over whatever a fixture supplies,

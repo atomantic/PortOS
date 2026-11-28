@@ -14,6 +14,7 @@ import { atomicWrite, ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { isPlainObject } from '../lib/objects.js';
 import { foldAuditSchedule } from '../lib/auditScheduleCompatibility.js';
+import { isAuditTaskType } from '../lib/auditCatalog.js';
 import { currentTaskTypeName, taskExecutionKey as executionKey } from '../lib/scheduledTaskTypes.js';
 import { emitLog } from './cos/cosEvents.js';
 import { LEGACY_INTERVAL_TYPES, normalizeIntervalConfig } from './taskScheduleConstants.js';
@@ -39,6 +40,7 @@ const queueScheduleWrite = createFileWriteQueue();
 const DEFAULT_SCHEDULE = {
   version: 2,
   retirementPolicyVersion: 2,
+  auditDataInputsVersion: 1,
   lastUpdated: null,
 
   // Unified task intervals (applies to all apps including PortOS)
@@ -68,6 +70,7 @@ function migrateScheduleV1toV2(schedule) {
   const migrated = {
     version: 2,
     retirementPolicyVersion: schedule.retirementPolicyVersion ?? 1,
+    auditDataInputsVersion: 1,
     lastUpdated: new Date().toISOString(),
     tasks: structuredClone(DEFAULT_TASK_INTERVALS),
     executions: {},
@@ -282,19 +285,34 @@ async function readSchedule() {
     }
   }
 
+  // One-time backfill for persisted v2 schedules that predate audit-slice-history
+  // and lane-health defaults (#12088, #12090): `{ ...defaultTask, ...loadedTask }`
+  // above let stale persisted `dataInputs` hide both inputs, preventing re-verification.
+  let auditDataInputsUpgraded = false;
+  if ((loaded.auditDataInputsVersion ?? 0) < 1) {
+    for (const [taskType, config] of Object.entries(mergedTasks)) {
+      if (!isAuditTaskType(taskType)) continue;
+      const current = Array.isArray(config.dataInputs) ? config.dataInputs : [];
+      const upgraded = [...new Set([...current, 'audit-slice-history', 'lane-health'])];
+      if (upgraded.length !== current.length) config.dataInputs = upgraded;
+    }
+    auditDataInputsUpgraded = true;
+  }
+
   const schedule = {
     ...DEFAULT_SCHEDULE,
     // Pre-transition stores retain their compatibility semantics until migration
     // 443 freezes their historical observations. Fresh installs start at v2.
     retirementPolicyVersion: loaded.retirementPolicyVersion ?? 1,
     ...loaded,
+    auditDataInputsVersion: 1,
     tasks: mergedTasks,
     executions: loaded.executions || {},
     templates: loaded.templates || []
   };
 
   // Populate prompts from defaults if missing, and auto-upgrade stale defaults
-  let needsSave = executionStateNormalized;
+  let needsSave = executionStateNormalized || auditDataInputsUpgraded;
   for (const [taskType, config] of Object.entries(schedule.tasks)) {
     if (config.__prReviewerPipelineMigrated) {
       delete config.__prReviewerPipelineMigrated;
