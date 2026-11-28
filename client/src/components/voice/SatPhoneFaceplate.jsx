@@ -1,8 +1,11 @@
+import { useState } from 'react';
 import { Link } from 'react-router';
-import { EyeOff, Maximize2, PanelBottomClose, ScanFace, SlidersHorizontal, Volume2, VolumeX, X } from 'lucide-react';
+import { AudioLines, Brain, EyeOff, Maximize2, PanelBottomClose, ScanFace, SlidersHorizontal, Video, Volume2, VolumeX, X } from 'lucide-react';
 import RealtimeCallPanel from './RealtimeCallPanel';
 import AvatarRuntimeSettings from './AvatarRuntimeSettings';
 import ChannelBrainPicker from './ChannelBrainPicker';
+import useMediaQuery from '../../hooks/useMediaQuery';
+import { safeReadStorage, safeWriteStorage } from '../../lib/safeStorage';
 
 const utilityBtn = 'inline-flex items-center justify-center rounded-md border border-transparent p-1 pointer-coarse:min-h-11 pointer-coarse:min-w-11 text-port-text-muted hover:border-port-border hover:bg-port-bg/60 hover:text-port-text transition-colors';
 
@@ -142,6 +145,18 @@ export function SatPhoneFaceplate({
   );
 }
 
+const SETUP_TAB_KEY = 'portos.voice.setupTab';
+const SETUP_TABS = [
+  { id: 'brain', label: 'Brain', Icon: Brain },
+  { id: 'realtime', label: 'Realtime', Icon: AudioLines },
+  { id: 'avatar', label: 'Avatar', Icon: Video },
+];
+
+/**
+ * The floating handset's setup tray. On a phone the sections stack; on a desktop pointer they sit behind compact tabs,
+ * one at a time, so the tray stays short. Every section stays mounted when hidden, so switching tabs never ends a
+ * realtime call or resets a form.
+ */
 export function SatPhoneSetup({
   llmProvider,
   llmModel,
@@ -152,30 +167,63 @@ export function SatPhoneSetup({
   onUpdateAvatarData,
   onRefetchAvatar,
 }) {
+  const tabbed = useMediaQuery('(min-width: 768px) and (pointer: fine)');
+  const [tab, setTab] = useState(() => {
+    const saved = safeReadStorage(SETUP_TAB_KEY);
+    return SETUP_TABS.some((t) => t.id === saved) ? saved : 'brain';
+  });
+  const choose = (id) => { safeWriteStorage(SETUP_TAB_KEY, id); setTab(id); };
+  const shown = (id) => !tabbed || tab === id;
   return (
     <div className="space-y-2">
-      <ChannelBrainPicker
-        compact
-        globalProvider={llmProvider}
-        globalModel={llmModel}
-        residency={llmResidency}
-        onGlobalSaved={onLlmSaved}
-      />
-      <RealtimeCallPanel compact />
-      <AvatarRuntimeSettings
-        compact
-        data={avatarData}
-        error={avatarError}
-        updateData={onUpdateAvatarData}
-        refetch={onRefetchAvatar}
-      />
-      <Link
-        to="/voice/call"
-        className="satphone-key inline-flex min-h-11 w-full items-center justify-center gap-1.5 rounded-lg border px-3 font-mono text-[10px] font-semibold uppercase tracking-wider"
-      >
-        <ScanFace size={12} aria-hidden="true" />
-        Avatars & channels
-      </Link>
+      {tabbed && (
+        <div role="tablist" aria-label="Voice setup" className="grid grid-cols-3 gap-1">
+          {SETUP_TABS.map(({ id, label, Icon }) => (
+            <button
+              key={id}
+              type="button"
+              role="tab"
+              aria-selected={tab === id}
+              aria-controls={`satphone-setup-${id}`}
+              onClick={() => choose(id)}
+              className={`inline-flex min-h-8 items-center justify-center gap-1 rounded-md border px-1.5 font-mono text-[10px] font-semibold uppercase tracking-wider transition-colors ${
+                tab === id ? 'border-port-accent bg-port-accent/10 text-port-text' : 'border-port-border bg-port-card text-port-text-muted hover:text-port-text'
+              }`}
+            >
+              <Icon size={11} aria-hidden="true" />
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
+      <div id="satphone-setup-brain" role={tabbed ? 'tabpanel' : undefined} hidden={!shown('brain')}>
+        <ChannelBrainPicker
+          compact
+          globalProvider={llmProvider}
+          globalModel={llmModel}
+          residency={llmResidency}
+          onGlobalSaved={onLlmSaved}
+        />
+      </div>
+      <div id="satphone-setup-realtime" role={tabbed ? 'tabpanel' : undefined} hidden={!shown('realtime')}>
+        <RealtimeCallPanel compact />
+      </div>
+      <div id="satphone-setup-avatar" role={tabbed ? 'tabpanel' : undefined} hidden={!shown('avatar')} className="space-y-2">
+        <AvatarRuntimeSettings
+          compact
+          data={avatarData}
+          error={avatarError}
+          updateData={onUpdateAvatarData}
+          refetch={onRefetchAvatar}
+        />
+        <Link
+          to="/voice/call"
+          className="satphone-key inline-flex min-h-11 w-full items-center justify-center gap-1.5 rounded-lg border px-3 font-mono text-[10px] font-semibold uppercase tracking-wider"
+        >
+          <ScanFace size={12} aria-hidden="true" />
+          Avatars & channels
+        </Link>
+      </div>
     </div>
   );
 }
