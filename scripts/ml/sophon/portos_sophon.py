@@ -281,7 +281,7 @@ async def main():
         if not presented:
             path = getattr(getattr(ws, "request", None), "path", None) or getattr(ws, "path", "")
             presented = parse_qs(urlparse(path).query).get("token", [""])[0]
-        if not hmac.compare_digest(presented, token):
+        if not hmac.compare_digest(presented.encode("utf-8"), token.encode("utf-8")):
             await ws.close(4401, "bad token"); return
         if busy["on"]:
             await ws.close(1013, "one conversation at a time"); return
