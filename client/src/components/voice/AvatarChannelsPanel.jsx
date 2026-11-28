@@ -202,9 +202,7 @@ export default function AvatarChannelsPanel({ agentDefaults }) {
   const removingRef = useRef(false);
 
   // Each edit names one channel and field; the server merges it, so overlapping edits all land.
-  const editChannel = (index, change) => {
-    patchAvatarChannel(index, change).then(updateData).catch(() => {});
-  };
+  const editChannel = (index, change) => patchAvatarChannel(index, change).then(updateData).catch(() => {});
   const fileAvatar = useCallback((filename) => {
     addAvatarToLibrary(filename).then((next) => {
       updateData(next);

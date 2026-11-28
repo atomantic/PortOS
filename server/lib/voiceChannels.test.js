@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   applyChannelAgent,
   channelAgentSpeechOpts,
+  mergeChannelAgentPatch,
   normalizeChannelAgent,
   normalizeChannels,
 } from './voiceChannels.js';
@@ -55,6 +56,13 @@ describe('channel agent overrides', () => {
     const cfg = applyChannelAgent(globalCfg, { provider: 'ollama', model: 'other' });
     expect(cfg.llm.visionModel).toBe('base-vision');
     expect(cfg.llm.usePersonality).toBe(false);
+  });
+
+  it('merges an agent edit field by field', () => {
+    const agent = { name: 'Scout', provider: 'ollama', model: 'm', traits: ['dry'] };
+    expect(mergeChannelAgentPatch(agent, { role: 'Pilot', traits: null })).toEqual({ name: 'Scout', provider: 'ollama', model: 'm', role: 'Pilot' });
+    expect(mergeChannelAgentPatch(agent, { provider: null })).toEqual({ name: 'Scout', traits: ['dry'] });
+    expect(mergeChannelAgentPatch(agent, null)).toEqual({});
   });
 
   it('normalizes every channel record, including stored agents', () => {

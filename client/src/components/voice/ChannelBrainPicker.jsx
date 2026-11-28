@@ -14,11 +14,9 @@ export default function ChannelBrainPicker({ compact = false, globalProvider, gl
   const number = channel ? channel.index + 1 : null;
 
   const saveAgent = (agent) => patchAvatarChannel(channel.index, { agent }, { silent: true }).then(updateData);
-  const saveOwn = ({ provider, model }) => saveAgent({ ...channel.agent, provider, model });
-  const useGlobal = () => {
-    const { provider: _provider, model: _model, ...rest } = channel.agent || {};
-    saveAgent(rest).catch(() => {});
-  };
+  // Only the LLM fields are sent; the server merges them into the channel's other overrides.
+  const saveOwn = ({ provider, model }) => saveAgent({ provider, model });
+  const useGlobal = () => { saveAgent({ provider: null }).catch(() => {}); };
 
   return (
     <VoiceLlmQuickPicker

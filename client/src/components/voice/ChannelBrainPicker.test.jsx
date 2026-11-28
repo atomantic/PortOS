@@ -34,6 +34,7 @@ vi.mock('../ProviderModelSelector', () => ({
 }));
 
 import ChannelBrainPicker from './ChannelBrainPicker';
+import { mergeChannelAgentPatch } from '../../../../server/lib/voiceChannels.js';
 
 let stored;
 const library = (agent) => ({
@@ -47,7 +48,7 @@ beforeEach(() => {
   stored = library({});
   mocks.fetchAvatarLibrary.mockImplementation(async () => stored);
   mocks.patchAvatarChannel.mockImplementation(async (index, { agent }) => {
-    stored = { ...stored, channels: stored.channels.map((ch, i) => (i === index ? { ...ch, agent } : ch)) };
+    stored = { ...stored, channels: stored.channels.map((ch, i) => (i === index ? { ...ch, agent: mergeChannelAgentPatch(ch.agent, agent) } : ch)) };
     return stored;
   });
   mocks.updateVoiceConfig.mockResolvedValue({});
@@ -77,5 +78,5 @@ it('edits the global LLM until the on-air channel takes its own, then edits only
   expect(mocks.updateVoiceConfig).not.toHaveBeenCalled();
 
   fireEvent.click(within(scope).getByRole('button', { name: 'All channels' }));
-  await waitFor(() => expect(mocks.patchAvatarChannel).toHaveBeenLastCalledWith(1, { agent: {} }, { silent: true }));
+  await waitFor(() => expect(mocks.patchAvatarChannel).toHaveBeenLastCalledWith(1, { agent: { provider: null } }, { silent: true }));
 });

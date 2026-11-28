@@ -44,6 +44,7 @@ vi.mock('../imageGen/GalleryImagePicker', () => ({
 }));
 
 import AvatarChannelsPanel from './AvatarChannelsPanel';
+import { mergeChannelAgentPatch } from '../../../../server/lib/voiceChannels.js';
 import {
   addAvatarToLibrary, fetchAvatarLibrary, patchAvatarChannel, removeAvatarFromLibrary, saveAvatarChannels,
 } from '../../services/apiVoiceAvatar';
@@ -67,8 +68,13 @@ beforeEach(() => {
 
 // Mirrors the server: a channel edit merges into the stored channels.
 let stored;
-const patchStored = async (index, patch) => {
-  stored = { ...stored, channels: stored.channels.map((channel, i) => (i === index ? { ...channel, ...patch } : channel)) };
+const patchStored = async (index, { agent, ...fields }) => {
+  stored = {
+    ...stored,
+    channels: stored.channels.map((channel, i) => (i !== index ? channel : {
+      ...channel, ...fields, ...(agent !== undefined && { agent: mergeChannelAgentPatch(channel.agent, agent) }),
+    })),
+  };
   return stored;
 };
 
@@ -137,18 +143,30 @@ it('tunes one channel\'s agent and falls back to the defaults', async () => {
 
   const styles = within(editor).getByRole('group', { name: 'Speech style for channel 2' });
   fireEvent.click(within(styles).getByRole('button', { name: 'dry and witty' }));
-  await waitFor(() => expect(patchAvatarChannel).toHaveBeenLastCalledWith(1, {
-    agent: { voiceId: 'piper:test-voice', speechStyle: 'dry and witty' },
-  }));
+  await waitFor(() => expect(patchAvatarChannel).toHaveBeenLastCalledWith(1, { agent: { speechStyle: 'dry and witty' } }));
 
-  // Tapping a trait while inheriting starts this channel's list from the defaults.
+  // Tapping a trait while inheriting starts this channel's list from the defaults, and two
+  // quick toggles before the first save answers both land.
+  // The server applies edits in arrival order and answers in that order.
+  const held = [];
+  const hold = (index, patch) => {
+    const snapshot = patchStored(index, patch);
+    return new Promise((resolve) => { held.push(() => resolve(snapshot)); });
+  };
+  patchAvatarChannel.mockImplementationOnce(hold).mockImplementationOnce(hold);
   const traits = within(editor).getByRole('group', { name: 'Traits for channel 2' });
   fireEvent.click(within(traits).getByRole('button', { name: 'curious' }));
-  await waitFor(() => expect(patchAvatarChannel.mock.calls.at(-1)[1].agent.traits).toEqual(['warm', 'curious']));
+  fireEvent.click(within(traits).getByRole('button', { name: 'witty' }));
+  expect(patchAvatarChannel.mock.calls.at(-1)[1]).toEqual({ agent: { traits: ['warm', 'curious', 'witty'] } });
+  await act(async () => { held[0](); });
+  expect(within(traits).getByRole('button', { name: 'witty' })).toHaveAttribute('aria-pressed', 'true');
+  await act(async () => { held[1](); });
+  expect(within(traits).getByRole('button', { name: 'witty' })).toHaveAttribute('aria-pressed', 'true');
   expect(await screen.findByRole('button', { name: 'Tune the agent on channel 2' })).toHaveTextContent('3');
 
   fireEvent.click(within(editor).getByRole('button', { name: 'Use defaults' }));
-  await waitFor(() => expect(patchAvatarChannel).toHaveBeenLastCalledWith(1, { agent: {} }));
+  await waitFor(() => expect(patchAvatarChannel).toHaveBeenLastCalledWith(1, { agent: null }));
+  await waitFor(() => expect(within(editor).queryByRole('button', { name: 'Use defaults' })).toBeNull());
 });
 
 it('generates a square avatar from the prompt as written and files it into the collection', async () => {

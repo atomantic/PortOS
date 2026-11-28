@@ -117,12 +117,23 @@ it('preserves omitted fields on partial channel updates, emits library change ev
 
   // Single-channel edits merge server-side, so overlapping edits to different fields both land.
   expect(isHostControlRoute('PATCH', base + '/channels/1')).toBe(true);
+  await request(app).patch(base + '/channels/1').send({ agent: null });
   await Promise.all([
     request(app).patch(base + '/channels/1').send({ label: 'Ranger' }),
     request(app).patch(base + '/channels/1').send({ agent: { speechStyle: 'dry' } }),
   ]);
   const merged = await request(app).get(base + '/library');
   expect(merged.body.channels[1]).toEqual({ label: 'Ranger', avatar: 'pilot.png', agent: { speechStyle: 'dry' } });
+  // Agent edits merge field by field: overlapping edits keep each other, null clears one, agent: null clears all.
+  await Promise.all([
+    request(app).patch(base + '/channels/1').send({ agent: { name: 'Scout' } }),
+    request(app).patch(base + '/channels/1').send({ agent: { provider: 'ollama', model: 'm' } }),
+  ]);
+  const fieldWise = await request(app).patch(base + '/channels/1').send({ agent: { speechStyle: null } });
+  expect(fieldWise.body.channels[1].agent).toEqual({ name: 'Scout', provider: 'ollama', model: 'm' });
+  const cleared = await request(app).patch(base + '/channels/1').send({ agent: { provider: null } });
+  expect(cleared.body.channels[1].agent).toEqual({ name: 'Scout' });
+  expect((await request(app).patch(base + '/channels/1').send({ agent: null })).body.channels[1].agent).toEqual({});
   expect((await request(app).patch(base + '/channels/6').send({ label: 'x' })).status).toBe(400);
   expect((await request(app).patch(base + '/channels/1').send({})).status).toBe(400);
 

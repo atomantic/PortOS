@@ -55,8 +55,13 @@ export const voiceAvatarChannelsSchema = z.object({
   channels: z.array(voiceAvatarChannelSchema).length(AVATAR_CHANNEL_COUNT).optional(),
 }).strict().refine((body) => body.active !== undefined || body.channels !== undefined, 'Send active or channels');
 
-/** One channel's edit; a sent `agent` replaces that channel's overrides as a whole. */
-export const voiceAvatarChannelPatchSchema = voiceAvatarChannelSchema.partial()
+/** A field-wise agent edit: a value sets the field, `null` clears it, and `agent: null` clears them all. */
+const voiceChannelAgentPatchSchema = z.object(Object.fromEntries(
+  Object.entries(voiceChannelAgentSchema.shape).map(([field, schema]) => [field, schema.unwrap().nullable().optional()]),
+)).strict().nullable();
+
+/** One channel's edit; the server merges `agent` field by field (mergeChannelAgentPatch). */
+export const voiceAvatarChannelPatchSchema = voiceAvatarChannelSchema.extend({ agent: voiceChannelAgentPatchSchema.optional() }).partial()
   .refine((body) => Object.keys(body).length > 0, 'Send label, avatar or agent');
 export const voiceAvatarChannelParamsSchema = z.object({
   index: z.coerce.number().int().min(0).max(AVATAR_CHANNEL_COUNT - 1),

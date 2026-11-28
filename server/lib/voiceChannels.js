@@ -66,6 +66,22 @@ export function normalizeChannelAgent(raw) {
   return agent;
 }
 
+/**
+ * Apply one edit to a channel's agent field by field: a value sets that field, `null`
+ * clears it back to the global default, and a `null` patch clears every override.
+ * Clearing the provider clears its model too.
+ */
+export function mergeChannelAgentPatch(agent, patch) {
+  if (patch === null) return {};
+  const next = { ...(agent || {}) };
+  for (const [field, value] of Object.entries(patch || {})) {
+    if (value === null) delete next[field];
+    else if (value !== undefined) next[field] = value;
+  }
+  if (!next.provider) delete next.model;
+  return next;
+}
+
 const blankChannel = () => ({ label: '', avatar: null, agent: {} });
 
 /** Normalize a stored channels record; anything malformed falls back per field. */

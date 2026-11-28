@@ -1,4 +1,5 @@
-import { useId, useState } from 'react';
+import { useId, useRef, useState } from 'react';
+import { mergeChannelAgentPatch } from '../../../../server/lib/voiceChannels.js';
 import { RotateCcw } from 'lucide-react';
 import BlurCommitTextarea from '../ui/BlurCommitTextarea';
 import useVoiceLlmProviders from '../../hooks/useVoiceLlmProviders';
@@ -57,17 +58,25 @@ function ChannelLlm({ agent, defaults, save }) {
  * One channel's agent: voice, LLM and persona. Every field starts on "Default" and
  * inherits Settings → Voice until the user picks something for this channel.
  */
-export default function ChannelAgentEditor({ number, agent = {}, defaults = {}, onSave }) {
+export default function ChannelAgentEditor({ number, agent: savedAgent = {}, defaults = {}, onSave }) {
   const id = useId();
   const persona = defaults.personality || {};
-  const save = (change) => {
-    const next = { ...agent, ...change };
-    for (const [field, value] of Object.entries(next)) {
-      if (value === null || value === undefined || value === '') delete next[field];
-    }
-    if (!next.provider) delete next.model;
-    onSave(next);
+  // Each save sends only the fields it changes and the server merges them, so quick
+  // successive edits all land. The edits in flight show at once, and the overlay
+  // drops once the latest save settles and the saved agent has caught up.
+  const [pending, setPending] = useState([]);
+  const saveSeq = useRef(0);
+  const agent = pending.reduce(mergeChannelAgentPatch, savedAgent);
+  const send = (patch) => {
+    const seq = ++saveSeq.current;
+    setPending((list) => [...list, patch]);
+    Promise.resolve(onSave(patch)).catch(() => {}).finally(() => {
+      if (seq === saveSeq.current) setPending([]);
+    });
   };
+  const save = (change) => send(Object.fromEntries(
+    Object.entries(change).map(([field, value]) => [field, value === '' || value === undefined ? null : value]),
+  ));
 
   const ownLlm = Boolean(agent.provider);
   const style = agent.speechStyle || '';
@@ -91,7 +100,7 @@ export default function ChannelAgentEditor({ number, agent = {}, defaults = {}, 
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="min-w-0 text-[11px] text-port-text-muted">Anything left on Default follows Settings → Voice.</p>
         {tuned && (
-          <button type="button" onClick={() => onSave({})} className="satphone-key inline-flex min-h-11 items-center gap-1.5 rounded-lg border px-2.5 font-mono text-[10px] font-semibold uppercase tracking-wider">
+          <button type="button" onClick={() => send(null)} className="satphone-key inline-flex min-h-11 items-center gap-1.5 rounded-lg border px-2.5 font-mono text-[10px] font-semibold uppercase tracking-wider">
             <RotateCcw size={12} aria-hidden="true" />
             Use defaults
           </button>

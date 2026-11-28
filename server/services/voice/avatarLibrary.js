@@ -13,7 +13,7 @@ import { join } from 'node:path';
 import { access, readFile } from 'node:fs/promises';
 import { ServerError } from '../../lib/errorHandler.js';
 import { PATHS } from '../../lib/fileUtils.js';
-import { VOICE_CHANNELS_SETTINGS_KEY, normalizeChannels as normalizeChannelRecord } from '../../lib/voiceChannels.js';
+import { mergeChannelAgentPatch, VOICE_CHANNELS_SETTINGS_KEY, normalizeChannels as normalizeChannelRecord } from '../../lib/voiceChannels.js';
 import { getSettings, updateSettingsWith } from '../settings.js';
 import { emitToOperators } from '../socketIo.js';
 import { ERR_DUPLICATE, ERR_NOT_FOUND, itemKey } from '../mediaCollections/collectionStore.js';
@@ -60,13 +60,18 @@ export async function updateAvatarChannels(patch) {
 }
 
 /**
- * Edit one channel in place. Merging inside the settings write keeps overlapping edits
- * to different channels (or fields) from overwriting each other.
+ * Edit one channel in place. Merging inside the settings write, and merging `agent` field
+ * by field, keeps overlapping edits to different channels or fields from overwriting each other.
  */
 export async function updateAvatarChannel(index, patch) {
   await updateSettingsWith((settings) => {
     const current = normalizeChannels(settings[SETTINGS_KEY]);
-    const channels = current.channels.map((channel, i) => (i === index ? { ...channel, ...patch } : channel));
+    const { agent, ...fields } = patch;
+    const channels = current.channels.map((channel, i) => (i !== index ? channel : {
+      ...channel,
+      ...fields,
+      ...(agent !== undefined && { agent: mergeChannelAgentPatch(channel.agent, agent) }),
+    }));
     return { ...settings, [SETTINGS_KEY]: normalizeChannels({ ...current, channels }) };
   });
   announce();
