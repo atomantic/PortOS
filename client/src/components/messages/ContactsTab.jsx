@@ -99,8 +99,9 @@ export default function ContactsTab() {
     if (!res) toast.error(failureMessage('Could not load Tribe suggestions', failure));
   };
 
-  const handleImport = async (s) => {
-    const key = s.contactId || s.handle || s.displayName;
+  const suggestionKey = (s, index) => s.contactId || s.handle || `${s.displayName}:${index}`;
+
+  const handleImport = async (s, key) => {
     setImportingId(key);
     let failure = null;
     const result = await importContactToTribe({
@@ -117,7 +118,7 @@ export default function ContactsTab() {
       return;
     }
     toast.success(result.created ? `Added ${result.person?.name} to Tribe` : `${result.person?.name} already in Tribe`);
-    setSuggestions((prev) => prev.filter((x) => (x.contactId || x.handle) !== (s.contactId || s.handle)));
+    setSuggestions((prev) => prev.filter((x) => x !== s));
   };
 
   if (loading && !status && !statusError) return <BrailleSpinner />;
@@ -274,8 +275,8 @@ export default function ContactsTab() {
         </p>
         {suggestions.length > 0 && (
           <ul className="divide-y divide-port-border rounded border border-port-border max-h-80 overflow-y-auto">
-            {suggestions.map((s) => {
-              const key = s.contactId || s.handle || s.displayName;
+            {suggestions.map((s, index) => {
+              const key = suggestionKey(s, index);
               return (
                 <li key={key} className="flex items-center justify-between gap-2 px-3 py-2 text-sm">
                   <div className="min-w-0">
@@ -288,7 +289,7 @@ export default function ContactsTab() {
                   </div>
                   <button
                     type="button"
-                    onClick={() => handleImport(s)}
+                    onClick={() => handleImport(s, key)}
                     disabled={importingId === key}
                     className="shrink-0 inline-flex items-center gap-1 rounded border border-port-border px-2 py-1 text-xs text-gray-200 hover:border-port-accent disabled:opacity-40"
                   >

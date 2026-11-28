@@ -7,6 +7,7 @@ const api = vi.hoisted(() => ({
   getGoogleAuthStatus: vi.fn(),
   getGoogleAuthUrl: vi.fn(),
   getSettings: vi.fn(),
+  updateMessageAccount: vi.fn(),
   updateSettings: vi.fn(),
   runGoogleAutoConfig: vi.fn(),
   saveGoogleAuthCredentials: vi.fn(),
@@ -26,7 +27,10 @@ const providerModels = vi.hoisted(() => ({
   setSelectedProviderId: vi.fn(),
 }));
 
-vi.mock('../../services/apiMessages.js', () => ({ deleteMessageAccount: api.deleteMessageAccount }));
+vi.mock('../../services/apiMessages.js', () => ({
+  deleteMessageAccount: api.deleteMessageAccount,
+  updateMessageAccount: api.updateMessageAccount,
+}));
 vi.mock('../../services/apiCalendar.js', () => ({
   getGoogleAuthStatus: api.getGoogleAuthStatus,
   getGoogleAuthUrl: api.getGoogleAuthUrl,
@@ -228,4 +232,43 @@ it('only suggests adding an account after a successful empty read', async () => 
   await act(async () => { rerender(panel([gmailAccount])); });
   expect(screen.getByText(gmailAccount.name)).toBeInTheDocument();
   expect(screen.queryByText('No accounts configured')).not.toBeInTheDocument();
+});
+
+it('guards account toggle against double-clicks and preserves dirty config edits during save', async () => {
+  api.getGoogleAuthStatus.mockResolvedValue({ hasCredentials: true, hasTokens: true, needsScopeUpgrade: false });
+  let resolveToggle;
+  api.updateMessageAccount.mockReturnValueOnce(new Promise((resolve) => { resolveToggle = resolve; }));
+  let resolveSave;
+  api.updateSettings.mockReturnValueOnce(new Promise((resolve) => { resolveSave = resolve; }));
+
+  const setAccounts = vi.fn();
+  renderConfig(setAccounts);
+
+  const toggleBtn = await screen.findByRole('button', { name: 'Enabled' });
+  fireEvent.click(toggleBtn);
+  fireEvent.click(toggleBtn);
+  expect(api.updateMessageAccount).toHaveBeenCalledTimes(1);
+  expect(toggleBtn).toBeDisabled();
+
+  await act(async () => {
+    resolveToggle({ ...gmailAccount, enabled: false });
+  });
+  expect(setAccounts).toHaveBeenCalledTimes(1);
+  const updater = setAccounts.mock.calls[0][0];
+  expect(updater([gmailAccount])[0].enabled).toBe(false);
+
+  const reply = await screen.findByLabelText('Reply Template');
+  fireEvent.change(reply, { target: { value: 'First edit' } });
+  const saveBtn = screen.getByRole('button', { name: /Save Config/ });
+  fireEvent.click(saveBtn);
+  fireEvent.click(saveBtn);
+  expect(api.updateSettings).toHaveBeenCalledTimes(1);
+  expect(saveBtn).toBeDisabled();
+
+  fireEvent.change(reply, { target: { value: 'Second edit while saving' } });
+  await act(async () => {
+    resolveSave({ ok: true });
+  });
+  expect(screen.getByRole('button', { name: /Save Config/ })).not.toBeDisabled();
+  expect(screen.getByText('Unsaved changes')).toBeInTheDocument();
 });

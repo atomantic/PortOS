@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import {
   RefreshCw, Search, Trash2, Ban, ChevronLeft,
@@ -40,21 +40,23 @@ function formatWhen(iso) {
   }
 }
 
-function ConfirmBar({ message, confirmLabel, onConfirm, onCancel, danger }) {
+function ConfirmBar({ message, confirmLabel, onConfirm, onCancel, danger, busy = false }) {
   return (
     <div className="flex flex-wrap items-center gap-2 rounded border border-port-warning/40 bg-port-warning/10 px-3 py-2 text-sm text-gray-200">
       <span className="flex-1 min-w-[12rem]">{message}</span>
       <button
         type="button"
         onClick={onCancel}
-        className="rounded border border-port-border bg-port-bg px-3 py-1.5 text-xs hover:border-port-accent"
+        disabled={busy}
+        className="rounded border border-port-border bg-port-bg px-3 py-1.5 text-xs hover:border-port-accent disabled:opacity-40"
       >
         Cancel
       </button>
       <button
         type="button"
         onClick={onConfirm}
-        className={`rounded px-3 py-1.5 text-xs font-medium ${
+        disabled={busy}
+        className={`rounded px-3 py-1.5 text-xs font-medium disabled:opacity-40 ${
           danger
             ? 'bg-port-error/20 text-port-error hover:bg-port-error/30'
             : 'bg-port-accent/20 text-port-accent hover:bg-port-accent/30'
@@ -161,13 +163,14 @@ function ConversationDetail({
   identity,
   loading,
   timezone,
+  busy,
+  runPending,
   onBack,
   onPurged,
   onEventDeleted,
   onBlocked,
 }) {
   const [confirm, setConfirm] = useState(null); // 'purge' | 'block-purge' | null
-  const [busy, setBusy] = useState(false);
 
   const handle = conversation?.handle;
   const displayTitle = conversation?.displayName
@@ -177,11 +180,9 @@ function ConversationDetail({
   const organization = conversation?.organization || identity?.organization;
   const personId = conversation?.personId || identity?.personId;
 
-  const runPurge = async () => {
-    setBusy(true);
+  const runPurge = () => runPending(chatKey, async () => {
     let failure = null;
     const result = await purgeImessageConversation(chatKey, { silent: true }).catch((err) => { failure = err; return null; });
-    setBusy(false);
     setConfirm(null);
     if (!result) {
       toast.error(failureMessage('Could not purge the conversation', failure));
@@ -189,30 +190,30 @@ function ConversationDetail({
     }
     toast.success(`Removed ${pluralize(result.deleted, 'event')} from PortOS`);
     onPurged?.(chatKey);
-  };
+  });
 
-  const runBlock = async ({ purgeExisting }) => {
+  const runBlock = ({ purgeExisting }) => {
     if (!handle) {
       toast.error('No handle to block on this conversation');
       setConfirm(null);
       return;
     }
-    setBusy(true);
-    let failure = null;
-    const result = await addImessageBlocklist(handle, { purgeExisting, silent: true }).catch((err) => { failure = err; return null; });
-    setBusy(false);
-    setConfirm(null);
-    if (!result) {
-      toast.error(failureMessage('Could not update the blocklist', failure));
-      return;
-    }
-    const purged = result.purged || 0;
-    toast.success(
-      purged > 0
-        ? `Blocked ${handle} — removed ${pluralize(purged, 'PortOS event')}`
-        : `Blocked ${handle} — future syncs will skip it`,
-    );
-    onBlocked?.(chatKey, { purged });
+    return runPending(chatKey, async () => {
+      let failure = null;
+      const result = await addImessageBlocklist(handle, { purgeExisting, silent: true }).catch((err) => { failure = err; return null; });
+      setConfirm(null);
+      if (!result) {
+        toast.error(failureMessage('Could not update the blocklist', failure));
+        return;
+      }
+      const purged = result.purged || 0;
+      toast.success(
+        purged > 0
+          ? `Blocked ${handle} — removed ${pluralize(purged, 'PortOS event')}`
+          : `Blocked ${handle} — future syncs will skip it`,
+      );
+      onBlocked?.(chatKey, { purged });
+    });
   };
 
   const deleteEvent = async (id) => {
@@ -287,6 +288,7 @@ function ConversationDetail({
             message="Purge all PortOS events for this conversation? Messages.app is unchanged."
             confirmLabel={busy ? 'Purging…' : 'Purge from PortOS'}
             danger
+            busy={busy}
             onCancel={() => setConfirm(null)}
             onConfirm={runPurge}
           />
@@ -296,6 +298,7 @@ function ConversationDetail({
             message={`Block ${handle || 'this handle'} and remove matching PortOS events?`}
             confirmLabel={busy ? 'Blocking and purging…' : 'Block and purge'}
             danger
+            busy={busy}
             onCancel={() => setConfirm(null)}
             onConfirm={() => runBlock({ purgeExisting: true })}
           />
@@ -479,6 +482,8 @@ export default function IMessageTab() {
   const navigate = useNavigate();
   // Route is /messages/imessage/:chatKey — React Router already decodes.
   const selectedKey = chatKeyParam || null;
+  const selectedKeyRef = useRef(selectedKey);
+  selectedKeyRef.current = selectedKey;
 
   const [stats, setStats] = useState(null);
   const [conversations, setConversations] = useState([]);
@@ -492,6 +497,20 @@ export default function IMessageTab() {
   const [conversationIdentity, setConversationIdentity] = useState(null);
   const [eventsLoading, setEventsLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const pendingKeysRef = useRef(new Set());
+  const [pendingKeys, setPendingKeys] = useState(() => new Set());
+
+  const runPending = useCallback(async (key, task) => {
+    if (!key || pendingKeysRef.current.has(key)) return;
+    pendingKeysRef.current.add(key);
+    setPendingKeys(new Set(pendingKeysRef.current));
+    try {
+      await task();
+    } finally {
+      pendingKeysRef.current.delete(key);
+      setPendingKeys(new Set(pendingKeysRef.current));
+    }
+  }, []);
 
   // Ingestion config lives in a right-side drawer over this page (not its own
   // Settings page), deep-linked as ?settings=1 so ⌘K / voice can open it. The
@@ -586,8 +605,10 @@ export default function IMessageTab() {
 
   const onPurged = (key) => {
     setConversations((prev) => prev.filter((c) => c.chatKey !== key));
-    setEvents([]);
-    navigate(BASE);
+    if (selectedKeyRef.current === key) {
+      setEvents([]);
+      navigate(BASE);
+    }
     loadList();
   };
 
@@ -603,8 +624,10 @@ export default function IMessageTab() {
   const onBlocked = (key, { purged }) => {
     if (purged > 0) {
       setConversations((prev) => prev.filter((c) => c.chatKey !== key));
-      setEvents([]);
-      navigate(BASE);
+      if (selectedKeyRef.current === key) {
+        setEvents([]);
+        navigate(BASE);
+      }
     } else {
       setConversations((prev) => prev.map((c) => (
         c.chatKey === key ? { ...c, blocked: true } : c
@@ -721,12 +744,15 @@ export default function IMessageTab() {
         </div>
         <div className={`min-h-0 min-w-0 ${showDetailMobile ? 'block' : 'hidden md:block'} h-[min(50vh,28rem)] md:h-auto`}>
           <ConversationDetail
+            key={selectedKey || 'none'}
             chatKey={selectedKey}
             conversation={selectedConversation}
             events={events}
             identity={conversationIdentity}
             loading={eventsLoading}
             timezone={undefined}
+            busy={Boolean(selectedKey && pendingKeys.has(selectedKey))}
+            runPending={runPending}
             onBack={() => select(null)}
             onPurged={onPurged}
             onEventDeleted={onEventDeleted}
