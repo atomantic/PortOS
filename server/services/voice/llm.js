@@ -13,6 +13,7 @@ import { normalizeOpenAiBaseUrl } from '../../lib/localProviderRuntime.js';
 import { isConversationalGemma } from '../../lib/voiceModelCatalog.js';
 import { assertSecretEndpoint } from '../../lib/aiToolkit/endpointGuard.js';
 import { probeVoiceLlmResidency } from './llmResidency.js';
+import { emitToOperators } from '../socketIo.js';
 
 // Legacy env-based LM Studio default. Returns the OpenAI-compatible API base
 // INCLUDING the version path, so callers append `/models` / `/chat/completions`.
@@ -330,7 +331,33 @@ export const extractInlineToolCalls = (text) => {
 export const readVoiceLlmResidency = async ({ provider, model } = {}) => {
   const endpoint = await resolveLlmEndpoint(provider);
   const resolved = await resolveModel(model, { ...endpoint, requireTools: true });
-  return probeVoiceLlmResidency({ providerId: provider || DEFAULT_VOICE_BACKEND, apiBase: endpoint.apiBase, apiKey: endpoint.apiKey, model: resolved });
+  const providerId = provider || DEFAULT_VOICE_BACKEND;
+  const residency = await probeVoiceLlmResidency({ providerId, apiBase: endpoint.apiBase, apiKey: endpoint.apiKey, model: resolved });
+  if (residency.state === 'unloaded' && warmingVoiceLlms.has(warmingKey(providerId, resolved))) return { ...residency, state: 'loading' };
+  return residency;
+};
+
+// Models a warm-up request is loading right now. Ollama and LM Studio list a
+// model only once it is resident, so without this the badge would read "not
+// loaded" for the whole load. Each change tells open views to re-read.
+const warmingVoiceLlms = new Map();
+const warmingKey = (provider, model) => `${provider || DEFAULT_VOICE_BACKEND}|${model}`;
+const RESIDENCY_CHANGED_EVENT = 'voice:llm:residency:changed';
+
+/** Report `model` as loading until the returned release runs. */
+export const markVoiceLlmWarming = (provider, model) => {
+  const key = warmingKey(provider, model);
+  warmingVoiceLlms.set(key, (warmingVoiceLlms.get(key) || 0) + 1);
+  emitToOperators(RESIDENCY_CHANGED_EVENT);
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    const left = (warmingVoiceLlms.get(key) || 1) - 1;
+    if (left > 0) warmingVoiceLlms.set(key, left);
+    else warmingVoiceLlms.delete(key);
+    emitToOperators(RESIDENCY_CHANGED_EVENT);
+  };
 };
 
 /**

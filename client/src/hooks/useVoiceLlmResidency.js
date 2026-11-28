@@ -6,7 +6,8 @@ import { useEffect, useRef } from 'react';
 import { getVoiceLlmResidency } from '../services/apiVoice';
 import { useSocketResource } from './useSocketResource';
 
-const LOADED_EVENTS = ['loaded-models:changed'];
+// The second event marks a warm-up starting or finishing a model load.
+const LOADED_EVENTS = ['loaded-models:changed', 'voice:llm:residency:changed'];
 const TURN_STAGES = new Set(['loading', 'thinking', 'speaking']);
 
 /**

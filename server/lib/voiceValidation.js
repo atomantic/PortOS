@@ -71,6 +71,7 @@ export const voiceAvatarAddSchema = z.object({ filename: mediaFilenameSchema }).
 export const voiceAvatarFilenameParamsSchema = z.object({ filename: mediaFilenameSchema }).strict();
 
 export const facetimeActionSchema = z.object({}).strict();
+export const voiceLlmPreloadSchema = z.object({}).strict();
 
 export const voiceConfigPatchSchema = z.object({
   enabled: z.boolean().optional(),

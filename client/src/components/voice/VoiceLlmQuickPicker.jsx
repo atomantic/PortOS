@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Brain } from 'lucide-react';
 import { voiceModelDisplayName } from '../../../../server/lib/voiceModelCatalog.js';
-import { updateVoiceConfig } from '../../services/apiVoice';
+import { preloadVoiceLlm, updateVoiceConfig } from '../../services/apiVoice';
 import useMounted from '../../hooks/useMounted';
 import useVoiceLlmProviders from '../../hooks/useVoiceLlmProviders';
 import toast from '../ui/Toast';
@@ -35,6 +35,8 @@ export default function VoiceLlmQuickPicker({
       const choice = { provider: nextProvider, model: nextModel };
       if (onSave) await onSave(choice);
       else await updateVoiceConfig({ llm: choice }, { silent: true });
+      // Load the new model now so the first reply skips the cold load; a failed preload leaves it to load on first reply.
+      preloadVoiceLlm({ silent: true }).catch(() => {});
       if (!mountedRef.current) return;
       onSaved?.({ provider: nextProvider, model: nextModel });
       toast.success(`Voice LLM set to ${nextModel === 'auto' ? `${nextProvider} (auto)` : voiceModelDisplayName(nextModel)}`);
