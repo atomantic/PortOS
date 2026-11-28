@@ -1,11 +1,11 @@
-# AuK-Flash (Apple Silicon MLX) runtime: the dependencies of the pinned AuK
-# checkout (AUK_REVISION in server/services/voice/aukRuntime.js) — its base
-# `dependencies` plus the `[mlx]` extra — and huggingface_hub for the weight
-# download. Installed only from requirements-auk-mlx.lock.txt, then AuK itself
-# is installed editable with `--no-deps --no-build-isolation`. After editing this
-# file, regenerate the lock with the command in the lock header. When bumping
-# AUK_REVISION, re-copy the ranges from that revision's pyproject.toml, except
-# the torch-family / transformers overrides below.
+# AuK-Flash (Apple Silicon MLX) runtime: the dependencies needed by auk_mlx
+# at AUK_REVISION in server/services/voice/aukRuntime.js, plus huggingface_hub
+# for the weight download. Install from requirements-auk-mlx.lock.txt, then
+# install AuK editable with `--no-deps --no-build-isolation`. Regenerate the
+# lock with the command in its header after editing this file. When bumping
+# AUK_REVISION, recheck the import graph and the ranges in pyproject.toml.
+# PortOS runs auk_mlx, which does not import the PyTorch src/auk stack's
+# torchaudio, torchdiffeq, or x-transformers dependencies.
 mlx>=0.29
 soundfile
 soxr
@@ -13,17 +13,14 @@ soxr
 # transformers<5): every release inside them carries OSV advisories (#15670). The
 # MLX path uses torch only to read checkpoints in auk_mlx.convert and transformers
 # only for the Qwen2.5-Omni processor; conversion and rendering were validated on
-# the pins in the lock. torchaudio stopped tracking torch minors after 2.11.
+# the pins in the lock.
 torch>=2.13
-torchaudio>=2.11
 torchvision>=0.28
 transformers>=5.10
 qwen-omni-utils>=0.0.9
 # PyAV 18.1.0 was yanked for an audio decoding defect. Keep the Python 3.11 branch on 18.1.1 (#20251).
 av==18.1.1 ; python_version < "3.12"
 omegaconf>=2.3.0
-torchdiffeq
-x_transformers>=1.31.14
 safetensors
 huggingface_hub
 # Build backend of the editable AuK install (its pyproject: setuptools >= 61.0),
