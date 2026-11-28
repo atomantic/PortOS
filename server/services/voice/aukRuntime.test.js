@@ -40,7 +40,6 @@ vi.mock('../../lib/childProcess.js', async importActual => ({
   };
   children.push(child); return child;
 }) }));
-vi.mock('../../lib/processEnv.js', () => ({ safeChildProcessOptions: value => value }));
 vi.mock('../../lib/pythonSetup.js', () => ({ installLockedRuntime: setupMocks.installLocked, resolvePatchedUv: setupMocks.resolveUv }));
 vi.mock('../../lib/spawnCwd.js', () => ({ withSpawnCwdEnv: (env, cwd) => ({ ...env, PWD: cwd }) }));
 vi.mock('../../lib/paths.js', () => ({ PATHS: { root: '/example' } }));

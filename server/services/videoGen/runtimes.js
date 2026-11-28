@@ -15,7 +15,7 @@ import { join } from 'path';
 import { homedir, cpus, type as osType, release as osRelease } from 'os';
 import { PATHS } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
-import { safeChildProcessOptions } from '../../lib/processEnv.js';
+import { safeChildProcessOptions, withoutServerSecretsEnv } from '../../lib/processEnv.js';
 import { createSingleFlight } from '../../lib/singleFlight.js';
 import { LAST_FRAME_ANCHORED_RUNTIMES } from '../../lib/runners.js';
 
@@ -523,6 +523,7 @@ function runVenvProbe(venvPython, args, label, { unsupportedExitCode, staleExitC
       resolve(ok);
     };
     const child = spawn(venvPython, args, safeChildProcessOptions({
+      env: withoutServerSecretsEnv(process.env),
       stdio: ['ignore', 'ignore', 'pipe'],
     }));
     // Decode as text on the stream, so a multi-byte character split across two
@@ -694,6 +695,7 @@ export async function isByovRuntimeCurrent(runtimeId) {
     return new Promise((resolve) => {
       let stdout = '';
       const child = spawn(info.venvPython, ['--version'], safeChildProcessOptions({
+        env: withoutServerSecretsEnv(process.env),
         stdio: ['ignore', 'pipe', 'ignore'],
       }));
       const timer = setTimeout(() => { if (!child.killed) child.kill('SIGKILL'); resolve(false); }, 10000);
@@ -716,6 +718,7 @@ function isByovRuntimeSourceCurrent(info) {
       ? ['-C', info.repoDir, 'status', '--porcelain=v2', '--branch', '--untracked-files=all', '--', info.sourcePath]
       : ['-C', info.repoDir, 'rev-parse', 'HEAD'];
     const child = spawn('git', args, safeChildProcessOptions({
+      env: withoutServerSecretsEnv(process.env),
       stdio: ['ignore', 'pipe', 'ignore'],
     }));
     const timer = setTimeout(() => { if (!child.killed) child.kill('SIGKILL'); resolve(false); }, 10000);
@@ -779,7 +782,7 @@ async function probeRuntimeFingerprint(runtimeId) {
         info.venvPython,
         info.fingerprintProbeArgs
           || [RUNTIME_FINGERPRINT_SCRIPT, runtimeId, ...(info.fingerprintPackages || [])],
-        safeChildProcessOptions({ stdio: ['ignore', 'pipe', 'ignore'] }),
+        safeChildProcessOptions({ env: withoutServerSecretsEnv(process.env), stdio: ['ignore', 'pipe', 'ignore'] }),
       );
       const timer = setTimeout(() => { if (!child.killed) child.kill('SIGKILL'); resolve({ error: 'timeout' }); }, 15000);
       child.stdout.on('data', (c) => { if (out.length < FINGERPRINT_STDOUT_CAP) out += c.toString(); });

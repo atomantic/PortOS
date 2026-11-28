@@ -14,7 +14,7 @@ import { spawn } from '../../lib/childProcess.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { scrubHomePath } from '../../lib/homePath.js';
 import { PATHS } from '../../lib/paths.js';
-import { safeChildProcessOptions, whichFirst } from '../../lib/processEnv.js';
+import { safeChildProcessOptions, withoutServerSecretsEnv, whichFirst } from '../../lib/processEnv.js';
 
 export const QWEN3_TTS_REPO_DIR = join(homedir(), '.portos', 'qwen3-tts');
 export const QWEN3_TTS_MODELS_DIR = join(homedir(), '.portos', 'voice', 'models', 'qwen3-tts');
@@ -137,7 +137,7 @@ export async function getQwen3RuntimeStatus(pythonPath) {
 
 function runRuntime(pythonPath, args, timeout = 10000) {
   return new Promise((resolve, reject) => {
-    const child = spawn(pythonPath, args, safeChildProcessOptions({ timeout }));
+    const child = spawn(pythonPath, args, safeChildProcessOptions({ env: withoutServerSecretsEnv(process.env), timeout }));
     let stdout = '';
     let stderr = '';
     child.stdout.on('data', (d) => { stdout = (stdout + d.toString()).slice(-65536); });

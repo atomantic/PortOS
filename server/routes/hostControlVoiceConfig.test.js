@@ -28,6 +28,10 @@ vi.mock('../services/settings.js', () => ({
   settingsEvents: new EventEmitter(),
   getSettings: vi.fn(async () => ({})),
 }));
+vi.mock('../services/modelObservation.js', async (importOriginal) => ({
+  ...await importOriginal(),
+  observeModelResource: (_key, read) => ({ read }),
+}));
 vi.mock('../services/voice/config.js', () => voiceConfig);
 vi.mock('../services/voice/health.js', () => ({ checkAll: vi.fn(), invalidateHealthCache: vi.fn() }));
 vi.mock('../services/voice/bootstrap.js', () => bootstrap);
@@ -122,6 +126,14 @@ beforeEach(() => {
 });
 
 describe('voice config behind the default-deny gate (#10990, #13055, #16114)', () => {
+  it('requires operator authority before reading voice readiness', async () => {
+    const workflow = ['get', '/api/voice/status', undefined, bootstrap.verifyBinaries, 200];
+    await expectRemoteRefusal(mounts, workflow);
+    expect(voiceConfig.getVoiceConfig).not.toHaveBeenCalled();
+    expect(bootstrap.verifyModels).not.toHaveBeenCalled();
+    await expectAuthorizedWorkflows({ auth, mounts, workflows: [workflow] });
+  });
+
   it('refuses a remote caller before the save and the runtime reconcile', async () => {
     await expectRemoteRefusal(mounts, ['put', '/api/voice/config', configBody, voiceConfig.updateVoiceConfig]);
     expect(bootstrap.reconcile).not.toHaveBeenCalled();

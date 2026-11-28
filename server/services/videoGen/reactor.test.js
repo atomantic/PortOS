@@ -71,10 +71,17 @@ const started = async (options = {}) => {
 
 describe('Reactor SDK adapter', () => {
   it('mints the official scoped token, pipes it privately, and finalizes only a captured file', async () => {
+    vi.stubEnv('REACTOR_API_KEY', 'example-key');
+    vi.stubEnv('PORTOS_API_TOKEN', 'example-session');
+    vi.stubEnv('CUDA_VISIBLE_DEVICES', '0');
     const job = await started({ sourceImagePath: '/example/first-frame.png', seed: 42 });
     expect(fetch).toHaveBeenCalledWith('https://api.reactor.inc/tokens', expect.objectContaining({ headers: { 'Reactor-API-Key': 'example-key', 'Content-Type': 'application/json' }, body: JSON.stringify({ authorization_details: [{ type: 'session', resources: { models: { match: ['reactor/fast-h3'] } }, constraints: { max_sessions: 1 } }] }) }));
     expect(input).toMatchObject({ jwt: 'example-jwt', seconds: 6, seed: 42, sourceImagePath: '/example/first-frame.png' });
     expect(JSON.stringify(mocks.spawn.mock.calls)).not.toContain('example-jwt');
+    const { env } = mocks.spawn.mock.calls[0][2];
+    expect(env).not.toHaveProperty('REACTOR_API_KEY');
+    expect(env).not.toHaveProperty('PORTOS_API_TOKEN');
+    expect(env.CUDA_VISIBLE_DEVICES).toBe('0');
     await writeFile(input.outputPath, 'example-video');
     child.stdout.emit('data', Buffer.from('{"type":"complete","clipId":"clip-example","seconds":6}\n'));
     expect(mocks.finalize).not.toHaveBeenCalled();
