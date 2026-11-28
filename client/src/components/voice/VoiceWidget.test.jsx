@@ -299,6 +299,40 @@ describe('VoiceWidget async lifecycle', () => {
     expect(voiceClientMock.startCapture).not.toHaveBeenCalled();
     expect(mocks.startWebSpeechCapture).not.toHaveBeenCalled();
   });
+
+  it('serializes a rapid re-engage behind hideWidget mic teardown', async () => {
+    const widget = await renderWidget();
+    let releaseStop;
+    mocks.isContinuous.mockReturnValue(true);
+    mocks.stopContinuous.mockReturnValue(new Promise((r) => { releaseStop = r; }));
+    mocks.startContinuous.mockClear();
+
+    fireEvent.click(within(widget).getAllByRole('button', { name: 'Hide voice widget' })[0]);
+    act(() => { window.dispatchEvent(new Event(ENGAGE_EVENT)); });
+    await settle();
+    expect(mocks.startContinuous).not.toHaveBeenCalled();
+
+    mocks.isContinuous.mockReturnValue(false);
+    await act(async () => { releaseStop(); });
+    await settle();
+    expect(mocks.startContinuous).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops an active continuous capture on disengage even after sttEngine switches to web-speech', async () => {
+    await renderWidget();
+    mocks.isContinuous.mockReturnValue(true);
+    act(() => {
+      for (const handler of [...(mocks.socketHandlers.get('voice:config:changed') || [])]) {
+        handler({ sttEngine: 'web-speech' });
+      }
+    });
+    await settle();
+
+    act(() => { window.dispatchEvent(new Event(DISENGAGE_EVENT)); });
+    await settle();
+    expect(mocks.stopContinuous).toHaveBeenCalledTimes(1);
+    expect(mocks.interrupt).toHaveBeenCalled();
+  });
 });
 
 describe('Voice Call console', () => {
