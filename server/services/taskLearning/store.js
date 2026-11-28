@@ -267,15 +267,20 @@ const DEFAULT_LEARNING_DATA = {
 // evaluation cycles where multiple functions read the same file.
 let _learningCache = null;
 let _learningCacheTime = 0;
+let _learningCacheGeneration = 0;
 const LEARNING_CACHE_TTL_MS = 5000;
 
 /**
  * Clear the learning data cache. Exposed for testing.
  */
 export function clearLearningCache() {
+  _learningCacheGeneration += 1;
   _learningCache = null;
   _learningCacheTime = 0;
 }
+
+/** Hold learning mutations through live backup transfer and cache reconciliation. */
+export const withLiveRestore = (restore) => withLock(() => restore(clearLearningCache));
 
 /**
  * Load learning data from file (cached for 5s)
@@ -285,6 +290,7 @@ export async function loadLearningData() {
     return structuredClone(_learningCache);
   }
 
+  const generation = _learningCacheGeneration;
   await ensureDir(DATA_DIR);
 
   // Strict (#4115): every mutation is `loadLearningData → mutate →
@@ -293,6 +299,7 @@ export async function loadLearningData() {
   // routing/outcome history. It also feeds the CoS learning counts. Throwing
   // skips the cycle and leaves the file intact.
   const data = await readJSONFile(LEARNING_FILE, structuredClone(DEFAULT_LEARNING_DATA), { strict: true });
+  if (generation !== _learningCacheGeneration) return loadLearningData();
   _learningCache = structuredClone(data);
   _learningCacheTime = Date.now();
   return data;
@@ -359,6 +366,7 @@ export async function saveLearningData(data) {
   }
 
   await atomicWrite(LEARNING_FILE, data);
+  _learningCacheGeneration += 1;
   _learningCache = structuredClone(data);
   _learningCacheTime = Date.now();
   cosEvents.emit('goals:changed', {});
