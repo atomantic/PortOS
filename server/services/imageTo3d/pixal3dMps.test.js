@@ -49,6 +49,9 @@ describe('pixal3dMps path and install plan', () => {
     expect(lock).toContain('opencv-python-headless==5.0.0.93');
     expect(lock).not.toMatch(/^opencv-python==/m);
     expect(lock).not.toMatch(/^gradio==/m);
+    for (const pkg of ['diffusers', 'accelerate', 'requests', 'urllib3', 'charset-normalizer', 'certifi', 'importlib-metadata', 'lazy-importer', 'psutil', 'zipp']) {
+      expect(lock, pkg).not.toMatch(new RegExp(`^${pkg}==`, 'm'));
+    }
     expect(lock).toContain(`torch==${PIXAL3D_MPS_TORCH_VERSION}`);
     expect(lock).toContain(`torchvision==${PIXAL3D_MPS_TORCHVISION_VERSION}`);
     expect(PIXAL3D_MPS_TORCH_VERSION.split('.').slice(0, 2).map(Number)).toEqual([2, expect.any(Number)]);

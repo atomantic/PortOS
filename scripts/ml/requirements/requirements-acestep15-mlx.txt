@@ -8,34 +8,25 @@
 # is installed. Dependencies match the foundation music generation stack with
 # OSV-clean pins (torch 2.15.0, transformers 5.22.2, diffusers 0.42.1,
 # accelerate 1.15.0, filelock >= 4.2.1, pillow 13.0.0; diskcache and unused gradio omitted).
-# Inference only: scripts/ml/generate_acestep15.py runs AceStepHandler + generate_music offline. Upstream also
-# declares tensorboard, lightning, lycoris-lora, toml, matplotlib and modelscope for its training UI, LoKr adapter
-# loading and ModelScope download fallback; none is imported by acestep.handler / acestep.inference at ACESTEP15_PIN
-# (static import-graph walk), so they are omitted. Re-check the graph when bumping the pin.
+# Inference only: scripts/ml/generate_acestep15.py runs AceStepHandler + generate_music offline
+# (quantization=None, llm_handler=None, thinking=False, task_type="text2music", default Haar DCW).
+# Upstream also declares training, plotting, ModelScope, LLM, scoring, and CUDA-only deps
+# (tensorboard, lightning, lycoris-lora, toml, matplotlib, modelscope, torchvision, scipy,
+# typer-slim, torchcodec, torchao [disabled on MPS], numba, peft, mlx-lm, sentencepiece,
+# pytorch-wavelets/pywavelets [MLX Haar DCW is native], wheel/setuptools [build-backend is
+# hatchling]); none is required by this MLX inference path at ACESTEP15_PIN. Re-check the
+# import graph when bumping the pin.
 torch==2.15.0
-torchvision==0.29.2
 torchaudio==2.11.1
 accelerate==1.15.0
 diffusers==0.42.1
 transformers==5.22.2
 huggingface-hub[hf_xet]==2.4.0
-sentencepiece==0.2.3
-peft==0.21.2
 einops>=0.8.1
-numba>=0.63.1
 vector-quantize-pytorch>=1.27.15
-torchcodec>=0.9.1
-torchao>=0.16.0,<0.17.0
 mlx>=0.25.2
-mlx-lm>=0.20.0
-typer-slim>=0.21.1
-pytorch-wavelets>=1.3.0
-pywavelets>=1.9.0
 loguru>=0.7.3
-scipy>=1.10.1
 soundfile>=0.13.1
 filelock>=4.2.1
 pillow==13.0.0
 hatchling
-wheel
-setuptools

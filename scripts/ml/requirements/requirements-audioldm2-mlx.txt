@@ -2,6 +2,8 @@
 # Installed only from requirements-audioldm2-mlx.lock.txt, which pins and
 # hashes every transitive package. After editing this file, regenerate the lock
 # with the command in the lock header.
+# scripts/ml/generate_audioldm2.py writes WAV with stdlib wave + numpy and
+# cvssp/audioldm2 uses DDIMScheduler, so scipy is omitted.
 torch==2.15.0
 diffusers==0.42.1
 transformers==5.22.2
@@ -9,4 +11,3 @@ huggingface-hub[hf_xet]==2.4.0
 sentencepiece==0.2.3
 accelerate==1.15.0
 numpy==2.4.6
-scipy==1.17.1

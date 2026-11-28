@@ -90,6 +90,8 @@ function run(mode = 'success') {
 it.each(['txt', 'lock.txt'])('keeps only required imaging packages in the TRELLIS.2 Metal %s manifest', extension => {
   const requirements = readFileSync(new URL(`./requirements/requirements-trellis2-mps.${extension}`, import.meta.url), 'utf8');
   expect(requirements).not.toMatch(/^imageio(?:-ffmpeg)?==/m);
+  expect(requirements).not.toMatch(/^accelerate==/m);
+  expect(requirements).not.toMatch(/^psutil==/m);
   expect(requirements).toMatch(/^kornia==/m);
 });
 

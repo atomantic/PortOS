@@ -3,10 +3,9 @@
 # The lock is the hashed closure of this file. MoGe, pipeline, utils3d and natten
 # install from requirements-pixal3d-mps-sources.lock.txt. PortOS never starts
 # Gradio; MoGe's metadata is patched to drop it and to use one OpenCV wheel.
-# generate_mps.py does not import pymeshlab.
-accelerate==1.15.0
+# generate_mps.py does not import pymeshlab, diffusers (only in unused
+# DinoV3VaeProjFeatureExtractor), or accelerate (not used by DINOv3/BiRefNet).
 click==8.5.1
-diffusers==0.42.1
 easydict==1.13
 # Required by the installed natten-mps source.
 einops==0.8.2

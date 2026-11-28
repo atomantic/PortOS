@@ -1685,6 +1685,10 @@ describe('AudioLDM2 Apple Silicon install is hash-pinned', () => {
   it('installs nothing on Linux/Windows outside the hash-pinned CUDA locks', () => {
     expect(otherBranch).not.toMatch(/pip install|--upgrade/);
   });
+
+  it('omits unused scipy from the AudioLDM2 Apple Silicon lock', () => {
+    expect(lock).not.toMatch(/^scipy==/m);
+  });
 });
 
 describe.each([
@@ -2113,6 +2117,10 @@ ${section}`;
     expect(otherBranch).not.toMatch(/pip install --upgrade|git\+/);
     expect(otherBranch).toContain('--no-binary docopt --no-binary unidic-lite');
   });
+
+  it('omits unused training-only peft from the ACE-Step Apple Silicon lock', () => {
+    expect(lock).not.toMatch(/^peft==/m);
+  });
 });
 
 describe.each(['windows', 'linux'])('ACE-Step %s Install/Repair', (target) => {
@@ -2208,6 +2216,16 @@ describe('ACE-Step 1.5 Apple Silicon install is hash-pinned', () => {
 
   it('installs nothing on Linux/Windows outside the hash-pinned CUDA locks and the pinned checkout', () => {
     expect(otherBranch).not.toMatch(/pip install --upgrade|git\+/);
+  });
+
+  it('omits unused training, CUDA-only, LLM, and scoring packages from the ACE-Step 1.5 Apple Silicon lock', () => {
+    for (const pkg of [
+      'torchvision', 'scipy', 'typer-slim', 'torchcodec', 'torchao',
+      'numba', 'llvmlite', 'peft', 'mlx-lm', 'protobuf', 'sentencepiece',
+      'pytorch-wavelets', 'pywavelets', 'six', 'wheel',
+    ]) {
+      expect(lock, pkg).not.toMatch(new RegExp(`^${pkg}==`, 'm'));
+    }
   });
 });
 

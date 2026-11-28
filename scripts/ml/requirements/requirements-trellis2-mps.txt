@@ -1,9 +1,9 @@
 # TRELLIS.2 Metal runtime and build closure: CPython 3.13, macOS 26+ arm64.
 # Sources are listed separately in trellis2-mps-profile.json.
+# accelerate is omitted: generate.py / trellis2 inference never imports it or uses device_map.
 torch==2.15.0
 torchvision==0.29.2
 transformers==5.22.2
-accelerate==1.15.0
 click==8.5.1
 huggingface-hub==2.4.0
 safetensors==0.8.0

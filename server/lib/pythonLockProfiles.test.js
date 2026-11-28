@@ -80,8 +80,12 @@ describe('locked runtime profiles', () => {
     }
   });
 
-  it('omits the PyTorch AuK stack and its exclusive dependencies from the MLX lock', () => {
-    for (const name of ['torchaudio', 'torchdiffeq', 'x-transformers', 'einops', 'einx', 'frozendict', 'loguru', 'torch-einops-utils']) {
+  it('omits the PyTorch AuK stack, qwen-omni-utils, PyAV, and their exclusive dependencies from the MLX lock', () => {
+    for (const name of [
+      'torchaudio', 'torchdiffeq', 'x-transformers', 'einops', 'einx', 'frozendict', 'loguru', 'torch-einops-utils',
+      'qwen-omni-utils', 'av', 'librosa', 'numba', 'llvmlite', 'scikit-learn', 'scipy',
+      'audioread', 'pooch', 'requests', 'urllib3', 'charset-normalizer', 'certifi',
+    ]) {
       expect(lockEntryText(LOCK_PROFILES['auk-mlx'], name), name).toBe('');
     }
   });
