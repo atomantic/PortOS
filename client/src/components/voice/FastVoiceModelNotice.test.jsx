@@ -7,7 +7,7 @@ vi.mock('../../services/apiLocalLlm.js', () => ({ installLocalLlmModel: mocks.in
 import { RECOMMENDED_FAST_VOICE_MODEL } from '../../../../server/lib/voiceModelCatalog.js';
 import FastVoiceModelNotice from './FastVoiceModelNotice';
 
-const { id, providerId } = RECOMMENDED_FAST_VOICE_MODEL;
+const { id, name, providerId } = RECOMMENDED_FAST_VOICE_MODEL;
 const ollama = (models) => ({ id: providerId, type: 'api', name: 'Ollama', models });
 const LLAMA = { id: 'llama-server', type: 'api', name: 'llama.cpp (local)', models: ['example-org/voice-model'] };
 
@@ -28,7 +28,7 @@ describe('FastVoiceModelNotice', () => {
   it('switches provider and model in one click when Ollama has it', () => {
     const onChange = vi.fn();
     render(<FastVoiceModelNotice apiProviders={[LLAMA, ollama(['other:7b', id])]} selectedProviderId="llama-server" selectedModelId="example-org/voice-model" onChange={onChange} />);
-    fireEvent.click(screen.getByRole('button', { name: /Use Qwen3.6 35B/ }));
+    fireEvent.click(screen.getByRole('button', { name: `Use ${name}` }));
     expect(onChange).toHaveBeenCalledWith({ provider: providerId, model: id });
     expect(mocks.installLocalLlmModel).not.toHaveBeenCalled();
   });
@@ -38,7 +38,7 @@ describe('FastVoiceModelNotice', () => {
     const onChange = vi.fn();
     const onRefreshModels = vi.fn().mockResolvedValue();
     render(<FastVoiceModelNotice apiProviders={[ollama([])]} selectedProviderId="llama-server" selectedModelId="auto" onChange={onChange} onRefreshModels={onRefreshModels} />);
-    fireEvent.click(screen.getByRole('button', { name: /Pull Qwen3.6 35B/ }));
+    fireEvent.click(screen.getByRole('button', { name: new RegExp(`^Pull ${name}`) }));
     await waitFor(() => expect(onChange).toHaveBeenCalledWith({ provider: providerId, model: id }));
     expect(mocks.installLocalLlmModel).toHaveBeenCalledWith(providerId, id, { silent: true });
     expect(onRefreshModels).toHaveBeenCalledWith(providerId);
@@ -48,7 +48,7 @@ describe('FastVoiceModelNotice', () => {
     mocks.installLocalLlmModel.mockRejectedValue(new Error('Ollama is not running'));
     const onChange = vi.fn();
     render(<FastVoiceModelNotice apiProviders={[ollama([])]} selectedProviderId="llama-server" selectedModelId="auto" onChange={onChange} />);
-    fireEvent.click(screen.getByRole('button', { name: /Pull Qwen3.6 35B/ }));
+    fireEvent.click(screen.getByRole('button', { name: new RegExp(`^Pull ${name}`) }));
     expect(await screen.findByRole('alert')).toHaveTextContent('Ollama is not running');
     expect(onChange).not.toHaveBeenCalled();
   });

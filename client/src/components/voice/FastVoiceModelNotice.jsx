@@ -7,7 +7,7 @@ import BrailleSpinner from '../BrailleSpinner';
 const BUTTON_CLS = 'inline-flex min-h-9 pointer-coarse:min-h-11 items-center gap-1.5 rounded-md border border-port-accent/60 bg-port-card px-2.5 py-1 text-xs font-medium text-port-accent-text hover:border-port-accent disabled:opacity-50';
 
 /**
- * Recommends the fastest measured local Voice brain (Ollama Qwen3.6 35B) next to
+ * Recommends the fastest measured local Voice brain (`RECOMMENDED_FAST_VOICE_MODEL`) next to
  * the Voice LLM picker. One click selects it when Ollama already has it, or pulls
  * it first. Renders nothing when there is no Ollama provider to serve it.
  */
