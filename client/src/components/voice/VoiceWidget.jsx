@@ -22,6 +22,7 @@ import {
   getVoiceVolume, setVoiceVolume, isVoiceMuted, setVoiceMuted, onVoiceAudioPrefs, getVoiceOutputLevel,
 } from '../../services/voiceClient';
 import toast from '../ui/Toast';
+import { REALTIME_ACTIVE_EVENT, isRealtimeCallActive } from '../../services/voiceRealtime';
 import {
   VISIBILITY_EVENT,
   VISUAL_MODE_EVENT,
@@ -295,6 +296,11 @@ export default function VoiceWidget({ config, claimHeld, consoleHost }) {
 
   const handleStart = useCallback(async () => {
     if (!enabled || disposedRef.current) return;
+    // A realtime call has the mic and the conversation; listening here would answer the same words a second time.
+    if (isRealtimeCallActive()) {
+      toast('Hang up the realtime call to use the regular voice.');
+      return;
+    }
 
     if (useWebSpeech) {
       if (isWebSpeechCapturing()) return;
@@ -608,6 +614,15 @@ export default function VoiceWidget({ config, claimHeld, consoleHost }) {
     setInterimTranscript('');
     setStage('idle');
   }, []);
+
+  // A realtime call takes over the microphone and the conversation: stop this
+  // widget's listening and speech when one starts, so the regular pipeline does
+  // not hear the same words and answer them in its own voice.
+  useEffect(() => {
+    const onRealtime = (event) => { if (event.detail?.active) endCall(); };
+    window.addEventListener(REALTIME_ACTIVE_EVENT, onRealtime);
+    return () => window.removeEventListener(REALTIME_ACTIVE_EVENT, onRealtime);
+  }, [endCall]);
 
   // Leaving the dedicated call console stops its microphone and cancels
   // playback; switching surfaces never mounts a second capture engine.
