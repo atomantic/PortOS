@@ -1,14 +1,12 @@
 import { Router } from 'express';
 import { validateCommand } from '../lib/commandSecurity.js';
-import { existsSync, statSync, realpathSync } from 'fs';
-import { resolve } from 'path';
 import * as commands from '../services/commands.js';
 import { requireHostControl } from '../services/authGate.js';
 import { broadcastToCommandSubscribers } from '../services/socketIo.js';
 import * as pm2Service from '../services/pm2.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
-import { isWithinAllowedRoots, outsideAllowedRootsMessage } from '../lib/workspaceRoots.js';
+import { assertAllowedWorkspaceDir } from '../lib/workspaceRoots.js';
 import { getAppById } from '../services/apps.js';
 import { commandExecuteBodySchema, processListQuerySchema, processActionSchema } from '../lib/processValidation.js';
 
@@ -18,31 +16,8 @@ const router = Router();
 router.post('/execute', requireHostControl, asyncHandler(async (req, res) => {
   const { command, workspacePath, timeoutMs } = validateRequest(commandExecuteBodySchema, req.body);
 
-  // Validate workspacePath if provided: must exist, be a directory, and — after
-  // symlinks are followed — resolve within an allowed root. Using realpath here
-  // prevents a symlink like /tmp/escape -> /etc from tricking the containment
-  // check (which only sees /tmp/escape).
   if (workspacePath !== undefined && workspacePath !== null && workspacePath !== '') {
-    const resolvedPath = resolve(workspacePath);
-    if (!existsSync(resolvedPath)) {
-      throw new ServerError('workspacePath does not exist', { status: 400, code: 'INVALID_PATH' });
-    }
-    // statSync/realpathSync can throw on permission/symlink edge cases — convert
-    // those into clean 400s rather than leaking as 500 via centralized middleware.
-    let realPath;
-    try {
-      if (!statSync(resolvedPath).isDirectory()) {
-        throw new ServerError('workspacePath is not a directory', { status: 400, code: 'INVALID_PATH' });
-      }
-      realPath = realpathSync(resolvedPath);
-    } catch (err) {
-      if (err instanceof ServerError) throw err;
-      throw new ServerError('workspacePath is not accessible', { status: 400, code: 'INVALID_PATH' });
-    }
-    if (!isWithinAllowedRoots(realPath)) {
-      console.error(`❌ ${outsideAllowedRootsMessage(realPath, { field: 'workspacePath' })}`);
-      throw new ServerError('workspacePath is outside allowed directories', { status: 400, code: 'INVALID_PATH' });
-    }
+    assertAllowedWorkspaceDir(workspacePath, { field: 'workspacePath', outsideStatus: 400 });
   }
 
   // executeCommand reports validation failures through onComplete before it

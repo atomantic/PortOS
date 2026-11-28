@@ -2,6 +2,12 @@ import { describe, expect, it } from 'vitest';
 import { blankCommentBodies, blankLiterals } from './sourceScan.js';
 
 describe('single-traversal source views', () => {
+  it('keeps division and masks regex after a keyword across comment spans', () => {
+    const source = 'obj.return /* note */ / count;\nreturn /* a\nb */ /[/]/gi;';
+    expect(blankLiterals(source)).toBe('obj.return            / count;\nreturn     \n     ' + ' '.repeat(7) + ';');
+    expect(blankCommentBodies(source)).toBe('obj.return            / count;\nreturn     \n     /[/]/gi;');
+  });
+
   it('preserves both lexer modes across literal, comment, and interpolation boundaries', () => {
     const sources = [
       '// comment with " and `\ncall("https://example.com/*literal*/", /["\']/g); /* end */',

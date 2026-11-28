@@ -1,5 +1,6 @@
 import { Router } from 'express'
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js'
+import { ABUSE_GUARD_PAGE_BREADCRUMB } from '../../lib/navManifest.js'
 import { validateRequest } from '../../lib/validateRequest.js'
 import { manualGuardScanSchema } from '../../lib/mediaValidation.js'
 import { localLlmProgress as emitter } from '../localLlmProgress.js'
@@ -49,9 +50,9 @@ router.post('/security-guard/install', asyncHandler(async (req, res) => {
         : code === 'security-guard-python-unavailable'
           ? 'Install Python 3.10 or newer on this machine, restart PortOS if needed to detect it, then refresh Abuse Guard status.'
           : code === 'security-guard-self-test-failed'
-            ? 'Prompt Guard could not complete its local verification. Repair the dedicated runtime from Models > LLMs > Abuse Guard before retrying.'
+            ? `Prompt Guard could not complete its local verification. Repair the dedicated runtime from ${ABUSE_GUARD_PAGE_BREADCRUMB} before retrying.`
             : code === 'security-guard-runtime-install-failed'
-              ? 'Classifier package installation failed. Check internet access and Python compatibility, then retry from Models > LLMs > Abuse Guard.'
+              ? `Classifier package installation failed. Check internet access and Python compatibility, then retry from ${ABUSE_GUARD_PAGE_BREADCRUMB}.`
         : code
     const detail = result?.diagnostic
     const actionableMessage = detail ? `${message} ${detail.message} ${detail.action}` : message

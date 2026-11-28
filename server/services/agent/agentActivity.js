@@ -6,11 +6,12 @@
  */
 
 import { readFile, readdir } from 'fs/promises';
-import { existsSync } from 'fs';
 import { join } from 'path';
 import { ensureDir, getDateString, atomicWrite, PATHS } from '../../lib/fileUtils.js';
 import { createKeyedFileWriteQueue } from '../../lib/fileWriteQueue.js';
+import { mapWithConcurrency } from '../../lib/mapWithConcurrency.js';
 
+const ACTIVITY_READ_CONCURRENCY = 4;
 const AGENTS_DIR = PATHS.agentPersonalities;
 const ACTIVITY_DIR = join(AGENTS_DIR, 'activity');
 
@@ -26,13 +27,6 @@ const queueActivityWrite = createKeyedFileWriteQueue();
 // Cache for today's activity (per account)
 const todayCache = new Map();
 
-async function ensureActivityDir(agentId = null) {
-  await ensureDir(ACTIVITY_DIR);
-  if (agentId) {
-    await ensureDir(join(ACTIVITY_DIR, agentId));
-  }
-}
-
 function getActivityFilePath(agentId, date = new Date()) {
   const dateStr = typeof date === 'string' ? date : getDateString(date);
   return join(ACTIVITY_DIR, agentId, `${dateStr}.json`);
@@ -43,21 +37,29 @@ function getActivityFilePath(agentId, date = new Date()) {
  */
 async function loadActivity(agentId, date = new Date()) {
   const filePath = getActivityFilePath(agentId, date);
-  await ensureActivityDir(agentId);
-
-  if (!existsSync(filePath)) {
-    return { activities: [] };
+  try {
+    const content = await readFile(filePath, 'utf-8');
+    return JSON.parse(content);
+  } catch (error) {
+    if (error.code === 'ENOENT') return { activities: [] };
+    throw error;
   }
+}
 
-  const content = await readFile(filePath, 'utf-8');
-  return JSON.parse(content);
+async function listActivityDir(directory, options) {
+  try {
+    return await readdir(directory, options);
+  } catch (error) {
+    if (error.code === 'ENOENT') return [];
+    throw error;
+  }
 }
 
 /**
  * Save activity for a specific agent and date
  */
 async function saveActivity(agentId, date, data) {
-  await ensureActivityDir(agentId);
+  await ensureDir(join(ACTIVITY_DIR, agentId));
   const filePath = getActivityFilePath(agentId, date);
   await atomicWrite(filePath, data);
 }
@@ -147,23 +149,13 @@ export async function getTodayActionCount(accountId, action) {
 
   // Count from all agents for this account
   const today = getDateString();
-  let count = 0;
-
-  await ensureActivityDir();
-
-  if (existsSync(ACTIVITY_DIR)) {
-    const entries = await readdir(ACTIVITY_DIR, { withFileTypes: true });
-    const agentDirs = entries.filter(e => e.isDirectory()).map(e => e.name);
-
-    for (const agentId of agentDirs) {
-      const data = await loadActivity(agentId, today);
-      for (const activity of data.activities || []) {
-        if (activity.accountId === accountId && activity.action === action) {
-          count++;
-        }
-      }
-    }
-  }
+  const entries = await listActivityDir(ACTIVITY_DIR, { withFileTypes: true });
+  const agentDirs = entries.filter(entry => entry.isDirectory()).map(entry => entry.name);
+  const counts = await mapWithConcurrency(agentDirs, ACTIVITY_READ_CONCURRENCY, async agentId => {
+    const data = await loadActivity(agentId, today);
+    return (data.activities || []).filter(activity => activity.accountId === accountId && activity.action === action).length;
+  });
+  const count = counts.reduce((total, agentCount) => total + agentCount, 0);
 
   // Update cache
   todayCache.set(cacheKey, { count, timestamp: Date.now() });
@@ -220,13 +212,16 @@ export async function getAgentStats(agentId, days = 7) {
   };
 
   const today = new Date();
-
+  const dates = [];
   for (let i = 0; i < days; i++) {
     const date = new Date(today);
     date.setDate(date.getDate() - i);
-    const dateStr = getDateString(date);
+    dates.push(getDateString(date));
+  }
 
-    const data = await loadActivity(agentId, date);
+  const dayData = await mapWithConcurrency(dates, ACTIVITY_READ_CONCURRENCY, date => loadActivity(agentId, date));
+  for (const [index, data] of dayData.entries()) {
+    const dateStr = dates[index];
     const dayActivities = data.activities || [];
 
     stats.byDay[dateStr] = dayActivities.length;
@@ -252,43 +247,45 @@ export async function getActivityTimeline(options = {}) {
   const { agentIds = null, actions = null, limit = 100, beforeTimestamp = null } = options;
   const before = beforeTimestamp ? new Date(beforeTimestamp).getTime() : null;
 
-  await ensureActivityDir();
-  if (!existsSync(ACTIVITY_DIR)) return [];
-
-  const entries = await readdir(ACTIVITY_DIR, { withFileTypes: true });
+  const entries = await listActivityDir(ACTIVITY_DIR, { withFileTypes: true });
   const agentDirs = entries
     .filter(entry => entry.isDirectory() && (!agentIds || agentIds.includes(entry.name)))
     .map(entry => entry.name);
-  const dates = new Set();
+  const filesByAgent = await mapWithConcurrency(agentDirs, ACTIVITY_READ_CONCURRENCY,
+    agentId => listActivityDir(join(ACTIVITY_DIR, agentId)));
+  const agentsByDate = new Map();
 
-  for (const agentId of agentDirs) {
-    const files = await readdir(join(ACTIVITY_DIR, agentId));
+  for (const [index, files] of filesByAgent.entries()) {
     for (const file of files) {
-      if (DAY_FILE_RE.test(file)) dates.add(file.slice(0, -5));
+      if (!DAY_FILE_RE.test(file)) continue;
+      const date = file.slice(0, -5);
+      if (!agentsByDate.has(date)) agentsByDate.set(date, []);
+      agentsByDate.get(date).push(agentDirs[index]);
     }
   }
 
   const activities = [];
-  for (const date of [...dates].sort().reverse()) {
+  for (const date of [...agentsByDate.keys()].sort().reverse()) {
     const dayActivities = [];
-    for (const agentId of agentDirs) {
-      const data = await loadActivity(agentId, date);
+    const dayAgents = agentsByDate.get(date);
+    const dayData = await mapWithConcurrency(dayAgents, ACTIVITY_READ_CONCURRENCY, agentId => loadActivity(agentId, date));
+    for (const [index, data] of dayData.entries()) {
       for (const activity of data.activities || []) {
         const timestamp = new Date(activity.timestamp).getTime();
         // Filter before the limit cut so a filtered page stays full.
         if ((before === null || timestamp < before) && (!actions || actions.includes(activity.action))) {
-          dayActivities.push({ agentId, ...activity });
+          dayActivities.push({ timestamp, entry: { agentId: dayAgents[index], ...activity } });
         }
       }
     }
 
     dayActivities.sort((a, b) => {
-      const timestampOrder = new Date(b.timestamp) - new Date(a.timestamp);
+      const timestampOrder = b.timestamp - a.timestamp;
       if (timestampOrder !== 0) return timestampOrder;
-      const agentOrder = a.agentId.localeCompare(b.agentId);
-      return agentOrder || String(a.id).localeCompare(String(b.id));
+      const agentOrder = a.entry.agentId.localeCompare(b.entry.agentId);
+      return agentOrder || String(a.entry.id).localeCompare(String(b.entry.id));
     });
-    activities.push(...dayActivities);
+    activities.push(...dayActivities.map(({ entry }) => entry));
 
     // Files are visited newest-day first. Once a complete day fills the page,
     // older files cannot contribute an entry ahead of the current window.

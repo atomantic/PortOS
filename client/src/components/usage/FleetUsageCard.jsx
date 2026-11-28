@@ -208,13 +208,13 @@ export default function FleetUsageCard({ fleet, onSaved }) {
         <table className="w-full text-sm min-w-[520px]">
           <thead>
             <tr className="text-left text-xs text-gray-500 border-b border-port-border">
-              <th className="py-2 pr-2 font-medium">Instance</th>
-              <th className="py-2 px-2 font-medium text-center" title="On your subscriptions. Turn off if this instance pays API rates.">Subscriptions</th>
-              <th className="py-2 px-2 font-medium text-right">Sessions</th>
-              <th className="py-2 px-2 font-medium text-right">Messages</th>
-              <th className="py-2 px-2 font-medium text-right">Tokens In</th>
-              <th className="py-2 px-2 font-medium text-right">Tokens Out</th>
-              <th className="py-2 pl-2 font-medium text-right">Est. API Cost</th>
+              <th scope="col" className="py-2 pr-2 font-medium">Instance</th>
+              <th scope="col" className="py-2 px-2 font-medium text-center" title="On your subscriptions. Turn off if this instance pays API rates.">Subscriptions</th>
+              <th scope="col" className="py-2 px-2 font-medium text-right">Sessions</th>
+              <th scope="col" className="py-2 px-2 font-medium text-right">Messages</th>
+              <th scope="col" className="py-2 px-2 font-medium text-right">Tokens In</th>
+              <th scope="col" className="py-2 px-2 font-medium text-right">Tokens Out</th>
+              <th scope="col" className="py-2 pl-2 font-medium text-right">Est. API Cost</th>
             </tr>
           </thead>
           <tbody>

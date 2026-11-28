@@ -45,6 +45,15 @@ export const getLocalLlmCatalog = (backend, q = '', { variants = false, silent }
 export const checkConversationalGemmaAccess = options =>
   request('/local-llm/conversational-gemma/access', { ...options, method: 'POST' });
 
+export const getConversationalGemmaSetupStatus = options =>
+  request('/local-llm/conversational-gemma/status', { signal: options?.signal, silent: true, hostControlOptional: true });
+
+export const startConversationalGemmaSetup = options =>
+  request('/local-llm/conversational-gemma/setup', { ...options, method: 'POST', body: '{}' });
+
+export const cancelConversationalGemmaSetup = options =>
+  request('/local-llm/conversational-gemma/cancel', { ...options, method: 'POST', body: '{}' });
+
 export const getModelAbuseGuardStatus = (options) =>
   request('/local-llm/security-guard/status', options);
 
@@ -96,6 +105,9 @@ export const getJevHeads = (options) => request('/local-llm/jev/heads', options)
 // leash and an explicit in-progress state.
 export const trainJevHead = (body = {}, options) =>
   request('/local-llm/jev/heads/train', { method: 'POST', body: JSON.stringify(body), ...options });
+
+export const cancelJevTraining = (options) =>
+  request('/local-llm/jev/heads/train/cancel', { method: 'POST', ...options });
 
 // Refused server-side unless the head beats BOTH the stock zero-shot and the
 // majority-class baseline — a disabled button is a suggestion, not the gate.
@@ -270,6 +282,11 @@ export const startLlamaServer = managedRuntimeRequests.llama.start;
 export const stopLlamaServer = managedRuntimeRequests.llama.stop;
 export const installLlamaServer = managedRuntimeRequests.llama.install;
 
+// Start with PortOS: replay the last explicit launch line at boot. Turning it on
+// while the server is down starts it now; the response carries fresh status.
+export const setLlamaServerAutoStart = (enabled, options) =>
+  request('/local-llm/llama-server/auto-start', { ...options, method: 'PUT', body: JSON.stringify({ enabled: enabled === true }) });
+
 // Upgrade a package-manager-installed binary. The server restarts a managed
 // llama-server using its existing launch configuration.
 export const upgradeLlamaServer = () => managedRuntimeRequests.llama.upgrade();
@@ -403,6 +420,9 @@ export const runLocalLlmAssessment = (payload, options) =>
 // This measures tool-loop completion separately from direct decoder throughput.
 export const runOpenCodeAgentBenchmark = (payload, options) =>
   request('/local-llm/assessments/agent-benchmark', { method: 'POST', body: JSON.stringify(payload), ...options });
+
+export const cancelOpenCodeAgentBenchmark = (options) =>
+  request('/local-llm/assessments/agent-benchmark/cancel', { method: 'POST', ...options });
 
 // === The overnight sweep =====================================================
 // Measure every model the scope covers, in one server-side queue. Unlike

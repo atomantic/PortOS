@@ -1,16 +1,8 @@
 name: Set up the server workspace
 description: >-
-  Node 26, a cached server/node_modules that is reused only when its trusted
-  native rebuild is stamped, and the Vitest transform-artifact cache. Shared by
-  every ci.yml job that runs the server workspace (Linux, Windows and macOS).
-
-inputs:
-  vitest-key-suffix:
-    description: >-
-      Appended to the transform-artifact cache key so jobs and shards that run
-      in parallel never race on one save (e.g. `-1of2`, `-browser-1of2`).
-    required: false
-    default: ''
+  Node 26 and a cached server/node_modules that is reused only when its
+  trusted native rebuild is stamped. Shared by every ci.yml job that runs
+  the server workspace (Linux, Windows and macOS).
 
 runs:
   using: composite
@@ -19,14 +11,8 @@ runs:
       uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
       with:
         node-version: 26.x
-        cache: npm
-        cache-dependency-path: server/package-lock.json
+        package-manager-cache: false
 
-    # setup-node's npm cache only preserves ~/.npm, the tarball cache: a clean
-    # install still wipes and repopulates a 570 MB node_modules on every job
-    # that runs this action. Cache the installed tree instead and skip the
-    # install on a hit.
-    #
     # No restore-keys. The install below is skipped on a hit, so a near-miss
     # restore would silently ship a node_modules built from a different
     # lockfile. Exact key or nothing. package.json is in the hash alongside
@@ -34,8 +20,7 @@ runs:
     # manifest-vs-lockfile check, and the key carries the Node *major* rather
     # than the resolved patch, because NODE_MODULE_VERSION is stable across
     # patches and keying on the patch would discard the entry on every Node
-    # 26.x release. The transform-artifact cache below keeps its own key and
-    # its own restore-keys; this one is about dependencies.
+    # 26.x release.
     #
     # Hit rate comes from the runs on `main`, the only scope every PR branch
     # can read: every push seeds the Linux entry, and both daily schedule runs
@@ -55,13 +40,10 @@ runs:
     # explicit mark; this reads it back.
     #
     # `continue-on-error` on purpose: a bad entry must not wedge every PR
-    # until a human clears the cache by hand. It fails, the two steps below
-    # see a non-success outcome, and the job builds the tree it needs. It does
-    # not *replace* the bad entry — cache keys are immutable and actions/cache
-    # skips the save on an exact hit — so that entry keeps costing each run a
-    # reinstall until the key moves or it ages out. That is precisely the
-    # pre-cache cost: the worst case degrades to the old behaviour, never to a
-    # red repo.
+    # until a human clears the cache by hand. On failure, the job builds the
+    # tree it needs. It does not *replace* the bad entry — cache keys are
+    # immutable and actions/cache skips the save on an exact hit. Each run
+    # reinstalls until the key changes or the cache entry expires.
     #
     # `outcome != 'success'` covers all three cases in one expression: on a
     # cache miss this step is skipped (outcome `skipped`), on a hit it is
@@ -72,6 +54,34 @@ runs:
       continue-on-error: true
       shell: bash
       run: node scripts/trusted-rebuild-stamp.js check server
+
+    - name: Locate the server npm cache
+      id: server-npm-cache
+      if: steps.server-modules-usable.outcome != 'success'
+      working-directory: server
+      shell: bash
+      run: |
+        cache_path=$(npm config get cache)
+        # Native npm on Windows can leave a trailing carriage return.
+        printf 'path=%s\n' "${cache_path%$'\r'}" >> "$GITHUB_OUTPUT"
+
+    # Pull requests only restore package downloads because their caches are
+    # scoped to the PR merge ref.
+    - name: Restore server npm downloads
+      if: steps.server-modules-usable.outcome != 'success' && github.event_name == 'pull_request'
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ steps.server-npm-cache.outputs.path }}
+        key: npm-cache-server-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('server/package-lock.json') }}
+        restore-keys: npm-cache-server-${{ runner.os }}-${{ runner.arch }}-
+
+    - name: Cache server npm downloads
+      if: steps.server-modules-usable.outcome != 'success' && github.event_name != 'pull_request'
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ steps.server-npm-cache.outputs.path }}
+        key: npm-cache-server-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('server/package-lock.json') }}
+        restore-keys: npm-cache-server-${{ runner.os }}-${{ runner.arch }}-
 
     - name: Install server dependencies
       if: steps.server-modules-usable.outcome != 'success'
@@ -99,34 +109,3 @@ runs:
       run: |
         node scripts/trusted-rebuilds.js server
         node scripts/trusted-rebuild-stamp.js write server
-
-    # Reuse Vite/Vitest artifacts from checkout-owned .cache paths, outside
-    # node_modules (which may be shared by worktrees). Unlike the installed
-    # dependency tree above, these artifacts can safely use a near-miss
-    # restore and stay warm across a lockfile bump. Both server Vitest configs
-    # are hashed for every job, so one key shape serves the unit, DB, browser,
-    # Windows and macOS jobs; the suffix keeps their parallel saves apart.
-    # A PR-saved cache is private to its merge ref and never read again, so PRs only restore.
-    - name: Cache Vitest transform artifacts (restore only on pull requests)
-      if: github.event_name == 'pull_request'
-      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-      with:
-        path: |
-          server/.cache/vitest
-          server/.cache/vitest-db
-        key: vitest-server-${{ runner.os }}-${{ hashFiles('server/package-lock.json', 'server/vitest.config.js', 'server/vitest.config.db.js', 'scripts/vitestCiPool.js') }}${{ inputs.vitest-key-suffix }}
-        restore-keys: |
-          vitest-server-${{ runner.os }}-${{ hashFiles('server/package-lock.json') }}-
-          vitest-server-${{ runner.os }}-
-
-    - name: Cache Vitest transform artifacts
-      if: github.event_name != 'pull_request'
-      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-      with:
-        path: |
-          server/.cache/vitest
-          server/.cache/vitest-db
-        key: vitest-server-${{ runner.os }}-${{ hashFiles('server/package-lock.json', 'server/vitest.config.js', 'server/vitest.config.db.js', 'scripts/vitestCiPool.js') }}${{ inputs.vitest-key-suffix }}
-        restore-keys: |
-          vitest-server-${{ runner.os }}-${{ hashFiles('server/package-lock.json') }}-
-          vitest-server-${{ runner.os }}-

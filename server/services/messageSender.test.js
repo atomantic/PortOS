@@ -98,6 +98,35 @@ describe('draft send workflow', () => {
     expect(doubles.sendGmail).toHaveBeenCalledTimes(1);
   });
 
+  it.each([[true, 'sent'], [false, 'erased']])('finishes an active send after erasure (success=%s)', async (success, status) => {
+    seed({ id: 'in-flight', generatedBy: 'privacy-optout', privacyMeta: { caseId: 'case' }, to: ['broker@example.com'] });
+    const started = barrier();
+    const finish = barrier();
+    doubles.sendGmail.mockImplementationOnce(async (_account, claimed) => {
+      started.resolve();
+      await finish.promise;
+      expect(claimed).toMatchObject({ body: 'Example message', to: ['broker@example.com'] });
+      return { success };
+    });
+    const sending = sendDraft('in-flight');
+    await started.promise;
+    const { eraseCaseDrafts } = await import('./privacyDraftErasure.js');
+    await eraseCaseDrafts('case');
+    const erased = await getDraft('in-flight');
+    expect(erased).toMatchObject({ status: 'sending', privacyErased: true, to: [] });
+    expect(erased.body).not.toBe('Example message');
+    finish.resolve();
+    expect((await sending).success).toBe(success);
+    const finished = await getDraft('in-flight');
+    expect(finished).toMatchObject({
+      status, body: erased.body, sendAttemptId: erased.sendAttemptId,
+      sendAttempts: [{ id: erased.sendAttemptId, outcome: success ? 'sent' : 'failed' }]
+    });
+    await expect(approveDraft('in-flight')).rejects.toMatchObject({ status: 409 });
+    expect(await sendDraft('in-flight')).toMatchObject({ status: 409 });
+    expect(doubles.sendGmail).toHaveBeenCalledTimes(1);
+  });
+
   it('lets another draft complete while one provider dispatch is blocked', async () => {
     seed({ id: 'draft-1' }, { id: 'draft-2' });
     const dispatchStarted = barrier();
@@ -196,7 +225,7 @@ describe('browser draft delivery', () => {
   });
 
   it('resolves the reply target inside the draft\'s own account only', async () => {
-    seed({ id: 'reply', replyToMessageId: 'msg-1', threadId: 'thread-1', ...browserDraft({ to: [] }) });
+    seed({ id: 'reply', replyToMessageId: 'msg-1', threadId: 'thread-1', ...browserDraft({ to: [], subject: 'Re: Example' }) });
     doubles.getMessage.mockResolvedValueOnce(cachedMessage());
     expect(await sendDraft('reply')).toEqual({ success: true });
     expect(doubles.getMessage).toHaveBeenCalledWith('account-1', 'msg-1');
@@ -206,6 +235,7 @@ describe('browser draft delivery', () => {
   it.each([
     ['a reply target that belongs to another account', { replyToMessageId: 'msg-1' }, null, 'REPLY_TARGET_NOT_FOUND'],
     ['a reply whose thread differs from its target', { replyToMessageId: 'msg-1', threadId: 'thread-2' }, cachedMessage(), 'THREAD_MISMATCH'],
+    ['a reply whose subject differs from its target', { replyToMessageId: 'msg-1' }, cachedMessage(), 'OUTLOOK_REPLY_SUBJECT_MISMATCH'],
     ['a draft with no recipient', { to: [] }, null, 'DRAFT_NOT_DELIVERABLE'],
     ['a recipient that is not an email address', { to: ['Alice'] }, null, 'DRAFT_NOT_DELIVERABLE']
   ])('refuses %s without consuming approval or touching the provider', async (_label, overrides, target, code) => {
@@ -213,6 +243,17 @@ describe('browser draft delivery', () => {
     doubles.getMessage.mockResolvedValue(target);
     expect(await sendDraft('draft-1')).toMatchObject({ success: false, code });
     expect((await getDraft('draft-1')).status).toBe('approved');
+    expect(doubles.sendPlaywright).not.toHaveBeenCalled();
+  });
+
+  it('rechecks the Outlook reply subject before claim when the draft was edited and re-approved during lookup', async () => {
+    seed({ id: 'reply', replyToMessageId: 'msg-1', ...browserDraft({ subject: 'Re: Example' }) });
+    doubles.getMessage.mockImplementationOnce(async () => {
+      await updateDraft('reply', { subject: 'Different conversation', status: 'approved' });
+      return cachedMessage();
+    });
+    await expect(sendDraft('reply')).rejects.toMatchObject({ status: 422, code: 'OUTLOOK_REPLY_SUBJECT_MISMATCH' });
+    expect(await getDraft('reply')).toMatchObject({ status: 'approved', subject: 'Different conversation' });
     expect(doubles.sendPlaywright).not.toHaveBeenCalled();
   });
 
@@ -298,6 +339,24 @@ describe('interrupted send reconciliation', () => {
       expect(sent.sendAttempts).toHaveLength(2);
       await expect(restarted.finishDraftSend('draft-1', unknown.sendAttemptId, true)).rejects.toMatchObject({ status: 409 });
     }
+  });
+
+  it('recovers an erased send lease after restart without reopening its content', async () => {
+    vi.resetModules();
+    const original = await import('./messageDrafts.js');
+    const { eraseSubjectDrafts } = await import('./privacyDraftErasure.js');
+    seed({ id: 'interrupted', generatedBy: 'privacy-change', privacyMeta: { subjectId: 'subject' } });
+    const { sendAttemptId } = await original.claimDraftForSend('interrupted');
+    await eraseSubjectDrafts('subject');
+    vi.resetModules();
+    const restarted = await import('./messageDrafts.js');
+    await restarted.initializeMessageDrafts();
+    const draft = await restarted.getDraft('interrupted');
+    expect(draft).toMatchObject({ status: 'delivery_unknown', sendAttemptId, privacyErased: true });
+    expect(draft.body).not.toBe('Example message');
+    const settled = await restarted.reconcileDraftSend('interrupted', { attemptId: sendAttemptId, outcome: 'not_sent' });
+    expect(settled).toMatchObject({ status: 'erased', body: draft.body });
+    await expect(restarted.updateDraft('interrupted', { status: 'approved', body: 'Replacement' })).rejects.toMatchObject({ status: 409 });
   });
 
   it('recovers legacy sends and bounds retained attempt history', async () => {

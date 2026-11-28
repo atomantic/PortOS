@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { findFfmpeg, findFfprobe } from '../../lib/ffmpeg.js';
 import { FILTER_GRAPH_ARG_LIMIT, filterGraphViaFile } from '../../lib/ffmpegFilterGraph.js';
 import {
-  MUSIC_VIDEO_TRANSITION_STYLES, glitchFrameParams, musicVideoTransitionFilter, sceneTransitions, shotGlitchFrames, transitionFrameAt, transitionGlitchFrames,
+  MUSIC_VIDEO_TRANSITION_STYLES, glitchFrameParams, groupedEffectFrames, mergeGlitchFrames, musicVideoTransitionFilter, sceneTransitions, shotGlitchFrames, transitionFrameAt, transitionGlitchFrames,
 } from '../../lib/musicVideo/musicVideoTransitions.js';
 import { buildMusicVideoFfmpegArgs } from './render.js';
 import { applySceneUpdate, varySceneWipes } from './projectsLogic.js';
@@ -475,6 +475,68 @@ describe.skipIf(!ffmpeg)('a light leak inside a shot in the final render', () =>
     const faint = renderLeak('leak-green-right-faint', { color: '#00ff00', edge: 'right', strength: 0.3 });
     expect(faint.right[1]).toBeLessThan(green.right[1] - 10);
     expect(faint.right[1]).toBeGreaterThan(faint.left[1]);
+  });
+
+  it('renders the new optical light styles (screen edge bleed and radial corner flare) cleanly in ffmpeg', () => {
+    const clip = join(dir, 'dark-light-styles.mp4');
+    const song = join(dir, 'dark-light-styles.wav');
+    run(['-f', 'lavfi', '-i', `color=0x181820:s=${W}x${H}:r=${FPS}:d=2`, '-pix_fmt', 'yuv420p', '-y', clip]);
+    run(['-f', 'lavfi', '-i', 'sine=frequency=440:duration=2', '-y', song]);
+    for (const style of ['light-bleed', 'corner-flare', 'edge-fog', 'light-streak', 'overexpose']) {
+      const output = join(dir, `${style}-shot.mp4`);
+      const scene = { sceneId: 's0', startSec: 0, endSec: 2, glitches: [{ atSec: 0.5, style, color: '#f9c57b', edge: 'right' }] };
+      const plan = buildMusicVideoFfmpegArgs([{
+        sceneId: 's0', videoPath: clip, width: W, height: H, fps: FPS, duration: 2, sourceSec: 2, loop: false, inSec: 0, outSec: 2, frameFit: 'fill',
+        ...sceneTransitions(scene),
+      }], song, output, { audioDurationSec: 2, frameGrid: true });
+      run(plan.args.filter((arg, i) => !(arg === '-progress' || plan.args[i - 1] === '-progress')));
+      const raw = run(['-i', output, '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-']);
+      const frameBytes = W * H * 3;
+      // Peak frame around index 5 of the 11-frame style (frame 6 + 5 = 11) should be noticeably brighter than frame 0.
+      const sumLuma = (f) => {
+        let sum = 0;
+        for (let p = 0; p < frameBytes; p += 3) sum += raw[f * frameBytes + p] + raw[f * frameBytes + p + 1] + raw[f * frameBytes + p + 2];
+        return sum / (W * H * 3);
+      };
+      expect(sumLuma(11), style).toBeGreaterThan(sumLuma(0) + 12);
+    }
+  });
+});
+
+// Uniquely catches radial flare edge mirroring/rotation and tinted-style color inheritance.
+describe('new optical light styles', () => {
+  it('re-anchors radial flares to the chosen edge and applies custom color with lighter core', () => {
+    const left = glitchFrameParams({ style: 'corner-flare', index: 5, color: 'f9c57b', edge: 'left' });
+    const right = glitchFrameParams({ style: 'corner-flare', index: 5, color: 'f9c57b', edge: 'right' });
+    const top = glitchFrameParams({ style: 'corner-flare', index: 5, color: 'f9c57b', edge: 'top' });
+    const bottom = glitchFrameParams({ style: 'corner-flare', index: 5, color: 'f9c57b', edge: 'bottom' });
+    expect(left.glows[0]).toMatchObject({ shape: 'radial', color: 'f9c57b', blend: 'screen' });
+    expect(left.glows[1].color).not.toBe('f9c57b');
+    expect(right.glows[0].x).toBeCloseTo(1 - left.glows[0].x);
+    expect(top.glows[0].y).toBeCloseTo(left.glows[0].x);
+    expect(bottom.glows[0].y).toBeCloseTo(1 - left.glows[0].x);
+  });
+
+  it('stacks multiple overlapping effects on the same frame in order for preview and document renders', () => {
+    const piece = {
+      sceneId: 's1', startFrame: 0, endFrame: 48,
+      ...sceneTransitions({
+        sceneId: 's1', startSec: 0, endSec: 2,
+        glitches: [
+          { atSec: 0, style: 'corner-flare', lengthSec: 2, color: '#f9c57b', edge: 'left' },
+          { atSec: 0, style: 'edge-fog', lengthSec: 2, color: '#e83814', edge: 'right' },
+        ],
+      }),
+    };
+    const merged = mergeGlitchFrames(shotGlitchFrames([piece], 24));
+    const hit = transitionFrameAt(merged, 24);
+    expect(hit.params.layers).toHaveLength(2);
+    expect(hit.params.layers[0].glows[0]).toMatchObject({ shape: 'radial', color: 'f9c57b' });
+    expect(hit.params.layers[1].glows[0]).toMatchObject({ side: 'right', color: 'e83814' });
+
+    const grouped = groupedEffectFrames(merged);
+    const frame24 = grouped.find((e) => e.frame === 24);
+    expect(frame24.params.layers).toHaveLength(2);
   });
 });
 

@@ -12,6 +12,12 @@ Use the thinking profile to select the provider and model the Mind may use. Self
 
 Give the Mind only the task and managed-app grants you intend it to use. Review proposals or task records in CoS and investigate refusals through their recorded reasons. Its task authority and the general thinking route are independent.
 
+## Tool-free model delegation
+
+In **CoS → Persistent Mind → Tools**, configure approved API workers and a trusted API evaluator before enabling **Tool-free model delegation**. It starts disabled. The grant covers calls to those routes and sends the supplied context to those providers. The evaluator can consume paid quota.
+
+The `sandbox.models` tool lists approved routes. `sandbox.delegate` takes the task, relevant context, and acceptance criteria as text. Workers and evaluators have no shell, filesystem, browser, or semantic tools. Supply the context needed to answer and keep credentials and private records out of it. Independently validate returned proposals before acting on them. An evaluator verdict records model assessment only.
+
 ## Persistent Mind phone calls
 
 Configure one recipient in **Settings → Voice → FaceTime Audio** and attach the call host on that Mac. Verify the audio route with a test call. Enable **voice.call-user** under **Mind → Tools** only if you want the Mind to call that recipient. The grant starts off. The model supplies a reason and opening line. PortOS supplies the configured recipient.

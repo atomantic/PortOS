@@ -18,7 +18,7 @@ const store = createProjectFileStore({
 });
 
 export const {
-  loadAll, saveAll, loadAllAndIndex, listProjects, listProjectPage, getProject, getProjectsByIds, listProjectIds, listProjectNames,
+  loadAll, saveAll, loadAllAndIndex, listProjects, listProjectSummaries, listProjectPage, getProject, getProjectsByIds, getProjectSummariesByIds, listProjectIds, listProjectNames,
 } = store;
 
 export async function listProjectVersionPage(rootId, { limit, offset }) {
@@ -45,7 +45,7 @@ export async function listMidiSourceRows() {
 
 export async function listCompletionCandidateIds(ingredientIds) {
   const wanted = ingredientIds && new Set(ingredientIds);
-  return (await listProjects()).filter((project) => {
+  return (await listProjectSummaries()).filter((project) => {
     if (project.status !== 'complete' || !(project.renderHistoryId && project.renderDependencies) && project.composition?.mode !== 'blender') return false;
     return !wanted || (project.castAndSets?.source === 'catalog'
       && Array.isArray(project.renderDependencies?.references)

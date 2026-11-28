@@ -5,19 +5,14 @@
  * Mounted at /api/digital-twin/social-accounts
  */
 
+import { listQuerySchema } from '../lib/socialAccountsValidation.js';
 import { Router } from 'express';
-import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest, } from '../lib/validateRequest.js';
 import * as socialAccounts from '../services/socialAccounts.js';
 import { socialAccountSchema, socialAccountUpdateSchema } from '../lib/socialAccountValidation.js';
 
 const router = Router();
-
-const listQuerySchema = z.object({
-  platform: z.string().min(1).max(50).optional(),
-  category: z.string().min(1).max(50).optional(),
-});
 
 // GET / - List all social accounts
 router.get('/', asyncHandler(async (req, res) => {

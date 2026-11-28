@@ -3,6 +3,7 @@ import { Loader2, Scissors } from 'lucide-react';
 import { useFableLoomRun } from '../../hooks/useFableLoomRun';
 import toast from '../ui/Toast';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair';
+import ListLoadError from '../ui/ListLoadError';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
 import {
   applyLoomEpisodeShots,
@@ -16,7 +17,7 @@ import { analyzeEpisodeShots } from '../../../../server/lib/fableLoomShots.js';
 export default function LoomShotPlanner({ loom, episode, route, guidance, disabled, onLoomUpdate, onRunningChange }) {
   const [plan, setPlan] = useState(null);
   const [confirmation, setConfirmation] = useState(null);
-  const { run: shotRun, applyRun } = useFableLoomRun({
+  const { run: shotRun, applyRun, readState, readError, retry } = useFableLoomRun({
     loomId: loom.id, episodeId: episode.id, event: 'fableloom:shots:run',
     loadRun: () => getLoomEpisodeShotRun(loom.id, episode.id, { silent: true }),
     onTerminal: (finished, isCurrent) => {
@@ -46,6 +47,7 @@ export default function LoomShotPlanner({ loom, episode, route, guidance, disabl
   return <section className="rounded border border-port-border p-3 space-y-3" aria-label="Timed shot planning">
     <h4 className="font-semibold text-sm flex items-center gap-2"><Scissors size={15} /> Split dramatic scenes into shots</h4>
     <p className="text-xs text-port-text-muted">One node becomes one 5–10 second render. The selected model drafts and reviews short shots before replacing scene nodes. Branches stay connected. Applying clears old scene media; preview first or let autopilot apply a passing plan.</p>
+    {readError && <ListLoadError what="shot planning status" error={readError} onRetry={retry} retrying={readState === 'loading'} />}
     <div className="flex flex-wrap gap-2">
       <button type="button" disabled={busy || !episode.nodes.length} onClick={() => run(false)} className="min-h-11 rounded border border-port-border px-3 text-sm disabled:opacity-50">{running ? <Loader2 size={14} className="inline animate-spin mr-2" /> : null}Preview shot split</button>
       <button type="button" disabled={busy || !episode.nodes.length} onClick={() => setConfirmation('autopilot')} className="min-h-11 rounded bg-port-accent px-3 text-sm text-white disabled:opacity-50">Run shot autopilot</button>

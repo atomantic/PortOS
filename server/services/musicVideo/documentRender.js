@@ -2,7 +2,7 @@ import { assertMusicVideoMediaSelections, musicVideoMediaMode } from '../../lib/
 import { shotImageTreatmentAspect } from '../../lib/musicVideo/musicVideoImageTreatments.js';
 import { isEndFrameImageEffect, MUSIC_VIDEO_IMAGE_EFFECTS, sceneImageEffect, scenePhotoSequence } from '../../lib/musicVideo/musicVideoImageEffects.js';
 import { musicVideoGlitchRuntime } from '../../lib/musicVideo/musicVideoGlitchCanvas.js';
-import { applyCameraCutDefaults, glitchFrameParams, mergeGlitchFrames, sceneImageEffectGlitchFrames, sceneShotGlitchFrames, sceneTransitionSections, sceneWipeCuts, transitionGlitchFrames } from '../../lib/musicVideo/musicVideoTransitions.js';
+import { applyCameraCutDefaults, groupedEffectFrames, mergeGlitchFrames, sceneImageEffectGlitchFrames, sceneShotGlitchFrames, sceneTransitionSections, sceneWipeCuts, transitionGlitchFrames } from '../../lib/musicVideo/musicVideoTransitions.js';
 import { musicVideoWipeRuntime } from '../../lib/musicVideo/musicVideoWipes.js';
 import { plannedTransitions } from '../../lib/musicVideo/musicVideoCutEffects.js';
 import { musicVideoGradeFilter } from '../../lib/musicVideo/musicVideoGrade.js';
@@ -323,10 +323,9 @@ export function buildDocumentData(project, { media = new Map(), frame, clock, so
     ? { ...scene, imageEffect: null } : scene);
   const cameras = project?.cameras;
   const sections = sceneTransitionSections(effectScenes, clock.fps, { endSec: songDurationSec, cameras });
-  const effectFrames = mergeGlitchFrames(transitionGlitchFrames(sections, { totalFrames: clock.frames }),
+  const effectFrames = groupedEffectFrames(mergeGlitchFrames(transitionGlitchFrames(sections, { totalFrames: clock.frames }),
     sceneImageEffectGlitchFrames(effectScenes, clock.fps, { layered: true, endSec: songDurationSec, cameras }),
-    sceneShotGlitchFrames(effectScenes, clock.fps, { endSec: songDurationSec, cameras }))
-    .map(effect => ({ frame: effect.frame, params: glitchFrameParams(effect) }));
+    sceneShotGlitchFrames(effectScenes, clock.fps, { endSec: songDurationSec, cameras })));
   const lyrics = songDocument.lyrics;
   const narrative = resolveNarrativeEvents(project, songDocument.sections, clock.fps);
   if (narrative.unresolved.length) throw new ServerError(`Rebind narrative events: ${narrative.unresolved.join(', ')}`, { status: 422, code: 'NARRATIVE_EVENT_UNRESOLVED' });

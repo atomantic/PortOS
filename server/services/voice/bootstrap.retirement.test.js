@@ -33,6 +33,7 @@ vi.mock('./modelProvisioners.js', async (importOriginal) => {
 });
 vi.mock('../provider/providers.js', () => ({ getProviderById: vi.fn() }));
 vi.mock('../../lib/childProcess.js', () => ({ execFile: vi.fn() }));
+vi.mock('./realtimeRuntime.js', () => ({ stopRealtimeSidecar: vi.fn(async () => {}) }));
 vi.mock('../settings.js', () => ({ getSettings: vi.fn(), updateSettings: vi.fn() }));
 
 import { existsSync } from 'fs';
@@ -42,6 +43,7 @@ const { execFile } = await import('../../lib/childProcess.js');
 const { fetchWithTimeout } = await import('../../lib/fetchWithTimeout.js');
 const { getProviderById } = await import('../provider/providers.js');
 const { VOICE_DEFAULTS } = await import('./config.js');
+const { stopRealtimeSidecar } = await import('./realtimeRuntime.js');
 const { getVoiceProvisioner } = await import('./modelProvisioners.js');
 const { reconcile, startWhisper, stopWhisper, ensureToolCapableModel, preloadModel } = await import('./bootstrap.js');
 
@@ -68,6 +70,23 @@ it('does not download or preload anything when an upgraded install boots before 
   await expect(reconcile(cfg, { allowSetup: false })).resolves.toEqual({ setupRequired: 'piper' });
   expect(execFile).not.toHaveBeenCalled();
   expect(getProviderById).not.toHaveBeenCalled();
+});
+
+it('stops the realtime sidecar when voice or realtime voice is disabled during reconcile', async () => {
+  vi.clearAllMocks();
+  existsSync.mockReturnValue(true);
+  await reconcile({ ...VOICE_DEFAULTS, enabled: false, realtime: { ...VOICE_DEFAULTS.realtime, enabled: true } });
+  expect(stopRealtimeSidecar).toHaveBeenCalledWith('disabled');
+
+  vi.clearAllMocks();
+  existsSync.mockReturnValue(true);
+  await reconcile({ ...VOICE_DEFAULTS, enabled: true, realtime: { ...VOICE_DEFAULTS.realtime, enabled: false } }, { allowSetup: false });
+  expect(stopRealtimeSidecar).toHaveBeenCalledWith('disabled');
+
+  vi.clearAllMocks();
+  existsSync.mockReturnValue(true);
+  await reconcile({ ...VOICE_DEFAULTS, enabled: true, realtime: { ...VOICE_DEFAULTS.realtime, enabled: true } }, { allowSetup: false });
+  expect(stopRealtimeSidecar).not.toHaveBeenCalled();
 });
 
 it('starts provisioned Whisper while deferring missing Piper setup and LLM preload at upgrade boot', async () => {

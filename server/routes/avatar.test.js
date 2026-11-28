@@ -151,6 +151,19 @@ describe('avatar routes', () => {
       }
     });
 
+    it('rejects repeated variant query parameters with 400 on HEAD and GET', async () => {
+      stat.mockResolvedValue({ size: 5 });
+      const app = request(buildApp());
+      const url = '/api/avatar/model.glb?variant=a&variant=b';
+
+      const head = await app.head(url);
+      expect(head.status).toBe(400);
+
+      const get = await app.get(url);
+      expect(get.status).toBe(400);
+      expect(get.body.code).toBe('VALIDATION_ERROR');
+    });
+
     // The client probes with HEAD before GET, so the HEAD handler runs the
     // same resolveVariant() guard — pin it independently of the GET path.
     it('HEAD honors a valid variant and rejects traversal', async () => {

@@ -18,24 +18,22 @@ import TaskRefPicker from './TaskRefPicker';
 import { quotaBurnJobIsSpent } from '../../lib/quotaBurnPatch';
 import { findTaskEntry, stepFromTaskEntry, taskEntryNeedsApp, taskRefKey } from '../../lib/quotaBurnTasks';
 import { timeAgo } from '../../utils/formatters';
-import { commandBasename, hasLocalRuntimeMarker } from '../../utils/providers';
+import { familyForProvider, isProcessProvider } from '../../utils/providerTypes';
 import { inputClass } from './fields';
 
 /**
  * The CLI/TUI providers that spend THIS family's subscription.
  *
  * A burn draws down one family's window, so a pin naming another family's binary
- * is never what the user meant — and the server rejects it. Local-model backends
- * are excluded outright: they have no subscription quota to burn.
+ * is never what the user meant — and the server rejects it. Delegates family
+ * classification to the shared `familyForProvider` leaf (which also excludes
+ * local-runtime wrappers).
  */
 function providersForFamily(providers, familyId) {
   return (providers || []).filter((provider) =>
     provider?.enabled !== false
-    && !hasLocalRuntimeMarker(provider)
-    && (provider?.type === 'cli' || provider?.type === 'tui')
-    && (commandBasename(provider?.command) === familyId
-      || String(provider?.id || '').toLowerCase().includes(familyId || '')
-      || (familyId === 'agy' && String(provider?.id || '').toLowerCase().includes('antigravity'))));
+    && isProcessProvider(provider)
+    && familyForProvider(provider) === familyId);
 }
 
 export default function JobRow({

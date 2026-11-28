@@ -81,6 +81,20 @@ describe('mounted route graph', () => {
     ]) expect(operations.has(operation), operation).toBe(true);
   });
 
+  it('catalogs the shared substance routers under their distinct public paths', () => {
+    const { routes } = getApiRouteCatalog();
+    for (const [substance, customPath] of [['alcohol', 'custom-drinks'], ['nicotine', 'custom-products']]) {
+      const mount = `/api/meatspace/${substance}`;
+      const operations = routes
+        .filter(({ path }) => path === mount || path.startsWith(`${mount}/`))
+        .map(({ method, path }) => `${method} ${path.slice(mount.length) || '/'}`);
+      expect(operations.sort()).toEqual([
+        'GET /', 'GET /daily', 'POST /log', 'PUT /log/:date/:index', 'DELETE /log/:date/:index',
+        `GET /${customPath}`, `POST /${customPath}`, `PUT /${customPath}/:index`, `DELETE /${customPath}/:index`,
+      ].sort());
+    }
+  });
+
   it('discovers all shared model artifact handlers under their owning routers', () => {
     const operations = new Set(getApiRouteCatalog().routes.map(({ method, path }) => `${method} ${path}`));
     for (const path of [

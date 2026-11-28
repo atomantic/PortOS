@@ -295,8 +295,8 @@ describe('planTestMemo and recordTestMemo', () => {
     expect(record(check()).unrecorded).toEqual([]);
     expect(check().run).toEqual([]);
 
-    // The suite starts reading this checkout: the declaration falls, the old entry no longer matches, and no new one is written.
-    writeRepo(root, { [fixture]: `${source}\nit('reads the checkout', () => { git(process.cwd(), 'rev-parse', 'HEAD'); });\n` });
+    // A direct spawn from the checkout contradicts the declaration and prevents recording a new entry.
+    writeRepo(root, { [fixture]: `${source}\nit('reads the checkout', () => { execFileSync('git', ['rev-parse', 'HEAD'], { cwd: process.cwd() }); });\n` });
     const contradicted = check();
     expect(contradicted.run).toEqual([fixture]);
     const refused = 'spawns git (git-fixture declaration refused: hands git a path in this repository (server))';
@@ -802,11 +802,12 @@ describe('planTestMemo and recordTestMemo', () => {
     expect(lines.at(-2)).toContain(`server/lib/t${MEMO_UNRECORDED_LINE_LIMIT - 1}.test.js`);
   });
 
-  it('keys the real backup manifest suite with its fully replaced migration runner', () => {
+  it('keys the backup and bootstrap suites according to whether the migration runner executed', () => {
     root = realpathSync(mkdtempSync(join(tmpdir(), 'portos-backup-record-')));
     const server = join(repoRootDir, 'server');
     const config = join(root, 'probe.mjs');
     const cacheDir = join(root, 'server/.cache/vitest');
+    const mocked = 'server/services/bootstrap.test.js';
     const suite = 'server/services/backup.manifestScope.test.js';
     const reader = 'scripts/lib/fileMigrationRunner.js';
     // Use the real server setup and isolate the depfile from the enclosing Vitest run.
@@ -818,36 +819,35 @@ describe('planTestMemo and recordTestMemo', () => {
     delete env.VITEST_POOL_ID;
     delete env.VITEST_WORKER_ID;
     const result = spawnSync(process.execPath, [join(server, 'node_modules/vitest/vitest.mjs'),
-      'run', 'services/backup.manifestScope.test.js', '--configLoader', 'runner', '--config', config,
+      'run', posix.relative('server', suite), posix.relative('server', mocked), '--configLoader', 'native', '--config', config,
       '--experimental.recordDependencies', '--maxWorkers', '1', '--reporter=dot'], { cwd: server, env, encoding: 'utf8', timeout: 120000 });
     expect(result.status, result.error?.message ?? result.stdout + result.stderr).toBe(0);
-    const modules = readVitestDependencies(vitestDependenciesPath(root, 'server'), 'server').get(suite);
-    expect(modules).toContain('scripts/run-migrations.js');
-    expect(modules).not.toContain(reader);
+    const bySuite = readVitestDependencies(vitestDependenciesPath(root, 'server'), 'server');
+    expect(bySuite.get(suite)).toContain('scripts/run-migrations.js');
+    expect(bySuite.get(suite)).toContain(reader);
+    expect(bySuite.get(mocked)).toContain('scripts/run-migrations.js');
+    expect(bySuite.get(mocked)).not.toContain(reader);
 
     const disk = createDiskFs(repoRootDir, nodeFs, nodePath);
     const tracked = listRepositoryFiles(repoRootDir);
-    const verdict = (changed, recorded = modules, appended = '\n') => computeTestMemoKeys([suite], {
-      workspace: 'server', listFiles: () => tracked, records: new Map([[suite, recorded]]),
+    const verdict = (test, changed, appended = '\n') => computeTestMemoKeys([test], {
+      workspace: 'server', listFiles: () => tracked, records: new Map([[test, bySuite.get(test)]]),
       fs: { ...disk, read: rel => rel === changed ? Buffer.concat([disk.read(rel), Buffer.from(appended)]) : disk.read(rel) },
-    }).get(suite).recorded;
-    const baseline = verdict();
+    }).get(test).recorded;
+    const baseline = verdict(suite);
     expect(baseline, baseline.reason).toMatchObject({ memoizable: true, key: expect.any(String) });
-    expect(verdict('scripts/doctor.js').key).toBe(baseline.key);
-    expect(verdict(reader).key).toBe(baseline.key);
-    const changed = verdict('server/services/backup/restore.js');
+    expect(verdict(suite, 'scripts/doctor.js').key).toBe(baseline.key);
+    const changed = verdict(suite, 'server/services/backup/restore.js');
     expect(changed.memoizable).toBe(true);
     expect(changed.key).not.toBe(baseline.key);
-    // Partial mocks and importActual evaluate the implementation. Its scanner
-    // bounds the listing even when fs is mocked, so the runner can enter the key.
-    const withReader = [...modules, reader];
-    const evaluated = verdict(null, withReader);
-    expect(evaluated, evaluated.reason).toMatchObject({ memoizable: true, key: expect.any(String) });
-    expect(verdict(reader, withReader).key).not.toBe(evaluated.key);
+    expect(verdict(suite, reader).key).not.toBe(baseline.key);
+    const mockedBaseline = verdict(mocked);
+    expect(mockedBaseline, mockedBaseline.reason).toMatchObject({ memoizable: true, key: expect.any(String) });
+    expect(verdict(mocked, reader).key).toBe(mockedBaseline.key);
 
     // Replacing the scanner itself removes the basename guarantee.
     const scannerMock = "\nvi.mock('../../scripts/lib/migrationFiles.js', () => ({}));\n";
-    expect(verdict(suite, withReader, scannerMock)).toMatchObject({
+    expect(verdict(suite, suite, scannerMock)).toMatchObject({
       memoizable: false,
       reasons: expect.arrayContaining([`${reader}: names a path through scripts/lib/migrationFiles.js, which the test mocks`]),
     });
@@ -1125,10 +1125,12 @@ describe('planTestMemo and recordTestMemo', () => {
     slices.forEach((slice, i) => {
       const browserCount = slice.filter((file) => CLIENT_BROWSER_SHARD_OWNERS[file]).length;
       expect(browserCount).toBeGreaterThanOrEqual(5);
-      expect(browserCount).toBeLessThanOrEqual(6);
+      expect(browserCount).toBeLessThanOrEqual(i === 0 ? 7 : 6);
       const hashed = vitestShardSlice(files, shardOptions(i + 1)).filter((file) => !CLIENT_BROWSER_SHARD_OWNERS[file]);
       expect(slice.filter((file) => !CLIENT_BROWSER_SHARD_OWNERS[file])).toEqual(hashed);
     });
+    expect(slices[0]).toContain('client/src/components/ui/ConfirmModal.browser.test.js');
+    expect(slices[3]).toContain('client/src/pages/VoiceCall.browser.test.js');
     const heavy = ['SceneClipCoverageLayout', 'MediaLightbox', 'PageLayout', 'SceneCard']
       .map((name) => CLIENT_BROWSER_SHARD_OWNERS[browser.find((file) => file.endsWith(`/${name}.browser.test.js`))]);
     expect(heavy).not.toContain(undefined);

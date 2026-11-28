@@ -29,7 +29,13 @@ vi.mock('../services/instanceFeatures.js', () => ({ getInstanceFeatures: () => (
 vi.mock('../services/maintenanceControl.js', () => ({ readinessProjection: () => ({ state: 'normal', blockerCount: 0 }) }));
 vi.mock('../services/updateChecker.js', () => ({ getShellUpdateStatus: () => ({ updateAvailable: false }) }));
 vi.mock('../services/voice/config.js', () => ({
-  getVoiceConfig: () => ({ enabled: true, hotkey: 'Space', stt: { engine: 'whisper', modelPath: '/private/file' } }),
+  getVoiceConfig: () => ({
+    enabled: true,
+    hotkey: 'Space',
+    stt: { engine: 'whisper', modelPath: '/private/file' },
+    llm: { provider: 'ollama', model: 'example-model:7b', systemPrompt: 'private prompt' },
+    tts: { engine: 'qwen3-tts', rate: 1, qwen3: { voice: 'example-voice', modelId: 'private/model' } },
+  }),
 }));
 vi.mock('../lib/buildIdentity.js', () => ({ getBuildIdentity: () => ({ commit: 'example' }) }));
 
@@ -61,7 +67,14 @@ it('gates the private snapshot and projects only the fields needed to boot the s
     settings: { theme: 'classic-midnight', timezone: 'UTC' },
     selfInstance: { name: 'Example' },
     features: { features: [], groups: [] },
-    voiceConfig: { enabled: true, hotkey: 'Space', vad: {}, stt: { engine: 'whisper' }, llm: {}, tts: {} },
+    voiceConfig: {
+      enabled: true,
+      hotkey: 'Space',
+      vad: {},
+      stt: { engine: 'whisper' },
+      llm: { provider: 'ollama', model: 'example-model:7b' },
+      tts: { engine: 'qwen3-tts', rate: 1, qwen3: { voice: 'example-voice' } },
+    },
     maintenance: { state: 'normal', blockerCount: 0 },
     passwordRisk: { enabled: true, revision: 'protected' },
     updateStatus: { updateAvailable: false },

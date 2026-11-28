@@ -15,23 +15,26 @@ import { PATHS } from '../lib/fileUtils.js';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware, ServerError } from '../lib/errorHandler.js';
 
-vi.mock('../services/brain.js', () => ({
+vi.mock('../services/brainStorage.js', async (importOriginal) => ({
+  ...await importOriginal(),
   getLinks: vi.fn(),
   getLinksPage: vi.fn(),
   listLinkIds: vi.fn(),
   getLinkById: vi.fn(),
   getLinkByUrl: vi.fn(),
-  createLinkFromUrl: vi.fn(),
   updateLink: vi.fn(),
   reorderLinks: vi.fn(),
   deleteLink: vi.fn(),
-  cloneRepoInBackground: vi.fn(),
   getBuckets: vi.fn(),
   getBucketById: vi.fn(),
-  createBucketAppended: vi.fn(),
   updateBucket: vi.fn(),
-  reorderBuckets: vi.fn(),
-  deleteBucketAndUnlinkChildren: vi.fn(),
+  reorderBuckets: vi.fn()
+}));
+vi.mock('../services/brainLinks.js', () => ({
+  createLinkFromUrl: vi.fn(),
+  cloneRepoInBackground: vi.fn(),
+  createBucketAppended: vi.fn(),
+  deleteBucketAndUnlinkChildren: vi.fn()
 }));
 
 vi.mock('../services/repoCloner.js', async () => {
@@ -54,7 +57,8 @@ vi.mock('../services/malwareScanReports.js', () => ({
 
 vi.mock('../lib/openFolder.js', () => ({ openFolderInSystemExplorer: vi.fn() }));
 
-import * as brainService from '../services/brain.js';
+import * as brainStorage from '../services/brainStorage.js';
+import * as brainLinks from '../services/brainLinks.js';
 import { restudyRepoLink } from '../services/repoIntake.js';
 import linkRoutes from './brainLinks.js';
 
@@ -72,12 +76,12 @@ const link = (id, extra = {}) => ({ id, url: `https://example.com/${id}`, ...ext
 
 beforeEach(() => {
   vi.clearAllMocks();
-  brainService.getLinksPage.mockResolvedValue({ links: [], total: 0 });
+  brainStorage.getLinksPage.mockResolvedValue({ links: [], total: 0 });
 });
 
 describe('GET /api/brain/links', () => {
   it('returns the service page verbatim alongside the echoed window', async () => {
-    brainService.getLinksPage.mockResolvedValue({ links: [link('a'), link('b')], total: 137 });
+    brainStorage.getLinksPage.mockResolvedValue({ links: [link('a'), link('b')], total: 137 });
 
     const res = await request(app).get('/api/brain/links?limit=2&offset=10');
 
@@ -90,8 +94,8 @@ describe('GET /api/brain/links', () => {
   it('delegates filtering, ordering, and pagination to getLinksPage', async () => {
     await request(app).get('/api/brain/links?linkType=repo&isRepo=true&limit=25&offset=50');
 
-    expect(brainService.getLinksPage).toHaveBeenCalledTimes(1);
-    expect(brainService.getLinksPage).toHaveBeenCalledWith({
+    expect(brainStorage.getLinksPage).toHaveBeenCalledTimes(1);
+    expect(brainStorage.getLinksPage).toHaveBeenCalledWith({
       linkType: 'repo',
       isRepo: true,
       limit: 25,
@@ -100,20 +104,20 @@ describe('GET /api/brain/links', () => {
   });
 
   it('never pulls the whole collection to answer a page', async () => {
-    brainService.getLinksPage.mockResolvedValue({ links: [link('a')], total: 5000 });
+    brainStorage.getLinksPage.mockResolvedValue({ links: [link('a')], total: 5000 });
 
     const res = await request(app).get('/api/brain/links?limit=1');
 
     expect(res.status).toBe(200);
     expect(res.body.links).toHaveLength(1);
     // The O(N) read path is gone — this is the regression guard for #3509.
-    expect(brainService.getLinks).not.toHaveBeenCalled();
+    expect(brainStorage.getLinks).not.toHaveBeenCalled();
   });
 
   it('applies the schema defaults when no window is given', async () => {
     await request(app).get('/api/brain/links');
 
-    expect(brainService.getLinksPage).toHaveBeenCalledWith({
+    expect(brainStorage.getLinksPage).toHaveBeenCalledWith({
       linkType: undefined,
       isRepo: undefined,
       limit: 50,
@@ -124,7 +128,7 @@ describe('GET /api/brain/links', () => {
   it('passes isRepo=false through as a boolean, not a truthy string', async () => {
     await request(app).get('/api/brain/links?isRepo=false');
 
-    expect(brainService.getLinksPage).toHaveBeenCalledWith(
+    expect(brainStorage.getLinksPage).toHaveBeenCalledWith(
       expect.objectContaining({ isRepo: false }),
     );
   });
@@ -132,7 +136,7 @@ describe('GET /api/brain/links', () => {
   it('maps the legacy isGitHubRepo query name to the host-neutral filter', async () => {
     await request(app).get('/api/brain/links?isGitHubRepo=true');
 
-    expect(brainService.getLinksPage).toHaveBeenCalledWith(
+    expect(brainStorage.getLinksPage).toHaveBeenCalledWith(
       expect.objectContaining({ isRepo: true }),
     );
   });
@@ -141,7 +145,7 @@ describe('GET /api/brain/links', () => {
     const res = await request(app).get('/api/brain/links?limit=999999');
 
     expect(res.status).toBe(400);
-    expect(brainService.getLinksPage).not.toHaveBeenCalled();
+    expect(brainStorage.getLinksPage).not.toHaveBeenCalled();
   });
 });
 
@@ -152,18 +156,18 @@ describe('POST /api/brain/links/reorder', () => {
 
   it('checks batch membership from the id listing, not the full records', async () => {
     const updates = [{ id: idA, bucketId: bucket, bucketOrder: 0 }];
-    brainService.listLinkIds.mockResolvedValue([idA, idB]);
-    brainService.reorderLinks.mockResolvedValue(updates);
+    brainStorage.listLinkIds.mockResolvedValue([idA, idB]);
+    brainStorage.reorderLinks.mockResolvedValue(updates);
 
     const res = await request(app).post('/api/brain/links/reorder').send({ updates });
 
     expect(res.status).toBe(200);
-    expect(brainService.getLinks).not.toHaveBeenCalled();
-    expect(brainService.reorderLinks).toHaveBeenCalledWith(updates);
+    expect(brainStorage.getLinks).not.toHaveBeenCalled();
+    expect(brainStorage.reorderLinks).toHaveBeenCalledWith(updates);
   });
 
   it('still rejects the whole batch when an id is unknown', async () => {
-    brainService.listLinkIds.mockResolvedValue([idA]);
+    brainStorage.listLinkIds.mockResolvedValue([idA]);
 
     const res = await request(app).post('/api/brain/links/reorder').send({
       updates: [
@@ -173,7 +177,7 @@ describe('POST /api/brain/links/reorder', () => {
     });
 
     expect(res.status).toBe(404);
-    expect(brainService.reorderLinks).not.toHaveBeenCalled();
+    expect(brainStorage.reorderLinks).not.toHaveBeenCalled();
   });
 });
 
@@ -186,13 +190,13 @@ describe('POST /api/brain/links/:id/clone', () => {
   });
 
   it('starts a new clone for a link boot recovery reset to failed', async () => {
-    brainService.getLinkById.mockResolvedValue(repoLink('failed'));
-    brainService.cloneRepoInBackground.mockResolvedValue(repoLink('cloning'));
+    brainStorage.getLinkById.mockResolvedValue(repoLink('failed'));
+    brainLinks.cloneRepoInBackground.mockResolvedValue(repoLink('cloning'));
 
     const res = await request(app).post('/api/brain/links/repo-link/clone');
 
     expect(res.status).toBe(200);
-    expect(brainService.cloneRepoInBackground).toHaveBeenCalledWith(
+    expect(brainLinks.cloneRepoInBackground).toHaveBeenCalledWith(
       'repo-link',
       'https://github.com/acme/widgets',
     );
@@ -201,8 +205,8 @@ describe('POST /api/brain/links/:id/clone', () => {
   it('surfaces the 409 from the locked claim when a concurrent start won', async () => {
     // Both requests read `failed` before either claimed; the claim inside the
     // link's write queue is the authority (#15155).
-    brainService.getLinkById.mockResolvedValue(repoLink('failed'));
-    brainService.cloneRepoInBackground.mockRejectedValue(
+    brainStorage.getLinkById.mockResolvedValue(repoLink('failed'));
+    brainLinks.cloneRepoInBackground.mockRejectedValue(
       new ServerError('Clone already in progress', { status: 409, code: 'CLONE_IN_PROGRESS' })
     );
 
@@ -213,8 +217,8 @@ describe('POST /api/brain/links/:id/clone', () => {
   });
 
   it('answers 404 when the link was deleted before the claim', async () => {
-    brainService.getLinkById.mockResolvedValue(repoLink('none'));
-    brainService.cloneRepoInBackground.mockResolvedValue(null);
+    brainStorage.getLinkById.mockResolvedValue(repoLink('none'));
+    brainLinks.cloneRepoInBackground.mockResolvedValue(null);
 
     const res = await request(app).post('/api/brain/links/repo-link/clone');
 
@@ -232,8 +236,8 @@ describe('POST /api/brain/links/:id/study', () => {
   });
 
   beforeEach(() => {
-    brainService.getLinkById.mockResolvedValue(cloned());
-    brainService.updateLink.mockImplementation(async (id, patch) => ({ ...cloned(), ...patch }));
+    brainStorage.getLinkById.mockResolvedValue(cloned());
+    brainStorage.updateLink.mockImplementation(async (id, patch) => ({ ...cloned(), ...patch }));
   });
 
   it('queues the study with the brief and persists the pending run on the link', async () => {
@@ -254,12 +258,12 @@ describe('POST /api/brain/links/:id/study', () => {
       // `pull` defaults on, so the button refreshes the checkout unless told not to.
       expect.objectContaining({ pull: true, studyContext: 'look at its offline sync', targetAppId: 'portos-default' }),
     );
-    expect(brainService.updateLink).toHaveBeenCalledWith('repo-link', { repoStudy: { taskId: 'task-1' } });
+    expect(brainStorage.updateLink).toHaveBeenCalledWith('repo-link', { repoStudy: { taskId: 'task-1' } });
     expect(res.body).toMatchObject({ taskId: 'task-1', pulled: { ok: true } });
   });
 
   it('refuses a recorded localPath that is not the derived clone path for the link URL', async () => {
-    brainService.getLinkById.mockResolvedValue({ ...cloned(), localPath: '/srv/elsewhere/example-repo' });
+    brainStorage.getLinkById.mockResolvedValue({ ...cloned(), localPath: '/srv/elsewhere/example-repo' });
 
     const res = await request(app).post('/api/brain/links/repo-link/study').send({});
 
@@ -273,7 +277,7 @@ describe('POST /api/brain/links/:id/study', () => {
     const res = await request(app).post('/api/brain/links/repo-link/study').send({});
 
     expect(res.status).toBe(409);
-    expect(brainService.updateLink).not.toHaveBeenCalled();
+    expect(brainStorage.updateLink).not.toHaveBeenCalled();
   });
 
   it('maps a missing target app and an unknown reason to distinct errors', async () => {
@@ -288,11 +292,11 @@ describe('POST /api/brain/links/:id/study', () => {
     const gone = await request(app).post('/api/brain/links/repo-link/study').send({});
     expect(gone.status).toBe(400);
     expect(gone.body.code).toBe('PATH_NOT_FOUND');
-    expect(brainService.updateLink).not.toHaveBeenCalled();
+    expect(brainStorage.updateLink).not.toHaveBeenCalled();
   });
 
   it('rejects a link that has no clone to study', async () => {
-    brainService.getLinkById.mockResolvedValue({ ...cloned(), cloneStatus: 'none', localPath: null });
+    brainStorage.getLinkById.mockResolvedValue({ ...cloned(), cloneStatus: 'none', localPath: null });
 
     const res = await request(app).post('/api/brain/links/repo-link/study').send({});
 

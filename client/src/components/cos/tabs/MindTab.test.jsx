@@ -1010,7 +1010,8 @@ describe('MindTab', () => {
 
     expect(await screen.findByRole('heading', { name: 'Memory reflection' })).toBeInTheDocument();
     expect(api.getPersistentMindContext).toHaveBeenCalledTimes(1);
-    expect(api.getPersistentMindReflection).toHaveBeenCalledTimes(1);
+    // The reflection panel's heading renders before its fetch effect runs.
+    await vi.waitFor(() => expect(api.getPersistentMindReflection).toHaveBeenCalledTimes(1));
 
     await user.click(screen.getByRole('tab', { name: 'Memories' }));
     expect(await screen.findByRole('heading', { name: 'Curated memories' })).toBeInTheDocument();

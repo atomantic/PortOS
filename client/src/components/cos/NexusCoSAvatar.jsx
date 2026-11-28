@@ -1,10 +1,11 @@
-import { useRef, useMemo, useEffect } from 'react';
-import { Canvas, useFrame, useThree } from '@react-three/fiber';
+import { useRef, useMemo } from 'react';
+import { Canvas, useFrame } from '@react-three/fiber';
 import { Float, MeshDistortMaterial, Sparkles } from '../../lib/threeHelpers/effects.jsx';
 import * as THREE from 'three';
 import { AGENT_STATES } from './constants';
 import CoSAvatarOrbitControls from './CoSAvatarOrbitControls';
 import CoSCanvasGuard from './CoSCanvasGuard';
+import CoSInvalidateOnStateChange from './CoSInvalidateOnStateChange';
 import CoSBackgroundCamera from './CoSBackgroundCamera';
 import { graphMotionSettings } from '../graph3d/GraphScene';
 import usePrefersReducedMotion from '../../hooks/usePrefersReducedMotion';
@@ -335,16 +336,6 @@ function StatusRing({ color, state }) {
   );
 }
 
-// Under frameloop='demand', state/speaking changes that only affect
-// useFrame-driven properties need to invalidate the frame so one renders.
-function InvalidateOnStateChange({ state, speaking }) {
-  const { invalidate } = useThree();
-  useEffect(() => {
-    invalidate();
-  }, [state, speaking, invalidate]);
-  return null;
-}
-
 function Scene({ state, speaking, background }) {
   const stateConfig = AGENT_STATES[state] || AGENT_STATES.sleeping;
   const color = stateConfig.color;
@@ -356,7 +347,7 @@ function Scene({ state, speaking, background }) {
     <>
       <CoSBackgroundCamera enabled={background} y={0.2} z={3.5} />
 
-      <InvalidateOnStateChange state={state} speaking={speaking} />
+      <CoSInvalidateOnStateChange state={state} speaking={speaking} />
 
       <ambientLight intensity={0.1} />
       <pointLight position={[3, 2, 3]} intensity={0.6} color={color} />

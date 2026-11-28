@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
-import { X, Save, Plus, Trash2 } from 'lucide-react';
+import { X, Save, Plus, Trash2, Archive } from 'lucide-react';
 import toast from '../../ui/Toast';
 import Modal from '../../ui/Modal';
+import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import { FormField } from '../../ui/FormField';
 import { getMemory, updateMemory } from '../../../services/apiMemory.js';
 import useMounted from '../../../hooks/useMounted';
@@ -14,7 +15,12 @@ import { normalizeMemoryType } from '../../../lib/legacyMemoryType';
 
 const MEMORY_EVENTS = ['cos:memory:updated', 'cos:memory:deleted'];
 
-export default function MemoryEditModal({ memory, apps, onSave, onClose }) {
+/**
+ * Editor for one memory. `onArchive` (optional) adds an Archive action so a
+ * memory opened from a deep link (an agent card's "Memories sent") can be
+ * retired without hunting for it in the list; it resolves truthy on success.
+ */
+export default function MemoryEditModal({ memory, apps, onSave, onClose, onArchive }) {
   const mounted = useMounted();
   const [formData, setFormData] = useState({
     content: memory.content || '',
@@ -30,6 +36,8 @@ export default function MemoryEditModal({ memory, apps, onSave, onClose }) {
   const [saving, setSaving] = useState(false);
   const [fullMemory, setFullMemory] = useState(memory.content && Number.isInteger(memory.version) && memory.version > 0 ? memory : null);
   const [changeReason, setChangeReason] = useState('');
+  const [confirmingArchive, setConfirmingArchive] = useState(false);
+  const [archiving, setArchiving] = useState(false);
   const latest = useSocketResource(
     async ({ signal }) => {
       const result = await getMemory(memory.id, { signal, silent: true });
@@ -93,6 +101,15 @@ export default function MemoryEditModal({ memory, apps, onSave, onClose }) {
       toast.success('Memory updated');
       onSave(result);
     }
+  };
+
+  const handleArchive = async () => {
+    if (archiving) return;
+    setArchiving(true);
+    const archived = await onArchive(memory.id);
+    if (!mounted.current) return;
+    setArchiving(false);
+    if (!archived) setConfirmingArchive(false);
   };
 
   const handleAddTag = () => {
@@ -342,8 +359,33 @@ export default function MemoryEditModal({ memory, apps, onSave, onClose }) {
           {loaded && <MemoryHistory memory={latest.data || fullMemory} />}
           </fieldset>
 
+          {confirmingArchive && (
+            <InlineConfirmRow
+              autoFocus
+              aria-label="Confirm archive memory"
+              question="Archive this memory? Agents stop receiving it and it leaves search. Its contents and history remain stored."
+              confirmText={archiving ? 'Archiving…' : 'Archive'}
+              confirmDisabled={archiving}
+              confirmTitle="Confirm archive"
+              cancelTitle="Cancel archive"
+              onConfirm={handleArchive}
+              onCancel={() => setConfirmingArchive(false)}
+            />
+          )}
+
           {/* Actions */}
           <div className="flex flex-col-reverse sm:flex-row justify-end gap-2 pt-4">
+            {onArchive && loaded && latest.data?.status !== 'archived' && (
+              <button
+                type="button"
+                onClick={() => setConfirmingArchive(true)}
+                disabled={saving || archiving || confirmingArchive}
+                className="sm:mr-auto flex items-center justify-center gap-2 px-4 py-3 min-h-[44px] text-sm border border-port-border text-gray-400 hover:text-port-error hover:border-port-error/50 rounded-lg transition-colors disabled:opacity-50"
+              >
+                <Archive size={18} aria-hidden="true" />
+                Archive
+              </button>
+            )}
             <button
               type="button"
               onClick={onClose}

@@ -369,7 +369,7 @@ async function tryClaimLocked(ctx, handleState) {
 }
 
 // The claim file already exists: reap it when its owner is gone, else report or wait.
-async function resolveExistingClaim({ claimPath, now, deadline, pidIsAlive, unlinkClaim }) {
+async function resolveExistingClaim({ claimPath, now, pidIsAlive, unlinkClaim }) {
   const holder = await readHolder(claimPath);
   // The same process knows it finished this exact token. Claim this
   // one-shot cleanup synchronously so another local request cannot unlink

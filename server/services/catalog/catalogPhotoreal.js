@@ -14,6 +14,7 @@
 import { randomUUID } from 'node:crypto';
 import { access, readFile, mkdir, mkdtemp, copyFile, link, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
+import { createBoundedStateMap } from '../../lib/boundedStateMap.js';
 import { PATHS } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { maintenance } from '../../lib/maintenanceAdmission.js';
@@ -47,9 +48,9 @@ const deps = {
 
 export const __setPhotorealDepsForTests = (overrides) => Object.assign(deps, overrides);
 
-// ingredientId → latest job. In memory: a render is a disposable process; the
-// renders it attached and the .blend it kept are the durable results.
-const jobs = new Map();
+// Retain recent finished statuses for the tab. Running jobs stay with their
+// controllers so cache eviction never hides a render or prevents cancellation.
+const finishedJobs = createBoundedStateMap({ maxSize: 128, ttlMs: 24 * 60 * 60 * 1000 });
 const liveRenders = trackedRenderMap('photoreal', { noun: 'Photoreal render', link: (ingredientId) => `/catalog/place/${encodeURIComponent(ingredientId)}` });
 const sceneBuilds = trackedRenderMap('photoreal-scene', { noun: 'Photoreal scene build', link: (ingredientId) => `/catalog/place/${encodeURIComponent(ingredientId)}` });
 
@@ -85,7 +86,6 @@ export async function openPhotorealBlend(ingredientId) {
 }
 
 function publish(job) {
-  jobs.set(job.ingredientId, job);
   catalogEvents.emit('photoreal', { ingredientId: job.ingredientId, job });
 }
 
@@ -164,7 +164,7 @@ function ensurePhotorealScene(ingredientId, tool) {
 /** What the tab shows on open. Memory and file reads only; starts nothing. */
 export async function getPhotorealStatus(ingredientId) {
   return {
-    job: jobs.get(ingredientId) || null,
+    job: liveRenders.get(ingredientId)?.job ?? finishedJobs.get(ingredientId) ?? null,
     blendUrl: (await photorealBlendPath(ingredientId)) ? blendUrl(ingredientId) : null,
     blenderVersion: await deps.lastCheckedVersion(),
     sceneBuilding: sceneBuilds.has(ingredientId),
@@ -193,7 +193,7 @@ export async function startPhotorealRender(ingredientId, { shotIds, engine, samp
     ...(flythroughSeconds ? { flythroughSeconds } : {}),
     startedAt: new Date().toISOString(), finishedAt: null, error: null, report: null, video: null, blenderVersion: tool.version,
   };
-  const active = { controller: new AbortController(), publishing: false };
+  const active = { job, controller: new AbortController(), publishing: false };
   liveRenders.set(ingredientId, active);
   active.completion = finishRender({ place, scene, tool, job, samples, active });
   publish(job);
@@ -202,9 +202,9 @@ export async function startPhotorealRender(ingredientId, { shotIds, engine, samp
 
 /** Abort the current render and wait for it to release the place's slot. */
 export async function cancelPhotorealRender(ingredientId, jobId) {
-  const job = jobs.get(ingredientId);
-  if (!job || (jobId && job.id !== jobId)) throw refuse('This Photoreal render is no longer current.', 'PHOTOREAL_RENDER_NOT_FOUND', 404);
   const active = liveRenders.get(ingredientId);
+  const job = active?.job ?? finishedJobs.get(ingredientId);
+  if (!job || (jobId && job.id !== jobId)) throw refuse('This Photoreal render is no longer current.', 'PHOTOREAL_RENDER_NOT_FOUND', 404);
   if (!active) return job;
   // Finish publishing once durable writes start, so cancellation cannot leave
   // an incomplete set of attachments or replace only the scene.
@@ -229,6 +229,7 @@ async function finishRender({ place, scene, tool, job, samples, active }) {
   }
   liveRenders.delete(job.ingredientId);
   finished.finishedAt = new Date().toISOString();
+  finishedJobs.set(job.ingredientId, finished);
   publish(finished);
   if (finished.state === 'done' && !job.flythroughSeconds) catalogEvents.emit('primitive-changed', { ingredientId: place.id });
   return finished;

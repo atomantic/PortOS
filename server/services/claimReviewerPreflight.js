@@ -1,4 +1,5 @@
 import { ServerError } from '../lib/errorHandler.js';
+import { CODE_REVIEWERS_PAGE_BREADCRUMB } from '../lib/navManifest.js';
 
 function commentBotProcedure({ token, bot, status, required }) {
   if (status === 'missing') return `- Skip optional reviewer \`@${token}\` for this run. Its bot account was not found.`;
@@ -43,7 +44,7 @@ export async function preflightClaimReviewers(app, config, { metadata = {}, appO
         ? `Apps → Automation → ${taskType} → Reviewers (taskMetadata.${field})`
         : Array.isArray(metadata[field])
           ? `Tasks → Schedule → ${taskType} → Reviewers (taskMetadata.${field})`
-          : `Settings → Code Reviewers (${field})`;
+          : `${CODE_REVIEWERS_PAGE_BREADCRUMB} (${field})`;
     return `@${entry.token}: ${entry.reason}. Repair the @${entry.token} entry in ${setting}.`;
   };
   if (result.requiredMissing.length) {

@@ -4,9 +4,10 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { join } from 'node:path';
+import { existsSync, statSync } from 'node:fs';
+import { isAbsolute, join, relative } from 'node:path';
 import { exportNames, mask, mockDrift, unusedAllowed } from '../../../../scripts/lib/mockContractScan.js';
-import { readText, REPO_ROOT as ROOT, workingTreeFiles } from '../../../../scripts/lib/guardCorpus.js';
+import { guardCorpus, readText, REPO_ROOT as ROOT } from '../../../../scripts/lib/guardCorpus.js';
 
 /** Deliberate fixture adapters: `<test file>|<module specifier>|<key>` -> reason. */
 const ALLOWED = new Map([
@@ -15,12 +16,17 @@ const ALLOWED = new Map([
 ]);
 
 const used = new Set();
-const drift = (testFile, source) => mockDrift(testFile, source, { root: ROOT, allowed: ALLOWED, used, readFile: readText });
 
-function trackedTests() {
-  return workingTreeFiles(ROOT, ['server', 'scripts', 'lib', 'autofixer'])
-    .filter((f) => /\.test\.[cm]?js$/.test(f));
+function isFile(file) {
+  const path = relative(ROOT, file);
+  if (!path.startsWith('..') && !isAbsolute(path)) {
+    const info = guardCorpus().lstat(path);
+    if (!info?.isSymbolicLink()) return info?.isFile() === true;
+  }
+  return existsSync(file) && statSync(file).isFile();
 }
+
+const drift = (testFile, source) => mockDrift(testFile, source, { root: ROOT, allowed: ALLOWED, used, readFile: readText, isFile });
 
 describe('vi.mock factory contract conventions', () => {
   it('flags a planted key the real module does not export', () => {
@@ -66,10 +72,15 @@ describe('vi.mock factory contract conventions', () => {
     expect(exportNames(join(ROOT, 'server/lib/fileUtils.js'))).toContain('safeJSONParse');
   });
 
-  it('mocks only members the real modules export', () => {
-    const files = trackedTests();
+  it('mocks only members the real modules export', async () => {
+    const corpus = guardCorpus();
+    const files = corpus.workingTreeCandidates().filter((path) =>
+      /^(?:server|scripts|lib|autofixer)\//.test(path) && /\.test\.[cm]?js$/.test(path) && corpus.lstat(path) !== null);
     expect(files.length).toBeGreaterThan(100);
-    const violations = files.flatMap((f) => drift(join(ROOT, f), readText(join(ROOT, f))));
+    const violations = [];
+    for await (const [file, source] of corpus.readSources(files)) {
+      violations.push(...drift(join(ROOT, file), source));
+    }
     expect(violations, 'delete the dead key, or point the mock at the module that really exports it').toEqual([]);
     expect(unusedAllowed(ALLOWED, used), 'delete the stale ALLOWED entry').toEqual([]);
   });

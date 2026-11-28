@@ -145,6 +145,8 @@ describe('<CodePanel>', () => {
     fireEvent.click(screen.getByRole('button', { name: /^Play$/ }));
     expect(posted).toHaveBeenLastCalledWith({ type: 'play', code: CODE }, '*');
     await fromFrame({ type: 'state', state: 'playing' });
+    await fromFrame({ type: 'recorded', wav: new ArrayBuffer(64), durationSec: 4 });
+    expect(renderTrackCode).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: /^Stop$/ }));
     expect(posted).toHaveBeenLastCalledWith({ type: 'stop' }, '*');
 
@@ -161,11 +163,15 @@ describe('<CodePanel>', () => {
     await mountReady({ onRendered });
     fireEvent.change(screen.getByLabelText('Take length (sec)'), { target: { value: '4' } });
     fireEvent.click(screen.getByRole('button', { name: /Save as take/ }));
-    expect(posted).toHaveBeenLastCalledWith({ type: 'record', code: CODE, seconds: 4 }, '*');
+    const { recordingId } = posted.mock.lastCall[0];
+    expect(posted).toHaveBeenLastCalledWith({ type: 'record', code: CODE, seconds: 4, recordingId: expect.any(Number) }, '*');
     expect(screen.getByRole('button', { name: /Recording/ })).toBeDisabled();
 
-    await fromFrame({ type: 'recorded', wav: new ArrayBuffer(64), durationSec: 4 });
+    const completed = { type: 'recorded', wav: new ArrayBuffer(64), durationSec: 4, recordingId };
+    await fromFrame(completed);
     await waitFor(() => expect(onRendered).toHaveBeenCalledWith({ id: 'track-1' }));
+    await fromFrame(completed);
+    expect(renderTrackCode).toHaveBeenCalledTimes(1);
     const [trackId, form] = renderTrackCode.mock.calls[0];
     expect(trackId).toBe('track-1');
     expect(form.get('track').type).toBe('audio/wav');
@@ -183,8 +189,8 @@ describe('<CodePanel>', () => {
     expect(writeMusicCode.mock.calls[0][0]).not.toHaveProperty('description');
 
     fireEvent.click(screen.getByRole('button', { name: /Save as take/ }));
-    await waitFor(() => expect(posted).toHaveBeenLastCalledWith({ type: 'record', code: CODE, seconds: 20 }, '*'));
-    await fromFrame({ type: 'recorded', wav: new ArrayBuffer(64), durationSec: 20 });
+    await waitFor(() => expect(posted).toHaveBeenLastCalledWith({ type: 'record', code: CODE, seconds: 20, recordingId: expect.any(Number) }, '*'));
+    await fromFrame({ type: 'recorded', wav: new ArrayBuffer(64), durationSec: 20, recordingId: posted.mock.lastCall[0].recordingId });
     await waitFor(() => expect(renderTrackCode).toHaveBeenCalled());
     expect(resolveTrackId).toHaveBeenCalledTimes(1);
     expect(renderTrackCode.mock.calls[0][0]).toBe('soundtrack-track');
@@ -202,11 +208,14 @@ describe('<CodePanel>', () => {
     window.localStorage.setItem('portos.musicDesigner.strudelCode', JSON.stringify({ trackId: 'track-1', code: CODE }));
     await mountReady();
     fireEvent.click(screen.getByRole('button', { name: /Save as take/ }));
+    const { recordingId } = posted.mock.lastCall[0];
     await fromFrame({ type: 'state', state: 'blocked' });
     expect(screen.getByText(/holding audio back/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /^Stop$/ }));
     expect(posted).toHaveBeenLastCalledWith({ type: 'stop' }, '*');
     expect(screen.getByRole('button', { name: /Save as take/ })).toBeEnabled();
+    await fromFrame({ type: 'recorded', wav: new ArrayBuffer(64), durationSec: 4, recordingId });
+    expect(renderTrackCode).not.toHaveBeenCalled();
   });
 
   it('ends a failed recording without uploading', async () => {

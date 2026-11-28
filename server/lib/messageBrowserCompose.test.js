@@ -1,8 +1,8 @@
-import { MESSAGE_SELECTOR_DEFAULTS } from './messageSelectorDefaults.js';
+import { MESSAGE_COMPOSE_PATTERN_DEFAULTS, MESSAGE_SELECTOR_DEFAULTS } from './messageSelectorDefaults.js';
 import vm from 'node:vm';
 import { describe, expect, it } from 'vitest';
 import {
-  COMPOSE_PHASES, SEND_ACK_PATTERN, SEND_REFUSAL_PATTERN, buildComposePhaseScript,
+  COMPOSE_PHASES, buildComposePhaseScript,
   checkAccountIdentity, classifySendOutcome, planDelivery, recipientsMatch, resolveComposeConfig
 } from './messageBrowserCompose.js';
 
@@ -41,19 +41,20 @@ describe('planDelivery', () => {
     expect(plan).toMatchObject({ to: ['alice@example.com'], cc: ['carol@example.com'], subject: 'Example subject', reply: null });
   });
 
-  it('answers the sender of the message a bare reply was written for, and locates it by provider row id', () => {
-    const planned = planDelivery('outlook', draft({ to: [], replyToMessageId: 'msg-1', threadId: 'thread-1' }), target());
+  it.each(['  re: RE: Re  ', ''])('plans an Outlook reply with subject %j to the sender of the original message', subject => {
+    const planned = planDelivery('outlook', draft({ subject, to: [], replyToMessageId: 'msg-1', threadId: 'thread-1' }), target());
     expect(planned.plan).toMatchObject({ to: ['bob@example.com'], reply: { providerRowId: 'row-1' } });
   });
 
   it.each([
     ['an empty body', 'outlook', { body: '  ' }, null, 'DRAFT_NOT_DELIVERABLE'],
     ['no recipient at all', 'outlook', { to: [] }, null, 'DRAFT_NOT_DELIVERABLE'],
-    ['a bare reply whose sender has no email', 'outlook', { to: [], replyToMessageId: 'msg-1' }, target({ from: { name: 'Bob' } }), 'DRAFT_NOT_DELIVERABLE'],
+    ['a bare reply whose sender has no email', 'outlook', { to: [], subject: 'Re: Re', replyToMessageId: 'msg-1' }, target({ from: { name: 'Bob' } }), 'DRAFT_NOT_DELIVERABLE'],
     ['a new Outlook message without a subject', 'outlook', { subject: ' ' }, null, 'DRAFT_NOT_DELIVERABLE'],
     ['Cc on a Teams chat', 'teams', { cc: ['carol@example.com'] }, null, 'DRAFT_NOT_DELIVERABLE'],
     ['a reply with no target', 'outlook', { replyToMessageId: 'msg-1' }, null, 'REPLY_TARGET_NOT_FOUND'],
     ['an Outlook reply whose target has no provider row id', 'outlook', { replyToMessageId: 'msg-1' }, target({ providerRowId: null }), 'REPLY_TARGET_UNIDENTIFIABLE'],
+    ['a reply with a different subject', 'outlook', { replyToMessageId: 'msg-1' }, target(), 'OUTLOOK_REPLY_SUBJECT_MISMATCH'],
     ['a thread that is not the target\'s thread', 'teams', { replyToMessageId: 'msg-1', threadId: 'thread-2' }, target(), 'THREAD_MISMATCH'],
     ['an account type with no browser transport', 'gmail', {}, null, 'SEND_NOT_SUPPORTED']
   ])('refuses %s', (_label, type, overrides, replyTarget, code) => {
@@ -94,8 +95,8 @@ describe('resolveComposeConfig', () => {
     expect(config.sels.newMail).toBe(MESSAGE_SELECTOR_DEFAULTS.outlook.compose.newMail);
     expect(config.sels).not.toHaveProperty('messageRow');
     expect(config.ackPattern).toBe('delivered');
-    expect(config.refusalPattern).toBe(SEND_REFUSAL_PATTERN);
-    expect(resolveComposeConfig('outlook', undefined).ackPattern).toBe(SEND_ACK_PATTERN);
+    expect(config.refusalPattern).toBe(MESSAGE_COMPOSE_PATTERN_DEFAULTS.sendRefusalPattern);
+    expect(resolveComposeConfig('outlook', undefined).ackPattern).toBe(MESSAGE_COMPOSE_PATTERN_DEFAULTS.sendAckPattern);
     expect(resolveComposeConfig('gmail', {})).toBeNull();
   });
 });
@@ -103,7 +104,7 @@ describe('resolveComposeConfig', () => {
 // The scripts run inside the provider tab, so a syntax error or an argument that
 // escapes its JSON literal would only show up against a real mailbox.
 describe('buildComposePhaseScript', () => {
-  const args = { sels: MESSAGE_SELECTOR_DEFAULTS.outlook.compose, token: 'attempt-1', to: ['alice@example.com'], cc: [], subject: 'Example', body: 'Example body', reply: null, ackPattern: SEND_ACK_PATTERN, refusalPattern: SEND_REFUSAL_PATTERN, timeoutMs: 1000 };
+  const args = { sels: MESSAGE_SELECTOR_DEFAULTS.outlook.compose, token: 'attempt-1', to: ['alice@example.com'], cc: [], subject: 'Example', body: 'Example body', reply: null, ackPattern: MESSAGE_COMPOSE_PATTERN_DEFAULTS.sendAckPattern, refusalPattern: MESSAGE_COMPOSE_PATTERN_DEFAULTS.sendRefusalPattern, timeoutMs: 1000 };
 
   it.each(['outlook', 'teams'].flatMap(provider => COMPOSE_PHASES.map(phase => [provider, phase])))('%s %s compiles', (provider, phase) => {
     const script = buildComposePhaseScript(phase, { ...args, provider, sels: MESSAGE_SELECTOR_DEFAULTS[provider].compose });
@@ -117,6 +118,49 @@ describe('buildComposePhaseScript', () => {
     expect(() => new vm.Script(script)).not.toThrow();
     expect(script).toContain(JSON.stringify(body).slice(1, -1));
     expect(() => buildComposePhaseScript('send-now', args)).toThrow(/Unknown compose phase/);
+  });
+});
+
+describe('Outlook send confirmation in the provider page', () => {
+  it.each([
+    ['the built-in pattern', {}, true, false, 'unknown'],
+    ['a nonmatching override', { sendAckPattern: '^Nachricht empfangen$' }, true, false, 'unknown'],
+    ['a matching override while compose is open', { sendAckPattern: '^nachricht gesendet$' }, false, false, 'unknown'],
+    ['a matching message already on screen', { sendAckPattern: '^nachricht gesendet$' }, true, true, 'unknown'],
+    ['a matching override after compose closes', { sendAckPattern: '^nachricht gesendet$' }, true, false, 'confirmed'],
+    ['a matching refusal', { sendAckPattern: '^nachricht gesendet$', sendRefusalPattern: '^Nachricht nicht gesendet$' }, true, false, 'unknown'],
+  ])('handles %s after a single click', async (_label, overrides, closes, stale, expected) => {
+    const config = resolveComposeConfig('outlook', overrides);
+    const status = { innerText: 'Nachricht gesendet' };
+    const refusal = { innerText: 'Nachricht nicht gesendet' };
+    const send = {
+      isConnected: true,
+      getClientRects: () => [{}],
+      getAttribute: () => null,
+      click() {
+        clicks++;
+        root.isConnected = !closes;
+      }
+    };
+    let clicks = 0;
+    let now = 0;
+    const root = { isConnected: true, querySelectorAll: () => [send] };
+    const document = {
+      querySelector: () => root,
+      querySelectorAll: () => stale || clicks ? [status, refusal] : [],
+    };
+
+    const script = buildComposePhaseScript('submit', {
+      ...config, provider: 'outlook', token: 'attempt-1', timeoutMs: 400,
+    });
+    const observed = await vm.runInNewContext(script, {
+      document,
+      Date: { now: () => now },
+      setTimeout: (done, ms) => { now += ms; done(); },
+    });
+
+    expect(clicks).toBe(1);
+    expect(classifySendOutcome(observed)).toEqual({ outcome: expected });
   });
 });
 

@@ -22,9 +22,10 @@ vi.mock('../lib/fileUtils.js', () => ({
 }));
 
 const {
-  listDrafts, createDraft, updateDraft, claimDraftForSend, releaseDraftSend,
+  listDrafts, createDraft, updateDraft, approveDraft, claimDraftForSend, releaseDraftSend, reconcileDraftSend,
   erasePrivacyDrafts, scrubLegacyPrivacyDraftValues, PRIVACY_DRAFT_REDACTION_NOTICE, PRIVACY_DRAFT_SUBJECT_REDACTION_NOTICE
 } = await import('./messageDrafts.js');
+const { eraseVaultRecordDrafts, eraseSubjectDrafts, eraseCaseDrafts } = await import('./privacyDraftErasure.js');
 
 // Seed the file store directly so we control accountId/status without relying on
 // createDraft (which always stamps status 'draft').
@@ -155,30 +156,59 @@ describe('privacy draft erasure (#17233)', () => {
     expect('privacyMeta' in plain).toBe(false);
   });
 
-  it('deletes unsent matches, redacts sent bodies, and leaves locked and unrelated drafts untouched', async () => {
+  it('deletes unsent matches and redacts both sent and interrupted deliveries', async () => {
     seed([
-      priv('d', 'draft'), priv('a', 'approved'), priv('f', 'failed'),
+      priv('d', 'draft'), priv('p', 'pending_review'), priv('a', 'approved'), priv('f', 'failed'),
       priv('sent', 'sent', { sendAttempts: [attempt] }),
       priv('sending', 'sending', { sendAttemptId: 'att-1', sendAttempts: [attempt] }),
       priv('other-subject', 'draft', { privacyMeta: { subjectId: 's2' } }),
       { id: 'manual', status: 'draft', generatedBy: 'manual', body: 'Name: Alex Example', privacyMeta: { subjectId: 's1' } }
     ]);
-    // The sending draft has no live dispatcher, so loadDrafts reclassifies it
-    // delivery_unknown; either way it must survive untouched.
     const result = await erasePrivacyDrafts(d => d.privacyMeta?.subjectId === 's1');
-    expect(result).toEqual({ deleted: 3, redacted: 1, skipped: 1 });
+    expect(result).toEqual({ deleted: 4, redacted: 2, skipped: 0 });
     const left = Object.fromEntries(stored().map(d => [d.id, d]));
     expect(Object.keys(left).sort()).toEqual(['manual', 'other-subject', 'sending', 'sent']);
     expect(left.sent).toMatchObject({ status: 'sent', body: PRIVACY_DRAFT_REDACTION_NOTICE, subject: PRIVACY_DRAFT_SUBJECT_REDACTION_NOTICE, sendAttempts: [attempt] });
-    expect(left.sending.body).toBe('Name: Alex Example');
+    expect(left.sending).toMatchObject({ status: 'delivery_unknown', privacyErased: true, body: PRIVACY_DRAFT_REDACTION_NOTICE });
     expect(left.manual.body).toBe('Name: Alex Example');
   });
 
+  it.each([
+    ['vault record', { vaultRecordIds: ['record'] }, () => eraseVaultRecordDrafts('record')],
+    ['household subject', { subjectId: 'subject' }, () => eraseSubjectDrafts('subject')],
+    ['case', { caseId: 'case' }, () => eraseCaseDrafts('case')],
+    ['legacy case evidence', undefined, () => eraseCaseDrafts('case', 'selected')],
+    ['legacy vault value', undefined, () => eraseVaultRecordDrafts('record', ['alex@example.com'])],
+  ])('erases the selected %s disclosure and retains only delivery evidence', async (_source, privacyMeta, erase) => {
+    seed([priv('selected', 'delivery_unknown', {
+      privacyMeta, body: 'Example disclosure', to: ['broker@example.com'], cc: ['alex@example.com'],
+      sendAttemptId: attempt.id, sendAttempts: [{ ...attempt, outcome: 'delivery_unknown', detail: 'Example disclosure' }]
+    }), priv('unrelated', 'draft')]);
+    await erase();
+    const [erased, unrelated] = stored();
+    expect(JSON.stringify(erased)).not.toMatch(/Example disclosure|example\.com/);
+    expect(erased).toMatchObject({
+      id: 'selected', status: 'delivery_unknown', sendAttemptId: attempt.id,
+      subject: PRIVACY_DRAFT_SUBJECT_REDACTION_NOTICE, body: PRIVACY_DRAFT_REDACTION_NOTICE,
+      to: [], cc: [], sendAttempts: [{ ...attempt, outcome: 'delivery_unknown' }]
+    });
+    expect(unrelated).toEqual(priv('unrelated', 'draft'));
+    const result = await reconcileDraftSend('selected', { attemptId: attempt.id, outcome: 'not_sent' });
+    expect(result.status).toBe('erased');
+    expect(result.sendAttempts[0].reconciliation).toBe('not_sent');
+    await expect(approveDraft('selected')).rejects.toMatchObject({ status: 409 });
+    await expect(claimDraftForSend('selected')).rejects.toMatchObject({ status: 409 });
+  });
+
   it('onlyUnsent revokes queued opt-outs but keeps sent drafts as-is', async () => {
-    seed([priv('a', 'approved'), priv('sent', 'sent'), priv('chg', 'draft', { generatedBy: 'privacy-change' })]);
+    seed([
+      priv('a', 'approved'), priv('sent', 'sent'), priv('chg', 'draft', { generatedBy: 'privacy-change' }),
+      priv('unknown', 'delivery_unknown', { sendAttemptId: attempt.id, sendAttempts: [attempt] })
+    ]);
     const result = await erasePrivacyDrafts(d => d.privacyMeta?.subjectId === 's1', { onlyUnsent: true, generatedBy: ['privacy-optout'] });
-    expect(result).toMatchObject({ deleted: 1, redacted: 0 });
-    expect(stored().map(d => d.id).sort()).toEqual(['chg', 'sent']);
+    expect(result).toMatchObject({ deleted: 1, redacted: 1 });
+    expect(stored().map(d => d.id).sort()).toEqual(['chg', 'sent', 'unknown']);
+    expect(stored().find(d => d.id === 'unknown')).toMatchObject({ status: 'delivery_unknown', privacyErased: true });
     expect(stored().find(d => d.id === 'sent').body).toBe('Name: Alex Example');
   });
 

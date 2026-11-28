@@ -4,6 +4,7 @@ import { tuiModeAddition } from '../../lib/provider/providerModePairing.js';
 import { findConnectionByRef, providerGraphEnabled } from '../../services/provider/providerGraph.js';
 import { readGraph } from '../../services/provider/providerGraphStore.js';
 import { refreshServiceCatalog } from '../../services/provider/providerServices.js';
+import { requestHasHostControl } from '../../services/authGate.js';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
 import {
   providerCreateSchema,
@@ -147,12 +148,13 @@ export function createProviderManagementRoutes(providerService, readProviders) {
     // Cache-only: this list must stay a synchronous read that spawns nothing.
     // `null` here means NOT PROBED, and the dedicated `/codex/account` fetch is
     // what fills it — a card renders "unknown", never "signed out", until then.
-    const codexAccount = peekCodexAccountReadiness();
+    const includeDiagnostics = requestHasHostControl(req);
+    const codexAccount = peekCodexAccountReadiness({ includeDiagnostics });
     // Same cache-only contract, for the CoS/model pickers (#6306): the signed-in
     // account's real catalog when one has been fetched, otherwise the three-state
     // shape that tells the client to keep showing its shipped list. Rendering a
     // picker must never be what starts `codex app-server`.
-    const codexModelCatalog = peekCodexModelCatalog();
+    const codexModelCatalog = peekCodexModelCatalog({ includeDiagnostics });
     res.json({
       activeProvider: data.activeProvider,
       providers: data.providers.map((provider) => ({

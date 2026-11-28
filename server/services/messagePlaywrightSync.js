@@ -6,7 +6,7 @@ import { ensureDir, PATHS, readJSONFileStrict, unreadableStoreError, atomicWrite
 import { isPlainObject } from '../lib/objects.js';
 import { createMutex } from '../lib/asyncMutex.js';
 import { messageLogError } from '../lib/messageLogError.js';
-import { MESSAGE_SELECTOR_DEFAULTS } from '../lib/messageSelectorDefaults.js';
+import { MESSAGE_COMPOSE_PATTERN_DEFAULTS, MESSAGE_SELECTOR_DEFAULTS } from '../lib/messageSelectorDefaults.js';
 import {
   COMPOSE_PROVIDER_LABEL, SUBMIT_EVALUATE_TIMEOUT_MS, SUBMIT_OBSERVE_MS, buildComposePhaseScript, checkAccountIdentity, classifySendOutcome,
   describeComposeFailure, planDelivery, recipientsMatch, resolveComposeConfig
@@ -35,7 +35,7 @@ function outlookRowContext(selector, requireScroll = true) {
     if (typeof selector !== 'string' || !selector.trim()) throw new Error('Empty selector');
     initialRows = rows();
   } catch {
-    return { error: 'invalid-selector', message: 'Invalid Outlook messageRow selector. Edit it in Messages > Sync and test again.' };
+    return { error: 'invalid-selector', message: 'Invalid Outlook messageRow selector. Edit it in Comms → Sync and test again.' };
   }
   if (!requireScroll || initialRows.length === 0) return { rows };
 
@@ -58,7 +58,7 @@ function outlookRowContext(selector, requireScroll = true) {
   if (!scrollContainer || typeof scrollContainer.scrollBy !== 'function'
       || typeof scrollContainer.scrollTo !== 'function'
       || initialRows.some(row => !scrollContainer.contains(row))) {
-    return { error: 'invalid-container', message: 'Outlook messageRow must match rows in one scrollable list or region. Edit it in Messages > Sync and test again.' };
+    return { error: 'invalid-container', message: 'Outlook messageRow must match rows in one scrollable list or region. Edit it in Comms → Sync and test again.' };
   }
   return { rows, scrollContainer };
 }
@@ -654,7 +654,7 @@ export async function testSelectors(provider) {
 
   for (const [name, selector] of Object.entries(sels)) {
     // Compose controls need a compose view. Test checks the current list page.
-    if (Object.hasOwn(compose, name) || name === 'sendAckPattern' || name === 'sendRefusalPattern') continue;
+    if (Object.hasOwn(compose, name) || Object.hasOwn(MESSAGE_COMPOSE_PATTERN_DEFAULTS, name)) continue;
     const script = provider === 'outlook' && name === 'messageRow'
       ? `(function() {
           const context = (${outlookRowContext.toString()})(${JSON.stringify(selector)}, false);

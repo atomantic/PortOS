@@ -1,56 +1,26 @@
-import { CONVERSATIONAL_GEMMA, isConversationalGemma } from '../../../../../server/lib/voiceModelCatalog.js';
 import { PROVIDERS_PAGE_BREADCRUMB } from '../../../../../server/lib/navManifest.js';
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect } from 'react';
 import { RefreshCw } from 'lucide-react';
-import toast from '../../ui/Toast';
 import BrailleSpinner from '../../BrailleSpinner';
-import { getProviders, refreshProviderModels } from '../../../services/apiProviders';
 import { withUnlistedOption } from '../../../lib/withUnlistedOption';
 import ProviderModelSelector from '../../ProviderModelSelector';
 import FormField from '../../ui/FormField';
 import ListLoadError from '../../ui/ListLoadError';
-import useMounted from '../../../hooks/useMounted';
+import useVoiceLlmProviders from '../../../hooks/useVoiceLlmProviders';
+import VoiceLlmFields from '../../voice/VoiceLlmFields';
 
 const parseTraits = (text) => text.split(',').map((s) => s.trim()).filter(Boolean);
 
 export default function VoiceLlmSection({ cfg, patch, inputCls, traitsSyncRef }) {
-  const mountedRef = useMounted();
   // Raw text of the Traits input while it has uncommitted edits; null means "show
   // the saved list". Parsing per keystroke would drop typed commas and spaces.
   const [traitsText, setTraitsText] = useState(null);
-  // API-type providers only — voice needs low-latency streaming chat, which
-  // CLI/TUI providers can't deliver.
-  const [apiProviders, setApiProviders] = useState([]);
-  const [codeProviders, setCodeProviders] = useState([]);
-  const [providersError, setProvidersError] = useState(null);
-  const [refreshingModels, setRefreshingModels] = useState(false);
-
-  // Load the provider registry. The conversational brain can only stream
-  // through `api`-type providers (filtered here); the code-agent picker draws
-  // from `cli`/`tui` providers (Claude Code, Codex, Antigravity) — those are the
-  // ones that can actually edit code. Silent: the ListLoadError row is the
-  // failure UI, so don't also pop a toast. A failure is kept distinct from an
-  // empty registry so the pickers offer Retry rather than reading as "none".
-  const loadProviders = useCallback(() => {
-    setProvidersError(null);
-    return getProviders({ silent: true })
-      .then((data) => {
-        if (!mountedRef.current) return;
-        const all = data?.providers || [];
-        setApiProviders(all.filter((p) => p.type === 'api'));
-        setCodeProviders(all.filter((p) => p.type === 'cli' || p.type === 'tui'));
-      })
-      .catch((err) => {
-        if (!mountedRef.current) return;
-        setApiProviders([]);
-        setCodeProviders([]);
-        setProvidersError(err instanceof Error ? err : new Error('Request failed'));
-      });
-  }, [mountedRef]);
-
-  useEffect(() => {
-    loadProviders();
-  }, [loadProviders]);
+  // The conversational brain streams through `api` providers; the code-agent
+  // picker draws from CLI/TUI agents. Silent load: ListLoadError is the failure UI.
+  const {
+    apiProviders, codeProviders, error: providersError, reload: loadProviders,
+    refreshing: refreshingModels, refreshModels: handleRefreshModels,
+  } = useVoiceLlmProviders();
 
   useEffect(() => {
     if (!traitsSyncRef) return undefined;
@@ -67,60 +37,27 @@ export default function VoiceLlmSection({ cfg, patch, inputCls, traitsSyncRef })
     setTraitsText(null);
   };
 
-  // Re-query the selected provider's /models endpoint and refresh the dropdown
-  // (LM Studio / Ollama load models on demand, so the list goes stale).
-  const handleRefreshModels = async (providerId) => {
-    if (!providerId || refreshingModels) return;
-    setRefreshingModels(true);
-    try {
-      // Silent: the route errors when the refresh fails (502 with the probe's
-      // real message, or 400 when that CLI has no fetcher), so the catch below
-      // owns the error toast (avoids a double toast).
-      const updated = await refreshProviderModels(providerId, { silent: true });
-      setApiProviders((prev) => prev.map((p) => (p.id === providerId ? { ...p, models: updated.models || [] } : p)));
-      toast.success(`Refreshed models for ${updated.name || providerId} (${updated.models?.length || 0})`);
-    } catch (err) {
-      toast.error(`Failed to refresh models: ${err.message}`);
-    } finally {
-      setRefreshingModels(false);
-    }
-  };
-
   if (!cfg) return null;
 
-  // LLM provider/model pickers. The saved provider/model are always shown even
-  // when missing from the registry (e.g. provider deleted, or a model not in
-  // the cached list) so the select never silently drops the user's choice.
+  // The saved provider/model always render even when the registry no longer
+  // lists them (VoiceLlmFields), so the select never drops the user's choice.
   const llmProvider = cfg.llm.provider || 'lmstudio';
   const llmModel = cfg.llm.model || 'auto';
   const llmVisionModel = cfg.llm.visionModel || 'auto';
   const selectedProvider = apiProviders.find((p) => p.id === llmProvider);
-  // Still used to gate the refresh buttons below, so kept alongside
-  // providerOptions rather than folded away.
   const providerMissing = apiProviders.length > 0 && !selectedProvider;
-  // An empty registry means "not loaded yet" (or the fetch failed), not
-  // "confirmed not an API provider" — the synthetic option's own text makes
-  // that distinction, since `withUnlistedOption` can't know why a value is
-  // absent from an empty list.
-  const providerOptions = withUnlistedOption(
-    apiProviders,
-    llmProvider,
-    (id) => ({ id, name: apiProviders.length === 0 ? id : `${id} (not an API provider)` }),
-  );
-  const providerModels = selectedProvider?.models || [];
-  // `providerModels` is a flat id-string list; wrap each as `{id}` so the
-  // shared helper's default `key: 'id'` object contract applies uniformly to
-  // real and synthetic entries alike.
-  const modelChoices = providerModels.map((m) => ({ id: m }));
-  // 'auto' is a sentinel rendered as its own hardcoded option below, never a
-  // real catalog id — routing it through the helper would wrongly flag it as
-  // an unlisted pin and duplicate the `value="auto"` option.
-  const modelOptions = llmModel === 'auto'
-    ? modelChoices
-    : withUnlistedOption(modelChoices, llmModel, (id) => ({ id, current: true }));
+  const modelChoices = (selectedProvider?.models || []).map((m) => ({ id: m }));
   const visionModelOptions = llmVisionModel === 'auto'
     ? modelChoices
     : withUnlistedOption(modelChoices, llmVisionModel, (id) => ({ id, current: true }));
+  const setBrain = ({ provider: nextProvider, model: nextModel }) => {
+    if (nextProvider !== llmProvider) {
+      patch('llm.provider', nextProvider);
+      // A new provider may not have the old vision model either.
+      patch('llm.visionModel', 'auto');
+    }
+    patch('llm.model', nextModel);
+  };
 
   // Code-agent delegation picker. Empty provider/model = "system default" (the
   // CoS spawner's activeProvider + selectModelForTask). The saved choice is
@@ -146,61 +83,19 @@ export default function VoiceLlmSection({ cfg, patch, inputCls, traitsSyncRef })
       {providersError && (
         <ListLoadError what="the provider registry (LLM and coding-agent pickers)" error={providersError} onRetry={loadProviders} className="md:col-span-2" />
       )}
-      <FormField label="LLM provider" hint={`Voice streams tokens, so only API providers (LM Studio, Ollama, OpenAI-compatible) are listed. Configure providers under ${PROVIDERS_PAGE_BREADCRUMB}.`}>
-        {/* Streaming needs a direct API route, so a composed combination is
-            restricted to the `api` method. The model/vision selects below
-            carry their own 'auto' sentinel, so this is the provider only. */}
-        <ProviderModelSelector
-          compact
-          label="LLM provider"
-          providers={providerOptions}
-          selectedProviderId={llmProvider}
-          composeMethods={['api']}
-          onProviderChange={(id) => {
-            // Switching provider invalidates the old model — reset to 'auto'
-            // so we don't send a model the new provider doesn't have.
-            patch('llm.provider', id);
-            patch('llm.model', 'auto');
-            patch('llm.visionModel', 'auto');
-          }}
+      <div className="md:col-span-2 space-y-1">
+        <p className="text-xs text-gray-500">Voice streams tokens, so only API providers (LM Studio, Ollama, llama.cpp, OpenAI-compatible) are listed. Configure providers under {PROVIDERS_PAGE_BREADCRUMB}. 'auto' uses the provider's default model. These are the defaults; each Voice Call channel can tune its own voice, LLM and persona.</p>
+        <VoiceLlmFields
+          provider={llmProvider}
+          model={llmModel}
+          apiProviders={apiProviders}
+          refreshing={refreshingModels}
+          onRefreshModels={handleRefreshModels}
+          onChange={setBrain}
+          onSetupComplete={({ provider: nextProvider, model: nextModel }) => setBrain({ provider: nextProvider, model: nextModel })}
+          providerLabel="LLM provider"
+          modelLabel="LLM model"
         />
-      </FormField>
-
-      {/* Not wrapped in <FormField>: the select sits beside a refresh button,
-          so the id must land on the <select> (FormField injects it onto the
-          first child, which would be the flex wrapper — orphaning the
-          label). */}
-      <div className="space-y-1">
-        <label htmlFor="voice-llm-model" className="block text-sm text-gray-400">LLM model</label>
-        <p className="text-xs text-gray-500">'auto' uses the provider's default model, or the fastest loaded model for LM Studio / Ollama.</p>
-        <div className="flex items-center gap-2">
-          <select
-            id="voice-llm-model"
-            value={llmModel}
-            onChange={(e) => patch('llm.model', e.target.value)}
-            className={`${inputCls} flex-1`}
-          >
-            <option value="auto">auto</option>
-            {modelOptions.map((opt) => (
-              <option key={opt.id} value={opt.id}>{isConversationalGemma(opt.id) ? CONVERSATIONAL_GEMMA.name : opt.id}{opt.current ? ' (current)' : ''}</option>
-            ))}
-          </select>
-          <button
-            type="button"
-            onClick={() => handleRefreshModels(llmProvider)}
-            disabled={refreshingModels || providerMissing || apiProviders.length === 0}
-            aria-label="Refresh model list from the provider"
-            title="Refresh model list from the provider"
-            className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 shrink-0 p-2 rounded-lg bg-port-border hover:bg-port-border/70 text-white disabled:opacity-50"
-          >
-            {refreshingModels ? <BrailleSpinner /> : <RefreshCw size={14} />}
-          </button>
-        </div>
-        <p className="text-xs text-port-text-muted">
-          <a href={CONVERSATIONAL_GEMMA.url} target="_blank" rel="noreferrer" className="text-port-accent hover:underline">
-            {CONVERSATIONAL_GEMMA.name}
-          </a>{' is available here when your provider serves it. After connecting the provider, refresh the model list.'}
-        </p>
       </div>
 
       <div className="space-y-1">
@@ -315,6 +210,23 @@ export default function VoiceLlmSection({ cfg, patch, inputCls, traitsSyncRef })
           </span>
         </div>
       </label>
+
+      {cfg.llm.tools?.enabled === true && (
+        <label className="flex items-start gap-3 cursor-pointer md:col-span-2">
+          <input
+            type="checkbox"
+            checked={cfg.llm.tools?.trimByIntent === true}
+            onChange={(e) => patch('llm.tools.trimByIntent', e.target.checked)}
+            className="w-4 h-4 mt-0.5 shrink-0"
+          />
+          <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-baseline gap-x-3 gap-y-0.5 min-w-0 flex-1">
+            <span className="text-sm text-white">Send only the tools each request needs</span>
+            <span className="text-xs text-gray-500">
+              For small models that get confused by the full tool list. Slower replies on larger models, because a changing tool list makes the model re-read the whole conversation every turn.
+            </span>
+          </div>
+        </label>
+      )}
 
       <label className="flex items-start gap-3 cursor-pointer md:col-span-2">
         <input

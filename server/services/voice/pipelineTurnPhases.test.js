@@ -18,8 +18,8 @@ vi.mock('../brainJournal.js', () => ({ appendJournal: mocks.appendJournal, getTo
 vi.mock('./echo.js', () => ({ isEchoOfRecentTts: () => false, rememberTtsSentence: vi.fn() }));
 vi.mock('./tools.js', () => ({
   dispatchTool: mocks.dispatchTool,
-  getToolSpecsForIntent: () => ({ specs: [], activeGroups: new Set(['ui']) }),
-  classifyIntent: () => new Set(),
+  getTurnToolSpecs: () => ({ specs: [], activeGroups: new Set(['ui']) }),
+  resolveTurnIntent: () => ({ activeGroups: new Set(), formFill: false }),
   getAllToolNames: () => [],
   UI_KINDS: ['tab', 'button', 'link', 'input', 'textarea', 'select', 'checkbox', 'radio'],
 }));
@@ -47,6 +47,21 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers());
 
 describe('runTurn tool execution', () => {
+  it('returns the reply without synthesizing speech for a text-only (speak: false) turn', async () => {
+    mocks.streamChat.mockImplementation(async (_messages, { onDelta }) => {
+      onDelta('It is nine. ');
+      return completion('It is nine.');
+    });
+    const events = [];
+    const result = await runTurn({
+      text: 'what time is it', source: 'delegate', speak: false, state: {}, signal: new AbortController().signal,
+      emit: (event) => events.push(event),
+    });
+    expect(result).toEqual({ transcript: 'what time is it', reply: 'It is nine.' });
+    expect(mocks.synthesize).not.toHaveBeenCalled();
+    expect(events).not.toContain('voice:tts:audio');
+  });
+
   it('reports length exhaustion instead of blaming otherwise enabled tools', async () => {
     mocks.streamChat.mockResolvedValue({ ...completion(''), finishReason: 'length' });
     const events = [];
@@ -305,5 +320,31 @@ describe('runTurn dictation routing', () => {
     expect(mocks.appendJournal).not.toHaveBeenCalled();
     expect(mocks.getToday).not.toHaveBeenCalled();
     expect(mocks.streamChat).not.toHaveBeenCalled();
+  });
+
+  it('mirrors stage timings to the client only while timing debug is on', async () => {
+    mocks.streamChat.mockImplementation(async (_messages, { onDelta, onModelLoading }) => {
+      onModelLoading({ model: 'test-model' });
+      onDelta('Hi. ');
+      return { ...completion('Hi.'), resolveMs: 3 };
+    });
+    const run = async (state) => {
+      const timings = [];
+      await runTurn({
+        text: 'hello', state, signal: new AbortController().signal,
+        emit: (event, payload) => { if (event === 'voice:timing') timings.push(payload); },
+      });
+      return timings;
+    };
+
+    expect(await run({})).toEqual([]);
+    const timings = await run({ timingDebug: true });
+    const labels = timings.map((t) => t.label.split(' ')[0]);
+    for (const stage of ['turn.start', 'llm.start', 'llm.loading', 'llm.ttft', 'llm.done', 'tts.start', 'tts.done', 'turn.summary']) {
+      expect(labels).toContain(stage);
+    }
+    expect(timings.find((t) => t.label.startsWith('llm.done')).label).toContain('resolve=3ms');
+    expect(new Set(timings.map((t) => t.turnId)).size).toBe(1);
+    expect(timings.every((t) => Number.isInteger(t.ms) && t.ms >= 0)).toBe(true);
   });
 });

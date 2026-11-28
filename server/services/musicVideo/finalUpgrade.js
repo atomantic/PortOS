@@ -14,6 +14,7 @@ import { sceneRenderTierChoices } from '../../lib/musicVideo/musicVideoRenderTie
 import { musicVideoUpscaleSettings } from '../../lib/musicVideo/musicVideoUpscale.js';
 import { resolveFalApiKey } from '../falQueue.js';
 import { getSettings } from '../settings.js';
+import { upscalePlanBlocker } from '../videoGen/upscalePlanBlocker.js';
 import { updateScene } from './projects.js';
 import { submitShotUpscale } from './shotUpscale.js';
 import { requireProject } from './requireProject.js';
@@ -51,33 +52,29 @@ async function planShot(project, scene, method, upscale) {
   if (!sceneFinalApproved(scene)) return { sceneId: scene.sceneId, status: 'not-approved' };
   if (method === 'upscale') {
     const shot = { sceneId: scene.sceneId, status: 'ready', method, ...upscale };
-    if (upscale.upscaleMethod === 'realesrgan') {
-      const { planUpscaleHistoryItem } = await import('../videoGen/upscaleVideo.js');
-      const plan = await planUpscaleHistoryItem(scene.videoHistoryId, { method: 'realesrgan' })
-        .catch((error) => ({ error: error.message }));
-      if (plan.error || plan.alreadyUpscaled || !plan.runtime.installed) {
-        const reason = plan.error || (plan.alreadyUpscaled ? 'The selected clip is already upscaled.' : plan.runtime.reason);
-        return {
-          ...shot,
-          status: 'upscale-blocked',
-          reason,
-          ...(plan.runtime ? { upscalerSupported: plan.runtime.supported, upscalerInstallTarget: plan.runtime.installTarget ?? null } : {}),
-        };
-      }
-      return { ...shot, costUsd: 0 };
-    }
-    if (upscale.upscaleMethod === 'fal-topaz') return { ...shot, historyId: scene.videoHistoryId, costUsd: null };
-    if (upscale.upscaleMethod !== 'fal-seedvr2') return { ...shot, costUsd: 0 };
+    const { upscaleMethod, upscaleTargetResolution } = upscale;
+    if (upscaleMethod === 'fal-topaz') return { ...shot, historyId: scene.videoHistoryId, costUsd: null };
+    if (!['realesrgan', 'fal-seedvr2', 'local-ltx25'].includes(upscaleMethod)) return { ...shot, costUsd: 0 };
+    const planMethod = upscaleMethod === 'local-ltx25' ? 'ltx' : upscaleMethod;
+    const requireCost = planMethod === 'fal-seedvr2';
     const { planUpscaleHistoryItem } = await import('../videoGen/upscaleVideo.js');
     const plan = await planUpscaleHistoryItem(scene.videoHistoryId, {
-      method: upscale.upscaleMethod, targetResolution: upscale.upscaleTargetResolution,
+      method: planMethod,
+      ...(requireCost ? { targetResolution: upscaleTargetResolution } : {}),
     }).catch((error) => ({ error: error.message }));
-    if (plan.error || plan.alreadyUpscaled || !plan.runtime.installed || plan.estimatedCostUsd == null) {
-      const reason = plan.error || (plan.alreadyUpscaled ? 'The selected clip is already upscaled.'
-        : plan.runtime.reason || 'The selected clip could not be measured for a cost estimate.');
-      return { ...shot, status: 'upscale-blocked', reason };
+    if ('error' in plan) return { ...shot, status: 'upscale-blocked', reason: plan.error };
+    const blocker = upscalePlanBlocker(plan, { requireCost });
+    if (blocker) {
+      // The panel offers an install action whenever a target is present.
+      const install = planMethod === 'realesrgan'
+        ? {
+          upscalerSupported: plan.runtime.supported,
+          upscalerInstallTarget: blocker.code === 'REALESRGAN_NOT_READY' ? plan.runtime.installTarget ?? null : null,
+        }
+        : {};
+      return { ...shot, status: 'upscale-blocked', reason: blocker.message, ...install };
     }
-    return { ...shot, costUsd: plan.estimatedCostUsd };
+    return { ...shot, costUsd: requireCost ? plan.estimatedCostUsd : 0 };
   }
   const choices = sceneRenderTierChoices(project.videoSettings?.backend, { scene, scenes: project.scenes, videoSettings: project.videoSettings, songDurationSec: project.audioAnalysis?.durationSec ?? null });
   const final = choices?.find((choice) => choice.tier === 'final');

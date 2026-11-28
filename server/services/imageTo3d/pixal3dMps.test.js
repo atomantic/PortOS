@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import {
   PIXAL3D_MPS_DEFAULT_PIPELINE_TYPE,
@@ -49,6 +49,9 @@ describe('pixal3dMps path and install plan', () => {
     expect(lock).toContain('opencv-python-headless==5.0.0.93');
     expect(lock).not.toMatch(/^opencv-python==/m);
     expect(lock).not.toMatch(/^gradio==/m);
+    for (const pkg of ['diffusers', 'accelerate', 'requests', 'urllib3', 'charset-normalizer', 'certifi', 'importlib-metadata', 'lazy-importer', 'psutil', 'zipp']) {
+      expect(lock, pkg).not.toMatch(new RegExp(`^${pkg}==`, 'm'));
+    }
     expect(lock).toContain(`torch==${PIXAL3D_MPS_TORCH_VERSION}`);
     expect(lock).toContain(`torchvision==${PIXAL3D_MPS_TORCHVISION_VERSION}`);
     expect(PIXAL3D_MPS_TORCH_VERSION.split('.').slice(0, 2).map(Number)).toEqual([2, expect.any(Number)]);
@@ -230,7 +233,10 @@ describe('runPixal3dMpsGenerate', () => {
     expect(spawnImpl).not.toHaveBeenCalled();
   });
 
-  it('prefers the pinned entrypoint over a legacy checkout and resolves the produced GLB', async () => {
+  it.each([
+    ['pinned', [VENV, SCRIPT, PINNED_SCRIPT], PINNED_SCRIPT],
+    ['legacy', [VENV, SCRIPT], SCRIPT],
+  ])('uses runtime-local tuning with the %s entrypoint and resolves the produced GLB', async (_name, paths, script) => {
     const child = makeChild();
     const spawnImpl = vi.fn(() => child);
     const postprocessGlb = vi.fn();
@@ -240,17 +246,21 @@ describe('runPixal3dMpsGenerate', () => {
       outputPath: '/tmp/model.glb',
       steps: 12,
       seed: 42,
-      exists: existsFor(VENV, SCRIPT, PINNED_SCRIPT),
+      exists: existsFor(...paths),
+      env: { FLEX_GEMM_AUTOTUNE_CACHE_PATH: join(BASE, '.flex_gemm', 'autotune_cache.json') },
       spawnImpl,
       postprocessGlb,
     });
     expect(spawnImpl).toHaveBeenCalledWith(
       VENV,
-      [PINNED_SCRIPT, '/tmp/source.png', '--device', 'mps', '--pipeline-type', '1024_cascade',
+      [script, '/tmp/source.png', '--device', 'mps', '--pipeline-type', '1024_cascade',
         '--output', '/tmp/model.glb', '--seed', '42', '--steps', '12'],
       expect.objectContaining({
-        cwd: join(ROOT, '.venv', 'portos-source'),
-        env: expect.objectContaining({ PYTHONUNBUFFERED: '1' }),
+        cwd: dirname(script),
+        env: expect.objectContaining({
+          PYTHONUNBUFFERED: '1',
+          FLEX_GEMM_AUTOTUNE_CACHE_PATH: join(ROOT, 'autotune_cache.json'),
+        }),
       }),
     );
     child.stdout.emit('data', '[Done] GLB saved to /tmp/model.glb\n');

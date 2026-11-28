@@ -14,10 +14,8 @@ import { moduleSpecifiers } from '../../../../scripts/lib/moduleGraph.js';
 import { tokenize } from '../../../../scripts/lib/sourceTokens.js';
 import { guardCorpus, REPO_ROOT } from '../../../../scripts/lib/guardCorpus.js';
 
-const isWithin = (root, file) => {
-  const rel = posix.relative(root, file);
-  return rel !== '..' && !rel.startsWith('../');
-};
+// resolveRelative already normalized the POSIX path.
+const isWithin = (root, file) => file === root || file.startsWith(`${root}/`);
 
 const resolveRelative = (file, specifier) => {
   const path = specifier.replaceAll('\\', '/').split(/[?#]/)[0];
@@ -30,15 +28,20 @@ const resolveRelative = (file, specifier) => {
  * the text before the first escape must be a prefix of a relative path. Stop at the
  * opening delimiter's next occurrence so an escape in a later literal is irrelevant.
  */
-const MAY_REACH_SERVER = /\.\.[/\\]+(?:\.{1,2}[/\\]+)*server\b|(['"`])(?:\.{0,2}|\.{1,2}\/(?:(?!\1)[^\\])*)\\/;
+const SERVER_PATH = /\.\.[/\\]+(?:\.{1,2}[/\\]+)*server\b/;
+const ESCAPED_RELATIVE_PATH = /(['"`])(?:\.{0,2}|\.{1,2}\/(?:(?!\1)[^\\])*)\\/;
+// If "server" itself is split up, it needs a hex/Unicode escape, an
+// identity escape in the name, or a continuation that joins the letters.
+const POSSIBLE_SERVER_NAME = /server|\\[xesur\r\n]/;
+const mayReachServer = (source) => SERVER_PATH.test(source)
+  || (POSSIBLE_SERVER_NAME.test(source) && ESCAPED_RELATIVE_PATH.test(source));
 
-function inspectClientImports(clientFiles, readSource) {
+function inspectClientImports(clientSources, readSource = () => null) {
   const violations = [];
   const seen = new Set();
   const queue = [];
-  for (const file of clientFiles) {
-    const source = readSource(file);
-    if (source == null || !MAY_REACH_SERVER.test(source)) continue;
+  for (const [file, source] of clientSources) {
+    if (source == null || !mayReachServer(source)) continue;
     const { statics: imports, deferred: dynamic } = moduleSpecifiers(source, file);
     for (const specifier of [...imports, ...dynamic]) {
       const target = resolveRelative(file, specifier);
@@ -201,11 +204,12 @@ describe('shared literal constant tables', () => {
 });
 
 describe('browser-safe server imports from the client (#6364, #16709)', () => {
-  it('walks client imports and rejects direct or transitive edges outside server/lib', () => {
+  it('walks client imports and rejects direct or transitive edges outside server/lib', async () => {
     const corpus = guardCorpus();
     // Read indexed candidates directly instead of checking existence before each read.
     const sources = corpus.indexed(['client/src/*.js', 'client/src/*.jsx']).map(({ path }) => path);
-    const { entryCount, violations } = inspectClientImports(sources, (file) => {
+    const clientSources = await Array.fromAsync(corpus.readSources(sources, { allowMissing: true }));
+    const { entryCount, violations } = inspectClientImports(clientSources, (file) => {
       try {
         return corpus.read(file);
       } catch (error) {
@@ -227,7 +231,7 @@ describe('browser-safe server imports from the client (#6364, #16709)', () => {
     ['../../../server/services/universeBuilder/compile.js?raw', (path) => `const lazy = () => import('${path}');`],
   ])('names the importing test and resolved edge for %s', (specifier, source) => {
     const file = 'client/src/lib/count.test.js';
-    expect(inspectClientImports([file], () => source(specifier)).violations).toEqual([
+    expect(inspectClientImports([[file, source(specifier)]]).violations).toEqual([
       `${file} imports '${specifier}' → server/services/universeBuilder/compile.js (resolves outside server/lib)`,
     ]);
   });
@@ -240,7 +244,7 @@ describe('browser-safe server imports from the client (#6364, #16709)', () => {
       ['server/lib/leaf.js', "import './nested.js';"],
       ['server/lib/nested.js', 'export const result = 1;'],
     ]);
-    const inspect = () => inspectClientImports([file], (path) => modules.get(path));
+    const inspect = () => inspectClientImports([[file, modules.get(file)]], (path) => modules.get(path));
     expect(inspect()).toEqual({ entryCount: 1, violations: [] });
     modules.set('server/lib/nested.js', "import 'node:fs';\nexport { helper } from '../services/helper.js';");
     expect(inspect().violations).toEqual(expect.arrayContaining([
@@ -252,20 +256,21 @@ describe('browser-safe server imports from the client (#6364, #16709)', () => {
   it('still tokenizes files whose specifier hides ../server behind an escape', () => {
     const file = 'client/src/lib/escaped.js';
     const source = String.raw`import { x } from '..\/..\/..\/server\/services\/x.js';`;
-    expect(inspectClientImports([file], () => source).violations).toHaveLength(1);
-    expect(inspectClientImports([file], () => String.raw`import { x } from '\x2e\x2e/../../server/services/x.js';`).violations).toHaveLength(1);
-    expect(inspectClientImports([file], () => String.raw`import { x } from '../../../ser\u0076er/services/x.js';`).violations).toHaveLength(1);
-    expect(inspectClientImports([file], () => "import { x } from '../../../ser\\\nver/services/x.js';").violations).toHaveLength(1);
-    expect(inspectClientImports([file], () => 'const lazy = () => import(`../../../ser\\u0076er/services/x.js`);').violations).toHaveLength(1);
-    expect(inspectClientImports([file], () => "import { x } from '../../.././server/services/x.js';").violations).toHaveLength(1);
-    expect(inspectClientImports([file], () => String.raw`import { x } from '../../../\server/services/x.js';`).violations).toHaveLength(1);
-    expect(inspectClientImports([file], () => "import { x } from './lib/other.js';").violations).toEqual([]);
+    const inspect = (text) => inspectClientImports([[file, text]]).violations;
+    expect(inspect(source)).toHaveLength(1);
+    expect(inspect(String.raw`import { x } from '\x2e\x2e/../../server/services/x.js';`)).toHaveLength(1);
+    expect(inspect(String.raw`import { x } from '../../../ser\u0076er/services/x.js';`)).toHaveLength(1);
+    expect(inspect("import { x } from '../../../ser\\\nver/services/x.js';")).toHaveLength(1);
+    expect(inspect('const lazy = () => import(`../../../ser\\u0076er/services/x.js`);')).toHaveLength(1);
+    expect(inspect("import { x } from '../../.././server/services/x.js';")).toHaveLength(1);
+    expect(inspect(String.raw`import { x } from '../../../\server/services/x.js';`)).toHaveLength(1);
+    expect(inspect("import { x } from './lib/other.js';")).toEqual([]);
   });
 
   it('ignores unrelated paths and comments', () => {
     const source = `// import '../../../server/index.js';
 import './server/local.js';
 export * from '../../../server-lookalike/index.js';`;
-    expect(inspectClientImports(['client/src/lib/example.js'], () => source)).toEqual({ entryCount: 0, violations: [] });
+    expect(inspectClientImports([['client/src/lib/example.js', source]])).toEqual({ entryCount: 0, violations: [] });
   });
 });

@@ -138,6 +138,21 @@ describe('#3929 — cross-peer asset pull serialization', () => {
     await pullMissingAssetsFromPeer('peer-a', [audioEntry('present.mp3', bytes)]);
     expect(state.urls).toHaveLength(0);
   });
+
+  it('pools up to 4 concurrent pulls for distinct filenames from one peer', async () => {
+    const entries = Array.from({ length: 6 }, (_, i) => {
+      const buf = Buffer.from(`track-${i}-bytes`);
+      return { entry: audioEntry(`track-${i}.mp3`, buf), buf };
+    });
+    const byName = new Map(entries.map(({ entry, buf }) => [entry.filename, buf]));
+    const state = trackingFetch((url) => byName.get(url.split('/').pop()));
+    await pullMissingAssetsFromPeer('peer-a', entries.map(({ entry }) => entry));
+    expect(state.maxInFlight).toBe(4);
+    expect(state.urls).toHaveLength(6);
+    for (const { entry, buf } of entries) {
+      expect(readFileSync(join(tempRoot, 'audio', entry.filename))).toEqual(buf);
+    }
+  });
 });
 
 describe('#3929 — syncMediaLibraryWithAllPeers global re-entrancy guard', () => {

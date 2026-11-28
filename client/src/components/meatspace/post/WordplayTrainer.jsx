@@ -83,6 +83,7 @@ export default function WordplayTrainer({ onBack, onContinue, config, onConfigUp
   // direct mode→mode URL change mid-generation) can't land a stale drill or
   // strand `loading`. Bumped on every clear too, to invalidate an in-flight run.
   const genRef = useRef(0);
+  const scoringRef = useRef(false);
   const [drill, setDrill] = useState(null);
   const [loading, setLoading] = useState(false);
   const [questionIndex, setQuestionIndex] = useState(0);
@@ -149,6 +150,7 @@ export default function WordplayTrainer({ onBack, onContinue, config, onConfigUp
       // permanent spinner. Guard against a re-run loop — only clear when dirty.
       if (drill || loading || feedback || results.length || initiatedRef.current) {
         genRef.current += 1; // invalidate any in-flight generation for the mode we left
+        scoringRef.current = false;
         setDrill(null); setLoading(false); setQuestionIndex(0);
         setInputValue(''); setItems([]); setFeedback(null); setResults([]);
         initiatedRef.current = null;
@@ -161,6 +163,7 @@ export default function WordplayTrainer({ onBack, onContinue, config, onConfigUp
     // it invalidated, so this mode's UI never renders against the wrong drill.
     if (drill && drill.type !== selectedMode) {
       genRef.current += 1;
+      scoringRef.current = false;
       setDrill(null); setQuestionIndex(0); setInputValue(''); setItems([]);
       setFeedback(null); setResults([]);
       initiatedRef.current = null;
@@ -311,6 +314,8 @@ export default function WordplayTrainer({ onBack, onContinue, config, onConfigUp
   }
 
   function handleBackToModes() {
+    genRef.current += 1;
+    scoringRef.current = false;
     setDrill(null);
     setFeedback(null);
     setResults([]);
@@ -321,6 +326,9 @@ export default function WordplayTrainer({ onBack, onContinue, config, onConfigUp
 
   const handleSubmit = useCallback(async (e) => {
     e?.preventDefault();
+    if (scoringRef.current) return;
+    scoringRef.current = true;
+    const gen = genRef.current;
     const responseMs = Date.now() - questionStartRef.current;
 
     // A human-readable label for the prompt this response answers, sourced
@@ -351,19 +359,22 @@ export default function WordplayTrainer({ onBack, onContinue, config, onConfigUp
     // shared core also used by PostLlmDrillRunner's in-session training mode
     // for these same four drill types (issue #2097) — one scoring path.
     setFeedback({ scoring: true });
-    const result = await scoreWordplayResponse(
-      selectedMode, drill, responseObj, SCORE_TIMEOUT_MS, activeProviderId, activeModel, { silent: true }
-    ).catch((err) => {
-      setFeedback({ scoring: false, error: err.message });
-      return null;
-    });
-    if (!result) return;
-    setFeedback({ scoring: false, ...result });
-    setResults(prev => [...prev, {
-      ...responseObj,
-      score: result.score,
-      feedback: result.feedback || '',
-    }]);
+    try {
+      const result = await scoreWordplayResponse(
+        selectedMode, drill, responseObj, SCORE_TIMEOUT_MS, activeProviderId, activeModel, { silent: true }
+      );
+      if (gen !== genRef.current || !result) return;
+      setFeedback({ scoring: false, ...result });
+      setResults(prev => [...prev, {
+        ...responseObj,
+        score: result.score,
+        feedback: result.feedback || '',
+      }]);
+    } catch (err) {
+      if (gen === genRef.current) setFeedback({ scoring: false, error: err.message });
+    } finally {
+      if (gen === genRef.current) scoringRef.current = false;
+    }
   }, [inputValue, items, currentPrompt, selectedMode, drill, activeProviderId, activeModel, questionIndex]);
 
   const handleNext = useCallback(() => {
@@ -585,7 +596,6 @@ export default function WordplayTrainer({ onBack, onContinue, config, onConfigUp
         </div>
         <button
           onClick={handleNext}
-          autoFocus
           className={`w-full px-6 py-3 ${modeInfo?.bgColor?.replace('/20', '') || 'bg-purple-600'} hover:opacity-80 text-white font-medium rounded-lg transition-colors`}
         >
           {questionIndex + 1 >= totalPrompts ? 'See Results' : 'Next'}

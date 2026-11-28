@@ -28,10 +28,11 @@ export const createGuardCorpus = (root = REPO_ROOT) => {
   const corpus = createCorpus(root);
   return {
     ...corpus,
-    /** Shared read-only AST with tokens. Strict consumers must reject recovered errors. */
-    parseAst(path) {
+    /** Shared read-only AST. Strict consumers must reject recovered errors. */
+    parseAst(path, { tokens = true } = {}) {
       const absolute = resolve(corpus.root, path);
-      return corpus.derive('babelAst', absolute, () => parseGuardSource(corpus.read(absolute), { tokens: true }));
+      const kind = tokens ? 'babelAstWithTokens' : 'babelAst';
+      return corpus.derive(kind, absolute, () => parseGuardSource(corpus.read(absolute), { tokens }));
     },
   };
 };

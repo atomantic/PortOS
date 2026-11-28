@@ -2,8 +2,10 @@
 import { readFile, rm } from 'node:fs/promises';
 import { release } from 'node:os';
 import { avatarBundle, avatarFilesPresent, avatarMarker, avatarPython, avatarRoot, installAvatar } from './avatarInstall.js';
-import { avatarError, openAvatarWorker } from './avatarWorker.js';
+import { DEFAULT_PORTRAIT_KEY, avatarError, openAvatarWorker } from './avatarWorker.js';
+import { isHostShuttingDown } from '../../lib/hostShutdown.js';
 import { emitToOperators } from '../socketIo.js';
+import { getVoiceConfig, updateVoiceConfig } from './config.js';
 
 const supported = process.platform === 'darwin' && process.arch === 'arm64' && Number.parseInt(release(), 10) >= 25;
 let phase = 'stopped';
@@ -23,9 +25,14 @@ async function installation() {
 
 export async function getAvatarStatus() {
   const installed = await installation();
+  const autoStart = (await getVoiceConfig().catch(() => null))?.avatar?.autoStart !== false;
   return { supported, installed: Boolean(installed), updateAvailable: Boolean(installed && installed !== await avatarBundle()),
-    phase, detail };
+    phase, detail, autoStart };
 }
+
+// Start and Stop are the operator's say on whether calls open with the live avatar.
+const rememberAutoStart = (autoStart) => updateVoiceConfig({ avatar: { autoStart } })
+  .catch(error => console.log(`🎭 avatar.autoStart not saved: ${error.message}`));
 
 function publish(next, message = '') {
   phase = next;
@@ -33,7 +40,12 @@ function publish(next, message = '') {
   emitToOperators('voice:avatar:changed');
 }
 
+function assertAvatarCanLaunch() {
+  if (isHostShuttingDown()) throw avatarError('PortOS is shutting down.', 503);
+}
+
 function install() {
+  assertAvatarCanLaunch();
   installer = new AbortController();
   const { signal } = installer;
   publish('installing', 'Preparing model install…');
@@ -45,7 +57,19 @@ function install() {
   ).finally(() => { installer = undefined; });
 }
 
+function stopWorker() {
+  if (!worker || phase === 'stopping') return;
+  publish('stopping');
+  worker.stop();
+}
+
+export function stopAvatarForShutdown() {
+  installer?.abort();
+  stopWorker();
+}
+
 function start(bundle) {
+  assertAvatarCanLaunch();
   publish('starting', 'Warming the avatar model…');
   const owned = openAvatarWorker(avatarPython(bundle), expected => {
     if (worker !== owned) return;
@@ -69,10 +93,14 @@ export async function manageAvatar(action) {
   busy = true;
   try {
     if (action === 'stop') {
-      if (worker) {
-        publish('stopping');
-        worker.stop();
-      }
+      stopWorker();
+      await rememberAutoStart(false);
+    } else if (action === 'autostart') {
+      // A Voice Call view opened: start the worker if the operator wants calls to open live. Quietly does nothing
+      // otherwise (not installed, needs an update, already running or starting, a failed start, or autoStart off).
+      const bundle = worker || phase !== 'stopped' ? null : await installation();
+      const wanted = (await getVoiceConfig())?.avatar?.autoStart !== false;
+      if (bundle && wanted && bundle === await avatarBundle()) start(bundle);
     } else {
       if (worker) throw avatarError('Stop AvatarForcing before making this change.');
       const bundle = await installation();
@@ -81,6 +109,7 @@ export async function manageAvatar(action) {
         if (!bundle) throw avatarError('Install AvatarForcing before starting it.');
         if (bundle !== await avatarBundle()) throw avatarError('Update AvatarForcing before starting it.');
         start(bundle);
+        await rememberAutoStart(true);
       } else if (action === 'uninstall') {
         await rm(avatarRoot, { recursive: true, force: true });
         publish('stopped', 'AvatarForcing and its downloaded weights were removed.');
@@ -92,7 +121,28 @@ export async function manageAvatar(action) {
   }
 }
 
-export function renderAvatar(wav, options) {
+// The face the active transceiver channel wears; an unreadable assignment keeps the default.
+// Loaded on first render: the library pulls settings and media collections, which the
+// runtime's install/start/stop lifecycle never needs.
+async function activePortrait() {
+  const { getActiveAvatarFilename, loadAvatarPortrait } = await import('./avatarLibrary.js');
+  const filename = await getActiveAvatarFilename().catch(() => null);
+  return filename ? { key: filename, load: () => loadAvatarPortrait(filename) } : { key: DEFAULT_PORTRAIT_KEY };
+}
+
+function runningWorker() {
   if (!worker || phase !== 'running') throw avatarError('Start AvatarForcing before animating.', 503);
-  return worker.render(wav, options);
+  return worker;
+}
+
+export async function renderAvatar(wav, options) {
+  runningWorker();
+  const portrait = await activePortrait();
+  return runningWorker().render(wav, { ...options, portrait });
+}
+
+export async function renderAvatarIdle(options) {
+  runningWorker();
+  const portrait = await activePortrait();
+  return runningWorker().renderIdle({ ...options, portrait });
 }

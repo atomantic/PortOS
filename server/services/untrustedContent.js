@@ -7,6 +7,7 @@ import { safeJSONParse } from '../lib/fileUtils.js';
 import { evaluateSecretEndpoint } from '../lib/aiToolkit/endpointGuard.js';
 import { getAllProviders } from './provider/providers.js';
 import { modelAbuseContentFingerprint } from '../lib/modelAbuseGuard.js';
+import { ABUSE_GUARD_PAGE_BREADCRUMB } from '../lib/navManifest.js';
 import { formatUntrustedContent, resolveUntrustedContentPolicy, selectUntrustedContentProvider, UNTRUSTED_CONTENT_INSTRUCTIONS } from '../lib/untrustedContent.js';
 import { resolveUntrustedContentWindow } from '../lib/untrustedContentWindow.js';
 import { ollamaNativeChatUrl } from '../lib/aiToolkit/internal/ollamaNativeChat.js';
@@ -71,7 +72,7 @@ async function screenModelAbuse({ content, source, policy: override = {} } = {})
   const state = await readSettingsStrict();
   if (state.corrupt) return failure('untrusted-content-settings-unreadable', 'The untrusted-content settings could not be read. Repair Settings before retrying.');
   const policy = resolveUntrustedContentPolicy(state.settings.untrustedContent, source, override);
-  if (!policy) return failure('untrusted-content-policy-invalid', 'The source or untrusted-content policy is invalid. Check Models > LLMs > Abuse Guard.');
+  if (!policy) return failure('untrusted-content-policy-invalid', `The source or untrusted-content policy is invalid. Check ${ABUSE_GUARD_PAGE_BREADCRUMB}.`);
   if (typeof content !== 'string' || !content.trim()) return failure('untrusted-content-empty', 'There is no external content to analyze.');
   if (content.length > policy.maxInputChars) return failure('untrusted-content-too-large', 'The complete content exceeds the configured limit; no partial analysis was accepted.');
   const { runModelAbuseScan } = await import('./modelAbuseGuard.js');
@@ -81,7 +82,7 @@ async function screenModelAbuse({ content, source, policy: override = {} } = {})
   // working correctly — that is a distinct outcome from the guard failing to
   // run at all, and telling the operator to "check the abuse guard" for a
   // legitimate block sends them to a status panel that will just say ready.
-  if (!screening.ok) return { ...failure(screening.code || 'untrusted-content-screening-failed', 'Model-abuse screening could not run. Check Models > LLMs > Abuse Guard.'), screening };
+  if (!screening.ok) return { ...failure(screening.code || 'untrusted-content-screening-failed', `Model-abuse screening could not run. Check ${ABUSE_GUARD_PAGE_BREADCRUMB}.`), screening };
   if (screening.safe !== true) return { ...failure(screening.code || 'untrusted-content-blocked', 'The model-abuse guard flagged this content and blocked it. This is expected screening behavior, not a guard setup problem.'), screening };
   return { ok: true, safe: true, policy, screening, fingerprint: modelAbuseContentFingerprint(source, {}, content) };
 }
@@ -370,13 +371,13 @@ async function analyzeScreenedContent({ provider, model, content, prompt, source
   // Never clip evidence to make an undersized context appear successful.
   const needed = Buffer.byteLength(taskPrompt + evidence, 'utf8');
   if (needed + maxTokens + 128 > contextWindow) {
-    return failure('untrusted-content-context-too-small', `The complete evidence (about ${needed} bytes) does not fit ${selected.id} / ${effectiveModel}, whose resolved window is ${contextWindow} tokens. Set numCtx on that provider or pin a larger-window provider in Models > LLMs > Abuse Guard; or analyze a smaller complete batch.`);
+    return failure('untrusted-content-context-too-small', `The complete evidence (about ${needed} bytes) does not fit ${selected.id} / ${effectiveModel}, whose resolved window is ${contextWindow} tokens. Set numCtx on that provider or pin a larger-window provider in ${ABUSE_GUARD_PAGE_BREADCRUMB}; or analyze a smaller complete batch.`);
   }
   const endpointPolicy = selected.apiKey ? evaluateSecretEndpoint(selected.endpoint, { allowCustomEndpoint: selected.allowCustomEndpoint === true }) : { allowed: true };
   if (!endpointPolicy.allowed) return failure('untrusted-content-endpoint-blocked', 'The configured API endpoint cannot receive this provider credential.');
   const { ensureProviderReadyForExecution } = await import('./provider/providerExecutionReadiness.js');
   const ready = await ensureProviderReadyForExecution(selected).catch(() => null);
-  if (!ready?.success) return failure('untrusted-content-provider-unavailable', 'The selected text API provider is unavailable. Check Models > LLMs > Abuse Guard.');
+  if (!ready?.success) return failure('untrusted-content-provider-unavailable', `The selected text API provider is unavailable. Check ${ABUSE_GUARD_PAGE_BREADCRUMB}.`);
   // This transport deliberately has no runner failure hooks, run archives,
   // model healing, agent escalation, fallback, redirect, or tool execution.
   // Otherwise attacker-controlled diagnostics could become an autofixer task.

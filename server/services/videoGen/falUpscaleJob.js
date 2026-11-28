@@ -8,19 +8,13 @@
  * history, takes, collections and `renderSpend` accounting.
  */
 
-import { existsSync } from 'fs';
 import { readFile, writeFile } from 'fs/promises';
 import { randomUUID } from 'crypto';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { PATHS, unlinkGuarded } from '../../lib/fileUtils.js';
+import { probeVideoStreamInfo } from '../../lib/ffmpeg.js';
+import { PATHS } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
-import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
-import { FINISHED_OUTPUT_ADMISSION_MS } from '../../lib/backupPublicationWait.js';
-import {
-  safeUnder, generateThumbnail, probeVideoStreamInfo, probeVideoDuration,
-} from '../../lib/ffmpeg.js';
-import { omitDerivedRenderFields, renderTimingFields } from '../../lib/renderTiming.js';
 import { enqueueJob } from '../mediaJobQueue/index.js';
 import { getSettings } from '../settings.js';
 import {
@@ -28,9 +22,13 @@ import {
   hostFalDataUri, readCompletedFalResult, resolveFalApiKey, submitFalRequest,
 } from '../falQueue.js';
 import { videoGenEvents } from './events.js';
-import { getHistoryItem, mutateVideoHistory } from './history.js';
+import { getHistoryItem } from './history.js';
+import {
+  publishUpscaledVideo, removeOwnedUpscaleFile, resolveQueuedUpscaleSource, resolveUpscaleMusicVideo,
+} from './upscaleJobHelpers.js';
 import { finalizeUpscaleOutput } from './upscaleFfmpeg.js';
 import { planUpscaleHistoryItem } from './upscaleVideo.js';
+import { upscalePlanBlocker } from './upscalePlanBlocker.js';
 import {
   DEFAULT_FAL_SEEDVR2_TARGET_RESOLUTION,
   FAL_SEEDVR2_HISTORY_MODEL_ID,
@@ -50,8 +48,6 @@ const upscaledPrompt = (prompt, targetResolution) => (
   prompt ? `${prompt} (${targetResolution} SeedVR2)` : `(upscaled ${targetResolution} SeedVR2)`
 );
 
-const removeOwnedFile = (path) => (path ? unlinkGuarded(path).catch(() => {}) : Promise.resolve());
-
 /**
  * Validate a fal.ai SeedVR2 upscale request and enqueue it on the cloud lane.
  * Refuses already-upscaled clips or missing `FAL_KEY` before committing a job.
@@ -63,24 +59,10 @@ export async function enqueueFalSeedvr2Upscale(historyId, {
   musicVideo: shot = null,
 } = {}) {
   const plan = await planUpscaleHistoryItem(historyId, { method: 'fal-seedvr2', targetResolution });
-  if (plan.alreadyUpscaled) {
-    throw new ServerError('Cannot upscale an already-upscaled video', { status: 400, code: 'ALREADY_UPSCALED' });
-  }
-  if (!plan.runtime.installed) {
-    throw new ServerError(
-      plan.runtime.reason || 'Configure FAL_KEY in Settings → Credentials to use fal.ai SeedVR2 upscaling.',
-      { status: 400, code: 'FAL_KEY_MISSING' },
-    );
-  }
-  if (shot && plan.estimatedCostUsd == null) {
-    throw new ServerError('The selected clip could not be measured for a cost estimate.', { status: 422, code: 'UPSCALE_GEOMETRY_UNKNOWN' });
-  }
+  const blocker = upscalePlanBlocker(plan, { requireCost: Boolean(shot) });
+  if (blocker) throw new ServerError(blocker.message, { status: blocker.status, code: blocker.code });
   const item = await getHistoryItem(historyId);
-  const resolvedProjectId = musicVideoProjectId ?? item?.musicVideo?.projectId ?? null;
-  const resolvedSceneId = sceneId ?? (resolvedProjectId === item?.musicVideo?.projectId ? item?.musicVideo?.sceneId : null);
-  const musicVideo = shot ?? (resolvedProjectId
-    ? { projectId: resolvedProjectId, ...(resolvedSceneId ? { sceneId: resolvedSceneId } : {}), tier: 'final' }
-    : null);
+  if (!item) throw new ServerError('Video not found', { status: 404, code: 'NOT_FOUND' });
 
   return enqueueJob({
     kind: LTX_UPSCALE_JOB_KIND,
@@ -88,6 +70,7 @@ export async function enqueueFalSeedvr2Upscale(historyId, {
       mode: 'fal',
       upscaleMethod: 'fal-seedvr2',
       historyId: item.id,
+      sourceFilename: item.filename,
       targetResolution,
       prompt: upscaledPrompt(item.prompt, targetResolution),
       width: plan.target.width,
@@ -99,7 +82,7 @@ export async function enqueueFalSeedvr2Upscale(historyId, {
         musicVideoCostUsd: plan.estimatedCostUsd,
         musicVideoCostModelId: FAL_SEEDVR2_HISTORY_MODEL_ID,
       } : {}),
-      ...(musicVideo ? { musicVideo, musicVideoProjectId: musicVideo.projectId } : {}),
+      ...resolveUpscaleMusicVideo(item, { musicVideo: shot, musicVideoProjectId, sceneId }),
     },
   });
 }
@@ -119,6 +102,7 @@ export async function runVideoUpscale(request) {
   const {
     jobId,
     historyId,
+    sourceFilename,
     targetResolution = DEFAULT_FAL_SEEDVR2_TARGET_RESOLUTION,
     musicVideo = null,
   } = request;
@@ -135,20 +119,12 @@ export async function runVideoUpscale(request) {
   activeUpscales.set(jobId, entry);
   const renderStartedAtMs = Date.now();
   const scratch = [];
-  let deliverablePath = null;
-  let thumbnailPath = null;
+  let unpublishedPath = null;
   let result = null;
   let failureReason = null;
 
   try {
-    const item = await getHistoryItem(historyId);
-    if (!item?.filename) {
-      throw new ServerError('Source video history entry not found', { status: 404, code: 'NOT_FOUND' });
-    }
-    const sourcePath = safeUnder(PATHS.videos, item.filename);
-    if (!sourcePath || !existsSync(sourcePath)) {
-      throw new ServerError('Source video file not found on disk', { status: 404, code: 'FILE_NOT_FOUND' });
-    }
+    const { item, sourcePath } = await resolveQueuedUpscaleSource(historyId, sourceFilename);
 
     const sourceStream = await probeVideoStreamInfo(sourcePath);
     const sourceBytes = await readFile(sourcePath);
@@ -228,7 +204,8 @@ export async function runVideoUpscale(request) {
 
     const newId = randomUUID();
     const newFilename = `${newId}.mp4`;
-    deliverablePath = join(PATHS.videos, newFilename);
+    const deliverablePath = join(PATHS.videos, newFilename);
+    unpublishedPath = deliverablePath;
 
     const finalized = await finalizeUpscaleOutput(rawPath, deliverablePath, {
       width: outWidth,
@@ -241,70 +218,38 @@ export async function runVideoUpscale(request) {
       throw new ServerError(`Failed to finish the upscaled clip: ${finalized.reason}`, { status: 500, code: 'UPSCALE_MUX_FAILED' });
     }
 
-    await withBackupAssetPublication(async () => {
-      try {
-        if (entry.aborted) throw new ServerError('Upscale canceled', { status: 499, code: 'UPSCALE_CANCELED' });
-        const [measured, duration] = await Promise.all([
-          probeVideoStreamInfo(deliverablePath),
-          probeVideoDuration(deliverablePath),
-        ]);
-        const thumbnail = await generateThumbnail(deliverablePath, newId);
-        thumbnailPath = thumbnail ? safeUnder(PATHS.videoThumbnails, thumbnail) : null;
+    unpublishedPath = null;
+    result = await publishUpscaledVideo({
+      jobId, newId, newFilename, deliverablePath, item, musicVideo, renderStartedAtMs,
+      isCanceled: () => entry.aborted,
+      buildFields: measured => {
         const width = measured.width ?? outWidth;
         const height = measured.height ?? outHeight;
         const numFrames = measured.frameCount ?? outFrames;
-        const estimatedCostUsd = estimateFalSeedvr2CostUsd({ width, height, frameCount: numFrames });
-        const attributedMusicVideo = musicVideo?.projectId
-          ? { projectId: musicVideo.projectId, ...(musicVideo.sceneId ? { sceneId: musicVideo.sceneId } : {}) }
-          : item.musicVideo;
-
-        const newEntry = {
-          ...omitDerivedRenderFields(item),
-          id: newId,
-          filename: newFilename,
-          thumbnail,
-          createdAt: new Date().toISOString(),
+        return {
           modelId: FAL_SEEDVR2_HISTORY_MODEL_ID,
           resolution: targetResolution,
           width,
           height,
           fps: measured.fps ?? sourceStream.fps ?? outStream.fps,
           numFrames,
-          duration,
-          durationSec: duration,
-          estimatedCostUsd,
+          estimatedCostUsd: estimateFalSeedvr2CostUsd({ width, height, frameCount: numFrames }),
           falRequestId: receipt.request_id,
-          upscaledFrom: item.id,
           upscaleMethod: 'fal-seedvr2',
           upscaleRuntime: FAL_SEEDVR2_RUNTIME_ID,
           prompt: upscaledPrompt(item.prompt, targetResolution),
-          ...(attributedMusicVideo ? { musicVideo: attributedMusicVideo } : {}),
-          hidden: false,
-          ...renderTimingFields(renderStartedAtMs),
         };
-        await mutateVideoHistory((h) => { h.unshift(newEntry); return h; });
-        result = newEntry;
-        console.log(`✅ Upscaled [${newId.slice(0, 8)}] on fal-seedvr2: ${newFilename} (${width}×${height}, $${estimatedCostUsd ?? '?'}, ${Math.round((newEntry.renderMs ?? 0) / 1000)}s)`);
-      } catch (error) {
-        if (!result) for (const path of [deliverablePath, join(PATHS.videoThumbnails, `${newId}.jpg`)]) await removeOwnedFile(path);
-        throw error;
-      }
-    }, {
-      timeoutMs: FINISHED_OUTPUT_ADMISSION_MS,
-      onWait: () => {
-        console.log(`⏸️ Video upscale [${jobId.slice(0, 8)}] waiting for the backup to finish before saving`);
-        videoGenEvents.emit('activity', { generationId: jobId });
       },
+      formatSuccessLog: row => `✅ Upscaled [${newId.slice(0, 8)}] on fal-seedvr2: ${newFilename} (${row.width}×${row.height}, $${row.estimatedCostUsd ?? '?'}, ${Math.round((row.renderMs ?? 0) / 1000)}s)`,
     });
   } catch (err) {
-    for (const path of result ? [] : [deliverablePath, thumbnailPath]) {
-      await removeOwnedFile(path);
-    }
+    await removeOwnedUpscaleFile(jobId, unpublishedPath);
     const reason = entry.aborted ? 'Canceled while running' : (err?.message || 'Upscale failed');
-    console.error(`❌ Video upscale ${entry.aborted ? 'canceled' : 'failed'} [${jobId.slice(0, 8)}]: ${reason}`);
+    if (entry.aborted) console.log(`🛑 Video upscale canceled [${jobId.slice(0, 8)}]`);
+    else console.error(`❌ Video upscale failed [${jobId.slice(0, 8)}]: ${reason}`);
     failureReason = reason;
   } finally {
-    for (const path of scratch) await removeOwnedFile(path);
+    for (const path of scratch) await removeOwnedUpscaleFile(jobId, path);
     activeUpscales.delete(jobId);
   }
 

@@ -24,8 +24,21 @@ if ! command -v zstd >/dev/null 2>&1; then
     install_command=(sudo -n "${install[@]}")
   fi
   if ! "${install_command[@]}"; then
-    echo "Could not install zstd automatically. Run: sudo ${install[*]}, then retry Ollama." >&2
-    exit 1
+    # On minimal/fresh Debian/Ubuntu hosts, /var/lib/apt/lists can be empty or
+    # stale; refresh the APT index once and retry before failing.
+    if [ "${install[0]}" = apt-get ]; then
+      update_command=(apt-get update)
+      if [ "$(id -u)" != 0 ]; then
+        update_command=(sudo -n "${update_command[@]}")
+      fi
+      if ! ("${update_command[@]}" && "${install_command[@]}"); then
+        echo "Could not install zstd automatically. Run: sudo ${install[*]}, then retry Ollama." >&2
+        exit 1
+      fi
+    else
+      echo "Could not install zstd automatically. Run: sudo ${install[*]}, then retry Ollama." >&2
+      exit 1
+    fi
   fi
   if ! command -v zstd >/dev/null 2>&1; then
     echo 'zstd is still missing from PATH after installation. Make zstd available, then retry Ollama.' >&2
@@ -68,8 +81,8 @@ work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
 echo "Downloading ${asset}…"
-curl -fsSL -o "$work/$asset" "$base/$asset"
-curl -fsSL -o "$work/sha256sum.txt" "$base/sha256sum.txt"
+curl -fsSL --connect-timeout 15 --speed-time 60 --speed-limit 1024 --retry 3 --retry-delay 2 -o "$work/$asset" "$base/$asset"
+curl -fsSL --connect-timeout 15 --max-time 60 --retry 3 --retry-delay 2 -o "$work/sha256sum.txt" "$base/sha256sum.txt"
 
 expected="$(grep -E "[[:space:]]\*?(\./)?${asset}\$" "$work/sha256sum.txt" | head -n 1 || true)"
 if [ -z "$expected" ]; then

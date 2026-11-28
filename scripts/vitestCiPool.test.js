@@ -162,7 +162,7 @@ config.test.projects = config.test.projects.map(project => ({
 }));
 export default config;
 `);
-    const result = spawnSync(process.execPath, [join(server, 'node_modules/vitest/vitest.mjs'), 'run', '--configLoader', 'runner',
+    const result = spawnSync(process.execPath, [join(server, 'node_modules/vitest/vitest.mjs'), 'run', '--configLoader', 'native',
       '--config', config, '--root', fixture, '--maxWorkers', String(maxWorkers),
     ], { cwd: server, env, encoding: 'utf8', timeout: 30000 });
     expect(result.error).toBeUndefined();

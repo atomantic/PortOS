@@ -204,7 +204,7 @@ export default function TaskItem({ task, recordLabel = taskCardLabel(task), agen
           : requiresApproval ? 'border-yellow-500/50' : 'border-port-border'
       }`}
     >
-      {showAgent && <AgentCard agent={agent} liveOutput={liveOutput} durations={durations}
+      {showAgent && <AgentCard agent={agent} providers={providers} liveOutput={liveOutput} durations={durations}
         onRelaunch={() => setRelaunching(true)} />}
       <TaskDetails className={showAgent ? 'mt-3' : undefined}>
         {showAgent && <summary className="cursor-pointer text-sm text-gray-400">Task details and actions</summary>}

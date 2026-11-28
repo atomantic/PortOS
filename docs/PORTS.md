@@ -46,6 +46,7 @@ commands target the PM2 listener.
 | 5564 | portos-slotstream | - | Loopback SSD-streaming MoE runtime. Optional PM2 process, started/stopped from Models → Runtimes. Never 11434 — that port is a PortOS-managed Ollama. |
 | 5566 | jev sidecar (loopback) | - | Loopback openjev entailment scorer. Not a PM2 process: `server/services/jev.js` starts it on the first scoring call and reaps it after ten idle minutes. See [JEV_SETUP.md](./JEV_SETUP.md). |
 | 5568 | portos-llama-server | - | Loopback llama.cpp speculative-decoding server. Optional PM2 process, started/stopped from Models → Runtimes. |
+| 5569 | realtime voice sidecar | - | Loopback speech-to-speech Voice sidecar (`scripts/ml/sophon/portos_sophon.py`). Started on demand when a realtime Voice Call begins; stops after 10 idle minutes. |
 | 8000 | portos-mtplx | - | Loopback MTPLX OpenAI-compatible API (upstream's own default, kept so the shipped provider presets match). Optional PM2 process, started/stopped from Models → Runtimes. See [MTPLX setup](./features/local-llm-runtimes.md#mtplx-on-apple-silicon). |
 | 8001 | portos-splash | - | Loopback Splash API; managed from Models → Runtimes. |
 | 8002 | portos-mkserve | - | Loopback mkserve API; managed from Models → Runtimes. |
@@ -73,10 +74,7 @@ Rules of thumb:
 1. **`:5555` is the only port a remote user ever needs.** The scheme (HTTP vs HTTPS) flips based on whether a TLS cert is provisioned (`npm run setup:cert`); the port number does not.
 2. **`:5553` is a convenience for local terminals.** When HTTPS is on, `https://localhost:5555` would trip a cert warning (the cert covers `<machine>.<tailnet>.ts.net`, not `localhost`). The loopback HTTP mirror on `:5553` lets curl/scripts skip TLS entirely. It binds to `127.0.0.1` only — never reachable over the network.
 3. **`:5554` is `vite dev` only.** In `npm run dev`, Vite serves the React UI from `:5554` and proxies `/api`, `/data` and `/socket.io` to `:5555`. Production startup and update recovery select the non-Vite PM2 apps and remove any stale `portos-ui` entry; the React build is served from `:5555` and `:5554` is unused.
-   - **A server-owned path must never be answered by an SPA fallback — and there are two of them.** Neither 404s. In dev, Vite answers an unproxied path with `index.html` and a `200`; in production the fallback in `server/index.js` skips a request only when its path carries a file extension, so an EXTENSIONLESS one falls through the same way. Either shape hands a binary loader HTML, which fails far from the cause (a missing `/data/image-to-3d` proxy entry surfaced as `Unexpected token '<' … is not valid JSON` from the GLB viewer, which took its whole route down), or hands an API client HTML with a success status.
-   - **Dev side:** `/data` is proxied as one wildcard prefix, so a new mount is covered the moment it is added.
-   - **Production side:** `server/lib/assetRoutePrefixes.js` lists the namespaces the server owns (`SERVER_OWNED_PREFIXES`) alongside the exact client routes inside them (`spaPaths` — `/data` itself is the Data Manager page), and `mountAssetRoutes` closes each one with a terminating 404 (#4688).
-   - `server/test/guards/repo/dev-proxy-drift.test.js` fails if the proxy, the mounts, and the client's own routes drift apart. It reads both `NAV_COMMANDS` and `App.jsx`'s nested `<Route>` tree, so a new page under a server-owned prefix — which the terminator would otherwise 404 silently — fails the build even when only its `:id` detail route exists.
+   - Vite proxies the entire `/data` prefix. In production, `server/lib/assetRoutePrefixes.js` lists server-owned namespaces and the exact client routes within them. Unmatched requests in those namespaces return 404 so API clients and asset loaders never receive the SPA's HTML fallback.
 
 Run `npm run setup:guide` to print the currently valid local URL, the exact trusted MagicDNS URL when available, and the next Tailscale/HTTPS prerequisite. The end-to-end walkthrough is in [SETUP.md](./SETUP.md).
 
@@ -156,7 +154,7 @@ PortOS automatically detects ports from env vars:
 | Range | Purpose |
 |-------|---------|
 | 5553-5561 | PortOS core services (includes the `:5553` loopback mirror and the `portos-db` Docker container on `:5561`) |
-| 5562-5569 | Reserved for PortOS extensions. Assigned: 5562 whisper, 5563 Eidoverse bridge (on demand), 5564 slotstream (on demand), 5565 Tailcat ingress (on demand), 5566 jev scorer (on demand), 5568 llama-server. Unassigned but still reserved: 5567, 5569 |
+| 5562-5569 | Reserved for PortOS extensions. Assigned: 5562 whisper, 5563 Eidoverse bridge (on demand), 5564 slotstream (on demand), 5565 Tailcat ingress (on demand), 5566 jev scorer (on demand), 5568 llama-server, 5569 realtime voice sidecar (on demand). Unassigned but still reserved: 5567 |
 | 5570-5599 | User applications — **put managed apps here**. App scaffolding and the PM2 Standardizer allocate from this band, overflowing just past 5599 when it is full |
 | 6000 and other browser-blocked ports | Never allocated. Chrome and Firefox refuse to connect to the WHATWG Fetch "bad ports" (`ERR_UNSAFE_PORT`; 6000 is X11), so a managed app there has no reachable UI. `server/lib/browserUnsafePorts.js` holds the list and every allocator skips it |
 
@@ -172,7 +170,7 @@ PortOS automatically detects ports from env vars:
 > without an error, PortOS logged `🌐 Eidoverse host listening`, and the Eidoverse page
 > served the other app's admin UI. Nothing in either process reported a problem.
 >
-> The on-demand ports (5563, 5564, 5566, 5568) are the easiest to get wrong, because they are free
+> The on-demand ports (5563, 5564, 5566, 5568, 5569) are the easiest to get wrong, because they are free
 > at boot and only bind once a user opens the relevant page — so a port scan taken at
 > install time shows them available. Treat the whole band as taken regardless.
 >
@@ -196,7 +194,8 @@ The PortOS apps list (returned by `GET /api/apps`) shows registered PM2 processe
 
 Note that `GET /api/apps` only returns PM2 processes defined in `server/services/apps.js` (`portos-server`, `portos-cos`, `portos-autofixer`, `portos-browser` for the default PortOS app). Development-only `portos-ui` is not an expected production process. Infrastructure dependencies like `portos-db` (Docker container on port 5561, managed via `scripts/setup-db.js` / Docker Compose) are not PM2 processes and do not appear in `GET /api/apps`.
 
-Use the API to get detailed port information for registered PM2 processes:
+From the install directory, use the API helper to get detailed port information for registered PM2 processes. It selects the local HTTP listener or HTTPS loopback mirror and uses `PORTOS_API_TOKEN` or the configured [agent API key](./AGENT_API_KEY.md):
+
 ```bash
-curl http://localhost:5555/api/apps | jq '.[].processes'
+node scripts/portos-api.js get /api/apps | jq '.[].processes'
 ```

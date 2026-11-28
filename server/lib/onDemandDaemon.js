@@ -205,7 +205,7 @@ export function createOnDemandDaemon({
     const launch = section?.launch || {};
     return {
       model: typeof launch.model === 'string' && launch.model.trim() ? launch.model.trim() : null,
-      port: Number.isFinite(Number(launch.port)) ? Number(launch.port) : null,
+      port: launch.port != null && Number.isFinite(Number(launch.port)) ? Number(launch.port) : null,
       // Whatever else the daemon's own knobs need (MTPLX's `tuning`,
       // Slotstream's `memoryGb`) — shaped and normalized by `resolveLaunch`,
       // never generically here, since only the manager knows that shape.

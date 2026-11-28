@@ -60,7 +60,7 @@ describe('blocked PR remediation hand-back', () => {
     },
   });
 
-  it.each(['worktree-failed', 'max-retries'])('hands back %s once across concurrent events and later re-blocks', async (category) => {
+  it.each(['worktree-failed', 'max-retries', 'pr-validation-unavailable'])('hands back %s once across concurrent events and later re-blocks', async (category) => {
     const task = remediation(category);
     getTaskById.mockImplementation(async () => structuredClone(task));
     updateTask.mockImplementation(async (_id, { metadata }) => {

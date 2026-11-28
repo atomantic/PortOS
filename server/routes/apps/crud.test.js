@@ -60,7 +60,7 @@ vi.mock('../../services/pm2.js', () => ({
 
 vi.mock('../../services/streamingDetect.js', () => ({
   parseEcosystemFromPath: vi.fn(),
-  writeEcosystemPortEdits: vi.fn().mockResolvedValue({ file: 'ecosystem.config.cjs', changed: true, remapApplied: true, applied: [], unapplied: [] }),
+  writeEcosystemPortEdits: vi.fn().mockResolvedValue({ file: 'ecosystem.config.cjs', changed: true, applied: [], unapplied: [] }),
 }));
 vi.mock('../../services/appProcessTypes.js', () => ({
   usesPm2: vi.fn((type) => !new Set(['ios-native', 'macos-native', 'xcode', 'swift']).has(type)),
@@ -612,7 +612,6 @@ describe('Apps CRUD Routes', () => {
       expect(response.status).toBe(200);
       expect(streamingDetect.writeEcosystemPortEdits).toHaveBeenCalledWith(
         process.cwd(),
-        [],
         expect.arrayContaining([
           { processName: 'a', label: 'api', oldPort: 5173, newPort: 6000 },
           { processName: 'a', label: 'ui', oldPort: 5174, newPort: 6001 },
@@ -642,7 +641,6 @@ describe('Apps CRUD Routes', () => {
       expect(response.status).toBe(200);
       expect(streamingDetect.writeEcosystemPortEdits).toHaveBeenCalledWith(
         process.cwd(),
-        [],
         [{ processName: 'srv', label: 'ui', oldPort: 6000, newPort: 7000 }]
       );
       expect(appsService.updateApp).toHaveBeenCalled();
@@ -667,7 +665,6 @@ describe('Apps CRUD Routes', () => {
       expect(response.status).toBe(200);
       expect(streamingDetect.writeEcosystemPortEdits).toHaveBeenCalledWith(
         process.cwd(),
-        [],
         [{ processName: 'srv', label: 'ui', oldPort: 6000, newPort: 7000 },
           { processName: 'srv-ui', label: 'devUi', oldPort: 5556, newPort: 7001 }]
       );
@@ -681,7 +678,7 @@ describe('Apps CRUD Routes', () => {
       appsService.getAppById.mockResolvedValue(mockApp);
       streamingDetect.parseEcosystemFromPath.mockResolvedValue({ processes: [{ name: 'srv', ports: { api: 6000, ui: 6000 } }] });
       streamingDetect.writeEcosystemPortEdits.mockResolvedValueOnce({
-        file: 'ecosystem.config.cjs', changed: false, remapApplied: false, applied: [],
+        file: 'ecosystem.config.cjs', changed: false, applied: [],
         unapplied: [{ processName: 'srv', label: 'ui', oldPort: 6000, newPort: 7000 }]
       });
 
@@ -759,7 +756,6 @@ describe('Apps CRUD Routes', () => {
       expect(response.status).toBe(200);
       expect(streamingDetect.writeEcosystemPortEdits).toHaveBeenCalledWith(
         process.cwd(),
-        [],
         [{ processName: 'srv', label: 'api', oldPort: 6000, newPort: 7000 }]
       );
       const updateArg = appsService.updateApp.mock.calls[0][1];
@@ -787,7 +783,6 @@ describe('Apps CRUD Routes', () => {
       // API port persisted; the stale echoed UI port is ignored, not remapped.
       expect(streamingDetect.writeEcosystemPortEdits).toHaveBeenCalledWith(
         process.cwd(),
-        [],
         [{ processName: 'srv', label: 'api', oldPort: 6000, newPort: 7000 }]
       );
       const updateArg = appsService.updateApp.mock.calls[0][1];
@@ -817,7 +812,7 @@ describe('Apps CRUD Routes', () => {
       const mockApp = { id: 'app-001', name: 'App', type: 'node', repoPath: process.cwd(), apiPort: 5173 };
       appsService.getAppById.mockResolvedValue(mockApp);
       streamingDetect.parseEcosystemFromPath.mockResolvedValue({ processes: [{ name: 'a', ports: { api: 5173 } }] });
-      streamingDetect.writeEcosystemPortEdits.mockResolvedValueOnce({ file: 'ecosystem.config.cjs', changed: false, remapApplied: false, applied: [], unapplied: [] });
+      streamingDetect.writeEcosystemPortEdits.mockResolvedValueOnce({ file: 'ecosystem.config.cjs', changed: false, applied: [], unapplied: [] });
 
       const response = await request(app).put('/api/apps/app-001').send({ apiPort: 6000 });
 

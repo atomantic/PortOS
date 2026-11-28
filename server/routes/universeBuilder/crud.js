@@ -7,117 +7,22 @@
  * mounted BEFORE this one (see index.js).
  */
 
-import { universeVisualProfileSchema } from '../../lib/universeVisualProfileValidation.js';
 import { Router } from 'express';
-import { z } from 'zod';
 import { universeStarterPatch } from '../../lib/universeStarters.js';
 import { ServerError, asyncHandler } from '../../lib/errorHandler.js';
 import { validateRequest } from '../../lib/validateRequest.js';
+import {
+  universeCreateSchema,
+  universePatchSchema,
+  universeRestoreStarterSchema,
+} from '../../lib/universeBuilderValidation.js';
 import { paginationQuerySchema, isPaginationRequested, paginateArray } from '../../lib/queryValidation.js';
-import { recordRenderPinFields, llmSchema } from '../../lib/sharedSchemas.js';
 import { pruneStaleReferenceSheets } from '../../lib/storyBible.js';
 import * as svc from '../../services/universeBuilder.js';
 import { findSameNameUniverses } from '../../services/duplicateDetection.js';
-import {
-  mapServiceError,
-  entryImageRefsField,
-  compositeSheetSchema,
-  categoriesSchema,
-  lockedSchema,
-  influencesSchema,
-  styleReferencesField,
-  legacyStylePromptField,
-  legacyNegativePromptField,
-  canonArrayField,
-} from './shared.js';
+import { mapServiceError } from './shared.js';
 
 const router = Router();
-
-const createSchema = z.object({
-  name: z.string().trim().min(1).max(svc.NAME_MAX_LENGTH),
-  starterPrompt: z.string().trim().max(svc.STARTER_PROMPT_MAX).optional().default(''),
-  stylePrompt: legacyStylePromptField,
-  negativePrompt: legacyNegativePromptField,
-  logline: z.string().trim().max(svc.LOGLINE_MAX).optional().default(''),
-  premise: z.string().trim().max(svc.PREMISE_MAX).optional().default(''),
-  styleNotes: z.string().trim().max(svc.STYLE_NOTES_MAX).optional().default(''),
-  // Linked mood board pointer (#4188) — null/'' clears, absent preserves.
-  moodBoardId: z.string().trim().max(svc.MOOD_BOARD_ID_MAX).nullable().optional(),
-  categories: categoriesSchema.optional(),
-  compositeSheets: z.array(compositeSheetSchema).max(svc.COMPOSITE_SHEETS_MAX).optional(),
-  influences: influencesSchema.optional(),
-  visualProfile: universeVisualProfileSchema.nullable().optional(),
-  styleReferences: styleReferencesField,
-  // Base "style probe" render filenames — sanitized + capped server-side.
-  // Match the sanitizer cap so over-the-cap requests get a loud 400 instead
-  // of a silent 200 with N entries dropped (sanitizer keeps the most recent
-  // IMAGE_REFS_PER_ENTRY_MAX). Per-element filename cap is shared too.
-  styleImageRefs: entryImageRefsField,
-  locked: lockedSchema.optional(),
-  llm: llmSchema,
-  // Canon registries on POST (Phase B.4): writers-room promote, share-bucket
-  // import, and tests can seed a universe with canon at create time instead
-  // of needing a second PATCH round-trip.
-  characters: canonArrayField,
-  places: canonArrayField,
-  objects: canonArrayField,
-  // Per-record render pin (#3231 Phase 3) — this universe's default image
-  // backend + cloud model.
-  ...recordRenderPinFields,
-  // Factual/fiction axis (#7616) — true marks a real-world universe.
-  factual: z.boolean().optional(),
-  // Local-only "don't sync to peers" marker — see sanitizeRecordForWire.
-  ephemeral: z.boolean().optional(),
-});
-// `origin` is a share-bucket provenance block written by the importer + cleared
-// to null by the user; structurally an object or null.
-const originField = z.record(z.unknown()).nullable().optional();
-
-const patchSchema = z.object({
-  name: z.string().trim().min(1).max(svc.NAME_MAX_LENGTH).optional(),
-  starterPrompt: z.string().trim().max(svc.STARTER_PROMPT_MAX).optional(),
-  // Legacy prose prompts — see legacy*Field comment above. Tolerated on PATCH
-  // so a stale client tab can still save while the new chip-based UI lands.
-  stylePrompt: legacyStylePromptField,
-  negativePrompt: legacyNegativePromptField,
-  logline: z.string().trim().max(svc.LOGLINE_MAX).optional(),
-  premise: z.string().trim().max(svc.PREMISE_MAX).optional(),
-  styleNotes: z.string().trim().max(svc.STYLE_NOTES_MAX).optional(),
-  // Linked mood board pointer (#4188) — null/'' clears, absent preserves.
-  moodBoardId: z.string().trim().max(svc.MOOD_BOARD_ID_MAX).nullable().optional(),
-  categories: categoriesSchema.optional(),
-  // Full-map save: `categories` replaces the persisted map (so a deleted custom
-  // bucket stays deleted) instead of the default per-key union. Partial
-  // callers omit it and keep the merge.
-  replaceCategories: z.boolean().optional(),
-  compositeSheets: z.array(compositeSheetSchema).max(svc.COMPOSITE_SHEETS_MAX).optional(),
-  influences: influencesSchema.optional(),
-  visualProfile: universeVisualProfileSchema.nullable().optional(),
-  styleReferences: styleReferencesField,
-  // Base "style probe" render filenames — sanitized + capped server-side.
-  // Match the sanitizer cap so over-the-cap requests get a loud 400 instead
-  // of a silent 200 with N entries dropped (sanitizer keeps the most recent
-  // IMAGE_REFS_PER_ENTRY_MAX). Per-element filename cap is shared too.
-  styleImageRefs: entryImageRefsField,
-  locked: lockedSchema.optional(),
-  llm: llmSchema,
-  // Canon writes — these flow through sanitizeBibleList server-side so
-  // schema parity here is just "accept arrays of records." Without these
-  // entries Zod's default strip behavior silently drops them from the
-  // patch (PATCHABLE_SCALARS in services/universeBuilder.js reads them
-  // from the post-Zod body, so they'd never reach the writer).
-  characters: canonArrayField,
-  places: canonArrayField,
-  objects: canonArrayField,
-  origin: originField,
-  // Per-record render pin (#3231 Phase 3). Key-present with 'auto'/''/null
-  // clears; key-absent preserves.
-  ...recordRenderPinFields,
-  // Factual/fiction axis (#7616). Only a literal `true` marks the universe
-  // factual; `false` clears it back to absent (see sanitizeTemplate).
-  factual: z.boolean().optional(),
-  ephemeral: z.boolean().optional(),
-}).refine((p) => Object.keys(p).length > 0, { message: 'patch must include at least one field' });
 
 // Backward-compatible by default: returns the full universes array. When a client
 // passes `limit`/`offset`, the response becomes the bounded
@@ -133,7 +38,7 @@ router.get('/', asyncHandler(async (req, res) => {
 }));
 
 router.post('/', asyncHandler(async (req, res) => {
-  const body = validateRequest(createSchema, req.body ?? {});
+  const body = validateRequest(universeCreateSchema, req.body ?? {});
   const created = await svc.createUniverse(body);
   // Non-blocking same-name warning (computed at the route layer so the importer,
   // which calls the service directly, never pays for the scan). The UI surfaces
@@ -160,7 +65,7 @@ router.get('/summaries', asyncHandler(async (_req, res) => {
 router.post('/:id/restore-starter', asyncHandler(async (req, res) => {
   const patch = universeStarterPatch(req.params.id);
   if (!patch) throw new ServerError('No shipped starter exists for this universe', { status: 404 });
-  const { expectedUpdatedAt } = validateRequest(z.object({ expectedUpdatedAt: z.string().datetime() }), req.body ?? {});
+  const { expectedUpdatedAt } = validateRequest(universeRestoreStarterSchema, req.body ?? {});
   const restored = await svc.updateUniverse(req.params.id, (latest) => {
     if (latest.updatedAt !== expectedUpdatedAt) {
       throw new ServerError('Universe changed. Reload it before restoring the starter.', { status: 409 });
@@ -193,7 +98,7 @@ router.get('/:id', asyncHandler(async (req, res) => {
 }));
 
 router.patch('/:id', asyncHandler(async (req, res) => {
-  const { replaceCategories, ...body } = validateRequest(patchSchema, req.body ?? {});
+  const { replaceCategories, ...body } = validateRequest(universePatchSchema, req.body ?? {});
   const w = await svc.updateUniverse(req.params.id, body, { replaceCategories: replaceCategories === true }).catch((err) => { throw mapServiceError(err); });
   // Re-check the same-name warning when the rename actually changed the name.
   if ('name' in body) {

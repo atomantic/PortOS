@@ -1,6 +1,6 @@
 # Quota-burn automation
 
-**Dev Tools → Quota Burn** configures one install-wide loop for otherwise expiring subscription CLI quota. It is off by default. Enabling it permits scheduled spending on the selected families and tasks.
+**Models → Quota Burn** configures one install-wide loop for otherwise expiring subscription CLI quota. It is off by default. Enabling it permits scheduled spending on the selected families and tasks.
 
 ## How a cycle works
 

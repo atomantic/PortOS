@@ -1,14 +1,12 @@
 /**
  * Tests for the shared catalog type registry (`catalogTypes.js`).
  *
- * The registry is the single source of truth: the Zod enum, the ID prefix,
- * the FTS field set, the DDL CHECK constraint, and the per-record payload
- * schemaVersion all derive from it. These tests lock:
+ * The registry defines system types, ID prefixes, FTS payload fields, and
+ * per-record payload schema versions. These tests lock:
  *   1. registry shape invariants (frozen, unique ids/prefixes);
  *   2. the validation enum is registry-derived (no second hand-rolled list);
- *   3. the db.js / init-db.sql literals (CHECK + FTS field set) MATCH the
- *      registry — so the registry stays authoritative even though those two
- *      SQL files must keep the literals inline for the DDL-parity test;
+ *   3. the SQL definitions omit a hardcoded type CHECK and keep their inline
+ *      FTS payload fields in sync with the registry;
  *   4. the payload-version upgrade helper stamps + chains correctly.
  */
 
@@ -104,14 +102,13 @@ describe('catalogTypes — create validation', () => {
   });
 });
 
-// The CHECK constraint + FTS field set must keep their literals inline in
-// init-db.sql + db.js for the DDL-parity test (it reads the SQL as text). These
-// assertions prove those literals still equal the registry, so the registry
-// stays the source of truth: drift on either side fails the build here.
+// Scan the bootstrap SQL and ensureSchema DDL for a hardcoded type CHECK.
 function checkSet(source) {
   const m = /CHECK\s*\(\s*type\s+IN\s*\(([^)]*)\)\s*\)/i.exec(source);
   return m ? m[1].split(',').map((s) => s.replace(/['"\s]/g, '')).filter(Boolean) : null;
 }
+// Both SQL definitions keep the FTS payload fields inline for search_tsv.
+// The parity test checks those literals against FTS_PAYLOAD_FIELDS.
 function ftsKeys(source) {
   const out = [];
   const re = /payload->>'([a-zA-Z0-9_]+)'/g;

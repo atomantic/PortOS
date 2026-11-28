@@ -129,6 +129,20 @@ describe('log routes PM2_HOME resolution', () => {
     );
   });
 
+  it('ends the SSE response when spawning the log process emits an error without close', async () => {
+    pm2Service.spawnPm2.mockImplementation(() => {
+      const child = makeLogProcess();
+      queueMicrotask(() => child.emit('error', new Error('spawn failed')));
+      return child;
+    });
+
+    const response = await request(createApp()).get('/api/logs/example-api?follow=true');
+
+    expect(response.status).toBe(200);
+    expect(response.text).toContain('event: error\ndata: {"error":"spawn failed"}\n\n');
+    expect(response.text).not.toContain('event: close');
+  });
+
   it('keeps fragmented stdout and stderr separate and flushes their final lines before closing', async () => {
     pm2Service.spawnPm2.mockImplementation(() => {
       const child = makeLogProcess();

@@ -39,12 +39,25 @@
  * a hosted integration.
  */
 
+import {
+  createSchema,
+  patchSchema,
+  attachSchema,
+  audioUploadSchema,
+  youtubeImportSchema,
+  sunoImportSchema,
+  chiptuneGenerateSchema,
+  chiptunePublishSchema,
+  waveformDrawSchema,
+  waveformRenderSchema,
+  codeRenderSchema,
+  superColliderTakeSchema,
+} from '../lib/trackValidation.js';
 import { Router } from 'express';
 import { assertCancelResult } from '../lib/cancelResponse.js';
 import { paginationQuerySchema, isPaginationRequested, paginateArray } from '../lib/queryValidation.js';
 import { readFile, unlink } from 'fs/promises';
 import { join } from 'path';
-import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import { uploadSingle } from '../lib/multipart.js';
@@ -60,88 +73,12 @@ import {
 import {
   startYoutubeImport, attachImportSseClient, cancelYoutubeImport,
 } from '../services/trackYoutubeImport.js';
-import { YOUTUBE_VIDEO_URL_RE, YOUTUBE_URL_INVALID_MESSAGE } from '../lib/youtubeUrl.js';
 import { startSunoImport, attachSunoImportSseClient, cancelSunoImport } from '../services/trackSunoImport.js';
-import { SUNO_SONG_URL_RE, SUNO_URL_INVALID_MESSAGE } from '../lib/sunoSong.js';
 import { generateChiptuneScore, renderChiptuneTrack, publishChiptuneTrack } from '../services/chiptune.js';
 import { drawWaveSketchForTrack, renderWaveSketchToTrack } from '../services/musicWaveform.js';
-import { PAINTED_CANVAS_LIMITS } from '../lib/paintedCanvas.js';
 import { saveCodeTakeToTrack, saveSuperColliderTakeToTrack } from '../services/musicCode.js';
 
 const router = Router();
-
-const titleField = z.string().trim().min(1).max(tracks.TITLE_MAX);
-const albumIdField = z.string().trim().max(tracks.ALBUM_ID_MAX);
-const artistIdField = z.string().trim().max(tracks.ARTIST_ID_MAX);
-const artistNameField = z.string().trim().max(tracks.ARTIST_NAME_MAX);
-const conceptField = z.string().max(tracks.CONCEPT_MAX);
-const lyricsField = z.string().max(tracks.LYRICS_MAX);
-const promptField = z.string().max(tracks.PROMPT_MAX);
-const engineField = z.string().trim().max(tracks.ENGINE_MAX);
-const modelIdField = z.string().trim().max(tracks.MODEL_ID_MAX);
-// On the generic save path, `audioFilename` must be a bare, safe music-library
-// basename — same guard `/audio/attach` enforces — so a direct POST/PATCH can't
-// persist a path-ish (`../x.mp3`) or wrong-extension pointer that the player
-// would later render. '' is allowed (clears the pointer). Existence is NOT
-// checked here (a create may set the name before the file lands); the dedicated
-// attach route verifies the file is in the library.
-const audioFilenameField = z.string().trim().max(tracks.AUDIO_FILENAME_MAX).refine(
-  (v) => {
-    if (v === '') return true;
-    try { assertSafeMusicFilename(v); return true; } catch { return false; }
-  },
-  { message: 'audioFilename must be a bare music-library filename (mp3/wav/m4a/ogg/flac), no path separators' },
-);
-const durationField = z.number().int().min(tracks.DURATION_MIN_SEC).max(tracks.DURATION_MAX_SEC).nullable();
-
-const createSchema = z.object({
-  title: titleField,
-  albumId: albumIdField.optional().default(''),
-  artistId: artistIdField.optional().default(''),
-  artist: artistNameField.optional().default(''),
-  concept: conceptField.optional().default(''),
-  lyrics: lyricsField.optional().default(''),
-  prompt: promptField.optional().default(''),
-  engine: engineField.optional().default(''),
-  modelId: modelIdField.optional().default(''),
-  durationSec: durationField.optional().default(null),
-  audioFilename: audioFilenameField.optional().default(''),
-});
-
-const patchSchema = z.object({
-  title: titleField.optional(),
-  albumId: albumIdField.optional(),
-  artistId: artistIdField.optional(),
-  artist: artistNameField.optional(),
-  concept: conceptField.optional(),
-  lyrics: lyricsField.optional(),
-  prompt: promptField.optional(),
-  engine: engineField.optional(),
-  modelId: modelIdField.optional(),
-  durationSec: durationField.optional(),
-  audioFilename: audioFilenameField.optional(),
-}).refine((p) => Object.keys(p).length > 0, { message: 'patch must include at least one field' });
-
-const attachSchema = z.object({
-  filename: z.string().trim().min(1).max(tracks.AUDIO_FILENAME_MAX),
-});
-
-// Text fields riding a per-track audio upload. `source` is the take's
-// provenance: a plain file, or a song exported from Suno. prompt/lyrics describe
-// that take on its render card (for Suno: the style prompt and lyrics used there).
-const audioUploadSchema = z.object({
-  source: z.enum([tracks.RENDER_SOURCES.UPLOAD, tracks.RENDER_SOURCES.SUNO]).optional().default(tracks.RENDER_SOURCES.UPLOAD),
-  prompt: promptField.optional().default(''),
-  lyrics: lyricsField.optional().default(''),
-});
-
-const youtubeImportSchema = z.object({
-  url: z.string().trim().regex(YOUTUBE_VIDEO_URL_RE, YOUTUBE_URL_INVALID_MESSAGE),
-});
-
-const sunoImportSchema = z.object({
-  url: z.string().trim().regex(SUNO_SONG_URL_RE, SUNO_URL_INVALID_MESSAGE),
-});
 
 // Reuse the pipeline audio stage's multipart upload contract (50MB, audio MIME).
 const musicUpload = uploadSingle('track', {
@@ -268,21 +205,6 @@ router.post('/:id/audio/attach', asyncHandler(async (req, res) => {
 // Generation is synchronous (a single LLM call, seconds) and strictly
 // user-triggered from the Track editor, per the AI-provider usage policy.
 
-const chiptuneGenerateSchema = z.object({
-  prompt: z.string().trim().min(1, 'prompt is required').max(tracks.PROMPT_MAX),
-  providerId: z.string().trim().max(120).optional(),
-  model: z.string().trim().max(120).optional(),
-  // true = ignore the track's existing score and compose from scratch
-  // (default is to iterate on it when one exists).
-  fresh: z.boolean().optional(),
-});
-
-const chiptunePublishSchema = z.object({
-  appId: z.string().trim().min(1).max(120),
-  subdir: z.string().trim().max(200).optional(),
-  slug: z.string().trim().max(64).optional(),
-});
-
 // Generate (or iterate on) the track's chiptune score with an AI provider.
 router.post('/:id/chiptune/generate', asyncHandler(async (req, res) => {
   await requireTrack(req.params.id);
@@ -303,31 +225,6 @@ router.post('/:id/chiptune/publish', asyncHandler(async (req, res) => {
   res.json(await publishChiptuneTrack({ trackId: req.params.id, ...body }));
 }));
 
-// --- Drawn waveform takes — the Music Designer's LLM-painted spectrogram
-// canvas (server/lib/paintedCanvas.js, #8464). `draw` persists the painting on
-// the track (`waveSketch`/`waveSketchPrompt`, #8376); `render` renders that
-// STORED sketch with the same deterministic synth the browser previewed.
-// Painting is one explicit user action per call (AI Provider Usage Policy).
-const optionalPick = (max) => z.string().max(max).optional().transform((v) => v?.trim() || undefined);
-const waveformDrawSchema = z.object({
-  description: z.string().trim().min(1, 'description is required').max(tracks.PROMPT_MAX),
-  lyrics: z.string().trim().max(tracks.LYRICS_MAX).optional(),
-  guidance: z.string().trim().max(4000).optional(),
-  durationSec: z.number().min(PAINTED_CANVAS_LIMITS.DURATION_MIN_SEC).max(PAINTED_CANVAS_LIMITS.DURATION_MAX_SEC).optional(),
-  // true = revise the track's stored painting instead of painting from scratch.
-  revise: z.boolean().optional(),
-  // true = show the model a spectrogram of each passage for one repaint pass.
-  review: z.boolean().optional(),
-  providerId: optionalPick(128),
-  model: optionalPick(256),
-  effort: optionalPick(64),
-});
-
-const waveformRenderSchema = z.object({
-  prompt: z.string().trim().max(tracks.PROMPT_MAX).optional(),
-  title: z.string().trim().max(200).optional(),
-});
-
 router.post('/:id/waveform/draw', asyncHandler(async (req, res) => {
   const body = validateRequest(waveformDrawSchema, req.body ?? {});
   res.json(await drawWaveSketchForTrack({ trackId: req.params.id, ...body }));
@@ -338,14 +235,6 @@ router.post('/:id/waveform/render', asyncHandler(async (req, res) => {
   res.json(await renderWaveSketchToTrack({ trackId: req.params.id, ...body }));
 }));
 
-// --- Code takes: the Music Designer's code engine runs LLM-written Strudel in
-// a sandboxed browser frame and records it there. The server stores the
-// recorded WAV and never runs the code.
-const codeRenderSchema = z.object({
-  prompt: z.string().trim().max(tracks.PROMPT_MAX).optional(),
-  title: z.string().trim().max(200).optional(),
-});
-
 router.post('/:id/code/render', musicUpload, asyncHandler(async (req, res) => {
   if (!req.file) throw new ServerError('No recorded take uploaded', { status: 400, code: 'TRACK_AUDIO_MISSING_FILE' });
   // Read the temp upload before validating so a rejected body can't strand it.
@@ -353,15 +242,6 @@ router.post('/:id/code/render', musicUpload, asyncHandler(async (req, res) => {
   const body = validateRequest(codeRenderSchema, req.body ?? {});
   res.json(await saveCodeTakeToTrack({ trackId: req.params.id, wav, ...body }));
 }));
-
-// Save a finished SuperCollider preview as the active take (#9414). The preview
-// id comes from the render job; the audio and provenance are read back from the
-// host-written preview store, so the client cannot supply either.
-const superColliderTakeSchema = z.object({
-  jobId: z.string().regex(/^[A-Za-z0-9_-]{8,80}$/),
-  prompt: z.string().trim().max(tracks.PROMPT_MAX).optional(),
-  title: z.string().trim().max(200).optional(),
-});
 
 router.post('/:id/supercollider/take', asyncHandler(async (req, res) => {
   const body = validateRequest(superColliderTakeSchema, req.body ?? {});

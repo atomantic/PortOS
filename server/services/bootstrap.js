@@ -17,7 +17,8 @@ import { startAutomaticUpdateReservationRecovery } from './automaticUpdateReserv
 import { initCertRenewer } from './certRenewer.js';
 import { startBrainScheduler } from './brainScheduler.js';
 import { replayPersistedResync as replayBrainMemoryResync } from './brainMemoryBridge.js';
-import { recoverInterruptedRepoClones, recoverStuckClassifications } from './brain.js';
+import { recoverStuckClassifications } from './brain.js';
+import { recoverInterruptedRepoClones } from './brainLinks.js';
 import { recoverInFlightProjects } from './creativeDirector/recovery.js';
 import { startPolling } from './instances.js';
 import { ensureSelf } from './instanceIdentity.js';

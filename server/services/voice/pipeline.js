@@ -7,15 +7,18 @@
 // sentences.
 
 import { transcribe } from './stt.js';
-import { synthesize } from './tts.js';
-import { streamChat } from './llm.js';
-import { getVoiceConfig } from './config.js';
-import { getToolSpecsForIntent, classifyIntent, dispatchTool, getAllToolNames, UI_KINDS } from './tools.js';
-import { isEchoOfRecentTts, rememberTtsSentence } from './echo.js';
+import { createTurnTtsSpeaker, emitSyntheticReply } from './turnTtsSpeaker.js';
+import { streamChat, resolveLlmEndpoint, markVoiceLlmWarming } from './llm.js';
+import { getAgentVoiceConfig } from './channelAgent.js';
+import { getTurnToolSpecs, getToolSpecs, resolveTurnIntent, dispatchTool, getAllToolNames, UI_KINDS } from './tools.js';
+import { isEchoOfRecentTts } from './echo.js';
 import { appendJournal, getToday } from '../brainJournal.js';
 import { resolvePending, isExpired } from './confirmGate.js';
-import { anyAbortSignal } from '../../lib/requestAbort.js';
 import { ServerError } from '../../lib/errorHandler.js';
+import { attachTabFrame, takePendingImages, appendImageBlocks, resolveVoiceVisionTarget, IMAGE_DESCRIBE_PROMPT, IMAGE_DESCRIBE_MAX_TOKENS } from './imageAttachments.js';
+
+export { splitSentences } from './turnTtsSpeaker.js';
+
 // getRelevantMemories is imported lazily inside buildMemoryContext — it only
 // runs for retrieval-shaped turns, so keep its memory-backend + embeddings
 // dependency graph out of voice startup / non-retrieval turns (same rationale
@@ -106,7 +109,8 @@ const waitForUiRefresh = (state, timeoutMs, signal) => new Promise((resolve) => 
 // client echoes the same id back on voice:screenshot:result (handled in
 // sockets/voice.js). Keying by id means a late result from an earlier capture
 // can't satisfy a newer waiter and describe the wrong screen.
-// Resolves with the data URL or null on timeout/abort/denied-capture.
+// Resolves with the client's { dataUrl, signature, name } frame, or null on
+// timeout/abort/denied-capture.
 let screenshotRequestSeq = 0;
 const requestScreenshot = (emit, state, timeoutMs, signal) => new Promise((resolve) => {
   if (!state) { resolve(null); return; }
@@ -130,26 +134,29 @@ const requestScreenshot = (emit, state, timeoutMs, signal) => new Promise((resol
   emit('voice:screenshot:request', { requestId });
 });
 
-// Send a captured image (base64 data URL) to the voice LLM provider's vision
-// endpoint and return the description text. Reuses visionTest's provider-aware
-// OpenAI-compatible /chat/completions call so we don't reimplement the request
-// shape. Lazy import keeps tools.js / the pipeline free of a hard vision dep.
-//
-// Vision model selection is DECOUPLED from the voice text model: reusing
-// `cfg.llm.model` here meant that pinning a text-only voice model silently broke
-// ui_describe_visually even when the provider had a working vision-capable
-// default. Prefer an explicit `cfg.llm.visionModel` when set; otherwise pass
-// undefined so describeImageDataUrl falls back to the provider's defaultModel
-// (which is vision-capable for vision-capable providers).
-const describeScreenshot = async (dataUrl, prompt, cfg) => {
+// Send a captured image (base64 data URL) to a vision model and return
+// { text, model }. Reuses visionTest's provider-aware call so the request shape
+// isn't reimplemented; the lazy import keeps the pipeline free of a hard
+// vision dependency. The model comes from resolveVoiceVisionTarget: an explicit
+// `llm.visionModel`, else the voice model when it can see, else another local
+// vision model. Falling back to the provider's default model picked a
+// text-only model on installs whose default is not multimodal.
+const describeVoiceImage = async (dataUrl, prompt, cfg, hasHostControl) => {
   const { describeImageDataUrl } = await import('../visionTest.js');
-  const providerId = cfg?.llm?.provider || 'lmstudio';
-  const visionModel = cfg?.llm?.visionModel;
-  const model = typeof visionModel === 'string' && visionModel && visionModel !== 'auto'
-    ? visionModel
-    : undefined;
-  return describeImageDataUrl({ dataUrl, prompt, providerId, model });
+  const { providerId, model } = await resolveVoiceVisionTarget(cfg);
+  const text = await describeImageDataUrl({ dataUrl, prompt, providerId, model, hasHostControl, maxTokens: IMAGE_DESCRIBE_MAX_TOKENS });
+  return { text, model: model || null };
 };
+
+// Describe an image the user attached between turns (an upload), with the
+// on-air channel's settings, for the next turn's message.
+export const describeAttachedImage = async (dataUrl, { hasHostControl } = {}) => (
+  describeVoiceImage(dataUrl, IMAGE_DESCRIBE_PROMPT, await getAgentVoiceConfig(), hasHostControl)
+);
+
+// A shared-tab frame for the turn arrives fast or not at all: the client grabs
+// it from an already-authorized stream.
+const TURN_FRAME_TIMEOUT_MS = 4000;
 
 // Lazily fetch the page's visible text from the client. The client ships the
 // UI index WITHOUT the heavy visible-text blob by default (textOnDemand:true);
@@ -317,35 +324,6 @@ export const buildMemoryContext = async (userText, { limit = MEMORY_INJECT_LIMIT
   ].join('\n');
 };
 
-const SENTENCE_RE = /[.!?\n](?:\s+|$)/;
-
-// Exported for unit testing — the sentence-boundary logic is too central to
-// leave untested.
-export const splitSentences = (buffer) => {
-  const out = [];
-  let rest = buffer;
-  while (true) {
-    const m = rest.match(SENTENCE_RE);
-    if (!m || m.index === undefined) break;
-    const end = m.index + m[0].length;
-    const sentence = rest.slice(0, end).trim();
-    if (sentence) out.push(sentence);
-    rest = rest.slice(end);
-  }
-  return { sentences: out, remainder: rest };
-};
-
-/**
- * Run one turn.
- *
- * @param {object} args
- * @param {Buffer} args.audio        — utterance audio bytes
- * @param {string} args.mimeType     — e.g. 'audio/webm', 'audio/wav'
- * @param {Array}  args.history      — prior conversation messages
- * @param {(event:string, payload:any) => void} args.emit
- * @param {AbortSignal} [args.signal]
- * @returns {Promise<{ transcript: string, reply: string }>}
- */
 // Whisper tags non-speech as bracketed markers like [BLANK_AUDIO], [MUSIC],
 // [LAUGHTER], [INAUDIBLE]. Treat those as empty so we don't waste an LLM turn.
 export const isNonSpeechMarker = (text) => /^\s*\[[A-Z_ ]+\]\s*$/i.test(text);
@@ -382,32 +360,15 @@ export const detectNarrationWithoutCall = ({ finalText, toolRuns }) =>
 // Short correlation id so overlapping turns in the logs can be told apart
 // (user interrupts, late-arriving retries). 5 chars of base36 randomness is
 // plenty for single-user PortOS.
+// The speaker a text-only turn uses: the reply text is still collected by the LLM loop, nothing is synthesized.
+const SILENT_SPEAKER = Object.freeze({ appendDelta: () => {}, cancel: () => {}, drain: async () => {}, ttsTimings: Object.freeze([]) });
+
 const shortId = () => Math.random().toString(36).slice(2, 7);
 
 // Cap on an injected per-conversation briefing (the FaceTime call host passes
 // the persistent mind's). Bounded here because it rides in front of every turn
 // of that conversation and a runaway caller would blow the model's window.
 const MAX_SYSTEM_CONTEXT_CHARS = 4000;
-
-const reportTtsError = (err, signal, emit) => {
-  // Piper can reject with a plain Error when synthesis is interrupted.
-  if (signal?.aborted || err?.name === 'AbortError' || /aborted/i.test(err?.message || '')) return;
-  emit('voice:error', { stage: 'tts', message: err?.message ?? String(err) });
-};
-
-// Canonical replies still complete in text when the synthesizer is unavailable.
-const emitSyntheticReply = async ({ reply, signal, recentTts, emit }) => {
-  if (signal?.aborted) return;
-  const audio = await synthesize(reply, { signal }).catch((err) => reportTtsError(err, signal, emit));
-  if (signal?.aborted) return;
-  if (audio) {
-    if (recentTts) rememberTtsSentence(recentTts, reply);
-    emit('voice:tts:audio', { sentence: reply, wav: audio.wav, latencyMs: audio.latencyMs });
-  }
-  emit('voice:llm:delta', { delta: reply });
-  emit('voice:llm:done', { text: reply });
-  emit('voice:idle', { reason: 'turn-complete' });
-};
 
 // Journal dictation bypasses the model and emits only the newly appended segment.
 const runDictationTurn = async ({ userText, state, signal, emit, hasHostControl }) => {
@@ -484,8 +445,8 @@ const executeTurnToolCall = async ({ tc, cfg, emit, state, signal, hasHostContro
     // ui_describe_visually: capture the active tab (client round-trip) and
     // describe it via the voice provider's vision endpoint. Provided here
     // so tools.js stays free of socket/vision coupling.
-    captureScreenshot: () => requestScreenshot(emit, state, 15000, signal),
-    describeImage: (dataUrl, prompt) => describeScreenshot(dataUrl, prompt, cfg),
+    captureScreenshot: () => requestScreenshot(emit, state, 15000, signal).then((frame) => frame?.dataUrl || null),
+    describeImage: async (dataUrl, prompt) => (await describeVoiceImage(dataUrl, prompt, cfg, hasHostControl)).text,
     requestUiText: () => requestUiText(state, emit, signal),
   };
   try {
@@ -603,7 +564,17 @@ const resolvePendingConfirmation = async ({ state, userText, turnId, emit, tlog,
 const filterToolSpecs = (specs, cfg) =>
   specs && !cfg.llm.codeAgent?.enabled ? specs.filter((s) => s.function?.name !== 'dispatch_code_agent') : specs;
 
-const buildTurnMessages = async ({ cfg, systemContext, userText, intent, state, history, tlog }) => {
+// Message order is cache-driven. Backends reuse their prompt cache only up to
+// the first token that differs from the previous request, and the history is
+// the bulk of a call's prompt. So everything that is the same for the whole
+// call (persona, caller context) goes first, then the history, and only then
+// the blocks that change per turn (UI snapshot, recalled memories, the
+// form-fill hint). Putting a per-turn block ahead of the history would make
+// every turn re-process the full conversation.
+const FORM_FILL_HINT = 'This turn puts text into a field on the page: call ui_fill with the field label and the value. '
+  + 'Do not call brain_capture or daily_log_append, even if the value says remember, note, or save.';
+
+const buildTurnMessages = async ({ cfg, systemContext, userText, userContent = userText, intent, state, history, tlog }) => {
   const messages = [
     { role: 'system', content: buildSystemPrompt(cfg) },
   ];
@@ -612,6 +583,7 @@ const buildTurnMessages = async ({ cfg, systemContext, userText, intent, state, 
   if (typeof systemContext === 'string' && systemContext.trim()) {
     messages.push({ role: 'system', content: systemContext.trim().slice(0, MAX_SYSTEM_CONTEXT_CHARS) });
   }
+  messages.push(...history);
   if (shouldIncludeUi(userText, intent.activeGroups)) {
     const uiSummary = summarizeUi(state?.ui);
     if (uiSummary) {
@@ -635,18 +607,218 @@ const buildTurnMessages = async ({ cfg, systemContext, userText, intent, state, 
       tlog(`memory.none +${Date.now() - tMem}ms`);
     }
   }
-  messages.push(...history, { role: 'user', content: userText });
+  // The trimmed tool list already drops the capture tools on form-fill turns;
+  // the full list keeps them, so say it in words instead.
+  if (intent.formFill && intent.specs?.some((s) => s.function?.name === 'brain_capture')) {
+    messages.push({ role: 'system', content: FORM_FILL_HINT });
+  }
+  messages.push({ role: 'user', content: userContent });
   return messages;
 };
 
-export const runTurn = async ({ audio, text, mimeType, source, history = [], emit, signal, state, systemContext = null, hasHostControl }) => {
-  const cfg = await getVoiceConfig();
+const executeTurnLlmLoop = async ({
+  cfg, messages, toolSpecs, maxIterations, signal, emit, turnId, tlog, speaker, state, hasHostControl,
+}) => {
+  let firstLlm = null;
+  let lastLlm = null;
+  let finalText = '';
+  const toolRuns = [];
+  // Set when a tool returned confirmation_required:true. We short-circuit the
+  // turn server-side rather than trusting system-prompt instructions to keep
+  // the LLM from issuing further tool calls in the same turn. The pending
+  // record was already stashed on state by the tool itself.
+  let confirmationPrompt = null;
+
+  try {
+    for (let iter = 0; iter < maxIterations; iter++) {
+      if (signal?.aborted) break;
+
+      const iterStart = Date.now();
+      let firstDeltaAt = null;
+      let deltaChars = 0;
+      tlog(`llm.start iter=${iter + 1}/${maxIterations} provider=${cfg.llm.provider || 'lmstudio'} model=${cfg.llm.model} tools=${toolSpecs?.length || 0} msgs=${messages.length}`);
+      const llm = await streamChat(messages, {
+        provider: cfg.llm.provider,
+        model: cfg.llm.model,
+        signal,
+        onTimeout: () => speaker.cancel('timeout'),
+        tools: toolSpecs,
+        tag: turnId,
+        // The call UI shows "Loading model" instead of "Thinking" until tokens arrive.
+        onModelLoading: ({ model }) => {
+          tlog(`llm.loading iter=${iter + 1} model=${model} (not resident)`);
+          emit('voice:llm:loading', { model });
+        },
+        onDelta: (delta) => {
+          if (firstDeltaAt === null) {
+            firstDeltaAt = Date.now();
+            tlog(`llm.ttft  iter=${iter + 1} ${firstDeltaAt - iterStart}ms model=${lastLlm?.model || cfg.llm.model}`);
+          }
+          deltaChars += delta.length;
+          emit('voice:llm:delta', { delta });
+          speaker.appendDelta(delta);
+        },
+      });
+      if (!firstLlm) firstLlm = llm;
+      lastLlm = llm;
+      tlog(`llm.done  iter=${iter + 1} ${Date.now() - iterStart}ms resolve=${llm.resolveMs ?? '—'}ms model=${llm.model} text=${(llm.text || '').length}c spoken=${deltaChars}c tool_calls=${llm.toolCalls?.length || 0} finish=${llm.finishReason ?? '—'}`);
+      // Accumulate spoken text across tool-calling iterations. The old single-
+      // assignment version dropped every earlier segment, so the persisted
+      // `reply` (and next turn's history) diverged from what the user actually
+      // heard when the model spoke before/between tool calls.
+      if (llm.text) finalText += (finalText ? ' ' : '') + llm.text;
+
+      if (!llm.toolCalls?.length) break;
+
+      // Assign stable IDs up-front so the assistant's tool_calls[].id and each
+      // tool response's tool_call_id are guaranteed to match, even when the
+      // upstream stream omitted tc.id. Previously the fallback `call_<index>`
+      // was computed only at the tool-response side, so the assistant entry
+      // could carry a different id and the next LLM iteration wouldn't pair
+      // the result with the call.
+      const callsWithIds = llm.toolCalls.map((tc, i) => ({
+        ...tc,
+        resolvedId: tc.id || `call_${iter}_${tc.index ?? i}`,
+      }));
+
+      // Persist the assistant's tool-call turn, then execute each call and
+      // feed the result back as a 'tool' message for the next iteration.
+      messages.push({
+        role: 'assistant',
+        content: llm.text || null,
+        tool_calls: callsWithIds.map((tc) => ({
+          id: tc.resolvedId,
+          type: tc.type,
+          function: { name: tc.function.name, arguments: tc.function.arguments },
+        })),
+      });
+
+      for (const tc of callsWithIds) {
+        if (signal?.aborted) break;
+        const result = await executeTurnToolCall({ tc, cfg, emit, state, signal, hasHostControl, tlog, toolRuns });
+        messages.push({
+          role: 'tool',
+          tool_call_id: tc.resolvedId,
+          content: JSON.stringify(result),
+        });
+        // Destructive-action short-circuit: the tool stashed a pending record on
+        // state and returned a deterministic confirmation prompt. Stop executing
+        // further tool calls in this turn AND skip the next LLM iteration so the
+        // model can't (a) issue more tool calls that overwrite pendingDestructive
+        // or fire unrelated side effects, or (b) paraphrase the prompt in its
+        // own voice. The next user utterance ("yes"/"cancel") is handled by the
+        // pre-LLM gate in runTurn.
+        if (result?.confirmation_required) {
+          confirmationPrompt = result.summary || 'That looks destructive — confirm by saying "yes" or "cancel" to skip.';
+          break;
+        }
+      }
+      if (confirmationPrompt) break;
+    }
+  } catch (err) {
+    speaker.cancel('error');
+    throw err;
+  }
+
+  return { firstLlm, lastLlm, finalText, toolRuns, confirmationPrompt };
+};
+
+// Prefill the fixed part of every turn's prompt (persona + tool schemas,
+// about 7k tokens with all tools) so the first turn of a call starts from a
+// cached prefix instead of paying several seconds of prompt processing. Ollama
+// only reuses its cache from saved checkpoints, and a request that ends right
+// at the end of the persona leaves one exactly where every turn's prompt
+// diverges. Local backends only: a hosted provider would bill the warm-up.
+const PREFIX_WARM_DEDUPE_MS = 30_000;
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
+let lastPrefixWarm = { key: '', at: 0, pending: null };
+
+export const warmPromptPrefix = async ({ reason = 'call' } = {}) => {
+  const cfg = await getAgentVoiceConfig();
+  if (!cfg?.enabled) return { warmed: false, reason: 'voice-disabled' };
+  const toolsEnabled = !!cfg.llm.tools?.enabled;
+  const { apiBase } = await resolveLlmEndpoint(cfg.llm.provider);
+  let host = '';
+  try { host = new URL(apiBase).hostname; } catch { host = ''; }
+  if (!LOOPBACK_HOSTS.has(host)) return { warmed: false, reason: 'not-local' };
+
+  const messages = [{ role: 'system', content: buildSystemPrompt(cfg) }];
+  // Per-turn tool lists have no shared prefix past the persona, but the
+  // request still loads the model.
+  const perTurnTools = toolsEnabled && cfg.llm.tools?.trimByIntent === true;
+  const tools = toolsEnabled && !perTurnTools ? filterToolSpecs(getToolSpecs(), cfg) : undefined;
+  const key = JSON.stringify([cfg.llm.provider, cfg.llm.model, messages, tools]);
+  if (lastPrefixWarm.key === key && (lastPrefixWarm.pending || Date.now() - lastPrefixWarm.at < PREFIX_WARM_DEDUPE_MS)) {
+    return { warmed: false, reason: 'recent' };
+  }
+  const started = Date.now();
+  // onModelLoading opts into the cold-load timeout (the model may still have
+  // to load before the prefill can run) and shows the load in the status badge.
+  let releaseLoading = null;
+  const pending = streamChat(messages, {
+    provider: cfg.llm.provider, model: cfg.llm.model, tools, maxTokens: 1, tag: `warm:${reason}`,
+    onModelLoading: ({ model }) => { releaseLoading = markVoiceLlmWarming(cfg.llm.provider, model); },
+  });
+  lastPrefixWarm = { key, at: started, pending };
+  try {
+    await pending;
+    console.log(`🎙️ voice.prefix.warm ${reason} tools=${tools?.length || 0} ${Date.now() - started}ms`);
+    return { warmed: true, ms: Date.now() - started };
+  } finally {
+    lastPrefixWarm = { key, at: Date.now(), pending: null };
+    releaseLoading?.();
+  }
+};
+
+// Add the images the user is showing to this turn's message: a fresh frame of
+// the shared tab (skipped when the screen is unchanged since the last frame in
+// the conversation) plus any uploads queued since the last turn. Each image is
+// a labeled description block that the client shows as a chip.
+const withAttachedImages = async ({ userText, cfg, state, emit, signal, hasHostControl, tlog }) => {
+  if (!state) return userText;
+  const describe = (dataUrl) => describeVoiceImage(dataUrl, IMAGE_DESCRIBE_PROMPT, cfg, hasHostControl);
+  const frame = await attachTabFrame(state, {
+    capture: () => requestScreenshot(emit, state, TURN_FRAME_TIMEOUT_MS, signal),
+    describe,
+    emit,
+    newId: () => `tab_${shortId()}`,
+  });
+  if (frame) tlog('image.frame attached');
+  const tImages = Date.now();
+  const blocks = await takePendingImages(state, { emit, signal });
+  if (blocks.length) tlog(`image.attach ${blocks.length} image(s) ${blocks.reduce((n, b) => n + b.length, 0)}c +${Date.now() - tImages}ms wait`);
+  return appendImageBlocks(userText, blocks);
+};
+
+/**
+ * Run one turn.
+ *
+ * @param {object} args
+ * @param {Buffer} args.audio        — utterance audio bytes
+ * @param {string} args.mimeType     — e.g. 'audio/webm', 'audio/wav'
+ * @param {Array}  args.history      — prior conversation messages
+ * @param {(event:string, payload:any) => void} args.emit
+ * @param {AbortSignal} [args.signal]
+ * @param {boolean} [args.speak=true]  false = text only: no TTS, the reply is returned for another voice to say
+ *   (the realtime speech-to-speech voice speaks the result of a task it delegated).
+ * @returns {Promise<{ transcript: string, reply: string, userContent?: string }>} userContent is
+ *   the message sent to the model when images were added to it.
+ */
+export const runTurn = async ({ audio, text, mimeType, source, history = [], emit, signal, state, systemContext = null, hasHostControl, speak = true }) => {
+  // The on-air Voice Call channel's agent: global settings plus that channel's overrides.
+  const cfg = await getAgentVoiceConfig();
   if (signal?.aborted) return { transcript: '', reply: '' };
 
   const turnStart = Date.now();
   const turnId = shortId();
   const elapsed = () => Date.now() - turnStart;
-  const tlog = (msg) => console.log(`🎙️ [${turnId}] ${msg} +${elapsed()}ms`);
+  // The Voice Call timing debug toggle (state.timingDebug) mirrors each stage line to the client's
+  // Transmission log; the server console keeps the same lines either way.
+  const tlog = (msg) => {
+    const ms = elapsed();
+    console.log(`🎙️ [${turnId}] ${msg} +${ms}ms`);
+    if (state?.timingDebug) emit('voice:timing', { turnId, label: msg, ms });
+  };
 
   tlog(`turn.start source=${text ? 'text' : 'audio'} ${text ? `chars=${String(text).length}` : `bytes=${audio?.byteLength || audio?.length || 0} mime=${mimeType || '—'}`}`);
 
@@ -711,153 +883,28 @@ export const runTurn = async ({ audio, text, mimeType, source, history = [], emi
     return runDictationTurn({ userText, state, signal, emit, hasHostControl });
   }
 
-  const speakSyntheticReply = (reply) => emitSyntheticReply({ reply, signal, recentTts: state?.recentTts, emit });
+  const speakSyntheticReply = (reply) => (speak ? emitSyntheticReply({ reply, signal, recentTts: state?.recentTts, emit }) : undefined);
 
   const confirmed = await resolvePendingConfirmation({ state, userText, turnId, emit, tlog, speakSyntheticReply });
   if (confirmed) return confirmed;
 
   const toolsEnabled = !!cfg.llm.tools?.enabled;
-  const intent = toolsEnabled ? getToolSpecsForIntent(userText) : { specs: undefined, activeGroups: classifyIntent(userText) };
+  const intent = toolsEnabled
+    ? getTurnToolSpecs(userText, { trimByIntent: cfg.llm.tools?.trimByIntent === true })
+    : { specs: undefined, ...resolveTurnIntent(userText) };
   const toolSpecs = filterToolSpecs(intent.specs, cfg);
-  const messages = await buildTurnMessages({ cfg, systemContext, userText, intent, state, history, tlog });
+  const userContent = await withAttachedImages({ userText, cfg, state, emit, signal, hasHostControl, tlog });
+  if (signal?.aborted) return { transcript: userText, reply: '' };
+  // The history keeps the image descriptions so later turns can refer to them.
+  const imagesAdded = userContent === userText ? {} : { userContent };
+  const messages = await buildTurnMessages({ cfg, systemContext, userText, userContent, intent, state, history, tlog });
   const maxIterations = Math.max(1, cfg.llm.tools?.maxIterations ?? 3);
 
-  let pending = '';
-  const ttsTimings = [];
-  let ttsIdx = 0;
-  // Stop audio on LLM failure without making the socket treat it as a barge-in.
-  const ttsController = new AbortController();
-  const ttsSignal = anyAbortSignal([signal, ttsController.signal]);
-  const cancelTts = (reason) => {
-    if (ttsSignal.aborted) return;
-    ttsController.abort();
-    emit('voice:tts:cancel', { reason });
-  };
-  const speak = async (sentence) => {
-    if (ttsSignal.aborted) return;
-    const i = ++ttsIdx;
-    const t0 = Date.now();
-    tlog(`tts.start #${i} chars=${sentence.length}`);
-    const { wav, latencyMs } = await synthesize(sentence, { signal: ttsSignal });
-    if (ttsSignal.aborted) return;
-    ttsTimings.push(latencyMs);
-    tlog(`tts.done  #${i} ${latencyMs}ms synth+queue=${Date.now() - t0}ms`);
-    // Track what we just said so the next inbound transcript can be checked
-    // for echo. Done before emit so an immediately-arriving STT result on
-    // the next event-loop tick already sees this sentence in the buffer.
-    if (state?.recentTts) rememberTtsSentence(state.recentTts, sentence);
-    emit('voice:tts:audio', { sentence, wav, latencyMs });
-  };
-
-  let synthQueue = Promise.resolve();
-  const enqueueSpeak = (sentence) => {
-    if (!sentence) return;
-    synthQueue = synthQueue.then(() => speak(sentence)).catch((err) => reportTtsError(err, ttsSignal, emit));
-  };
-  const flushSentence = (delta) => {
-    const { sentences, remainder } = splitSentences(pending + delta);
-    pending = remainder;
-    for (const sentence of sentences) enqueueSpeak(sentence);
-  };
-
-  let firstLlm = null;
-  let lastLlm = null;
-  let finalText = '';
-  const toolRuns = []; // [{ name, ok, ms, error }]
-  // Set when a tool returned confirmation_required:true. We short-circuit the
-  // turn server-side rather than trusting system-prompt instructions to keep
-  // the LLM from issuing further tool calls in the same turn. The pending
-  // record was already stashed on state by the tool itself.
-  let confirmationPrompt = null;
-
-  try {
-    for (let iter = 0; iter < maxIterations; iter++) {
-      if (signal?.aborted) break;
-
-      const iterStart = Date.now();
-      let firstDeltaAt = null;
-      let deltaChars = 0;
-      tlog(`llm.start iter=${iter + 1}/${maxIterations} provider=${cfg.llm.provider || 'lmstudio'} model=${cfg.llm.model} tools=${toolSpecs?.length || 0} msgs=${messages.length}`);
-      const llm = await streamChat(messages, {
-        provider: cfg.llm.provider,
-        model: cfg.llm.model,
-        signal,
-        onTimeout: () => cancelTts('timeout'),
-        tools: toolSpecs,
-        tag: turnId,
-        onDelta: (delta) => {
-          if (firstDeltaAt === null) {
-            firstDeltaAt = Date.now();
-            tlog(`llm.ttft  iter=${iter + 1} ${firstDeltaAt - iterStart}ms model=${lastLlm?.model || cfg.llm.model}`);
-          }
-          deltaChars += delta.length;
-          emit('voice:llm:delta', { delta });
-          flushSentence(delta);
-        },
-      });
-      if (!firstLlm) firstLlm = llm;
-      lastLlm = llm;
-      tlog(`llm.done  iter=${iter + 1} ${Date.now() - iterStart}ms model=${llm.model} text=${(llm.text || '').length}c spoken=${deltaChars}c tool_calls=${llm.toolCalls?.length || 0} finish=${llm.finishReason ?? '—'}`);
-      // Accumulate spoken text across tool-calling iterations. The old single-
-      // assignment version dropped every earlier segment, so the persisted
-      // `reply` (and next turn's history) diverged from what the user actually
-      // heard when the model spoke before/between tool calls.
-      if (llm.text) finalText += (finalText ? ' ' : '') + llm.text;
-
-      if (!llm.toolCalls?.length) break;
-
-      // Assign stable IDs up-front so the assistant's tool_calls[].id and each
-      // tool response's tool_call_id are guaranteed to match, even when the
-      // upstream stream omitted tc.id. Previously the fallback `call_<index>`
-      // was computed only at the tool-response side, so the assistant entry
-      // could carry a different id and the next LLM iteration wouldn't pair
-      // the result with the call.
-      const callsWithIds = llm.toolCalls.map((tc, i) => ({
-        ...tc,
-        resolvedId: tc.id || `call_${iter}_${tc.index ?? i}`,
-      }));
-
-      // Persist the assistant's tool-call turn, then execute each call and
-      // feed the result back as a 'tool' message for the next iteration.
-      messages.push({
-        role: 'assistant',
-        content: llm.text || null,
-        tool_calls: callsWithIds.map((tc) => ({
-          id: tc.resolvedId,
-          type: tc.type,
-          function: { name: tc.function.name, arguments: tc.function.arguments },
-        })),
-      });
-
-      for (const tc of callsWithIds) {
-        if (signal?.aborted) break;
-        const result = await executeTurnToolCall({ tc, cfg, emit, state, signal, hasHostControl, tlog, toolRuns });
-        messages.push({
-          role: 'tool',
-          tool_call_id: tc.resolvedId,
-          content: JSON.stringify(result),
-        });
-        // Destructive-action short-circuit: the tool stashed a pending record on
-        // state and returned a deterministic confirmation prompt. Stop executing
-        // further tool calls in this turn AND skip the next LLM iteration so the
-        // model can't (a) issue more tool calls that overwrite pendingDestructive
-        // or fire unrelated side effects, or (b) paraphrase the prompt in its
-        // own voice. The next user utterance ("yes"/"cancel") is handled by the
-        // pre-LLM gate in this same function.
-        if (result?.confirmation_required) {
-          confirmationPrompt = result.summary || 'That looks destructive — confirm by saying "yes" or "cancel" to skip.';
-          break;
-        }
-      }
-      if (confirmationPrompt) break;
-    }
-  } catch (err) {
-    cancelTts('error');
-    throw err;
-  }
-
-  enqueueSpeak(pending.trim());
-  await synthQueue;
+  const speaker = speak ? createTurnTtsSpeaker({ signal, state, emit, tlog }) : SILENT_SPEAKER;
+  const { firstLlm, lastLlm, finalText, toolRuns, confirmationPrompt } = await executeTurnLlmLoop({
+    cfg, messages, toolSpecs, maxIterations, signal, emit, turnId, tlog, speaker, state, hasHostControl,
+  });
+  await speaker.drain();
 
   // Destructive-confirm short-circuit: drain any already-streamed sentences
   // (the model may have spoken "Okay, deleting that" before the tool call),
@@ -868,17 +915,18 @@ export const runTurn = async ({ audio, text, mimeType, source, history = [], emi
   if (confirmationPrompt && !signal?.aborted) {
     tlog(`confirm.prompt chars=${confirmationPrompt.length}`);
     await speakSyntheticReply(confirmationPrompt);
-    return { transcript: userText, reply: confirmationPrompt };
+    return { transcript: userText, reply: confirmationPrompt, ...imagesAdded };
   }
 
   const totalMs = Date.now() - turnStart;
+  const { ttsTimings } = speaker;
   const ttsTotal = ttsTimings.reduce((a, b) => a + b, 0);
   const inputKind = text ? 'text' : 'voice';
   const toolSummary = toolRuns.length
     ? ` · tools=${toolRuns.map((r) => `${r.name}(${r.ok ? `${r.ms}ms` : 'err'})`).join(',')}`
     : '';
-  console.log(
-    `🎙️ [${turnId}] turn.summary ${inputKind} ${totalMs}ms — ` +
+  tlog(
+    `turn.summary ${inputKind} ${totalMs}ms — ` +
     `stt=${sttLatencyMs}ms · ` +
     `llm[${lastLlm?.model}] ttft=${firstLlm?.ttfbMs ?? '—'}ms total=${lastLlm?.totalMs}ms finish=${lastLlm?.finishReason ?? '—'} · ` +
     `tts=${ttsTotal}ms (${ttsTimings.length} sentences)` +
@@ -907,5 +955,5 @@ export const runTurn = async ({ audio, text, mimeType, source, history = [], emi
 
   emit('voice:llm:done', { text: finalText, model: lastLlm?.model, ttfbMs: firstLlm?.ttfbMs });
   emit('voice:idle', { reason: 'turn-complete' });
-  return { transcript: userText, reply: finalText };
+  return { transcript: userText, reply: finalText, ...imagesAdded };
 };

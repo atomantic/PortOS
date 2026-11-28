@@ -37,6 +37,7 @@ describe.skipIf(!runDb)('privacy opt-out engine DB round-trip', () => {
   let svc; // privacyOptOut
   let brokers; // privacyBrokers
   let vault;
+  let scanSources;
   const brokerId = 'test-optout-broker';
   const emailBrokerId = 'test-optout-email';
   const createdVaultIds = [];
@@ -76,6 +77,8 @@ describe.skipIf(!runDb)('privacy opt-out engine DB round-trip', () => {
     createdVaultIds.push(rec.id);
     const addr = await vault.createVaultRecord({ type: 'address', label: 'Home', value: 'Portland, OR', useForScans: true });
     createdVaultIds.push(addr.id);
+    const { buildSearchVectors } = await import('./privacyScan.js');
+    scanSources = buildSearchVectors(await vault.listScanEligibleValues()).sources;
   });
 
   afterAll(async () => {
@@ -92,7 +95,7 @@ describe.skipIf(!runDb)('privacy opt-out engine DB round-trip', () => {
   });
 
   it('keeps a found case unchanged in the ledger when auto-approve has no send-capable account', async () => {
-    const kase = await brokers.recordScanVerdict(emailBrokerId, 'found', { evidence: {}, found: true });
+    const kase = await brokers.recordScanVerdict(emailBrokerId, 'found', { scanSources, evidence: {}, found: true });
     const broker = await brokers.getBroker(emailBrokerId);
     const draftCount = drafts.length;
     const res = await svc.emailLane(broker, kase, {
@@ -108,8 +111,8 @@ describe.skipIf(!runDb)('privacy opt-out engine DB round-trip', () => {
     expect((await brokers.getCaseForBroker(emailBrokerId)).state).toBe('found');
   });
 
-  it('emailLane drives a found case found → submitted in the ledger', async () => {
-    const kase = await brokers.recordScanVerdict(emailBrokerId, 'found', { evidence: { listing_urls: ['https://test-optout.example/p/jane'] }, found: true });
+  it('emailLane keeps a prepared request in progress until it is delivered', async () => {
+    const kase = await brokers.recordScanVerdict(emailBrokerId, 'found', { scanSources, evidence: { listing_urls: ['https://test-optout.example/p/jane'] }, found: true });
     const broker = await brokers.getBroker(emailBrokerId);
     const payload = { full_name: 'Jane Q Testcase', email: 'jane@example.com', city: 'Portland', state: 'OR' };
     const disclosed = svc.computeDisclosedFields(broker, payload, { listingUrls: ['https://test-optout.example/p/jane'] });
@@ -117,15 +120,15 @@ describe.skipIf(!runDb)('privacy opt-out engine DB round-trip', () => {
       disclosedFields: disclosed, payload, listingUrls: ['https://test-optout.example/p/jane'],
       autoApprove: false, accountsProvider: injectedAccounts, draftCreator: injectedDraftCreator, draftApprover: injectedApprover,
     });
-    expect(res.outcome).toBe('submitted');
+    expect(res.outcome).toBe('optout_in_progress');
     const persisted = await brokers.getCaseForBroker(emailBrokerId);
-    expect(persisted.state).toBe('submitted');
+    expect(persisted.state).toBe('optout_in_progress');
     expect(persisted.channel).toBe('email');
     expect(persisted.disclosedFields).toContain('full_name');
   });
 
   it('webFormLane default (auto-submit off) queues a human task in the ledger', async () => {
-    const kase = await brokers.recordScanVerdict(brokerId, 'found', { evidence: {}, found: true });
+    const kase = await brokers.recordScanVerdict(brokerId, 'found', { scanSources, evidence: {}, found: true });
     const broker = await brokers.getBroker(brokerId);
     const res = await svc.webFormLane(broker, kase, {
       disclosedFields: ['full_name'], payload: { full_name: 'Jane Q Testcase' }, listingUrls: [], autoSubmit: false,
@@ -144,14 +147,28 @@ describe.skipIf(!runDb)('privacy opt-out engine DB round-trip', () => {
   });
 
   it('verification advances submitted → verification_pending → confirmed_removed', async () => {
-    // The email broker case is `submitted`. A trusted confirmation email advances it.
-    const messagesProvider = async () => ({ messages: [{ id: 'm1', subject: 'Confirm your opt-out request', body: 'Click https://test-optout.example/confirm?t=1 to complete your removal.' }] });
-    const advance = await svc.runVerificationPass({
-      messagesProvider,
-      removalProbe: async () => ({ skipped: true, reason: 'inconclusive' }),
-    });
+    const kase = await brokers.getCaseForBroker(emailBrokerId);
+    const draft = drafts.find(d => d.id === kase.evidence.draftId);
+    const url = 'https://test-optout.example/confirm?t=1';
+    const messagesProvider = async () => ({ messages: [{ id: 'm1', accountId: account.id, labels: ['INBOX'],
+      inReplyTo: '<portos-optout-example-attempt@requests.invalid>', date: '2026-01-02T00:01:00Z',
+      subject: 'Confirm your opt-out request', bodyText: `Click ${url} to complete your removal.` }] });
+    const options = { draftsProvider: async () => drafts, messagesProvider, removalProbe: async () => ({ skipped: true }) };
+    expect((await svc.runVerificationPass(options)).advanced).toEqual([]);
+    expect((await brokers.getCaseForBroker(emailBrokerId)).state).toBe('optout_in_progress');
+
+    Object.assign(draft, { status: 'sent', sendAttemptId: 'example-attempt',
+      sendAttempts: [{ id: 'example-attempt', outcome: 'sent', finishedAt: '2026-01-02T00:00:00Z' }] });
+    // A verification read that captured an earlier request cannot apply to this case.
+    expect(await brokers.transitionCase(kase.id, 'submitted', {
+      expectedState: 'optout_in_progress', expectedDraftId: 'previous-draft',
+    })).toMatchObject({ skipped: true });
+    const advance = await svc.runVerificationPass(options);
     expect(advance.advanced.some((a) => a.brokerId === emailBrokerId)).toBe(true);
-    expect((await brokers.getCaseForBroker(emailBrokerId)).state).toBe('verification_pending');
+    const persisted = await brokers.getCaseForBroker(emailBrokerId);
+    expect(persisted.state).toBe('verification_pending');
+    expect(JSON.stringify(persisted.evidence)).not.toContain(url);
+    expect(await brokers.revealCaseEvidence(kase.id)).toMatchObject({ sealed: true, evidence: { verification_url: url } });
 
     // A verifying re-scan that finds nothing → confirmed_removed (only path).
     const confirm = await svc.runVerificationPass({

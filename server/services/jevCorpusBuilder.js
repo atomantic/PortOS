@@ -82,11 +82,12 @@ const failure = (code) => ({ ok: false, code });
  * any failure — a repository with no `gh`, no auth, or no network is a corpus
  * that cannot be built, which the caller reports as one code.
  */
-async function ghJson(args, { cwd, env }) {
+async function ghJson(args, { cwd, env, signal }) {
   const result = await execFileAsync('gh', args, {
     cwd,
     env: env || process.env,
     timeout: FORGE_TIMEOUT_MS,
+    signal,
     maxBuffer: 32 * 1024 * 1024,
   }).catch(() => null);
   if (!result) return null;
@@ -101,18 +102,18 @@ async function ghJson(args, { cwd, env }) {
  * would silently drop the older half of a busy repository's history, which is
  * the half a young corpus most needs.
  */
-async function fetchForgeRows({ cwd, env }) {
+async function fetchForgeRows({ cwd, env, signal }) {
   const [merged, closedPrs, notPlanned, parked] = await Promise.all([
     ghJson(['pr', 'list', '--state', 'merged', '--limit', String(FORGE_PAGE_LIMIT),
-      '--json', 'number,title,body'], { cwd, env }),
+      '--json', 'number,title,body'], { cwd, env, signal }),
     ghJson(['pr', 'list', '--state', 'closed', '--limit', String(FORGE_PAGE_LIMIT),
-      '--json', 'number,title,body,mergedAt'], { cwd, env }),
+      '--json', 'number,title,body,mergedAt'], { cwd, env, signal }),
     ghJson(['issue', 'list', '--state', 'closed', '--search', 'reason:"not planned"',
-      '--limit', String(FORGE_PAGE_LIMIT), '--json', 'number,title,body'], { cwd, env }),
+      '--limit', String(FORGE_PAGE_LIMIT), '--json', 'number,title,body'], { cwd, env, signal }),
     // `--search 'label:a,b'` is OR on the server; repeated `--label` flags
     // would be AND, and would find only the issues carrying both.
     ghJson(['issue', 'list', '--state', 'open', '--search', 'label:future,needs-input',
-      '--limit', String(FORGE_PAGE_LIMIT), '--json', 'number,title,body'], { cwd, env }),
+      '--limit', String(FORGE_PAGE_LIMIT), '--json', 'number,title,body'], { cwd, env, signal }),
   ]);
   // Every query failing means the forge is unreachable. One failing on a
   // repository that simply has no such rows is an empty list, which is fine —
@@ -182,7 +183,8 @@ function toExamples({ rows, clauses, index, options, verdicts, topK }) {
  * @param {string} options.repoPath Checkout holding `PRD.md` / `GOALS.md` and the forge remote.
  * @param {object} [options.env] Environment for the `gh` reads (a resolved forge token overlay).
  */
-export async function buildScopeAdherenceCorpus({ repoPath, env = null, topK = SCOPE_ADHERENCE_TOP_K } = {}) {
+export async function buildScopeAdherenceCorpus({ repoPath, env = null, signal, topK = SCOPE_ADHERENCE_TOP_K } = {}) {
+  signal?.throwIfAborted();
   if (typeof repoPath !== 'string' || !repoPath.trim()) return failure('jev-corpus-no-clauses');
 
   // Deferred: the scope-adherence service reaches the untrusted-content ladder
@@ -192,7 +194,9 @@ export async function buildScopeAdherenceCorpus({ repoPath, env = null, topK = S
   const corpus = await loadClauseCorpus(repoPath);
   if (!corpus.ok) return failure('jev-corpus-no-clauses');
 
-  const rows = await fetchForgeRows({ cwd: repoPath, env });
+  signal?.throwIfAborted();
+  const rows = await fetchForgeRows({ cwd: repoPath, env, signal });
+  signal?.throwIfAborted();
   if (rows === null) return failure('jev-corpus-forge-unavailable');
 
   const options = jevHypotheses(SCOPE_ADHERENCE_DECISION_ID);

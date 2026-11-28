@@ -151,6 +151,7 @@ const PORTS = {
   SLOTSTREAM: 5564,    // Loopback SSD-streaming MoE runtime (never 11434 — that collides with Ollama)
   JEV: 5566,           // Loopback openjev entailment scorer. On-demand sidecar started by services/jev.js on first score, reaped when idle.
   LLAMA_SERVER: 5568,  // Loopback llama.cpp speculative-decoding server
+  VOICE_REALTIME: 5569, // Loopback realtime speech-to-speech Voice sidecar (on demand)
   SPLASH: 8001,       // Managed loopback Splash / Inkling 2 Mini API
   MKSERVE: 8002,      // Managed loopback mkserve / Inkling 2 Mini API
   FLEET_LLM: 18022, // Authenticated shared inference queue for dedicated hosts
@@ -325,7 +326,7 @@ module.exports = {
       interpreter: NODE_INTERPRETER,
       log_date_format: LOG_DATE_FORMAT,
       windowsHide: IS_WIN,
-      args: `--configLoader runner --host 0.0.0.0 --port ${PORTS.UI}`,
+      args: `--configLoader native --host 0.0.0.0 --port ${PORTS.UI}`,
       env: {
         ...BASE_ENV,
         VITE_PORT: PORTS.UI

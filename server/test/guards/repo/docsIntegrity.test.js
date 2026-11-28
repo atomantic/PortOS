@@ -129,9 +129,12 @@ const catFileBatch = (specs, { check = false } = {}) => {
   return found;
 };
 
+// These two full-tree greps benefit from parallel reads without starting one
+// Git worker per logical core while the other guard groups are also running.
+const TREE_GREP_THREADS = '--threads=4';
 // One tree grep serves the scan and its self-check below.
 let claudeMentions;
-const claudeMentionLines = () => (claudeMentions ??= git('grep', '-n', '--fixed-strings', 'CLAUDE.md', '--', '.').split('\n').filter(Boolean));
+const claudeMentionLines = () => (claudeMentions ??= git('grep', TREE_GREP_THREADS, '-n', '--fixed-strings', 'CLAUDE.md', '--', '.').split('\n').filter(Boolean));
 
 describe('agent-instructions files (#4852)', () => {
   it('every location has a real AGENTS.md and a real CLAUDE.md holding only the import', () => {
@@ -345,7 +348,7 @@ describe('auth-exempt path documentation', () => {
     try {
       hits = execFileSync(
         'git',
-        ['grep', '-nw', 'PUBLIC_API_PATHS', '--', `:!${GUARD_PATH}`],
+        ['grep', TREE_GREP_THREADS, '-nw', 'PUBLIC_API_PATHS', '--', `:!${GUARD_PATH}`],
         { cwd: REPO_ROOT, encoding: 'utf8' },
       );
     } catch (err) {
@@ -653,9 +656,9 @@ function documentationFindings() {
   const mentions = [];
   const brokenPointers = [];
   const mislabelledLinks = [];
+  const corpus = guardCorpus();
   for (const file of new Set([...ENDPOINT_DOCS, ...CODE_POINTER_DOCS, ...LINK_LABEL_DOCS])) {
-    const path = join(REPO_ROOT, file);
-    if (!TRACKED_SET.has(file) || !lstatSync(path, { throwIfNoEntry: false })?.isFile()) continue;
+    if (!TRACKED_SET.has(file) || !corpus.lstat(file)?.isFile()) continue;
     const text = readDoc(file);
     if (ENDPOINT_DOCS.has(file)) mentions.push(...findMentions(file, text));
     if (CODE_POINTER_DOCS.has(file)) brokenPointers.push(...findBrokenPointers(file, text));

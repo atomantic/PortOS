@@ -11,7 +11,9 @@
  * HTTP server, so the handshake and per-event middleware run unmocked.
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { once } from 'node:events';
 import { createServer } from 'http';
+import express from 'express';
 import { Server } from 'socket.io';
 import { io as ioClient } from 'socket.io-client';
 import { writeFileSync } from 'fs';
@@ -123,10 +125,10 @@ const setInstancePassword = async () => {
   return auth;
 };
 
-const startServer = async (engineOptions = {}) => {
+const startServer = async (engineOptions = {}, app) => {
   const { socketAuthGate } = await stage('import authGate.js', import('./authGate.js'));
   const { __testing } = await stage('import socket.js', import('./socket.js'));
-  httpServer = createServer();
+  httpServer = createServer(app);
   ioServer = new Server(httpServer, engineOptions);
   ioServer.engine.on('connection_error', (error) => {
     const attempt = attempts.get(error.req?.headers[ATTEMPT_HEADER]);
@@ -375,6 +377,74 @@ describe('peer socket relay stays connected through cos:subscribe on a password-
     });
     expect(() => expectAuthenticationRequired(client, error)).toThrow(/handshake evidence:.*Unexpected server response: 400.*"authEntered":false/);
     expect(JSON.stringify(handshakeEvidence(client, error))).not.toContain('synthetic-diagnostic-secret');
+  });
+
+  it('revokes subscribed sockets by session ID and label while preserving other subscribers', async () => {
+    const auth = await import('./auth.js');
+    const firstRevocation = once(auth.authEvents, 'sessions:revoked-all');
+    const operator = await auth.setPassword({ newPassword: 'instance-secret' });
+    await firstRevocation;
+    const browser = await auth.createSession();
+    const agents = await Promise.all([auth.createSession({ label: 'agent' }), auth.createSession({ label: 'agent' })]);
+    instanceRegistry.data.peers = [{ id: 'peer-record', name: 'Example Peer', instanceId: PEER_ID, enabled: true, syncSecret: PAIR_SECRET }];
+
+    const { derivePeerAuthToken, PEER_AUTH_HEADER, PEER_INSTANCE_HEADER } = await import('../lib/peerHttpClient.js');
+    const { authGate, hostControlRouteGate } = await import('./authGate.js');
+    const { default: authRoutes } = await import('../routes/auth.js');
+    const { broadcastToCommandSubscribers, __testing } = await import('./socket.js');
+    const app = express();
+    app.use(authGate, hostControlRouteGate);
+    app.use('/api/auth', authRoutes);
+    await startServer({}, app);
+    __testing.registerAuthRevocationHandler(ioServer);
+
+    const subscribe = async (headers, topic = 'command') => {
+      const client = connectClient(headers);
+      await waitFor(client, 'connect');
+      const subscribed = waitFor(client, `${topic}:subscribed`);
+      client.emit(`${topic}:subscribe`);
+      await subscribed;
+      return client;
+    };
+    const bearer = (session) => ({ Authorization: `Bearer ${session.token}` });
+    const [kept, revokedBrowser, secondTab, ...agentClients] = await Promise.all([
+      subscribe(bearer(operator)),
+      subscribe({ cookie: `portos_auth=${browser.token}` }),
+      subscribe({ cookie: `portos_auth=${browser.token}` }),
+      ...agents.map((agent) => subscribe(bearer(agent))),
+    ]);
+    const peer = await subscribe({
+      [PEER_INSTANCE_HEADER]: PEER_ID,
+      [PEER_AUTH_HEADER]: derivePeerAuthToken(PAIR_SECRET, PEER_ID),
+    }, 'cos');
+
+    const expectDelivery = async (subscribers, data) => {
+      const event = 'command:example-id:data';
+      const deliveries = subscribers.map((client) => waitFor(client, event));
+      broadcastToCommandSubscribers(event, { data, stream: 'stdout' });
+      expect(await Promise.all(deliveries)).toEqual(subscribers.map(() => ({ data, stream: 'stdout' })));
+    };
+    const revoke = async (path, clientsToDisconnect, result) => {
+      const ids = clientsToDisconnect.map((client) => client.id);
+      const disconnects = clientsToDisconnect.map((client) => waitFor(client, 'disconnect'));
+      const response = await fetch(`http://127.0.0.1:${port}/api/auth/sessions${path}`, {
+        method: 'DELETE',
+        headers: bearer(operator),
+      });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual(result);
+      for (const id of ids) expect(ioServer.sockets.sockets.has(id)).toBe(false);
+      expect(await Promise.all(disconnects)).toEqual(ids.map(() => 'io server disconnect'));
+    };
+
+    await expectDelivery([kept, revokedBrowser, secondTab, ...agentClients], 'before revocation');
+    await revoke(`/${browser.id}`, [revokedBrowser, secondTab], { ok: true });
+    await expectDelivery([kept, ...agentClients], 'after ID revocation');
+    await revoke('?label=agent', agentClients, { ok: true, revoked: 2 });
+    await expectDelivery([kept], 'after label revocation');
+    const peerSubscribed = waitFor(peer, 'cos:subscribed');
+    peer.emit('cos:subscribe');
+    await peerSubscribed;
   });
 });
 

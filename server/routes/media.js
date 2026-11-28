@@ -1,5 +1,5 @@
+import { startMediaSchema } from '../lib/mediaValidation.js';
 import express from 'express';
-import { z } from 'zod';
 import mediaService from '../services/mediaService.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
@@ -8,14 +8,6 @@ const router = express.Router();
 const MAX_JPEG_FRAME_BYTES = 8 * 1024 * 1024;
 const JPEG_START = Buffer.from([0xFF, 0xD8]);
 const JPEG_END = Buffer.from([0xFF, 0xD9]);
-
-// Validation schemas
-const startMediaSchema = z.object({
-  videoDeviceId: z.string().optional(),
-  audioDeviceId: z.string().optional(),
-  video: z.boolean().default(true),
-  audio: z.boolean().default(true)
-});
 
 // List available media devices
 router.get('/devices', asyncHandler(async (req, res) => {

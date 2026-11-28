@@ -64,8 +64,10 @@ export async function runVideoVertical({ jobId, historyId, ratio }) {
     videoGenEvents.emit('started', { generationId: jobId, id: jobId, verticalFrom: historyId, etaMs: null });
     result = await verticalReframeHistoryItem(historyId, ratio, { id: jobId, signal: entry.abort.signal });
   } catch (err) {
-    failureReason = entry.abort.signal.aborted ? 'Canceled while running' : (err.message || 'Vertical export failed');
-    console.error(`❌ Vertical export ${entry.abort.signal.aborted ? 'canceled' : 'failed'} [${jobId.slice(0, 8)}]: ${failureReason}`);
+    const canceled = entry.abort.signal.aborted;
+    failureReason = canceled ? 'Canceled while running' : (err.message || 'Vertical export failed');
+    if (canceled) console.log(`🛑 Vertical export canceled [${jobId.slice(0, 8)}]: ${failureReason}`);
+    else console.error(`❌ Vertical export failed [${jobId.slice(0, 8)}]: ${failureReason}`);
   } finally {
     activeExports.delete(jobId);
   }

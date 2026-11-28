@@ -1,16 +1,26 @@
-# Legacy mlx_video + mlx_vlm (Apple Silicon) runtime: the shared mflux direct pins
-# (requirements-mflux-mlx.txt) plus the LTX-2 `mlx_video.generate_av` backend and
-# mlx_vlm, resolved together so one lock is a consistent superset of the mflux
-# lock. Installed only from requirements-mflux-video-mlx.lock.txt by the setup
-# page's package repair and `INSTALL_VIDEO=1 scripts/setup-image-video.sh`.
-# After editing this file, regenerate the lock with the command in the lock
-# header. Keep the mflux/mlx/pillow pins identical to requirements-mflux-mlx.txt.
-#
-# The PyPI package named just `mlx_video` is unrelated; `mlx-video-with-audio`
-# (>=0.1.35 for LTX-2.3 I2V VAE-encoder fixes) provides `mlx_video.generate_av`.
-mflux==0.24.0
+# Legacy mlx_video + mlx_vlm inference runtime for Apple Silicon.
+# Install from requirements-mflux-video-mlx.lock.txt. Regenerate using the
+# recipe in its header and keep the mflux pins aligned with requirements-mflux-mlx.txt.
 mlx==0.32.4
 mlx-metal==0.32.4
 pillow==13.0.0
+transformers==5.22.2
+huggingface-hub==1.33.0
+sentencepiece==0.2.2
+protobuf==7.36.2
+jinja2==3.1.6
+piexif==1.1.3
+platformdirs==4.14.3
+toml==0.10.2
+soundfile==0.14.0
+opencv-python-headless==5.0.0.93
+requests==2.34.2
+
+# Add these wheels with --no-deps. PortOS uses mflux inference plus the LTX-2
+# generation and Gemma 3 modules; upstream metadata also declares unused torch,
+# GUI opencv-python, matplotlib, server, dataset, and audio-playback tools.
+# mlx-video-with-audio provides mlx_video.generate_av (the mlx_video project is unrelated).
+# Keep mlx-video-with-audio >=0.1.35 for the LTX-2.3 image-to-video VAE encoder fixes.
+mflux==0.24.0
 mlx-video-with-audio==0.1.37
 mlx-vlm==0.7.12

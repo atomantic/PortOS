@@ -20,8 +20,8 @@
  * and normalizes journals). Running the split alone and leaving those to the
  * next boot would run them after it, writing monoliths nothing reads (#12813).
  * So that restore replays the restored ledger's pending migrations through the
- * split with the real runner, and parks every live store of that split the
- * snapshot carries no split index for, so the result is an in-order upgrade.
+ * split with the real runner. Park a live store only when the snapshot carries
+ * its monolith or the input a pending predecessor uses to build it.
  */
 import { rename, stat } from 'fs/promises';
 import { basename, dirname, join } from 'path';
@@ -34,6 +34,7 @@ const BRAIN_SPLIT_TYPES = [
   'journals', 'inbox', 'songs',
 ];
 
+const INBOX_PREDECESSOR = { migration: '081-brain-daily-log-inbox-sync.js', input: 'brain/inbox_log.jsonl' };
 const BRAIN_SPLIT_MIGRATION = '200-split-brain-stores-to-per-record.js';
 const MEDIA_COLLECTIONS_SPLIT_MIGRATION = '059-split-media-collections.js';
 const loadBrainSplit = () => import('../../scripts/migrations/200-split-brain-stores-to-per-record.js');
@@ -47,9 +48,7 @@ const LEGACY_SPLIT_STORES = Object.freeze([
     backupSuffix: '.bak-200',
     migration: BRAIN_SPLIT_MIGRATION,
     loadMigration: loadBrainSplit,
-    // Earlier migrations create some Brain monoliths (081 the inbox, 190 the
-    // songs), so a replay converts a type the snapshot has no monolith for.
-    replayRoot: 'brain',
+    predecessor: type === 'inbox' ? INBOX_PREDECESSOR : null,
     // Migration 200 throws on a records container that is present but not a map.
     readable: doc => doc.records == null || (typeof doc.records === 'object' && !Array.isArray(doc.records)),
   })),
@@ -60,15 +59,26 @@ const LEGACY_SPLIT_STORES = Object.freeze([
     backupSuffix: '.bak-059',
     migration: MEDIA_COLLECTIONS_SPLIT_MIGRATION,
     loadMigration: loadMediaCollectionsSplit,
-    replayRoot: null,
+    predecessor: null,
     readable: () => true,
   },
 ]);
 
-const exists = path => stat(path).then(
-  () => true,
-  error => { if (error.code === 'ENOENT') return false; throw error; },
-);
+const statIfPresent = path => stat(path).catch(error => {
+  if (error.code === 'ENOENT') return null;
+  throw error;
+});
+
+/** A scoped restore keeps the live ledger, so migration 081 cannot process the raw inbox. */
+export async function hasUnrestorableScopedInbox(srcDir, scope, { stores }, splitSchemaVersion) {
+  if (scope !== 'brain' && scope !== INBOX_PREDECESSOR.input) return false;
+  if (!(await statIfPresent(join(srcDir, INBOX_PREDECESSOR.input)))?.isFile()) return false;
+  // Restoring just the raw file leaves any newer inbox in the snapshot outside the transfer.
+  if (scope === INBOX_PREDECESSOR.input) return true;
+  if (stores.some(entry => entry.predecessor === INBOX_PREDECESSOR && entry.readable)) return false;
+  const { ok, value } = await readJSONFileStrict(join(srcDir, 'brain', 'inbox', 'index.json'), null, { logError: false });
+  return !ok || value?.schemaVersion !== splitSchemaVersion;
+}
 
 /**
  * The split stores a restore of `scope` installs in their pre-split layout: the
@@ -79,8 +89,7 @@ const exists = path => stat(path).then(
  *
  * `ledger` is the snapshot's migration ledger, passed only for a full restore
  * (which installs it). When it lacks a split migration, the restore replays the
- * ledger's pending migrations through that split (`migrations`), and every live
- * store of that split the snapshot has no split index for is converted too.
+ * ledger's pending migrations through that split (`migrations`).
  */
 export async function snapshotLegacySplitStores(srcDir, scope, { ledger = null, migrationsDir = DEFAULT_MIGRATIONS_DIR } = {}) {
   const recorded = !scope && Array.isArray(ledger) ? new Set(ledger) : null;
@@ -88,13 +97,12 @@ export async function snapshotLegacySplitStores(srcDir, scope, { ledger = null, 
   const stores = [];
   for (const entry of LEGACY_SPLIT_STORES) {
     if (scope && !entry.scopes.includes(scope)) continue;
-    if (await exists(join(srcDir, entry.store, 'index.json'))) continue;
-    const carriesMonolith = await exists(join(srcDir, entry.legacyFile));
+    if (await statIfPresent(join(srcDir, entry.store, 'index.json'))) continue;
+    const carriesMonolith = Boolean(await statIfPresent(join(srcDir, entry.legacyFile)));
     if (!carriesMonolith) {
-      // Only a live store needs parking for a replay to rebuild it.
-      const rebuilt = replays(entry) && entry.replayRoot
-        && await exists(join(srcDir, entry.replayRoot)) && await exists(join(PATHS.data, entry.store));
-      if (!rebuilt) continue;
+      const { predecessor } = entry;
+      if (!predecessor || !replays(entry) || recorded.has(predecessor.migration)
+        || !(await statIfPresent(join(srcDir, predecessor.input)))?.isFile()) continue;
       stores.push({ ...entry, carriesMonolith, readable: true });
       continue;
     }
@@ -142,7 +150,7 @@ export async function convertRestoredLegacySplitStores({ stores, migrations }, {
   const results = [];
   const direct = new Set();
   for (const entry of stores) {
-    if (!entry.carriesMonolith && !replays(entry)) continue;
+    if (!entry.carriesMonolith && (!replays(entry) || applied.has(entry.predecessor.migration))) continue;
     if (!entry.readable) {
       console.warn(`⚠️ Restore left ${entry.legacyFile} in its pre-split layout: the snapshot copy is unreadable`);
       results.push({ store: entry.store, legacyFile: entry.legacyFile, status: 'unreadable', parkedAs: null });
@@ -155,7 +163,7 @@ export async function convertRestoredLegacySplitStores({ stores, migrations }, {
       error => { if (error.code === 'ENOENT') return false; throw error; },
     );
     const liveBackup = join(PATHS.data, `${entry.legacyFile}${entry.backupSuffix}`);
-    if (await exists(liveBackup)) await rename(liveBackup, `${liveBackup}.pre-restore-${stamp}`);
+    if (await statIfPresent(liveBackup)) await rename(liveBackup, `${liveBackup}.pre-restore-${stamp}`);
     results.push({ store: entry.store, legacyFile: entry.legacyFile, status: 'converted', parkedAs: parked ? parkedAs : null });
     if (!replays(entry)) direct.add(entry.loadMigration);
   }

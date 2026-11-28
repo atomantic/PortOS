@@ -11,6 +11,6 @@ transformers==5.22.2
 # guard: absence of an OSV match does not establish upstream path validation.
 accelerate==1.15.0
 huggingface-hub==2.4.0
-av==18.1.0
+av==18.1.1
 pillow==13.0.0
 numpy==2.4.6

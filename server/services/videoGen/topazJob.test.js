@@ -12,6 +12,7 @@ vi.mock('../settings.js', () => ({ getSettings: async () => ({ videoGen: { topaz
 vi.mock('./history.js', () => ({
   HISTORY_UNCHANGED: Symbol('unchanged'),
   loadHistory: async () => state.rows,
+  getHistoryItem: async id => state.rows.find(row => row.id === id) ?? null,
   mutateVideoHistory: async fn => {
     const next = await fn([...state.rows]);
     if (state.failHistoryOnce) { state.failHistoryOnce = false; throw new Error('synthetic history failure'); }
@@ -81,9 +82,9 @@ beforeEach(async () => {
 });
 afterAll(() => { vi.unstubAllGlobals(); cleanupTempDataRoots(); });
 
-async function queued() {
+async function queued(attribution) {
   const estimate = await quoteTopaz(sourceId);
-  await enqueueTopazUpscale(sourceId, estimate.token);
+  await enqueueTopazUpscale(sourceId, estimate.token, attribution);
   state.job = { kind: 'video-upscale', status: 'failed', params: state.enqueued.params, result: {} };
   return { estimate, params: { ...state.enqueued.params, jobId } };
 }
@@ -122,6 +123,23 @@ describe('Topaz job boundary', () => {
     expect(state.rows[0]).toMatchObject({ id: jobId, upscaledFrom: sourceId, upscaleMethod: 'topaz', width: 1920, height: 1080 });
     expect(state.rows[1].filename).toBe('source.mp4');
     await expect(stat(topazPreparedPath(params.preparedId))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it.each([
+    [undefined, { projectId: 'mv-source', sceneId: 'shot-source' }],
+    [{ musicVideoProjectId: 'mv-other' }, { projectId: 'mv-other' }],
+    [{ musicVideo: { projectId: 'mv-explicit', sceneId: 'shot-explicit', tier: 'final', selectOnComplete: true } },
+      { projectId: 'mv-explicit', sceneId: 'shot-explicit' }],
+  ])('queues and persists the resolved Music Video attribution for %j', async (options, musicVideo) => {
+    Object.assign(state.rows[0], { musicVideo: { projectId: 'mv-source', sceneId: 'shot-source' }, durationSec: 99, hidden: true });
+    const { params } = await queued(options);
+    expect(params.musicVideoProjectId).toBe(musicVideo.projectId);
+    expect(params.musicVideo).toEqual(options?.musicVideo ?? { ...musicVideo, tier: 'final' });
+    await expect(runVideoUpscale(params)).resolves.toMatchObject({
+      musicVideo, duration: 1, durationSec: 1, hidden: false,
+      renderMs: expect.any(Number), renderStartedAt: expect.any(String), renderCompletedAt: expect.any(String),
+    });
+    expect(state.rows[0].musicVideo).toEqual(musicVideo);
   });
 
   it('does not accept again when a restart finds an uncertain submission', async () => {

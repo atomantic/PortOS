@@ -703,20 +703,39 @@ export async function getCaseForBroker(brokerId, { subjectId } = {}) {
   return rowToCase(rows[0]);
 }
 
+// Every candidate name/location participates in the page classification, even
+// when the URL only contains the first. Lock vault rows before any case row,
+// matching the erase path. xmin is an in-flight row version, never persisted.
+async function lockCurrentScanSources(client, subjectId, sources) {
+  if (!sources?.length) return false;
+  const { rowCount } = await client.query(
+    `SELECT v.id FROM privacy_vault_records v
+     JOIN unnest($2::uuid[], $3::text[]) AS source(id, version)
+       ON v.id = source.id AND v.xmin::text = source.version
+     WHERE v.subject_id = $1 AND v.use_for_scans AND v.type IN ('legal_name', 'address')
+     ORDER BY v.id FOR SHARE OF v`,
+    [subjectId, sources.map(s => s.id), sources.map(s => s.version)],
+  );
+  return rowCount === sources.length;
+}
+
+const staleScanResult = () => ({ skipped: true, reason: 'stale_scan_sources' });
+
 /**
  * Record a scan verdict on a broker's case — creates the case if absent, else
  * transitions the existing case. Enforces the state machine (a re-scan sets
- * `viaRescan`). Every write stamps `next_recheck_at`. Returns the case row.
+ * `viaRescan`). Returns the case row, or a skip when its scan sources changed.
  */
-export async function recordScanVerdict(brokerId, verdict, { evidence = {}, found = null, now = new Date(), subjectId } = {}) {
+export async function recordScanVerdict(brokerId, verdict, { evidence = {}, found = null, now = new Date(), subjectId, scanSources } = {}) {
   if (!SCAN_VERDICTS.includes(verdict)) {
     throw new ServerError(`Not a scan verdict: "${verdict}"`, { status: 400, code: 'INVALID_SCAN_VERDICT' });
   }
   const resolvedSubjectId = resolveSubjectId(subjectId);
   // A fresh scan REPLACES the identity match (a re-scan that no longer finds a
   // listing must not keep the old one), so no existing envelope is carried.
-  const storedEvidence = toPgJson(await prepareEvidenceForStorage(evidence));
   return withTransaction(async (client) => {
+    if (!(await lockCurrentScanSources(client, resolvedSubjectId, scanSources))) return staleScanResult();
+    const storedEvidence = toPgJson(await prepareEvidenceForStorage(evidence));
     const broker = await client.query(`SELECT id FROM privacy_brokers WHERE id = $1`, [brokerId]);
     if (!broker.rows[0]) throw new ServerError('Broker not found', { status: 404, code: 'NOT_FOUND' });
     // Keyed on the (broker, subject) pair — the ledger's unique index moved to
@@ -791,10 +810,18 @@ export async function recordScanVerdict(brokerId, verdict, { evidence = {}, foun
 export async function transitionCase(caseId, toState, patch = {}) {
   const { viaRescan = false, now = new Date() } = patch;
   return withTransaction(async (client) => {
+    if (viaRescan && toState === 'reappeared' && !(await lockCurrentScanSources(client, resolveSubjectId(patch.subjectId), patch.scanSources))) {
+      return staleScanResult();
+    }
     const existing = await client.query(
       `SELECT id, state, evidence FROM privacy_broker_cases WHERE id = $1 FOR UPDATE`, [caseId],
     );
     if (!existing.rows[0]) throw new ServerError('Case not found', { status: 404, code: 'NOT_FOUND' });
+    // A delayed mailbox read must not write evidence onto a reopened case's next request.
+    if (patch.expectedDraftId && (existing.rows[0].state !== patch.expectedState
+      || parseEvidence(existing.rows[0].evidence).draftId !== patch.expectedDraftId)) {
+      return { skipped: true, reason: 'optout_request_changed' };
+    }
     assertTransition(existing.rows[0].state, toState, { viaRescan });
     const sets = ['state = $1', 'next_recheck_at = $2', 'updated_at = NOW()'];
     const params = [toState, computeNextRecheckAt(toState, now)];

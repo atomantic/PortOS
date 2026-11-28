@@ -1,6 +1,8 @@
-import { useEffect, useRef, useState } from 'react';
-import { CheckCircle2, Circle, Download, ExternalLink, GraduationCap, RefreshCw, Scale, Plug, BarChart3, Wrench } from 'lucide-react';
-import { useLocation, useNavigate, useParams } from 'react-router';
+import ConfirmButtonPair from '../../components/ui/ConfirmButtonPair';
+import useConfirmDelete from '../../hooks/useConfirmDelete';
+import { useEffect, useState } from 'react';
+import { Download, ExternalLink, GraduationCap, RefreshCw, Scale, Plug, BarChart3, Wrench } from 'lucide-react';
+import { Link, useLocation, useNavigate, useParams } from 'react-router';
 import TabPills from '../ui/TabPills';
 import toast from '../ui/Toast';
 import JevIntegrations from './JevIntegrations';
@@ -11,6 +13,7 @@ import { formatBytes, formatCount, formatPercent } from '../../utils/formatters'
 import {
   adoptJevHead,
   cancelJevInstall,
+  cancelJevTraining,
   discardJevHead,
   getJevDecisionStats,
   getJevHeads,
@@ -20,7 +23,8 @@ import {
   trainJevHead,
   unloadJev,
 } from '../../services/apiLocalLlm.js';
-import socket from '../../services/socket';
+import InstallStageList from './InstallStageList';
+import useModelInstall from './useModelInstall';
 import { jevHeadBlockerLabel } from '../../lib/jevHeadReasons';
 
 // Shown before the first status response lands, and if status is unavailable,
@@ -63,9 +67,11 @@ const readStatus = ({ signal }) => getJevStatus({ silent: true, signal });
 const readStats = ({ signal }) => getJevDecisionStats({ silent: true, signal });
 const readHeads = ({ signal }) => getJevHeads({ silent: true, signal });
 
+const INSTALLING_MESSAGE = 'Installing the jev scorer…';
 const JEV_PATH = '/models/decision-classifiers/jev';
 
 export default function JevPanel() {
+  const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
   const { taskView } = useParams();
   const { features, error: featureError } = useInstanceFeatures();
   const feature = features?.find(item => item.id === 'jev');
@@ -81,72 +87,32 @@ export default function JevPanel() {
   const { data: status, error: statusError, refetch: loadStatus, updateData: setStatus } = useSocketResource(readStatus, { events: STATUS_EVENTS });
   const { data: decisionStats, error: statsError, refetch: loadStats } = useSocketResource(readStats, { events: STATS_EVENTS });
   const { data: headState, error: headStatusError, refetch: loadHeads } = useSocketResource(readHeads, { events: HEAD_EVENTS });
-  const [installing, setInstalling] = useState(false);
-  const [progressMsg, setProgressMsg] = useState('');
-  const [installError, setInstallError] = useState('');
-  const [installingStage, setInstallingStage] = useState(null);
+  const { installing, installingStage, progressMsg, installError, install, cancel } = useModelInstall({
+    scope: 'jev',
+    installRequest: installJev,
+    cancelRequest: cancelJevInstall,
+    reloadStatus: loadStatus,
+    updateStatus: setStatus,
+    installingMessage: INSTALLING_MESSAGE,
+    successMessage: 'jev scorer installed and ready',
+    cancelFailureMessage: 'Could not cancel the jev installation',
+  });
   const [premise, setPremise] = useState('');
   const [hypothesesText, setHypothesesText] = useState('');
   const [scoring, setScoring] = useState(false);
   const [decision, setDecision] = useState(null);
   const [training, setTraining] = useState(false);
+  const [cancellingTraining, setCancellingTraining] = useState(false);
   const [headError, setHeadError] = useState('');
   // `linear` is the honest default: a 3-way logistic regression over a frozen
   // 4B encoder. `mlp1` buys one hidden layer for a corpus large enough to
   // support it — exposed rather than server-only, because a knob only a
   // hand-written request can reach is a knob nobody tunes.
   const [architecture, setArchitecture] = useState('linear');
-  const progressTimer = useRef(null);
-
-  useEffect(() => {
-    const handleProgress = (data) => {
-      if (data?.scope !== 'jev') return;
-      clearTimeout(progressTimer.current);
-      if (data?.stage) setInstallingStage(data.stage);
-      setProgressMsg(data?.message || '');
-      if (data?.event === 'complete') {
-        setInstalling(false);
-        setInstallingStage(null);
-        progressTimer.current = setTimeout(() => setProgressMsg(''), 3000);
-        loadStatus();
-      }
-      if (data?.event === 'error') {
-        setInstalling(false);
-        setInstallError(data.message || 'Installation failed. Refresh status for diagnostics.');
-        loadStatus();
-      }
-    };
-    socket.on('localLlm:progress', handleProgress);
-    return () => {
-      socket.off('localLlm:progress', handleProgress);
-      clearTimeout(progressTimer.current);
-    };
-  }, [loadStatus]);
-
-  const install = () => {
-    setInstallError('');
-    setInstallingStage(null);
-    setInstalling(true);
-    setProgressMsg('Installing the jev scorer…');
-    return installJev({ silent: true })
-      .then((result) => {
-        if (result?.ready === true) {
-          setStatus(result);
-          toast.success('jev scorer installed and ready');
-        } else return loadStatus();
-      })
-      .catch((error) => { setInstallError(error.message || 'Installation failed.'); return loadStatus(); })
-      .finally(() => {
-        setInstalling(false);
-        setInstallingStage(null);
-      });
-  };
-
-  const cancel = () => cancelJevInstall({ silent: true }).then(loadStatus).catch(() => null);
 
   const unload = () => unloadJev({ silent: true }).then(() => {
     setStatus(current => current ? { ...current, resident: false } : current);
-  }).catch(() => null);
+  }).catch((error) => toast.error(error?.message || 'Could not unload jev'));
 
   const hypotheses = parseHypotheses(hypothesesText);
   const canScore = status?.ready === true && premise.trim().length > 0 && hypotheses.length >= 2;
@@ -180,8 +146,17 @@ export default function JevPanel() {
 
   const runTraining = () => {
     setTraining(true);
-    return runHeadAction(trainJevHead({ architecture }, { silent: true }), 'Training failed.')
+    return runHeadAction(trainJevHead({ architecture }, { silent: true }).then((result) => {
+      if (result?.cancelled) toast.success('Project head training cancelled');
+      return result;
+    }), 'Training failed.')
       .finally(() => setTraining(false));
+  };
+
+  const cancelTraining = () => {
+    setCancellingTraining(true);
+    return runHeadAction(cancelJevTraining({ silent: true }), 'Could not cancel training.')
+      .finally(() => setCancellingTraining(false));
   };
 
   const adoptHead = (decisionId) => runHeadAction(
@@ -198,7 +173,6 @@ export default function JevPanel() {
   );
 
   const stages = stagesFromStatus(status);
-  const currentStageId = installingStage || (installing ? stages.find((stage) => !stage.ready)?.id : null);
   const ready = status?.ready === true;
   const incomplete = status?.setupState === 'incomplete';
   const trainingActive = training || headState?.training === true;
@@ -248,46 +222,15 @@ export default function JevPanel() {
             <h3 className="text-sm font-semibold text-white">Installation</h3>
             <span className="text-xs text-gray-400">{stages.filter((stage) => stage.ready).length} of {stages.length} checks ready</span>
           </div>
-          <ol className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 list-none p-0" aria-label="jev setup stages">
-            {stages.map((stage) => {
-              const current = installing && currentStageId === stage.id;
-              const waiting = installing && !stage.ready && currentStageId && currentStageId !== stage.id;
-              return (
-                <li
-                  key={stage.id}
-                  data-testid={`jev-stage-${stage.id}`}
-                  data-ready={stage.ready ? 'true' : 'false'}
-                  className="flex items-start gap-2 rounded-lg border border-port-border/70 bg-port-bg/40 px-3 py-2"
-                >
-                  <span className="mt-0.5 shrink-0" aria-hidden="true">
-                    {stage.ready ? (
-                      <CheckCircle2 size={14} className="text-port-success" />
-                    ) : current ? (
-                      <BrailleSpinner />
-                    ) : (
-                      <Circle size={14} className={waiting ? 'text-gray-600' : 'text-port-warning'} />
-                    )}
-                  </span>
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <p className="text-xs font-medium text-white">{stage.label}</p>
-                      <span className={`text-[11px] ${stage.ready ? 'text-port-success' : current ? 'text-gray-300' : 'text-gray-500'}`}>
-                        {stage.ready ? 'Ready' : current ? 'Installing…' : waiting ? 'Waiting' : 'Not ready'}
-                      </span>
-                    </div>
-                    <details className="mt-1 text-xs text-gray-400">
-                      <summary className="cursor-pointer hover:text-port-accent">Details</summary>
-                      <p className="mt-1 leading-relaxed">{stage.description}</p>
-                    </details>
-                    {stage.id === 'python' && !stage.ready && (
-                      <a href="https://www.python.org/downloads/" target="_blank" rel="noopener noreferrer" className="text-xs text-port-accent hover:underline">Install Python, then refresh status</a>
-                    )}
-                    {current && progressMsg && <p className="text-[11px] text-gray-400 mt-1">{progressMsg}</p>}
-                  </div>
-                </li>
-              );
-            })}
-          </ol>
+          <InstallStageList
+            stages={stages}
+            installing={installing}
+            installingStage={installingStage}
+            progressMsg={progressMsg}
+            testIdPrefix="jev-stage"
+            gridClass="grid-cols-1 sm:grid-cols-2 lg:grid-cols-4"
+            ariaLabel="jev setup stages"
+          />
 
           <div className="flex items-center gap-2 flex-wrap text-[11px] text-gray-500">
             <span>{status?.name || 'OpenJEV Qwen3.5 4B NLI'}</span>
@@ -311,7 +254,7 @@ export default function JevPanel() {
               <span className="text-xs text-port-success">Installed from the pinned model revision.</span>
             ) : installing ? (
               <>
-                <span className="flex items-center gap-1.5 text-xs text-gray-300"><BrailleSpinner /> Installing the jev scorer…</span>
+                <span className="flex items-center gap-1.5 text-xs text-gray-300"><BrailleSpinner /> {INSTALLING_MESSAGE}</span>
                 <button type="button" onClick={cancel} className="px-2.5 py-1 text-xs bg-port-border hover:bg-port-border/70 text-gray-300 rounded">Cancel</button>
               </>
             ) : (
@@ -387,7 +330,7 @@ export default function JevPanel() {
               </table>
             </div>
           )}
-          <a href="/models/llms/abuse" className="text-xs text-port-accent hover:underline">Configure advanced content safety policies</a>
+          <Link to="/models/llms/abuse" className="text-xs text-port-accent hover:underline">Configure advanced content safety policies</Link>
         </div>
 
       </div>
@@ -452,13 +395,23 @@ export default function JevPanel() {
                               Adopt
                             </button>
                           )}
-                          <button
-                            type="button"
-                            onClick={() => discardHead(row.decisionId, row.adopted)}
-                            className="px-2 py-0.5 text-[11px] border border-port-border text-gray-300 rounded"
-                          >
-                            Discard
-                          </button>
+                          {isConfirming(`${row.decisionId}-${row.adopted}`) ? (
+                            <ConfirmButtonPair
+                              prompt="Discard head?"
+                              confirmText="Discard"
+                              onConfirm={() => confirmDelete(() => discardHead(row.decisionId, row.adopted))}
+                              onCancel={cancelDelete}
+                              className="flex-wrap"
+                            />
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => requestDelete(`${row.decisionId}-${row.adopted}`)}
+                              className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 px-2 py-0.5 text-[11px] border border-port-border text-gray-300 rounded"
+                            >
+                              Discard
+                            </button>
+                          )}
                         </div>
                         {row.ok && row.blocker && (
                           <p className="text-[11px] text-port-warning mt-1 max-w-xs">{jevHeadBlockerLabel(row.blocker)}</p>
@@ -481,7 +434,7 @@ export default function JevPanel() {
             <button
               type="button"
               onClick={runTraining}
-              disabled={!ready || trainingActive || !headState || headStatusError}
+              disabled={!ready || trainingActive || cancellingTraining || !headState || headStatusError}
               className="px-2.5 py-1 text-xs bg-port-accent/20 hover:bg-port-accent/30 text-port-accent rounded disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
             >
               <GraduationCap size={12} /> {trainingActive ? 'Training…' : 'Train a project head'}
@@ -499,9 +452,19 @@ export default function JevPanel() {
             </select>
             {!ready && <span className="text-xs text-gray-500">Install jev first.</span>}
             {trainingActive && (
-              <span className="flex items-center gap-1.5 text-xs text-gray-300">
-                <BrailleSpinner /> Reading this repository&rsquo;s history and encoding it once — minutes on a cold cache, seconds after.
-              </span>
+              <>
+                <span className="flex items-center gap-1.5 text-xs text-gray-300">
+                  <BrailleSpinner /> Reading this repository&rsquo;s history and encoding it once — minutes on a cold cache, seconds after.
+                </span>
+                <button
+                  type="button"
+                  onClick={cancelTraining}
+                  disabled={cancellingTraining}
+                  className="rounded border border-port-border px-2.5 py-1 text-xs text-gray-300 hover:border-port-accent disabled:opacity-50"
+                >
+                  {cancellingTraining ? 'Cancelling…' : 'Cancel training'}
+                </button>
+              </>
             )}
             <span className="text-[11px] text-gray-500">Trains {TRAINABLE_DECISION_ID}. Never adopts on its own.</span>
           </div>

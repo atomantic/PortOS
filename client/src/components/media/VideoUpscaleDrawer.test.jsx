@@ -16,6 +16,15 @@ vi.mock('../ui/Toast');
 
 const ITEM = { id: 'video-1' };
 
+const TOPAZ_QUOTE = {
+  token: 'quote-1',
+  source: { resolution: { width: 640, height: 480 } },
+  normalized: { width: 640, height: 480 },
+  padding: { width: 864, height: 486 },
+  target: { width: 1920, height: 1080 },
+  credits: [8, 9],
+};
+
 const READY_PLAN = {
   id: 'video-1',
   method: 'ltx',
@@ -75,7 +84,7 @@ afterEach(() => vi.unstubAllGlobals());
 
 describe('VideoUpscaleDrawer', () => {
   it('requires an explicit estimate and start before submitting Topaz', async () => {
-    quoteTopazUpscale.mockResolvedValue({ quote: { token: 'quote-1', source: { resolution: { width: 640, height: 480 } }, normalized: { width: 640, height: 480 }, padding: { width: 864, height: 486 }, target: { width: 1920, height: 1080 }, credits: [8, 9] } });
+    quoteTopazUpscale.mockResolvedValue({ quote: TOPAZ_QUOTE });
     startTopazUpscale.mockResolvedValue({ job: { jobId: 'job-1' } });
     render(<VideoUpscaleDrawer item={ITEM} onClose={vi.fn()} onUpscaled={vi.fn()} />);
     fireEvent.click(screen.getByLabelText(/Topaz Labs cloud/));
@@ -95,11 +104,33 @@ describe('VideoUpscaleDrawer', () => {
     fireEvent.click(screen.getByLabelText(/Topaz Labs cloud/));
     fireEvent.click(screen.getByRole('button', { name: 'Get free estimate' }));
     view.rerender(<VideoUpscaleDrawer item={{ id: 'video-2' }} onClose={vi.fn()} onUpscaled={vi.fn()} />);
-    await act(async () => resolveQuote({ quote: { token: 'old', source: { resolution: { width: 640, height: 480 } }, normalized: { width: 640, height: 480 }, padding: { width: 864, height: 486 }, target: { width: 1920, height: 1080 }, credits: [8, 9] } }));
+    await act(async () => resolveQuote({ quote: TOPAZ_QUOTE }));
     fireEvent.click(screen.getByLabelText(/Topaz Labs cloud/));
     expect(screen.queryByText(/Estimated 8–9 credits/)).toBeNull();
     expect(screen.getByRole('button', { name: 'Start Topaz upscale' })).toBeDisabled();
   });
+
+  it('requires a fresh Topaz estimate after the model changes', async () => {
+    let resolveProteus;
+    quoteTopazUpscale
+      .mockImplementationOnce(() => new Promise(resolve => { resolveProteus = resolve; }))
+      .mockResolvedValueOnce({ quote: { ...TOPAZ_QUOTE, token: 'starlight-quote' } });
+    render(<VideoUpscaleDrawer item={ITEM} onClose={vi.fn()} onUpscaled={vi.fn()} />);
+    fireEvent.click(screen.getByLabelText(/Topaz Labs cloud/));
+    fireEvent.click(screen.getByRole('button', { name: 'Get free estimate' }));
+    fireEvent.change(screen.getByLabelText('Model'), { target: { value: 'starlight' } });
+
+    await act(async () => resolveProteus({ quote: TOPAZ_QUOTE }));
+    const start = screen.getByRole('button', { name: 'Start Topaz upscale' });
+    expect(start).toBeDisabled();
+    expect(screen.queryByText(/Estimated 8–9 credits/)).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Get free estimate' }));
+    await screen.findByText(/Estimated 8–9 credits/);
+    expect(quoteTopazUpscale).toHaveBeenLastCalledWith('video-1', 'starlight', { silent: true });
+    expect(start).toBeEnabled();
+  });
+
   it('downloads the adapter through POST and allows an explicit retry after a dropped stream', async () => {
     getUpscalePlan.mockResolvedValue({ plan: missingAdapterPlan() });
     upscaleAdapterDownloadUrl.mockReturnValue('/api/video-gen/ic-loras/pixel-upscale/download');

@@ -27,6 +27,7 @@
  *   - key present, non-empty → fill ONLY when the target field is blank
  */
 
+import { VISION_EXPAND_MAX_IMAGES } from '../lib/universeBibleLimits.js';
 import { PROVIDERS_PAGE_BREADCRUMB } from '../lib/navManifest.js';
 import { getUniverse } from './universeBuilder.js';
 import { applyExpansion, STRING_FIELDS, LIST_FIELDS } from './universeCharacterExpand.js';
@@ -36,10 +37,7 @@ import { runPromptThroughProvider, assertProvider, assertVisionRunUsedImages } f
 import { ServerError } from '../lib/errorHandler.js';
 import { shortId } from '../lib/fileUtils.js';
 
-// Cap mirrors VISION_MAX_IMAGES in universeVisionDescribe.js — the runner
-// base64-inlines every image into a single request body, so a large batch
-// balloons the prompt and the provider's context window.
-export const VISION_EXPAND_MAX_IMAGES = 8;
+export { VISION_EXPAND_MAX_IMAGES };
 
 // Per-list-field row-shape guidance so the model returns rows that survive
 // `sanitizeCharacter` (which drops rows missing the required key). Keep in sync

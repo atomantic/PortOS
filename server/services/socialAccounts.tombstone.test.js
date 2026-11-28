@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
-import { rmSync } from 'fs';
+import { rmSync, statSync } from 'fs';
 import { join } from 'path';
 import { createTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
@@ -49,6 +49,12 @@ beforeEach(() => {
 afterAll(() => rmSync(tempRoot, { recursive: true, force: true }));
 
 describe('social account tombstones (#3532)', () => {
+  it.skipIf(process.platform === 'win32')('creates an owner-only social account store', async () => {
+    await newAccount();
+    expect(statSync(twinDir).mode & 0o777).toBe(0o700);
+    expect(statSync(join(twinDir, 'social-accounts.json')).mode & 0o777).toBe(0o600);
+  });
+
   it('records a tombstone on delete and keeps the account deleted through a peer sync', async () => {
     const created = await newAccount();
     const peer = peerSnapshotWith(created);

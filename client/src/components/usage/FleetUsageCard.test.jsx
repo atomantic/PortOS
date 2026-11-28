@@ -66,6 +66,9 @@ describe('FleetUsageCard', () => {
     expect(screen.getAllByText('This machine')).toHaveLength(2);
     expect(screen.getAllByText('Fleet total')).toHaveLength(2);
     expect(screen.getByText('2 instances combined')).toBeInTheDocument();
+    const columnHeaders = screen.getAllByRole('columnheader');
+    expect(columnHeaders).toHaveLength(7);
+    for (const header of columnHeaders) expect(header).toHaveAttribute('scope', 'col');
   });
 
   // A single-machine install has nothing to compare against — the section is

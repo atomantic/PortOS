@@ -363,6 +363,8 @@ describe('LocalModelAssessments', () => {
     await renderPanel();
 
     await user.click(await screen.findByRole('button', { name: /discard the measurement/i }));
+    expect(deleteLocalLlmAssessment).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: 'Discard' }));
     await waitFor(() => expect(screen.getByText(/Not yet measured \(1\)/)).toBeInTheDocument());
     expect(deleteLocalLlmAssessment).toHaveBeenCalledWith('ollama', 'example-model:7b', '', { silent: true });
   });
@@ -740,6 +742,8 @@ describe('LocalModelAssessments — one row per tuning', () => {
     // Ranked order puts the tuned row second (both score alike, tie broken on
     // tuning signature: '' sorts before 'ubatchSize=512').
     await user.click(buttons[1]);
+    expect(deleteLocalLlmAssessment).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: 'Discard' }));
     await waitFor(() => expect(deleteLocalLlmAssessment)
       .toHaveBeenCalledWith('llama', 'dflash', 'ubatchSize=512', { silent: true }));
   });

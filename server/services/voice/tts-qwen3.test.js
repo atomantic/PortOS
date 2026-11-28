@@ -20,11 +20,16 @@ wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22);
 wav.writeUInt32LE(24000, 24); wav.writeUInt32LE(48000, 28); wav.writeUInt16LE(2, 32); wav.writeUInt16LE(16, 34);
 wav.write('data', 36); wav.writeUInt32LE(4800, 40);
 
-function runnerResponse(response, code = 0) {
+const writeInput = vi.fn();
+
+function runnerResponse(response, code = 0, inputError = null) {
   spawn.mockImplementation(() => {
     const child = new EventEmitter();
     child.stdout = new EventEmitter(); child.stderr = new EventEmitter();
+    child.stdin = new EventEmitter();
+    child.stdin.end = writeInput;
     queueMicrotask(() => {
+      if (inputError) child.stdin.emit('error', inputError);
       (code === 0 ? child.stdout : child.stderr).emit('data', JSON.stringify(response));
       child.emit('close', code);
     });
@@ -50,10 +55,36 @@ describe('tts-qwen3', () => {
   });
 
   it('returns only playable audio with the actual immutable revision and buffered latency', async () => {
-    const result = await synthesizeQwen3('An invented example sentence.', { mode: 'design', instructions: 'warm low alto' });
+    const text = ' An invented example sentence.\n— ';
+    const instructions = 'warm low alto';
+    const result = await synthesizeQwen3(text, { mode: 'design', instructions });
     expect(result).toMatchObject({ wav, modelRevision: evidence.modelRevision, effectiveControls: evidence.effectiveControls });
     expect(result.firstAudioMs).toBe(result.latencyMs);
-    expect(spawn.mock.calls[0][1]).toContain('--models-dir');
+    const args = spawn.mock.calls[0][1];
+    expect(args).toContain('--models-dir');
+    expect(args).toContain('--stdin-json');
+    expect(args.join(' ')).not.toContain(text);
+    expect(args.join(' ')).not.toContain(instructions);
+    expect(JSON.parse(writeInput.mock.calls[0][0])).toEqual({ text, instructions });
+    expect(unlink).toHaveBeenCalledOnce();
+  });
+
+  it('sends the clone transcript on stdin alongside the speech text', async () => {
+    const cloneModel = 'Qwen/Qwen3-TTS-12Hz-1.7B-Base';
+    runnerResponse({ ...evidence, modelRevision: `${cloneModel}@${'a'.repeat(40)}`, effectiveControls: { ...evidence.effectiveControls, mode: 'clone' } });
+    const text = 'Example speech';
+    const referenceTranscript = 'Invented words from the reference recording';
+    await synthesizeQwen3(text, { referenceAudio: '/example/reference.wav', referenceTranscript });
+    const args = spawn.mock.calls[0][1];
+    expect(args).toContain('/example/reference.wav');
+    expect(args.join(' ')).not.toContain(referenceTranscript);
+    expect(JSON.parse(writeInput.mock.calls[0][0])).toEqual({ text, reference_transcript: referenceTranscript });
+  });
+
+  it('fails safely when the runner closes its input pipe early', async () => {
+    runnerResponse(evidence, 0, new Error('EPIPE'));
+    await expect(synthesizeQwen3('Example')).rejects.toMatchObject({ status: 502, code: 'QWEN3_SYNTHESIS_FAILED' });
+    expect(readFile).not.toHaveBeenCalled();
     expect(unlink).toHaveBeenCalledOnce();
   });
 

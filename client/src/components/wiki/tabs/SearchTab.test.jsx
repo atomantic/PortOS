@@ -27,4 +27,17 @@ describe('SearchTab superseded searches (#12951)', () => {
     await act(async () => { resolveOld({ results: [{ path: 'old/stale.md', name: 'Stale Result', snippet: 'x' }], total: 1 }); });
     expect(screen.queryByText('Stale Result')).not.toBeInTheDocument();
   });
+
+  it('lays out search input, clear button, and submit button in flow without overlapping', () => {
+    render(renderTab('v1'));
+    const box = screen.getByLabelText('Search wiki pages and raw sources');
+    expect(box.className).toContain('min-w-0');
+    expect(box.parentElement.className).toContain('flex');
+
+    fireEvent.change(box, { target: { value: 'query' } });
+    const clear = screen.getByRole('button', { name: 'Clear search' });
+    expect(clear.className).toContain('min-h-[44px]');
+    expect(clear.className).toContain('min-w-[44px]');
+    expect(screen.getByRole('button', { name: 'Search' })).toBeEnabled();
+  });
 });

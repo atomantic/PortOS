@@ -145,22 +145,25 @@ describe('Memory Routes', () => {
       expect(searchMemories).not.toHaveBeenCalled();
     });
 
-    it('uses semantic search and the requested relevance threshold when an embedding is available', async () => {
+    it('fuses keyword and semantic matches when an embedding is available', async () => {
       const embedding = [0.1, 0.2];
-      const result = { memories: [{ id: 'semantic-hit', similarity: 0.91 }], total: 7 };
+      const ranked = Array.from({ length: 9 }, (_, index) => ({ id: `hit-${index}`, searchMethod: 'fts' }));
       embeddings.generateQueryEmbedding.mockResolvedValue(embedding);
-      searchMemories.mockResolvedValue(result);
+      hybridSearchMemories.mockResolvedValue({ memories: ranked, total: ranked.length });
 
       const response = await request(app).post('/api/memory/search').send({ query, ...filters, minRelevance: 0.85 });
 
       expect(response.status).toBe(200);
-      expect(response.body).toEqual({ ...result, searchMode: 'semantic' });
+      expect(response.body).toEqual({ memories: ranked.slice(6), total: 9, searchMode: 'hybrid' });
       expect(embeddings.generateQueryEmbedding).toHaveBeenCalledExactlyOnceWith(query, {
         types: filters.types,
         categories: filters.categories,
       });
-      expect(searchMemories).toHaveBeenCalledExactlyOnceWith(embedding, { ...filters, minRelevance: 0.85 });
-      expect(hybridSearchMemories).not.toHaveBeenCalled();
+      const { offset, limit, ...scope } = filters;
+      expect(hybridSearchMemories).toHaveBeenCalledExactlyOnceWith(query, embedding, {
+        ...scope, limit: offset + limit, minRelevance: 0.85, lexicalMatch: 'any', ftsWeight: 0.6, vectorWeight: 0.4,
+      });
+      expect(searchMemories).not.toHaveBeenCalled();
     });
   });
 

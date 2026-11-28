@@ -140,7 +140,7 @@ describe('describeMindTurnProgress', () => {
       activeTurnId: null,
       usageLimited: false,
       contextBudgetBlocked: true,
-      pauseReason: 'Local context window too small: known 12288-token context is below the 15104-token request budget. Raise provider numCtx (Settings → AI providers) or shrink mind context, then resume.',
+      pauseReason: 'Local context window too small: known 12288-token context is below the 15104-token request budget. Raise provider numCtx (Models → Providers) or shrink mind context, then resume.',
       nextEligibleWakeAt: null,
     };
     const progress = describeMindTurnProgress({

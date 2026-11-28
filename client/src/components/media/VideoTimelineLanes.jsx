@@ -12,7 +12,6 @@ import { memo, useEffect, useMemo, useRef } from 'react';
 import { useSortable } from '../../lib/dnd/index.js';
 import { X, Film, Plus, Music } from 'lucide-react';
 import { dndTransformToCss } from '../../lib/dndTransform';
-import { clickableProps, onActivateKeyDown } from '../../lib/a11yKeyboard.js';
 import { assetUrl, segmentDuration } from '../../lib/videoTimelineModel';
 
 const segmentLabel = (segment, meta) => {
@@ -26,7 +25,7 @@ const segmentLabel = (segment, meta) => {
 function FadeRamp({ side, fadeSec, duration }) {
   if (!(fadeSec > 0)) return null;
   return (
-    <div
+    <span
       data-testid={`fade-${side}-ramp`}
       aria-hidden="true"
       style={{ width: `${Math.min(100, (fadeSec / duration) * 100)}%` }}
@@ -59,61 +58,42 @@ export const TimelineBlock = memo(function TimelineBlock({
     width: `${Math.max(60, dur * pxPerSec)}px`,
     opacity: isDragging ? 0.4 : 1,
   };
-  // This block is both the drag handle and the click-to-select target, and
-  // the keyboard activator lives on `listeners.onKeyDown` — so the
-  // `clickableProps` spread that used to sit here REPLACED that activator and
-  // left the block announcing itself as draggable with no working pickup
-  // (#7243). Split the keys instead: Enter selects, Space and the arrows that
-  // follow it belong to the drag sensor. The `currentTarget` guard is the one
-  // `clickableProps` carries, so Enter on the inner Remove button still removes.
-  // `role`/`tabIndex` below repeat what `attributes` already sets, so the
-  // clickable-element guard reads the triple off the tag.
-  const handleKeyDown = (event) => {
-    if (event.currentTarget != null && event.target !== event.currentTarget) return;
-    if (event.key !== 'Enter') {
-      listeners?.onKeyDown?.(event);
-      return;
-    }
-    event.preventDefault();
-    onSelect(clip._key);
-  };
   return (
     <div
       ref={setNodeRef}
       style={style}
-      className={`relative shrink-0 h-20 rounded-md border-2 cursor-pointer select-none transition-colors group ${
+      className={`relative shrink-0 h-20 rounded-md border-2 select-none transition-colors group ${
         isMissing
           ? 'bg-port-error/20 border-port-error'
           : isSelected
             ? 'border-port-accent bg-port-accent/10'
             : 'bg-port-card border-port-border hover:border-port-accent/50'
       }`}
-      onClick={() => onSelect(clip._key)}
-      {...attributes}
-      {...listeners}
-      role="button"
-      tabIndex={0}
-      onKeyDown={handleKeyDown}
     >
-      {thumbSrc && (
-        <img src={thumbSrc} alt="" draggable={false} className="w-full h-full object-cover rounded-md opacity-80" />
-      )}
-      <div className="absolute inset-0 rounded-md bg-gradient-to-t from-black/70 via-transparent to-transparent pointer-events-none" />
-      <FadeRamp side="in" fadeSec={clip.fadeInSec} duration={dur} />
-      <FadeRamp side="out" fadeSec={clip.fadeOutSec} duration={dur} />
-      <div className="absolute bottom-1 left-1.5 right-1.5 text-[10px] text-white truncate font-medium">
-        {isMissing ? '(missing)' : label}
-      </div>
-      <div className="absolute top-1 left-1.5 text-[9px] port-media-overlay px-1 rounded">
-        {isStill ? `still · ${dur.toFixed(2)}s` : `${dur.toFixed(2)}s`}
-      </div>
+      {/* Enter clicks the native button; the keyboard sensor owns Space. */}
       <button
         type="button"
-        onClick={(e) => { e.stopPropagation(); onRemove(clip._key); }}
-        // The editor's Mouse/Touch sensors activate on these, so a slow press
-        // on Remove must not start a reorder instead.
-        onMouseDown={(e) => e.stopPropagation()}
-        onTouchStart={(e) => e.stopPropagation()}
+        className="absolute inset-0 h-full w-full rounded-md text-left"
+        onClick={() => onSelect(clip._key)}
+        {...attributes}
+        {...listeners}
+      >
+        {thumbSrc && (
+          <img src={thumbSrc} alt="" draggable={false} className="w-full h-full object-cover rounded-md opacity-80" />
+        )}
+        <span className="absolute inset-0 rounded-md bg-gradient-to-t from-black/70 via-transparent to-transparent pointer-events-none" />
+        <FadeRamp side="in" fadeSec={clip.fadeInSec} duration={dur} />
+        <FadeRamp side="out" fadeSec={clip.fadeOutSec} duration={dur} />
+        <span className="absolute bottom-1 left-1.5 right-1.5 text-[10px] text-white truncate font-medium">
+          {isMissing ? '(missing)' : label}
+        </span>
+        <span className="absolute top-1 left-1.5 text-[9px] port-media-overlay px-1 rounded">
+          {isStill ? `still · ${dur.toFixed(2)}s` : `${dur.toFixed(2)}s`}
+        </span>
+      </button>
+      <button
+        type="button"
+        onClick={() => onRemove(clip._key)}
         className="absolute top-0 right-0 inline-flex min-w-[44px] min-h-[44px] items-start justify-end p-1 rounded opacity-40 [@media(hover:hover)]:lg:opacity-0 lg:group-hover:opacity-100 focus-visible:opacity-100 transition-opacity text-white group/remove"
         title="Remove from timeline"
         aria-label={`Remove ${removeLabel} from timeline`}
@@ -142,25 +122,27 @@ export const LaneBlock = memo(function LaneBlock({
   return (
     <div
       style={style}
-      className={`absolute top-1 bottom-1 rounded border cursor-pointer ${
+      className={`absolute top-1 bottom-1 rounded border ${
         isMissing
           ? 'bg-port-error/20 border-port-error'
           : isSelected
             ? 'z-10 border-port-accent bg-port-accent/20'
             : `${tone} hover:border-port-accent/50`
       }`}
-      onClick={() => onSelect(entry._key)}
-      {...clickableProps(() => onSelect(entry._key))}
-      onKeyDown={onActivateKeyDown(() => onSelect(entry._key))}
     >
-      <span className={`absolute top-0.5 text-[9px] text-white truncate pointer-events-none ${showRemove ? 'left-1 right-7' : 'inset-x-1'}`}>
-        {isMissing ? '(missing)' : label}
-      </span>
+      <button
+        type="button"
+        className="absolute inset-0 h-full w-full rounded text-left"
+        onClick={() => onSelect(entry._key)}
+      >
+        <span className={`absolute top-0.5 text-[9px] text-white truncate ${showRemove ? 'left-1 right-7' : 'inset-x-1'}`}>
+          {isMissing ? '(missing)' : label}
+        </span>
+      </button>
       {showRemove && (
         <button
           type="button"
-          onClick={(e) => { e.stopPropagation(); onRemove(entry._key); }}
-          onPointerDown={(e) => e.stopPropagation()}
+          onClick={() => onRemove(entry._key)}
           className="absolute top-1/2 right-0 -translate-y-1/2 inline-flex min-w-[44px] min-h-[44px] items-center justify-center p-1 text-white/70 hover:text-port-error"
           title="Remove"
           aria-label={`Remove ${label} from timeline`}

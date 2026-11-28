@@ -1,9 +1,16 @@
-import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { MemoryRouter, useLocation } from 'react-router';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
+import Brain from '../../../pages/Brain';
+
+vi.mock('../../../services/socket', async () => {
+  const { EventEmitter } = await import('node:events');
+  return { default: new EventEmitter() };
+});
+vi.mock('../../../services/apiBrain.js', () => ({
+  getBrainSummary: vi.fn().mockResolvedValue({ counts: {}, needsReview: 0 }),
+  getBrainSettings: vi.fn().mockResolvedValue({}),
+}));
 
 // ThreadSourceClosedAction imports apiBrainThreads.js directly, not the barrel (#16813),
 // so both mocks share one updateThread fn.
@@ -250,10 +257,16 @@ describe('ThreadsTab', () => {
     expect(updateThread).toHaveBeenCalledWith('act', expect.objectContaining({ title: 'Post the opening clip', dueAt: DUE }), { silent: true });
   });
 
-  it('is the component the Brain page renders for its threads tab', () => {
-    const clientSrc = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
-    const brainPage = readFileSync(join(clientSrc, 'pages', 'Brain.jsx'), 'utf8');
-    expect(brainPage).toContain("import('../components/brain/tabs/ThreadsTab')");
-    expect(brainPage).toMatch(/case 'threads':[\s\S]{0,120}<ThreadsTab\b/);
+  it('renders the threads view when Brain opens /brain/threads', async () => {
+    render(
+      <MemoryRouter initialEntries={['/brain/threads']}>
+        <Routes>
+          <Route path="/brain/:tab" element={<Brain />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('Pinned loop')).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Threads', selected: true })).toBeInTheDocument();
   });
 });

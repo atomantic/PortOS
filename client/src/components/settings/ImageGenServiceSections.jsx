@@ -1,3 +1,4 @@
+import { Link } from 'react-router';
 /**
  * Media settings — the sections beside the backend config: the HuggingFace
  * token (its own validated endpoints, independent of the Media save) and the
@@ -5,6 +6,8 @@
  * tab switch.
  */
 
+import ConfirmButtonPair from '../../components/ui/ConfirmButtonPair';
+import useConfirmDelete from '../../hooks/useConfirmDelete';
 import { useState, useId } from 'react';
 import { Save, AlertTriangle, Sparkles, Key, Check, Trash2 } from 'lucide-react';
 import toast from '../ui/Toast';
@@ -21,6 +24,7 @@ const SECTION_CLASS = 'bg-port-card border border-port-border rounded-xl p-6 spa
 const DEFAULT_TEST_PROMPT = 'a small cyberpunk fox sitting on a neon-lit rooftop at night, cinematic, highly detailed';
 
 export default function ImageGenServiceSections({ mediaTab, form }) {
+  const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
   const { saved, isDirty } = form;
 
   // HuggingFace token state — separate from the main settings save flow because
@@ -203,15 +207,26 @@ export default function ImageGenServiceSections({ mediaTab, form }) {
         </div>
 
         {hfTokenSource === 'stored' && (
-          <button
-            type="button"
-            onClick={handleClearHfToken}
-            disabled={hfTokenBusy !== null}
-            className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-port-border text-gray-300 text-xs font-medium hover:bg-port-error/20 hover:text-port-error disabled:opacity-50"
-          >
-            {hfTokenBusy === 'clearing' ? <BrailleSpinner /> : <Trash2 size={12} />}
-            Clear stored token
-          </button>
+          isConfirming('hf-token') ? (
+            <ConfirmButtonPair
+              prompt="Clear stored token?"
+              confirmText="Clear token"
+              onConfirm={() => confirmDelete(handleClearHfToken)}
+              onCancel={cancelDelete}
+              busy={hfTokenBusy !== null}
+              className="flex-wrap"
+            />
+          ) : (
+            <button
+              type="button"
+              onClick={() => requestDelete('hf-token')}
+              disabled={hfTokenBusy !== null}
+              className="inline-flex items-center gap-2 pointer-coarse:min-h-11 px-3 py-1.5 rounded-lg bg-port-border text-gray-300 text-xs font-medium hover:bg-port-error/20 hover:text-port-error disabled:opacity-50"
+            >
+              {hfTokenBusy === 'clearing' ? <BrailleSpinner /> : <Trash2 size={12} />}
+              Clear stored token
+            </button>
+          )
         )}
       </div>
       )}
@@ -224,7 +239,7 @@ export default function ImageGenServiceSections({ mediaTab, form }) {
         </div>
         <p className="text-xs text-gray-500">
           Send a prompt through {modeLabel(effectiveTestMode)} to verify end-to-end. For richer controls, visit the
-          <a href="/media/image" className="text-port-accent hover:underline ml-1">Image Gen</a> page.
+          <Link to="/media/image" className="text-port-accent hover:underline ml-1">Image Gen</Link> page.
         </p>
         <FormField label="Backend" labelClassName="block text-sm text-gray-300 mb-1">
           <select

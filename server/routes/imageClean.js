@@ -8,13 +8,13 @@
 // express.json() parser in server/index.js is a no-op here because the request
 // content-type is image/*, so this route's express.raw() owns the body.
 
+import { cleanQuerySchema, jobIdSchema } from '../lib/imageCleanValidation.js';
 import { Router, raw } from 'express';
-import { z } from 'zod';
 import sharp from 'sharp';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
-import { cleanImageBuffer, CLEAN_LEVELS, compositeIgnoreZone, IGNORE_ZONE_FEATHER_DEFAULT } from '../lib/imageClean.js';
-import { applyLightRegen, computePixelDelta, REGEN_STRENGTH_MIN, REGEN_STRENGTH_MAX } from '../services/imageGen/regen.js';
+import { cleanImageBuffer, CLEAN_LEVELS, compositeIgnoreZone } from '../lib/imageClean.js';
+import { applyLightRegen, computePixelDelta } from '../services/imageGen/regen.js';
 import { enqueueGpuClean, readGpuCleanResult, getGpuCleanStatus, saveGpuCleanToGallery } from '../services/imageGen/cleanGpu.js';
 
 const router = Router();
@@ -22,65 +22,6 @@ const router = Router();
 // Re-export so existing `import { CLEAN_LEVELS } from './imageClean.js'`
 // consumers in the routes layer keep working.
 export { cleanImageBuffer, CLEAN_LEVELS };
-
-// Query-string flag → boolean. Accepts the common truthy/falsey string forms a
-// browser fetch sends ("1"/"0"/"true"/"false"); anything else falls back to the
-// schema default. Mirrors the history.js success-filter pattern.
-const queryFlag = (def) => z.preprocess(
-  (v) => {
-    if (v === undefined) return def;
-    if (v === 'true' || v === '1') return true;
-    if (v === 'false' || v === '0') return false;
-    return v;
-  },
-  z.boolean(),
-);
-
-// Diffusion sub-mode. `off` (default) skips it entirely; `light` runs the
-// CPU-only spatial pass (`applyLightRegen`) that actually perturbs SynthID's
-// resolution-dependent carriers — the no-GPU fallback, always available since
-// sharp is a hard dependency. `gpu` (the FLUX img2img round-trip) is
-// GPU-serialized via mediaJobQueue: the route stages the sync-cleaned bytes,
-// enqueues a job through the shared regen seam, and returns a `jobId` the
-// client tracks via the media-job progress channel (issue #2264). Anything
-// else → the `off` default.
-const diffusionMode = z.preprocess(
-  (v) => {
-    if (v === undefined || v === '' || v === '0' || v === 'false' || v === 'off') return 'off';
-    if (v === 'light' || v === 'cpu' || v === '1' || v === 'true') return 'light';
-    if (v === 'gpu' || v === 'flux') return 'gpu';
-    return 'off';
-  },
-  z.enum(['off', 'light', 'gpu']),
-);
-
-// Pipeline steps ride in the query string, not the body (the body is the image).
-// `mask=1` signals an ignore-zone preserve-region envelope in the body (see the
-// length-prefixed decode below); `feather` is the soft-boundary blur sigma (px)
-// clamped in the lib. The mask only has any effect when a diffusion step runs —
-// it composites the ORIGINAL pixels back over the diffused result.
-const cleanQuerySchema = z.object({
-  metadata: queryFlag(true),
-  denoise: queryFlag(false),
-  diffusion: diffusionMode,
-  mask: queryFlag(false),
-  feather: z.preprocess(
-    (v) => (v === undefined || v === '' ? IGNORE_ZONE_FEATHER_DEFAULT : Number(v)),
-    z.number().min(0).max(50),
-  ),
-  // GPU-diffusion-only knobs (issue #2264), ignored by the sync passes.
-  // `strength` is the img2img denoise, clamped to the same [MIN, MAX] the
-  // lightbox slider is bound to; absent → the conservative arbitrary-upload
-  // default. `maxMp` is the optional per-run render-megapixel budget override.
-  strength: z.preprocess(
-    (v) => (v === undefined || v === '' ? undefined : Number(v)),
-    z.number().min(REGEN_STRENGTH_MIN).max(REGEN_STRENGTH_MAX).optional(),
-  ),
-  maxMp: z.preprocess(
-    (v) => (v === undefined || v === '' ? undefined : Number(v)),
-    z.number().min(0.25).max(16).optional(),
-  ),
-});
 
 // Decode the optional ignore-zone envelope. When `?mask=1`, the body is
 // `<uint32 BE maskLen><mask PNG bytes><image bytes>` — a no-dependency framing
@@ -294,13 +235,6 @@ router.post(
     res.send(outData);
   }),
 );
-
-// Validate a clean job id — the mediaJobQueue mints v4 UUIDs, so anything that
-// isn't UUID-shaped can't be a real job (and keeps the temp-path resolution
-// safe). Reused by the result-fetch + save-to-gallery routes below.
-const jobIdSchema = z.object({
-  jobId: z.string().uuid('Invalid job id'),
-});
 
 // Result-fetch for a GPU FLUX clean job (issue #2264). Returns the finished
 // temp render bytes (with any pending ignore-zone composite applied) as the

@@ -29,8 +29,8 @@ function ModelTable({ models, totals }) {
       <table className="w-full text-xs sm:text-sm">
         <thead>
           <tr className="text-left text-gray-500 border-b border-port-border">
-            <th className="py-1.5 pr-2 font-medium">Model</th>
-            {COLUMNS.map((c) => <th key={c.key} className="py-1.5 px-2 font-medium text-right whitespace-nowrap">{c.label}</th>)}
+            <th scope="col" className="py-1.5 pr-2 font-medium">Model</th>
+            {COLUMNS.map((c) => <th scope="col" key={c.key} className="py-1.5 px-2 font-medium text-right whitespace-nowrap">{c.label}</th>)}
           </tr>
         </thead>
         <tbody>

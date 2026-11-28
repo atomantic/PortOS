@@ -1190,16 +1190,16 @@ describe('mtplxServerManager', () => {
     // The saved port is the ONLY record of where MTPLX belongs once PortOS has
     // restarted with it stopped — probing the default port instead would miss a
     // server already on the saved one and then collide with it on start.
-    it('probes the saved port, not the default, when there is no recovered config', async () => {
+    it.each([[8010, 8010], [null, 8000]])('probes the configured port %s with fallback %s', async (port, expectedPort) => {
       vi.spyOn(processEnv, 'findCommandOnPath').mockReturnValue(BINARY);
       const settings = await import('./settings.js');
-      vi.spyOn(settings, 'getSettings').mockResolvedValue({ localLlm: { mtplx: { launch: { port: 8010 } } } });
+      vi.spyOn(settings, 'getSettings').mockResolvedValue({ localLlm: { mtplx: { launch: { port } } } });
       const probe = vi.spyOn(openAiModelsProbe, 'probeOpenAiModels').mockResolvedValue({ reachable: true });
 
       const result = await ensureMtplxRunning();
 
       expect(result.ready).toBe(true);
-      expect(probe).toHaveBeenCalledWith('http://127.0.0.1:8010/v1', expect.anything());
+      expect(probe).toHaveBeenCalledWith(`http://127.0.0.1:${expectedPort}/v1`, expect.anything());
       expect(startCalls()).toHaveLength(0);
     });
 

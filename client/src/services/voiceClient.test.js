@@ -183,22 +183,6 @@ describe('voice playback cancellation', () => {
     vi.unstubAllGlobals();
   });
 
-  it('samples the current played buffer for the avatar and returns silence on interrupt', async () => {
-    const samples = new Float32Array(800);
-    samples.fill(0.15);
-    audio.decodeImpl = () => Promise.resolve({
-      numberOfChannels: 1,
-      duration: 0.5,
-      sampleRate: 1600,
-      getChannelData: () => samples,
-    });
-    expect(voiceClient.getVoiceOutputLevel()).toBe(0);
-    await voiceClient.playWav(new ArrayBuffer(8));
-    expect(voiceClient.getVoiceOutputLevel()).toBeCloseTo(0.6);
-    voiceClient.interrupt();
-    expect(voiceClient.getVoiceOutputLevel()).toBe(0);
-  });
-
   it('stops active and queued audio when a provider timeout is signaled', async () => {
     trigger('voice:transcript');
     emitTtsAudio('first sentence');
@@ -1024,5 +1008,34 @@ describe('speakSynthesized error envelope handling', () => {
       status,
       context: body.context,
     });
+  });
+});
+
+describe('voiceClient output volume and mute controls', () => {
+  it('clamps volume, persists preferences, notifies subscribers, and routes playback through gain', async () => {
+    const snapshots = [];
+    const unsub = voiceClient.onVoiceAudioPrefs((prefs) => snapshots.push(prefs));
+    try {
+      voiceClient.setVoiceVolume(0.4);
+      expect(voiceClient.getVoiceVolume()).toBe(0.4);
+      expect(localStorage.getItem('portos.voice.volume')).toBe('0.4');
+
+      voiceClient.setVoiceVolume(2.5);
+      expect(voiceClient.getVoiceVolume()).toBe(1);
+
+      voiceClient.setVoiceMuted(true);
+      expect(voiceClient.isVoiceMuted()).toBe(true);
+      expect(localStorage.getItem('portos.voice.muted')).toBe('1');
+      expect(voiceClient.getVoiceOutputLevel()).toBe(0);
+
+      voiceClient.setVoiceMuted(false);
+      expect(voiceClient.isVoiceMuted()).toBe(false);
+      expect(localStorage.getItem('portos.voice.muted')).toBe('0');
+      expect(snapshots.at(-1)).toEqual({ volume: 1, muted: false });
+    } finally {
+      unsub();
+      voiceClient.setVoiceVolume(0.85);
+      voiceClient.setVoiceMuted(false);
+    }
   });
 });

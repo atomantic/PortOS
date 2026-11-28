@@ -43,9 +43,10 @@ describe.skipIf(!runDb)('privacy brokers DB round-trip', () => {
   let svc;
   let scan;
   let vault;
+  let scanSources;
   const autoBrokerIds = [
     'test-auto-alpha', 'ca-test-beta-inc', 'test-auto-upgrade',
-    'test-evidence-seal', 'test-evidence-erase', 'test-evidence-legacy', 'test-evidence-vault',
+    'test-evidence-late', 'test-evidence-seal', 'test-evidence-erase', 'test-evidence-legacy', 'test-evidence-vault',
   ];
   const createdVaultIds = [];
   const _vaultTableWasEmpty = false;
@@ -57,6 +58,9 @@ describe.skipIf(!runDb)('privacy brokers DB round-trip', () => {
     svc = await import('./privacyBrokers.js');
     scan = await import('./privacyScan.js');
     vault = await import('./privacyVault.js');
+    const name = await vault.createVaultRecord({ type: 'legal_name', label: 'Name', value: 'Example Person' });
+    createdVaultIds.push(name.id);
+    scanSources = scan.buildSearchVectors(await vault.listScanEligibleValues()).sources;
     // The scan pass needs an explicit broker_scan grant (#8332) — the seeded
     // `self` row holds only local-vault consent. Removed in afterAll.
     const subjects = await import('./privacySubjects.js');
@@ -182,7 +186,7 @@ describe.skipIf(!runDb)('privacy brokers DB round-trip', () => {
     const now = new Date('2026-07-08T00:00:00.000Z');
     // Fresh verdict on a curated broker.
     const kase = await svc.recordScanVerdict('test-auto-alpha', 'found', {
-      evidence: { match_basis: 'name+location', listing_urls: ['https://alpha.example/jane'] },
+      scanSources, evidence: { match_basis: 'name+location', listing_urls: ['https://alpha.example/jane'] },
       found: true, now,
     });
     expect(kase.state).toBe('found');
@@ -218,7 +222,7 @@ describe.skipIf(!runDb)('privacy brokers DB round-trip', () => {
     // (test-auto-alpha's case ends at confirmed_removed, which blocked can't
     // be recorded over).
     const kase = await svc.recordScanVerdict('ca-test-beta-inc', 'blocked', {
-      evidence: { match_basis: 'antibot_wall', search_url: 'https://beta.example/jane' }, now,
+      scanSources, evidence: { match_basis: 'antibot_wall', search_url: 'https://beta.example/jane' }, now,
     });
     expect(kase.found).toBe(null);
     // The blocked-case "I'm listed" manual verdict implies found: true.
@@ -271,7 +275,7 @@ describe.skipIf(!runDb)('privacy brokers DB round-trip', () => {
   it('stores scan identity evidence sealed, reveals it on request, and erases it on confirmed_removed', async () => {
     await insertTestBroker('test-evidence-seal');
     const kase = await svc.recordScanVerdict('test-evidence-seal', 'found', {
-      evidence: { match_basis: 'name+location', ...IDENTITY }, found: true,
+      scanSources, evidence: { match_basis: 'name+location', ...IDENTITY }, found: true,
     });
     // At rest (and so in every dump): no plaintext name, location, or URL.
     expectNoPlaintextIdentity(await rawEvidence(kase.id));
@@ -301,7 +305,7 @@ describe.skipIf(!runDb)('privacy brokers DB round-trip', () => {
   it('erases one case\'s identity evidence on request, keeping its state and verdict', async () => {
     await insertTestBroker('test-evidence-erase');
     const kase = await svc.recordScanVerdict('test-evidence-erase', 'blocked', {
-      evidence: { match_basis: 'antibot_wall', search_url: IDENTITY.search_url },
+      scanSources, evidence: { match_basis: 'antibot_wall', search_url: IDENTITY.search_url },
     });
     const cleared = await svc.clearCaseIdentityEvidence(kase.id);
     expect(cleared).toMatchObject({ state: 'blocked', evidence: { match_basis: 'antibot_wall' }, identityEvidence: null });
@@ -358,6 +362,7 @@ describe.skipIf(!runDb)('privacy brokers DB round-trip', () => {
     await insertTestBroker('test-evidence-vault');
     const nameRec = await vault.createVaultRecord({ type: 'legal_name', label: 'Seal test name', value: IDENTITY.matched_name });
     const kase = await svc.recordScanVerdict('test-evidence-vault', 'found', {
+      scanSources: scan.buildSearchVectors(await vault.listScanEligibleValues()).sources,
       evidence: { match_basis: 'name+location', ...IDENTITY }, found: true,
     });
     expect(kase.identityEvidence?.sealed).toBe(true);
@@ -370,6 +375,69 @@ describe.skipIf(!runDb)('privacy brokers DB round-trip', () => {
     const raw = await rawEvidence(kase.id);
     expectNoPlaintextIdentity(raw);
     expect(raw).not.toContain('sealed_identity');
+  });
+
+  it.each([
+    ['new', 'delete', 'name'], ['new', 'replace', 'address'], ['new', 'disable', 'address'],
+    ['existing', 'replace', 'name'], ['existing', 'delete', 'address'], ['verification', 'replace', 'address'],
+  ])('drops a late %s result after %s on the %s', async (scenario, edit, field) => {
+    const { createSubject, recordConsent } = await import('./privacySubjects.js');
+    const { runVerificationPass } = await import('./privacyOptOut.js');
+    const subject = await createSubject({ displayName: 'Example subject', consentMethod: 'self' });
+    const subjectId = subject.id;
+    try {
+      await recordConsent({ subjectId, scope: 'broker_scan', method: 'self' });
+      await recordConsent({ subjectId, scope: 'broker_optout', method: 'self' });
+      const name = await vault.createVaultRecord({ subjectId, type: 'legal_name', label: 'Name', value: IDENTITY.matched_name });
+      const address = await vault.createVaultRecord({ subjectId, type: 'address', label: 'Home', value: '1 Example St, Sealville, OR' });
+      const brokerId = 'test-evidence-late';
+      await insertTestBroker(brokerId);
+      await query(`UPDATE privacy_brokers SET source = 'curated', enabled = TRUE, urls = jsonb_build_object('search', $1::text) WHERE id = $2`,
+        ['https://seal-broker.example/{firstName}-{lastName}/{city}', brokerId]);
+      const broker = await svc.getBroker(brokerId);
+      const vectors = scan.buildSearchVectors(await vault.listScanEligibleValues({ subjectId }));
+      const response = { status: 200, text: async () => ('Jane Q Sealtest, Sealville. ').repeat(30) };
+      const deps = { subjectId, urlSafe: async url => url.startsWith('https://seal-broker.example/'), fetchImpl: async () => response };
+      let existing;
+      if (scenario !== 'new') {
+        existing = await scan.scanBroker(broker, vectors, { ...deps, now: new Date(0) });
+        expect(await svc.revealCaseEvidence(existing.id)).toMatchObject({ sealed: true, evidence: {
+          matched_name: IDENTITY.matched_name, matched_location: IDENTITY.matched_location, search_url: IDENTITY.search_url,
+        } });
+      }
+      if (scenario === 'verification') {
+        await svc.transitionCase(existing.id, 'optout_in_progress');
+        await svc.transitionCase(existing.id, 'submitted');
+        await svc.transitionCase(existing.id, 'verification_pending');
+        await svc.transitionCase(existing.id, 'confirmed_removed', { viaRescan: true, now: new Date(0) });
+      }
+
+      // Commit the vault mutation while the broker response is outstanding.
+      const recordId = field === 'name' ? name.id : address.id;
+      const probeDeps = { ...deps, fetchImpl: vi.fn(async () => {
+        if (edit === 'delete') await vault.deleteVaultRecord(recordId);
+        else if (edit === 'disable') await vault.updateVaultRecord(recordId, { useForScans: false });
+        else await vault.updateVaultRecord(recordId, { value: field === 'name' ? 'Replacement Example' : '2 Example St, Sampleville, WA' });
+        return response;
+      }) };
+      if (scenario === 'verification') {
+        const result = await runVerificationPass({ subjectId, probeDeps });
+        expect(result.reappeared).toEqual([]);
+      } else {
+        expect(await scan.runScanPass(probeDeps)).toMatchObject({ scanned: 0 });
+      }
+      expect(probeDeps.fetchImpl).toHaveBeenCalledExactlyOnceWith(IDENTITY.search_url, expect.anything());
+      await expect(probeDeps.fetchImpl.mock.results[0].value).resolves.toBe(response);
+      const kase = await svc.getCaseForBroker(brokerId, { subjectId });
+      if (existing) {
+        expect(kase.state).toBe(scenario === 'verification' ? 'confirmed_removed' : 'found');
+        expect(await svc.revealCaseEvidence(kase.id)).toEqual({ caseId: kase.id, sealed: false, evidence: {} });
+      } else {
+        expect(kase).toBe(null);
+      }
+    } finally {
+      await query('DELETE FROM privacy_subjects WHERE id = $1', [subjectId]);
+    }
   });
 
   it('reports scan status counts', async () => {

@@ -1,7 +1,8 @@
 /**
  * Pure usage-report builder: folds per-day / per-month provider+model buckets into a priced cost report, plus the counter primitives and row-cost helpers the ledger shares with it.
  */
-import { resolveModelRates, isFreeProvider, isFreeModelId, estimateCostUsd, estimateGrokImagineCost, estimateAgyImageCost, serviceTierExtra, SPEED_LEDGER_FIELDS, PRICING_AS_OF } from './modelPricing.js';
+import { resolveModelRates, isFreeProvider, isFreeModelId, estimateCostUsd, estimateGrokImagineCost, estimateAgyImageCost, serviceTierExtra, PRICING_AS_OF } from './modelPricing.js';
+import { TOKEN_TIER_FIELDS, USAGE_COUNT_FIELDS } from './usageFields.js';
 import { familyForProvider, familyForProviderId } from './provider/providerFamilies.js';
 import { roundCents } from './subscriptionSavings.js';
 import { POLLUTING_KEYS } from './objects.js';
@@ -30,15 +31,10 @@ export const normalizeProvider = (providerId, providerName = null) => {
   };
 };
 
-// `long*` is a subset of the base token fields (already included there), priced
-// a second time by the report. `images` / `videoSeconds` / `inputImages` are
-// Imagine units, priced by estimateGrokImagineCost rather than as tokens.
-export const countFields = [
-  'messages', 'tokensIn', 'tokensOut', 'cacheReadTokens', 'cacheWriteTokens',
-  'longTokensIn', 'longTokensOut', 'longCacheReadTokens', 'longCacheWriteTokens',
-  ...SPEED_LEDGER_FIELDS,
-  'images', 'videoSeconds', 'inputImages',
-];
+// `long*` and speed tiers are subsets of the base token fields (already included
+// there), priced a second time by the report. `images` / `videoSeconds` /
+// `inputImages` are Imagine units, priced by estimateGrokImagineCost rather than as tokens.
+export const countFields = USAGE_COUNT_FIELDS;
 
 // Every counter the usage report carries per provider, model and total; the
 // single list the report builder zero-inits, accumulates and projects from.
@@ -240,12 +236,7 @@ function foldSource(ctx, source, from, to) {
 
 // Every counter whose model-attributed total can fall short of the provider's:
 // the four base fields plus the long/fast/ultrafast subsets of each.
-const GAP_FIELDS = [
-  'tokensIn', 'tokensOut', 'cacheReadTokens', 'cacheWriteTokens',
-  'longTokensIn', 'longTokensOut', 'longCacheReadTokens', 'longCacheWriteTokens',
-  'fastTokensIn', 'fastTokensOut', 'fastCacheReadTokens', 'fastCacheWriteTokens',
-  'ultrafastTokensIn', 'ultrafastTokensOut', 'ultrafastCacheReadTokens', 'ultrafastCacheWriteTokens',
-];
+const GAP_FIELDS = TOKEN_TIER_FIELDS;
 
 /**
  * Tokens recorded without a model id (older capture paths) still count toward

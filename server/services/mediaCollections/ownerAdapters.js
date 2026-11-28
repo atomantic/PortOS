@@ -415,6 +415,15 @@ export const findOrCreateSpriteCollection = ({ id, name }) => findOrCreateFixedC
   description: 'Generated reference images for this sprite.',
 });
 
+// The Avatars collection: portraits voice agents wear on the Voice Call
+// transceiver channels. A fixed id so every peer converges on one bucket, and
+// the collection's federation (records plus image bytes) shares avatars.
+export const AVATAR_COLLECTION_ID = 'avatars';
+export const findOrCreateAvatarCollection = () => findOrCreateFixedCollection(AVATAR_COLLECTION_ID, {
+  name: 'Avatars',
+  description: 'Portraits for voice agents, assignable to Voice Call transceiver channels.',
+});
+
 export const findOrCreateCompositionsCollection = () => findOrCreateFixedCollection('compositions', {
   name: 'Compositions',
   description: 'Videos exported from HTML compositions and Code Animation.',

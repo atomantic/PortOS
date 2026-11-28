@@ -76,6 +76,10 @@ import usageRoutes from './usage.js';
 
 const buildApp = () => {
   const app = express();
+  app.use((req, _res, next) => {
+    req.portosAuthContext = { enabled: false };
+    next();
+  });
   app.use(express.json());
   app.use('/api/usage', usageRoutes);
   app.use(errorMiddleware);

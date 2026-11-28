@@ -182,6 +182,18 @@ describe('Calendar account availability', () => {
   });
 });
 
+it('keeps all eight section tabs named when their labels collapse on phones', async () => {
+  api.getCalendarAccounts.mockResolvedValue([]);
+  renderCalendar();
+  await screen.findByText('No calendar accounts configured');
+
+  const sections = within(screen.getByRole('tablist', { name: 'Calendar sections' }));
+  for (const name of ['Agenda', 'Day', 'Week', 'Month', 'Lifetime', 'Review', 'Sync', 'Config']) {
+    const tab = sections.getByRole('tab', { name });
+    expect(within(tab).getByText(name)).toHaveClass('max-sm:sr-only');
+  }
+});
+
 
 it('reconciles configuration without replacing an edited form and ignores obsolete reads', async () => {
   let resolveOld;

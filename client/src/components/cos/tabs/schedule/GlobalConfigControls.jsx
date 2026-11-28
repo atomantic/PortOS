@@ -1,3 +1,4 @@
+import { Link } from 'react-router';
 import { useState, useEffect } from 'react';
 import useFieldDraft from '../../../../hooks/useFieldDraft';
 import { AGENT_OPTIONS, BRANCHES_PER_AGENT_TASK_TYPES, DEPFREE_MODE_TASK_TYPES, LOG_TRIAGE_CAPS, LOG_TRIAGE_TASK_TYPES, RELEASE_OPTIONS, RELEASE_OPTIONS_TASK_TYPES, ISSUE_AUTHOR_FILTER_TASK_TYPES, SWARM_TASK_TYPES } from '../../constants';
@@ -105,7 +106,7 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
         <>
           <TaskModelQuickControls pins={pins} providers={providers} loading={!providersLoaded} disabled={updating} />
           {pins.toolFree && (
-            <p className="text-xs text-gray-500">Uses a text API with no tools. Default follows <a href="/models/llms/abuse" className="text-port-accent underline">Abuse Guard source settings</a>; a saved CLI provider must be cleared or replaced.</p>
+            <p className="text-xs text-gray-500">Uses a text API with no tools. Default follows <Link to="/models/llms/abuse" className="text-port-accent underline">Abuse Guard source settings</Link>; a saved CLI provider must be cleared or replaced.</p>
           )}
         </>
       )}

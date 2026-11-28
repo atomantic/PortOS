@@ -1,5 +1,6 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
-import { isAuthEnabled, verifyPassword, verifyRequestSession } from './auth.js';
+import * as authService from './auth.js';
+import { isAuthEnabled, verifyPassword, verifyRequestSession, verifyRequestSessionIdentity } from './auth.js';
 // Shared with sidecar processes (lib/sidecarAuthGate.js) so the Autofixer UI
 // on :5560 applies byte-identical credential extraction and CSRF rules.
 import { browserRequestRefusal, isLocalConnection, isOriginlessCrossSiteBrowserRequest, extractBasicPassword } from '../../lib/portosAuthCore.js';
@@ -203,8 +204,16 @@ export const authGate = async (req, res, next) => {
   // introduced here so a Settings toggle takes effect on the very next request.
   // A passwordless API exemption must not discard a supplied operator/agent
   // session: conditional host-control handlers still need that identity.
-  if (await verifyRequestSession(req)) {
-    req.portosAuthContext = { enabled: true, authenticated: true, method: 'session' };
+  const session = Object.hasOwn(authService, 'verifyRequestSessionIdentity')
+    ? await authService.verifyRequestSessionIdentity(req)
+    : ((await verifyRequestSession(req)) ? { kind: 'session', sessionId: null, label: null } : null);
+  if (session) {
+    req.portosAuthContext = {
+      enabled: true,
+      authenticated: true,
+      method: 'session',
+      ...(session.sessionId ? { sessionId: session.sessionId } : {}),
+    };
     return next();
   }
   const settings = await getSettings();
@@ -366,8 +375,10 @@ export const socketAuthGate = async (socket, next) => {
   }
   const enabled = await isAuthEnabled();
   if (!enabled) return next();
-  if (await verifyRequestSession(fakeReq)) {
+  const session = await verifyRequestSessionIdentity(fakeReq);
+  if (session) {
     markAuthMethod(socket, 'session');
+    socket.data.portosSessionId = session.sessionId;
     return next();
   }
   // Peer relay connections: the paired peer token, else legacy Basic. Neither

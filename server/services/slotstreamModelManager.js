@@ -501,11 +501,9 @@ export async function downloadSlotstreamModel({ model = null, cacheDir, onProgre
     const message = error.path
       ? 'Could not write the Slotstream checkpoint. Check the cache permissions and free space, then retry.'
       : error.message;
-    // A cancel is not a failure the user needs a red toast for, but the bar
-    // still has to come down — the card clears on any terminal frame, and
-    // 'cancelled' is what tells it which happened.
+    // The terminal frame clears the checkpoint progress bar after either outcome.
     onProgress({
-      event: slot.cancelled ? 'cancelled' : 'error',
+      event: slot.cancelled ? 'canceled' : 'error',
       model: repo,
       message,
     });

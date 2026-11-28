@@ -151,13 +151,14 @@ const PEER_RELAY_ALLOWED_EVENTS = new Set(['cos:subscribe', 'cos:unsubscribe', '
 // gallery). Command and log subscriptions stream host output.
 // `error:recover` queues a recovery agent that runs shell commands (#8716).
 // Detection can bootstrap a PM2 daemon while inspecting an app-specific home.
-// Voice host slots, dictation, and proactive output require operator authority.
+// Voice host slots, realtime calls, dictation, and proactive output require operator authority.
 // The HTTP twin of this set is isHostControlRoute in lib/hostControlRoutes.js.
 const HOST_CONTROL_SOCKET_EVENTS = new Set([
   'app:update', 'app:standardize', 'app:deploy', 'app:deploy:cancel', 'standardize:start', 'detect:start', 'error:recover', 'logs:subscribe',
-  'agent-processes:subscribe', 'processes:subscribe', 'command:subscribe',
+  'agent-processes:subscribe', 'processes:subscribe', 'command:subscribe', 'codex-account:subscribe',
   'voice:call:attach', 'voice:call:audio', 'voice:call:hangup', 'voice:capture:start', 'voice:dictation:set',
   'voice:output:available', 'voice:output:claim',
+  'voice:realtime:start', 'voice:realtime:audio', 'voice:realtime:interrupt',
 ]);
 const HOST_CONTROL_SOCKET_PREFIXES = ['shell:', 'iterm:', 'generated-preview:'];
 // Closing only stops work, so a refused socket can always tear down its own preview.
@@ -174,6 +175,9 @@ const hostControlRefusal = (event, payload) => {
   if (event.startsWith('iterm:')) return ['iterm:error', { ...refusal, id: payload?.id }];
   if (event.startsWith('generated-preview:')) {
     return ['generated-preview:error', { ...refusal, requestId: payload?.requestId, sessionId: payload?.sessionId }];
+  }
+  if (event.startsWith('voice:realtime:')) {
+    return ['voice:realtime:state', { active: false, ...refusal }];
   }
   if (event.startsWith('voice:')) {
     const stage = event.startsWith('voice:call:') ? 'call' : event.startsWith('voice:capture:') ? 'capture' : 'voice';
@@ -342,6 +346,19 @@ function registerAuthRevocationHandler(io) {
     console.log(`🔐 Auth state changed — disconnecting all sockets`);
     if (typeof io.disconnectSockets === 'function') io.disconnectSockets(true);
   });
+  authEvents.on('sessions:revoked', (sessionIds) => {
+    // The operator namespace is local to this server. Disconnect synchronously
+    // so passive subscribers stop receiving events as soon as revocation persists.
+    const revoked = new Set(sessionIds);
+    for (const socket of io.sockets.sockets.values()) {
+      if (!revoked.has(socket.data.portosSessionId)) continue;
+      try {
+        socket.disconnect(true);
+      } catch (err) {
+        console.error(`❌ Session socket revocation failed: ${err?.message ?? err}`);
+      }
+    }
+  });
 }
 
 const noPayload = () => ({});
@@ -508,9 +525,9 @@ function setupProactiveSpeechForwarding() {
 }
 
 // Test-only seam (mirrors the `__testing` convention in authGate.js): lets an
-// integration test wire the real per-event auth re-check onto a live
-// Socket.IO server without pulling in every other registrar's dependencies.
-export const __testing = { registerAuthHandlers, PEER_RELAY_ALLOWED_EVENTS, registerSubscriptionHandlers };
+// integration test wire auth checks, revocation and subscriptions onto a live
+// Socket.IO server without starting the other socket handlers.
+export const __testing = { registerAuthHandlers, registerAuthRevocationHandler, PEER_RELAY_ALLOWED_EVENTS, registerSubscriptionHandlers };
 
 // Broadcast to CoS subscribers only
 function broadcastToCos(event, data) {

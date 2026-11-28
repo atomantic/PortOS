@@ -49,8 +49,9 @@ describe('POST /api/memory/search with the file backend', () => {
     }
   });
 
-  it.each(['semantic', 'lexical'])('pages filtered %s hits with a query-wide total', async searchMode => {
-    generateQueryEmbedding.mockResolvedValue(searchMode === 'semantic' ? [1, 0] : null);
+  it('pages filtered lexical hits with a query-wide total', async () => {
+    const searchMode = 'lexical';
+    generateQueryEmbedding.mockResolvedValue(null);
     const filters = { query, types: ['fact'], appId: '__not_brain', limit: 1 };
 
     for (const offset of [0, 1, 2, 3, 1]) {
@@ -59,11 +60,25 @@ describe('POST /api/memory/search with the file backend', () => {
       expect(response.body.searchMode).toBe(searchMode);
       expect(response.body.total).toBe(3);
       expect(response.body.memories.map(hit => hit.id)).toEqual(eligibleIds.slice(offset, offset + 1));
-      if (searchMode === 'lexical' && response.body.memories.length) {
+      if (response.body.memories.length) {
         expect(response.body.memories[0]).toMatchObject({
           bm25Rank: offset + 1, rrfScore: 0.4 / (61 + offset), searchMethod: 'bm25',
         });
       }
     }
+  });
+
+  it('finds an exact keyword in a memory that has no embedding while semantic search is available', async () => {
+    const { id } = await memory.createMemory({ content: 'Telescope calibration checklist.', type: 'fact', sourceAppId }, null);
+    await flushBM25Index();
+    // Orthogonal to every stored vector, so only the keyword can match.
+    generateQueryEmbedding.mockResolvedValue([0, 1]);
+
+    const response = await request(app).post('/api/memory/search')
+      .send({ query: 'telescope', types: ['fact'], appId: '__not_brain' });
+
+    expect(response.status).toBe(200);
+    expect(response.body.searchMode).toBe('hybrid');
+    expect(response.body.memories.map(hit => hit.id)).toEqual([id]);
   });
 });

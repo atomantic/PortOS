@@ -355,4 +355,34 @@ describe('syncCosHistoryFromPeer', () => {
     const fetchedManifest = vi.mocked(peerFetch).mock.calls.some(([u]) => u.includes('cos-history-manifest'));
     expect(fetchedManifest).toBe(true);
   });
+
+  it('pulls missing archive files with bounded concurrency', async () => {
+    const byKey = new Map();
+    const entries = [];
+    for (const agentId of ['agent-one', 'agent-two']) {
+      for (const file of ['metadata.json', 'output.txt', 'prompt.txt']) {
+        const body = `${agentId}:${file}`;
+        byKey.set(`${agentId}:${file}`, body);
+        entries.push({ date: '2026-06-21', agentId, file, sha256: sha(body) });
+      }
+    }
+    let inFlight = 0;
+    let maxInFlight = 0;
+    vi.mocked(peerFetch).mockImplementation(async (url) => {
+      if (url.includes('cos-history-manifest')) {
+        return manifestRes({ schemaVersion: 1, manifestHash: sha('concurrent-6'), entries });
+      }
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      inFlight -= 1;
+      const agentId = decodeURIComponent(url.match(/agentId=([^&]+)/)[1]);
+      const file = decodeURIComponent(url.match(/file=([^&]+)/)[1]);
+      return byteRes(byKey.get(`${agentId}:${file}`));
+    });
+
+    const result = await syncCosHistoryFromPeer(PEER);
+    expect(result).toEqual({ pulled: 6, missing: 0 });
+    expect(maxInFlight).toBe(4);
+  });
 });

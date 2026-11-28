@@ -583,55 +583,69 @@ async function prepareImageJob(run, asset) {
     ? await replayAuthoredImageInputs(run, asset, recordedConditioning, { mode, settings, requestedModel })
     : { replayInputs: null, conditioned: await conditionRequest(run, asset, 'image', capability) };
   if (run.mode === 'exact_inputs') assertExactConditioning(recordedConditioning, conditioned?.visualConditioning);
-  const referenceImagePaths = conditioned?.referenceImagePaths || [];
-  const localInitImagePath = replayInputs ? replayInputs.init : conditioned?.sourceImagePath || referenceImagePaths[0] || null;
-  const geometry = renderGeometry(run, recordedConditioning);
-  const replayParameters = exactRenderParameters(run, recordedConditioning);
-
+  const shared = buildSharedImageParams(run, asset, conditioned, recordedConditioning, replayInputs);
   if (mode === IMAGE_GEN_MODE.LOCAL) {
-    const selectedIsEditOnly = isEditOnly(provisionalModel);
-    // An edit-only model takes the lead reference as its init image, so a fresh
-    // (non-replay) render must not send that frame twice.
-    const dropLeadReference = !replayInputs && selectedIsEditOnly;
-    const params = applyImageVisualProfile({
-      prompt: conditioned?.prompt ?? asset.prompt,
-      ...(conditioned?.promptAdditions?.length ? { promptAdditions: conditioned.promptAdditions } : {}),
-      negativePrompt: conditioned?.negativePrompt || '',
-      // Conditioning and sampler defaults belong to the same model the job validates.
-      modelId: requestedModel || provisionalModel?.id,
-      width: geometry.width,
-      height: geometry.height,
-      aspectRatio: geometry.aspectRatio,
-      steps: settings.imageGen?.local?.steps ?? provisionalModel?.steps,
-      guidance: settings.imageGen?.local?.guidance ?? provisionalModel?.guidance,
-      quantize: settings.imageGen?.local?.quantize ?? '8',
-      seed: randomInt(0, 2_147_483_647),
-      ...replayParameters,
-      ...((replayInputs || selectedIsEditOnly) && localInitImagePath ? { initImagePath: localInitImagePath } : {}),
-      ...(replayInputs?.initStrength != null ? { initImageStrength: replayInputs.initStrength } : {}),
-      referenceImagePaths: dropLeadReference ? referenceImagePaths.slice(1) : referenceImagePaths,
-      referenceImageStrengths: (conditioned?.referenceImageStrengths || []).slice(dropLeadReference ? 1 : 0),
-      loraFilenames: conditioned?.loraFilenames || [],
-      loraPaths: conditioned?.loraPaths || [],
-      loraScales: conditioned?.loraScales || [],
-      ...jobProvenanceFields(run, asset, conditioned),
-    }, conditioned?.visualProfile);
-    const local = resolveLocalImageModel(settings, params);
-    if (!local.selectedModel) {
-      throw new ServerError('No compatible local image model is available.', {
-        status: 409,
-        code: 'IMAGE_GEN_UNKNOWN_MODEL',
-      });
-    }
-    return {
-      kind: 'image',
-      provider: mode,
-      modelId: local.selectedModel.id,
-      modelRevision: local.selectedModel.revision || null,
-      params: { ...params, modelId: local.selectedModel.id, pythonPath: local.pythonPath },
-    };
+    return finalizeLocalImageJob({ mode, settings, provisionalModel, requestedModel, conditioned, replayInputs, shared });
   }
+  return finalizeCloudImageJob({ mode, cloud, capability, effort: run.render.effort, conditioned, replayInputs, shared });
+}
 
+function buildSharedImageParams(run, asset, conditioned, recordedConditioning, replayInputs) {
+  const geometry = renderGeometry(run, recordedConditioning);
+  return {
+    prompt: conditioned?.prompt ?? asset.prompt,
+    ...(conditioned?.promptAdditions?.length ? { promptAdditions: conditioned.promptAdditions } : {}),
+    negativePrompt: conditioned?.negativePrompt || '',
+    width: geometry.width,
+    height: geometry.height,
+    aspectRatio: geometry.aspectRatio,
+    ...exactRenderParameters(run, recordedConditioning),
+    ...(replayInputs?.initStrength != null ? { initImageStrength: replayInputs.initStrength } : {}),
+    referenceImagePaths: conditioned?.referenceImagePaths || [],
+    referenceImageStrengths: conditioned?.referenceImageStrengths || [],
+    loraFilenames: conditioned?.loraFilenames || [],
+    loraPaths: conditioned?.loraPaths || [],
+    loraScales: conditioned?.loraScales || [],
+    ...jobProvenanceFields(run, asset, conditioned),
+  };
+}
+
+function finalizeLocalImageJob({ mode, settings, provisionalModel, requestedModel, conditioned, replayInputs, shared }) {
+  const { referenceImagePaths } = shared;
+  const localInitImagePath = replayInputs ? replayInputs.init : conditioned?.sourceImagePath || referenceImagePaths[0] || null;
+  const selectedIsEditOnly = isEditOnly(provisionalModel);
+  // An edit-only model takes the lead reference as its init image, so a fresh
+  // (non-replay) render must not send that frame twice.
+  const dropLeadReference = !replayInputs && selectedIsEditOnly;
+  const params = applyImageVisualProfile({
+    // Conditioning and sampler defaults belong to the same model the job validates.
+    modelId: requestedModel || provisionalModel?.id,
+    steps: settings.imageGen?.local?.steps ?? provisionalModel?.steps,
+    guidance: settings.imageGen?.local?.guidance ?? provisionalModel?.guidance,
+    quantize: settings.imageGen?.local?.quantize ?? '8',
+    seed: randomInt(0, 2_147_483_647),
+    ...shared,
+    ...((replayInputs || selectedIsEditOnly) && localInitImagePath ? { initImagePath: localInitImagePath } : {}),
+    referenceImagePaths: dropLeadReference ? referenceImagePaths.slice(1) : referenceImagePaths,
+    referenceImageStrengths: shared.referenceImageStrengths.slice(dropLeadReference ? 1 : 0),
+  }, conditioned?.visualProfile);
+  const local = resolveLocalImageModel(settings, params);
+  if (!local.selectedModel) {
+    throw new ServerError('No compatible local image model is available.', {
+      status: 409,
+      code: 'IMAGE_GEN_UNKNOWN_MODEL',
+    });
+  }
+  return {
+    kind: 'image',
+    provider: mode,
+    modelId: local.selectedModel.id,
+    modelRevision: local.selectedModel.revision || null,
+    params: { ...params, modelId: local.selectedModel.id, pythonPath: local.pythonPath },
+  };
+}
+
+function finalizeCloudImageJob({ mode, cloud, capability, effort, conditioned, replayInputs, shared }) {
   if (!cloud?.enabled) {
     throw cloud?.disabledError || new ServerError('Image provider is disabled.', {
       status: 400,
@@ -640,7 +654,7 @@ async function prepareImageJob(run, asset) {
   }
   const providerParams = {
     ...cloud.providerParams,
-    ...(mode === IMAGE_GEN_MODE.CODEX && run.render.effort ? { effort: run.render.effort } : {}),
+    ...(mode === IMAGE_GEN_MODE.CODEX && effort ? { effort } : {}),
   };
   return {
     kind: 'image',
@@ -650,21 +664,8 @@ async function prepareImageJob(run, asset) {
     params: applyImageVisualProfile({
       mode,
       ...providerParams,
-      prompt: conditioned?.prompt ?? asset.prompt,
-      ...(conditioned?.promptAdditions?.length ? { promptAdditions: conditioned.promptAdditions } : {}),
-      negativePrompt: conditioned?.negativePrompt || '',
-      width: geometry.width,
-      height: geometry.height,
-      aspectRatio: geometry.aspectRatio,
-      ...replayParameters,
+      ...shared,
       initImagePath: replayInputs ? replayInputs.init : conditioned?.sourceImagePath || null,
-      ...(replayInputs?.initStrength != null ? { initImageStrength: replayInputs.initStrength } : {}),
-      referenceImagePaths,
-      referenceImageStrengths: conditioned?.referenceImageStrengths || [],
-      loraFilenames: conditioned?.loraFilenames || [],
-      loraPaths: conditioned?.loraPaths || [],
-      loraScales: conditioned?.loraScales || [],
-      ...jobProvenanceFields(run, asset, conditioned),
     }, conditioned?.visualProfile),
   };
 }
@@ -837,22 +838,22 @@ async function prepareJob(run, asset) {
   return prepareVideoJob(run, asset);
 }
 
-/**
- * Cancel every queued/running media job of a run and drop its job mappings so
- * the terminal events they emit are ignored. Leaves no asset in
- * ACTIVE_ASSET_STATUSES with a live job, which would otherwise stall resume.
- */
-async function cancelActiveBatchJobs(run, { status = 'canceled', error = 'Canceled by the user.' } = {}) {
+/** Request cancellation, retaining ownership of jobs that can still finish. */
+async function cancelActiveBatchJobs(run, { error = 'Canceled by the user.' } = {}) {
   const active = run.assets.filter((asset) => asset.jobId && ['queued', 'running'].includes(asset.status));
-  for (const asset of active) {
-    _jobToAsset.delete(asset.jobId);
-    asset.status = status;
-    asset.error = error;
-  }
   const results = await Promise.allSettled(active.map((asset) => cancelJob(asset.jobId)));
   results.forEach((result, index) => {
+    const asset = active[index];
     if (result.status === 'rejected') {
-      console.error(`❌ FableLoom could not cancel media job ${active[index].jobId}: ${errorMessage(result.reason)}`);
+      console.error(`❌ FableLoom could not cancel media job ${asset.jobId}: ${errorMessage(result.reason)}`);
+    } else if (result.value.status === 'canceled') {
+      _jobToAsset.delete(asset.jobId);
+      asset.status = 'canceled';
+      asset.error = error;
+    } else if (result.value.code === 'NOT_FOUND') {
+      _jobToAsset.delete(asset.jobId);
+      asset.status = 'failed';
+      asset.error = result.value.error;
     }
   });
 }
@@ -951,14 +952,6 @@ async function advanceRun(runId) {
       params: job.params,
       owner: `fableloom:${run.loomId}:${run.episodeId}:${asset.id}`,
     });
-    // Canceled while enqueueJob was suspended: the job exists but the run no
-    // longer owns it, so revoke it rather than recording it as queued.
-    if (run.cancelRequested || run.status !== 'in_progress') {
-      await cancelJob(enqueued.jobId).catch((error) => {
-        console.error(`❌ FableLoom could not cancel late-enqueued job ${enqueued.jobId}: ${errorMessage(error)}`);
-      });
-      break;
-    }
     asset.jobId = enqueued.jobId;
     asset.provider = job.provider || (job.kind === 'image' ? IMAGE_GEN_MODE.LOCAL : VIDEO_GEN_MODE.LOCAL);
     asset.modelId = job.modelId || null;
@@ -967,6 +960,14 @@ async function advanceRun(runId) {
     asset.effectiveParameters = effectiveParameters(job.params);
     asset.status = 'queued';
     _jobToAsset.set(enqueued.jobId, { runId, assetId: asset.id });
+    // Bulk cancellation can withdraw the job during admission, before this
+    // batch owns its queue event.
+    if (enqueued.status === 'canceled') {
+      await handleJobTerminal('canceled', { id: enqueued.jobId });
+      return run;
+    }
+    // The queued teardown owns this job even if cancel arrived during enqueue.
+    if (run.cancelRequested) break;
   }
   touchRun(run);
   return run;
@@ -997,9 +998,8 @@ async function handleJobTerminal(event, job) {
   touchRun(run);
   if (run.status === 'in_progress' && event === 'completed') await advanceRun(run.id);
   if (run.status === 'in_progress' && event === 'canceled') {
-    run.status = 'canceled';
     run.cancelRequested = true;
-    touchRun(run);
+    await stopCanceledBatch(run);
   }
   if (run.status === 'in_progress' && event === 'failed') {
     run.status = 'failed';
@@ -1261,6 +1261,20 @@ export function getEpisodeProductionBatch(runId) {
   return _batchRuns.get(runId) || null;
 }
 
+async function stopCanceledBatch(run) {
+  if (run.status !== 'in_progress') return run;
+  await cancelActiveBatchJobs(run);
+  for (const asset of run.assets) {
+    if (asset.status === 'pending' || asset.status === 'preparing') {
+      asset.status = 'canceled';
+      asset.error = 'Canceled before start.';
+    }
+  }
+  run.status = 'canceled';
+  touchRun(run);
+  return run;
+}
+
 /** Cancel an in-flight batch run and its queued/running media jobs. */
 export async function cancelEpisodeProductionBatch(runId) {
   const run = _batchRuns.get(runId);
@@ -1269,19 +1283,7 @@ export async function cancelEpisodeProductionBatch(runId) {
   // Flag synchronously so an in-flight advanceRun stops enqueueing, then run the
   // teardown on the run's queue so it waits for that enqueue step to drain.
   run.cancelRequested = true;
-  const teardown = async () => {
-    if (run.status !== 'in_progress') return run;
-    await cancelActiveBatchJobs(run);
-    for (const asset of run.assets) {
-      if (asset.status === 'pending' || asset.status === 'preparing') {
-        asset.status = 'canceled';
-        asset.error = 'Canceled by the user.';
-      }
-    }
-    run.status = 'canceled';
-    touchRun(run);
-    return run;
-  };
+  const teardown = () => stopCanceledBatch(run);
   const scheduled = await scheduleRun(runId, teardown);
   return scheduled || teardown();
 }
@@ -1291,6 +1293,12 @@ export function resumeEpisodeProductionBatch(runId) {
   const run = _batchRuns.get(runId);
   if (!run) throw new ServerError('Batch run not found', { status: 404, code: 'NOT_FOUND' });
   if (!['failed', 'canceled'].includes(run.status)) return run;
+  if (run.assets.some((asset) => ACTIVE_ASSET_STATUSES.has(asset.status))) {
+    throw new ServerError('Wait for the previous media jobs to finish or cancel them in the Media Queue, then resume the batch.', {
+      status: 409,
+      code: 'PRODUCTION_JOBS_SETTLING',
+    });
+  }
   for (const asset of run.assets) {
     if (asset.status === 'failed' || asset.status === 'blocked' || asset.status === 'canceled') {
       asset.status = 'pending';

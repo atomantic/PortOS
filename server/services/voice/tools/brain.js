@@ -2,7 +2,8 @@
 // OpenAI-format function schema plus an execute() that runs the action; the
 // orchestrator (tools.js) collects them into the shared TOOLS registry.
 
-import { captureThought, getInboxLog } from '../../brain.js';
+import { captureThought } from '../../brain.js';
+import { getInboxLog } from '../../brainStorage.js';
 import { clampLimit } from './shared.js';
 
 // Expanded to cover natural capture verbs — "remember", "note", "save",

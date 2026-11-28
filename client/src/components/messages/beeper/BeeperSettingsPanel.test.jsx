@@ -549,7 +549,7 @@ describe('BeeperSettingsPanel — the connect flow (#31)', () => {
     await renderPanel();
 
     fireEvent.click(await screen.findByRole('button', { name: 'Connect Beeper' }));
-    await waitFor(() => expect(open).toHaveBeenCalledWith('http://127.0.0.1:23373/oauth/authorize?state=s', '_blank', 'noopener'));
+    await waitFor(() => expect(open).toHaveBeenCalledWith('http://127.0.0.1:23373/oauth/authorize?state=s', '_blank', 'noopener,noreferrer'));
     expect(api.startBeeperOAuth).toHaveBeenCalledWith({ silent: true });
     open.mockRestore();
   });

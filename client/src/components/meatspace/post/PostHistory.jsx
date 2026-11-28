@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { clampPercent } from '../../ui/ProgressBar';
 import { useNavigate } from 'react-router';
 import { ArrowLeft, ChevronRight, Flame, Trophy } from 'lucide-react';
 import {
@@ -235,7 +236,14 @@ export default function PostHistory({ onBack }) {
                   {domain.drills.map(drill => (
                     <div key={drill.type} className="flex items-center gap-3">
                       <span className="text-xs text-gray-400 w-32 shrink-0 truncate" title={drill.label}>{drill.label}</span>
-                      <div className="flex-1 h-2 bg-port-bg rounded-full overflow-hidden">
+                      <div
+                        className="flex-1 h-2 bg-port-bg rounded-full overflow-hidden"
+                        role="progressbar"
+                        aria-label={`${drill.label} score`}
+                        aria-valuenow={clampPercent(drill.score)}
+                        aria-valuemin={0}
+                        aria-valuemax={100}
+                      >
                         <div
                           className="h-full rounded-full"
                           style={{ width: `${Math.min(100, Math.max(0, drill.score))}%`, backgroundColor: domainHex(domain.key) }}
@@ -256,11 +264,11 @@ export default function PostHistory({ onBack }) {
         <table className="w-full text-sm min-w-[520px]">
           <thead>
             <tr className="border-b border-port-border text-gray-500 text-left">
-              <th className="px-4 py-2 font-medium w-8"></th>
-              <th className="px-4 py-2 font-medium">Date</th>
-              <th className="px-4 py-2 font-medium">Duration</th>
-              <th className="px-4 py-2 font-medium">Modules</th>
-              <th className="px-4 py-2 font-medium text-right">Score</th>
+              <th scope="col" className="px-4 py-2 font-medium w-8"><span className="sr-only">Open details</span></th>
+              <th scope="col" className="px-4 py-2 font-medium">Date</th>
+              <th scope="col" className="px-4 py-2 font-medium">Duration</th>
+              <th scope="col" className="px-4 py-2 font-medium">Modules</th>
+              <th scope="col" className="px-4 py-2 font-medium text-right">Score</th>
             </tr>
           </thead>
           <tbody>

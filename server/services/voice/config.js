@@ -113,6 +113,10 @@ export const VOICE_DEFAULTS = Object.freeze({
     tools: {
       enabled: false,
       maxIterations: 3,
+      // Send only the tools the utterance looks like it needs. Helps small
+      // tool-use models, but the tool list then changes between turns, which
+      // stops the backend from reusing its prompt cache for the history.
+      trimByIntent: false,
     },
     // Code-agent delegation — lets the voice CoS hand a coding task to a
     // CLI/TUI agent (Claude Code, Codex, Antigravity) via the CoS task system.
@@ -170,6 +174,26 @@ export const VOICE_DEFAULTS = Object.freeze({
   },
 
   vad: { endOfSpeechMs: 700, minUtteranceMs: 250 },
+
+  // AvatarForcing (the Voice Call's generated avatar). autoStart: start the
+  // installed worker when a Voice Call view opens, so the call shows the live
+  // avatar instead of the still portrait. Start and Stop on the avatar card
+  // remember the choice.
+  avatar: {
+    autoStart: true,
+  },
+
+  // Realtime (speech-to-speech) Voice Call: a local full-duplex voice model
+  // (Sophon-Realtime's Mac/MLX build, installed separately) listens, takes
+  // turns, can be interrupted and speaks; lookups and actions are delegated to
+  // the regular Voice tool pipeline above. OFF by default: it needs a ~24 GB
+  // (32B) or ~9 GB (4B) model install and keeps it loaded during calls.
+  realtime: {
+    enabled: false,
+    engine: 'sophon',
+    size: '32B', // '32B' | '4B'
+    home: '~/.portos/sophon-mac',
+  },
 });
 
 // Alias kept for backward-compat with the 5 callers under server/services/voice/.

@@ -214,7 +214,7 @@ export async function streamVideoRuntimeInstall({
         emit({ type: 'error', message: 'Installer exited 0 but the runtime is still missing. Review the log above, then use Repair in this panel.' });
       } else if (code === 0) {
         emit({ type: 'error', message: !current
-          ? 'Installer exited 0 but the runtime is still on an outdated revision. Review the source-update log above, then use Repair in this panel.'
+          ? 'Installer exited 0 but the runtime is still out of date. Review the setup log above, then use Repair in this panel.'
           : `Installer exited 0 but the runtime can't import its core packages. Review the package errors above, then use Repair in this panel.` });
       } else {
         emit({ type: 'error', message: installFailure || `Installer exited with code ${code}.` });

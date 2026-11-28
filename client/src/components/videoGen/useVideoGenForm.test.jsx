@@ -1242,3 +1242,70 @@ describe('useVideoGenForm — i2v reference mode (#4874)', () => {
     await waitFor(() => expect(result.current.i2vReferenceMode).toBe('anchor'));
   });
 });
+
+describe('useVideoGenForm — URL ?lora= handoff and upload object URLs', () => {
+  it('applies ?lora= handoff once without duplicating trigger words', async () => {
+    const loras = [{
+      filename: 'cine.safetensors',
+      name: 'Cine Look',
+      loraCompatKey: 'ltx-video',
+      recommendedScale: 0.75,
+      triggerWords: ['cine_style', 'anamorphic'],
+    }];
+    const { result } = render({
+      availableLoras: loras,
+      url: '/media/video?lora=cine.safetensors',
+    });
+
+    await waitFor(() => expect(result.current.modelId).toBe(LTX2.id));
+    expect(result.current.selectedLoras).toEqual([
+      { filename: 'cine.safetensors', name: 'Cine Look', scale: 0.75 },
+    ]);
+    expect(result.current.prompt).toBe('cine_style, anamorphic');
+  });
+
+  it('skips trigger words already present in ?prompt= during ?lora= handoff', async () => {
+    const loras = [{
+      filename: 'cine.safetensors',
+      name: 'Cine Look',
+      loraCompatKey: 'ltx-video',
+      triggerWords: ['cine_style', 'anamorphic'],
+    }];
+    const { result } = render({
+      availableLoras: loras,
+      url: '/media/video?prompt=cine_style%20at%20dusk&lora=cine.safetensors',
+    });
+
+    await waitFor(() => expect(result.current.selectedLoras).toHaveLength(1));
+    expect(result.current.prompt).toBe('cine_style at dusk, anamorphic');
+  });
+
+  it('creates and revokes object URLs for uploaded source and last frames', async () => {
+    const createSpy = vi.spyOn(URL, 'createObjectURL')
+      .mockReturnValueOnce('blob:source-frame')
+      .mockReturnValueOnce('blob:last-frame');
+    const revokeSpy = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
+    try {
+      const { result, unmount } = render();
+      const first = new File(['a'], 'first.png', { type: 'image/png' });
+      const last = new File(['b'], 'last.png', { type: 'image/png' });
+
+      act(() => {
+        result.current.uploadSourceImage(first);
+        result.current.uploadLastImage(last);
+      });
+      await waitFor(() => expect(result.current.sourceUploadUrl).toBe('blob:source-frame'));
+      expect(result.current.lastUploadUrl).toBe('blob:last-frame');
+
+      act(() => result.current.clearSourceImage());
+      await waitFor(() => expect(result.current.sourceUploadUrl).toBeNull());
+      expect(revokeSpy).toHaveBeenCalledWith('blob:source-frame');
+
+      unmount();
+      expect(revokeSpy).toHaveBeenCalledWith('blob:last-frame');
+    } finally {
+      createSpy.mockRestore();
+      revokeSpy.mockRestore();
+    }
+  });
+});

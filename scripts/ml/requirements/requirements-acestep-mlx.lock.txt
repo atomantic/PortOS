@@ -1,3 +1,4 @@
+# Bounded depfree regeneration: uv 0.13.7; cutoff 2026-11-25T00:00:00Z; dropped unused peft and direct click pin; retained versions and hashes unchanged.
 # Bounded #17571 regeneration: uv 0.13.7; cutoff 2026-11-07T00:00:00Z; dropped unimported training, TensorBoard, plotting and ModelScope packages; every retained version and hash unchanged.
 # Bounded #16047 regeneration: cutoff 2026-11-07T00:00:00Z; Transformers 5.22.2 only; retained companion versions and artifact hashes.
 # Bounded #15988 regeneration: uv 0.13.7; cutoff 2026-11-06T00:00:00Z; complete closure constrained to retained pins.
@@ -29,7 +30,7 @@
 accelerate==1.15.0 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
     --hash=sha256:5654f8c5eaa0d4fa68b33e287a97765da6849bf6d51dcac874e73fbbddfb6134 \
     --hash=sha256:97eacca0b73e45cb867dbf8c5d5d4dc32219544300e0c8992c7334dc2ef33cec
-    # via peft, -r requirements-acestep-mlx.txt
+    # via -r requirements-acestep-mlx.txt
 annotated-doc==0.0.5 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
     --hash=sha256:117bac03a25ede5df5440e855b32d556049ca169ead221505badf432fed4b101 \
     --hash=sha256:c7e58ce09192557605d8bbd92836d7e1d520ac9580096042c0bfd197efacf1bb
@@ -450,7 +451,7 @@ charset-normalizer==3.5.2 ; platform_machine == 'arm64' and sys_platform == 'dar
 click==8.5.0 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
     --hash=sha256:255bc9599cf7748b4b1a446ccc735421bd08a2ae529a8b88597d3de5664ee360 \
     --hash=sha256:ba0d2089de75ea0310e2dde03160e6ca10009947fb95a182f9b54021bb272e34
-    # via huggingface-hub, spacy, weasel, -r requirements-acestep-mlx.txt
+    # via huggingface-hub, spacy, weasel
 cloudpathlib==0.26.0 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
     --hash=sha256:6ea02248f2db7cb10729caf1edbdec92587dfdbbd3df8c71a32aedd4ae55715a \
     --hash=sha256:abcd7f54bcbb2fbb79c0e96b79241f08866760aee6276586882b3558672d571b
@@ -649,7 +650,7 @@ httpx2==2.16.0 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
 huggingface-hub==2.4.0 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
     --hash=sha256:13a6158b9e3393d9d3f248ce99074d50c2a0a1449fb9d8e2f710751e2084c188 \
     --hash=sha256:42ecfd93ede47bdd333daebbf66a32d7bfe2e18752754fe4d2d4f98a0179d801
-    # via accelerate, diffusers, peft, tokenizers, transformers, -r requirements-acestep-mlx.txt
+    # via accelerate, diffusers, tokenizers, transformers, -r requirements-acestep-mlx.txt
 idna==3.20 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
     --hash=sha256:a7db850025b95ded1eae8a46181a1a6c56c92c96f0e2b005d9ff8dc0210cab44 \
     --hash=sha256:ab7ae7122974553370f0bdb919e1a960b2cd1bc1ef0276416d896db81c14582c
@@ -1214,15 +1215,11 @@ numpy==2.4.6 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
     --hash=sha256:f3a3570c4a2a16746ac2c31a7c7c7b0c186b95ce902e33db6f28094ed7387dda \
     --hash=sha256:f407cb6b8e9d6d8c626bc73c945db1706035af8fd632295547bf1c9e46d092d6 \
     --hash=sha256:f74a575920ab21fe304421a3fc28793d82e299cae9eccb37084e9fc7f3617c20
-    # via accelerate, blis, diffusers, librosa, numba, peft, py3langid, scikit-learn, scipy, soundfile, soxr, spacy, thinc, torchvision, transformers, -r requirements-acestep-mlx.txt
+    # via accelerate, blis, diffusers, librosa, numba, py3langid, scikit-learn, scipy, soundfile, soxr, spacy, thinc, torchvision, transformers, -r requirements-acestep-mlx.txt
 packaging==26.3 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
     --hash=sha256:94edc256424af38762eb31306eed28beb9f0efc50a8837492c9d6fd6004aed79 \
     --hash=sha256:d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c
-    # via accelerate, huggingface-hub, lazy-loader, peft, pooch, spacy, thinc, transformers, weasel, wheel
-peft==0.21.2 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
-    --hash=sha256:106ab6077ff72c54d21577f9af5970e34bac7582cb14209f7b2b511e322a4eae \
-    --hash=sha256:b803ccfb3f3f316004d850284306687833a2235ea278fb56abc856203456142e
-    # via -r requirements-acestep-mlx.txt
+    # via accelerate, huggingface-hub, lazy-loader, pooch, spacy, thinc, transformers, weasel, wheel
 pillow==13.0.0 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
     --hash=sha256:02464da86f561f410e13b061ec37c3068a9cb557a095494157742d07b3c24a27 \
     --hash=sha256:04a63720f79e22fd54d897c233a68314c50ca0603360f54ce2bd5db8f0f43782 \
@@ -1413,7 +1410,7 @@ psutil==7.2.2 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
     --hash=sha256:ed0cace939114f62738d808fdcecd4c869222507e266e574799e9c0faa17d486 \
     --hash=sha256:eed63d3b4d62449571547b60578c5b2c4bcccc5387148db46e0c2313dad0ee00 \
     --hash=sha256:fd04ef36b4a6d599bbdb225dd1d3f51e00105f6d48a28f006da7f9822f2606d8
-    # via accelerate, peft
+    # via accelerate
 py3langid==0.3.0 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
     --hash=sha256:0a875a031a58aaf9dbda7bb8285fd75e801a7bd276216ffabe037901d4b449ec \
     --hash=sha256:38f022eec31cf9a2bf6f142acb2a9b350fd7d0d5ae7762b1392c6d3567401fd3
@@ -1651,7 +1648,7 @@ pyyaml==6.0.3 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
     --hash=sha256:f7057c9a337546edc7973c0d3ba84ddcdf0daa14533c2065749c9075001090e6 \
     --hash=sha256:fa160448684b4e94d80416c0fa4aac48967a969efe22931448d853ada8baf926 \
     --hash=sha256:fc09d0aa354569bc501d4e787133afc08552722d3ab34836a80547331bb5d4a0
-    # via accelerate, huggingface-hub, peft, transformers
+    # via accelerate, huggingface-hub, transformers
 regex==2026.9.29 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
     --hash=sha256:01000ddf0e3ffef97f2413ceb514f6313040106b6d18a03ee00a4fe35c1eb1db \
     --hash=sha256:0166844493626c5015c6088ee15c9ca2fd060ca15b7641d1657da6a58432ae33 \
@@ -1810,7 +1807,7 @@ safetensors==0.8.0 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
     --hash=sha256:fabaf3e0f18a6618d9b36560682562157f77c2b71fcffc7b432be2baed9d753d \
     --hash=sha256:fcdd41ec4628fee5799f807c73c353629130fbd942aa23d83c623dd6c9d52d78 \
     --hash=sha256:fd6f3f93c9a0a7cc2788ee63fb763353d4bd2e89b0751bc78fcf7dda00bea774
-    # via accelerate, diffusers, peft, transformers
+    # via accelerate, diffusers, transformers
 scikit-learn==1.9.1 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
     --hash=sha256:09f4d73049cd63575157f6b1060e06a8c83a4bd3488dbfaeedf35ccba7aad712 \
     --hash=sha256:0c0f8b5d09b44101cea2767f300680bada1ea27f976fe4b48b83950a4f55a49a \
@@ -2334,7 +2331,7 @@ torch==2.15.0 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
     --hash=sha256:f2bd0a3709a7493a6ef2ac5a654111242a854439f7558f910b6b653b56f7504d \
     --hash=sha256:fbefd73b521d3c75c5a1d7c77056b2c6339b81468d14d4e33c55f525418a5855 \
     --hash=sha256:fbf74b432a5c1cac0824af3d482ecc64a0a8187a3d58cc6733efe349697daac4
-    # via accelerate, peft, torchaudio, torchvision, -r requirements-acestep-mlx.txt
+    # via accelerate, torchaudio, torchvision, -r requirements-acestep-mlx.txt
 torchaudio==2.11.1 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
     --hash=sha256:0173b5b51e1368aa88de3cbe4e98508b5e9df4d8d59356c4e1fbc830c96191ef \
     --hash=sha256:46ea71634d181f797370f046075ea982043c228b38d674fd7d9fc1c855a37b6a \
@@ -2350,11 +2347,11 @@ torchvision==0.29.2 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
 tqdm==4.70.1 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
     --hash=sha256:c293e525e6fef9c20e8728fd4612df02a0aa31bb5fe91ecd93e123b1b7bffa73 \
     --hash=sha256:cefd0eca11b2a37a3aee776544d4f4ae913f02688135b5556b8788dfa474afc4
-    # via huggingface-hub, peft, spacy, transformers, -r requirements-acestep-mlx.txt
+    # via huggingface-hub, spacy, transformers, -r requirements-acestep-mlx.txt
 transformers==5.22.2 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
     --hash=sha256:55f57e5cbd7c0b500b7a706daa0ecd76567b56ca139e6e02ef0bba0437e3a763 \
     --hash=sha256:829c2820aff91730b8ec45a4b8ff4be07f586a140b68a9073998b36fa35297dc
-    # via peft, -r requirements-acestep-mlx.txt
+    # via -r requirements-acestep-mlx.txt
 truststore==0.10.5 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
     --hash=sha256:30d36967ccaded5cbb38d602c433f53600036c79d502f4533a49b60a03bbefcd \
     --hash=sha256:9aaaedaefaf06d8b206278cf8b5012bc897f485a874503501e12d776df78951c

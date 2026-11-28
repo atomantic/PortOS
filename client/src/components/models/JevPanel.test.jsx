@@ -6,6 +6,7 @@ vi.mock('../../services/apiLocalLlm.js', () => ({
   getJevDecisionStats: vi.fn(),
   installJev: vi.fn(),
   cancelJevInstall: vi.fn(),
+  cancelJevTraining: vi.fn(),
   scoreJev: vi.fn(),
   unloadJev: vi.fn(),
   getJevHeads: vi.fn(),
@@ -27,6 +28,7 @@ vi.mock('../ui/Toast');
 import {
   adoptJevHead,
   cancelJevInstall,
+  cancelJevTraining,
   discardJevHead,
   getJevDecisionStats,
   getJevHeads,
@@ -38,6 +40,7 @@ import {
 } from '../../services/apiLocalLlm.js';
 import socket from '../../services/socket';
 import JevPanel from './JevPanel';
+import toast from '../ui/Toast';
 import { MemoryRouter, Routes, Route } from 'react-router';
 let initialView = 'try';
 
@@ -67,6 +70,7 @@ beforeEach(() => {
   getJevDecisionStats.mockResolvedValue({ updatedAt: null, decisions: [] });
   installJev.mockResolvedValue({ ok: true, ready: true });
   cancelJevInstall.mockResolvedValue({ cancelled: true });
+  cancelJevTraining.mockResolvedValue({ cancelled: true });
   unloadJev.mockResolvedValue({ unloaded: true });
   getJevHeads.mockResolvedValue({ heads: [], training: false });
   trainJevHead.mockResolvedValue({ ok: true });
@@ -142,13 +146,15 @@ describe('JevPanel install', () => {
     await act(async () => { settle({ ok: false }); });
   });
 
-  it('cancels an in-flight install', async () => {
+  it.each([undefined, 'Cancellation failed'])('handles install cancellation (error: %s)', async (error) => {
+    if (error) cancelJevInstall.mockRejectedValueOnce(new Error(error));
     let settle;
     installJev.mockReturnValue(new Promise((resolve) => { settle = resolve; }));
     await renderPanel();
     fireEvent.click(await screen.findByRole('button', { name: 'Install jev' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }));
     expect(cancelJevInstall).toHaveBeenCalled();
+    if (error) await waitFor(() => expect(toast.error).toHaveBeenCalledWith(error));
     await act(async () => { settle({ ok: false }); });
   });
 });
@@ -211,6 +217,16 @@ describe('JevPanel try-it box', () => {
     fill('Some text.', 'first\nsecond');
     fireEvent.click(screen.getByRole('button', { name: 'Score' }));
     expect(await screen.findByText('Scoring failed: jev-timeout')).toBeInTheDocument();
+  });
+
+  it('reports failed unloads and leaves the resident model available to retry', async () => {
+    initialView = 'setup';
+    getJevStatus.mockResolvedValue(status({ ready: true, setupState: 'ready', stages: stages(true), resident: true }));
+    unloadJev.mockRejectedValueOnce(new Error('Unload failed'));
+    await renderPanel();
+    fireEvent.click(await screen.findByRole('button', { name: 'Unload now' }));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Unload failed'));
+    expect(screen.getByRole('button', { name: 'Unload now' })).toBeEnabled();
   });
 
   it('offers an immediate unload only while the model is resident', async () => {
@@ -289,6 +305,20 @@ describe('JevPanel project head', () => {
     await waitFor(() => expect(adoptJevHead).toHaveBeenCalledWith('scope-adherence', { silent: true }));
   });
 
+  it.each([false, true])('confirms discard of a head with adopted=%s', async (adopted) => {
+    getJevHeads.mockResolvedValue({ heads: [headRow({ adopted })], training: false });
+    await renderPanel();
+    await screen.findByTestId('jev-head-table');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Discard' }));
+    expect(discardJevHead).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(discardJevHead).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Discard' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Discard' }));
+    await waitFor(() => expect(discardJevHead).toHaveBeenCalledExactlyOnceWith('scope-adherence', { adopted }, { silent: true }));
+  });
+
   it('refuses to offer adoption for a head that lost to the stock zero-shot scorer', async () => {
     getJevHeads.mockResolvedValue({
       heads: [headRow({
@@ -350,6 +380,26 @@ describe('JevPanel project head', () => {
     expect(trainJevHead).toHaveBeenCalledWith({ architecture: 'linear' }, { silent: true });
     // Training NEVER promotes: the run's only follow-up is re-reading state.
     expect(adoptJevHead).not.toHaveBeenCalled();
+  });
+
+  it('cancels in-progress training and enables a fresh run when it settles', async () => {
+    getJevStatus.mockResolvedValue(status({ ready: true, setupState: 'ready', stages: stages(true) }));
+    const { promise: training, resolve: finish } = Promise.withResolvers();
+    trainJevHead.mockReturnValueOnce(training);
+    await renderPanel();
+    const start = screen.getByRole('button', { name: 'Train a project head' });
+    await waitFor(() => expect(start).toBeEnabled());
+    fireEvent.click(start);
+
+    const cancel = await screen.findByRole('button', { name: 'Cancel training' });
+    await act(async () => { fireEvent.click(cancel); });
+    expect(cancelJevTraining).toHaveBeenCalledExactlyOnceWith({ silent: true });
+    expect(screen.getByRole('button', { name: 'Training…' })).toBeDisabled();
+    await act(async () => finish({ ok: false, cancelled: true, code: 'jev-head-training-cancelled' }));
+
+    expect(screen.queryByRole('button', { name: 'Cancel training' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Train a project head' })).toBeEnabled();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
   it('reports a failed training run beside the scores rather than as a toast', async () => {

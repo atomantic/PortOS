@@ -9,3 +9,9 @@
 export function cleanMessageId(value) {
   return String(value || '').replace(/[<>]/g, '').trim();
 }
+
+// A fresh send attempt identifies exactly one request, including repeat requests
+// on a previously removed case. Only its direct reply carries this Message-ID.
+export function optOutMessageId(sendAttemptId) {
+  return `<portos-optout-${sendAttemptId}@requests.invalid>`;
+}

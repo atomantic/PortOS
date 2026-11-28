@@ -22,6 +22,7 @@ const { assertSubjectConsentMock } = vi.hoisted(() => ({
 vi.mock('./privacySubjects.js', () => ({
   resolveSubjectId: (id) => id || SELF,
   assertSubjectConsent: assertSubjectConsentMock,
+  dispatchWithSubjectConsent: async (id, purpose, start) => { await assertSubjectConsentMock(id, purpose); return start(); },
 }));
 
 const {
@@ -82,6 +83,10 @@ describe('classifyScanResult', () => {
   it('403 → blocked', () => {
     expect(classifyScanResult({ status: 403, html: '', vectors }).verdict).toBe('blocked');
   });
+  it('HTTP 429 → blocked, even when the response resembles a result page', () => {
+    const r = classifyScanResult({ status: 429, html: 'No results found', vectors });
+    expect(r).toMatchObject({ verdict: 'blocked', evidence: { http_status: 429 } });
+  });
   it('name + location → found', () => {
     const r = classifyScanResult({ status: 200, html: 'Results for Jane Q Doe of Portland OR', vectors });
     expect(r.verdict).toBe('found');
@@ -92,8 +97,12 @@ describe('classifyScanResult', () => {
     const r = classifyScanResult({ status: 200, html: 'A page mentioning Jane Q Doe somewhere', vectors });
     expect(r.verdict).toBe('indirect_exposure');
   });
-  it('no match → not_found', () => {
-    const r = classifyScanResult({ status: 200, html: 'Nobody here by that description', vectors });
+  it('explicit empty search results → not_found', () => {
+    const r = classifyScanResult({ status: 200, html: 'No matching results found', vectors });
+    expect(r.verdict).toBe('not_found');
+  });
+  it('readable search results without the target → not_found', () => {
+    const r = classifyScanResult({ status: 200, html: '<h1>1 result found</h1><p>Example Person</p>', vectors });
     expect(r.verdict).toBe('not_found');
   });
   it('a bare CDN mention of "cloudflare" on a real result page is NOT a wall', () => {
@@ -177,7 +186,7 @@ describe('scanBroker — classify → record wiring', () => {
     const fetchImpl = vi.fn(async () => ({ status: 403, text: async () => 'Access denied' }));
     // Substantive real-Chrome page (long enough to not look like a JS shell).
     const page = `Results for Jane Q Doe in Portland, OR — full profile. ${'x'.repeat(700)}`;
-    const browserFetch = vi.fn(async () => ({ text: page }));
+    const browserFetch = vi.fn(async () => ({ status: 200, text: page }));
     const res = await scanBroker(broker, vectors, { fetchImpl, browserFetch, urlSafe: async () => true });
     expect(browserFetch).toHaveBeenCalledWith('https://b.example/Jane-Doe/OR');
     expect(res.state).toBe('found');
@@ -197,10 +206,7 @@ describe('scanBroker — classify → record wiring', () => {
   it('does NOT adopt a shell-length browser page on a wall (stays blocked, not not_found)', async () => {
     brokers.recordScanVerdict.mockClear();
     const fetchImpl = vi.fn(async () => ({ status: 403, text: async () => 'Access denied' }));
-    // Marker-free short text: if the adoption guard were dropped, this would
-    // classify as not_found (status rewritten to 200, no antibot marker) —
-    // so the blocked assertion genuinely pins the guard.
-    const browserFetch = vi.fn(async () => ({ text: 'Loading' }));
+    const browserFetch = vi.fn(async () => ({ status: 200, text: 'Loading' }));
     const res = await scanBroker(broker, vectors, { fetchImpl, browserFetch, urlSafe: async () => true });
     expect(res.state).toBe('blocked');
   });
@@ -209,7 +215,7 @@ describe('scanBroker — classify → record wiring', () => {
     brokers.recordScanVerdict.mockClear();
     const fetchImpl = vi.fn(async () => ({ status: 403, text: async () => 'Access denied' }));
     // Concise real result page (< JS-shell length) naming the person + city.
-    const browserFetch = vi.fn(async () => ({ text: 'Jane Q Doe — Portland, OR. 1 record.' }));
+    const browserFetch = vi.fn(async () => ({ status: 200, text: 'Jane Q Doe — Portland, OR. 1 record.' }));
     const res = await scanBroker(broker, vectors, { fetchImpl, browserFetch, urlSafe: async () => true });
     expect(res.state).toBe('found');
   });

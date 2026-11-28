@@ -254,6 +254,18 @@ export async function promoteInboxItem(bucketId, manifestId) {
   await mergeMediaJobRecords(bucket.path, manifest.recordIds);
   const availableAssetKeys = new Set(assetCopy.available.map((ref) => `${ref.kind}:${ref.ref}`));
   const outcome = await applyAutoMerge(bucket, manifest, records, { availableAssetKeys });
+  if (outcome.recordImportFailures?.length) {
+    throw Object.assign(new Error(`Record import failed for ${outcome.recordImportFailures.join(', ')} — retry after resolving the underlying error`), {
+      code: 'SHARING_RECORD_IMPORT_FAILED',
+      pendingRecordImportFailures: outcome.recordImportFailures,
+    });
+  }
+  if (outcome.collectionMergeFailures?.length) {
+    throw Object.assign(new Error(`Collection merge failed for ${outcome.collectionMergeFailures.join(', ')} — retry after resolving the underlying error`), {
+      code: 'SHARING_COLLECTION_MERGE_FAILED',
+      pendingCollectionMergeFailures: outcome.collectionMergeFailures,
+    });
+  }
   // Mirror the missing-record/asset gates above: if the collection
   // payload deferred because its owner (universe or series) isn't
   // present locally yet, throw a pending error instead of silently

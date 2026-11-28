@@ -11,6 +11,7 @@ import { readFile, writeFile, mkdir, stat } from 'fs/promises';
 import { resolve, dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { platform, homedir } from 'os';
+import { getSystemErrorMap } from 'util';
 import { browserExecutablePath, deriveMacAppBundleFromChromePath } from '../server/lib/browserConfig.js';
 import { isDirectlyInvoked } from '../scripts/lib/directInvocation.js';
 
@@ -35,6 +36,13 @@ const LAUNCH_POLLS = 20;
 const PREFS_MISSING = Symbol('prefs-missing');
 const PREFS_UNREADABLE = Symbol('prefs-unreadable');
 
+// System error messages can include paths, spawn arguments, or JSON excerpts.
+const SYSTEM_ERROR_CODES = new Set(Array.from(getSystemErrorMap().values(), ([code]) => code));
+
+function systemErrorCode(err) {
+  return SYSTEM_ERROR_CODES.has(err?.code) ? err.code : 'UNKNOWN';
+}
+
 const DEFAULT_MAC_CHROME_APP = '/Applications/Google Chrome.app';
 
 function getMacAppBundle(config, chromePath) {
@@ -52,8 +60,8 @@ async function loadConfig() {
   // Corrupt user-editable config must not put the browser child in a restart loop.
   try {
     return JSON.parse(raw);
-  } catch (err) {
-    console.error(`⚠️ Corrupt browser-config.json, using defaults: ${err.message}`);
+  } catch {
+    console.error('⚠️ Corrupt browser-config.json, using defaults');
     return {};
   }
 }
@@ -103,7 +111,7 @@ export async function ensureDirectory(dir, mkdirImpl = mkdir) {
   const target = resolve(dir);
   if (await isDirectory(target)) return;
   const parent = dirname(target);
-  if (parent === target) throw new Error(`${target} does not exist (drive not found or not connected)`);
+  if (parent === target) throw Object.assign(new Error(`${target} does not exist (drive not found or not connected)`), { code: 'ENOENT' });
   await ensureDirectory(parent, mkdirImpl);
   try {
     await mkdirImpl(target);
@@ -123,7 +131,7 @@ function asObject(value) {
 async function tryReadJson(path) {
   const raw = await readFile(path, 'utf-8').catch(err => {
     if (err.code === 'ENOENT') return PREFS_MISSING;
-    console.error(`⚠️ Unable to read Chrome Preferences, preserving file: ${err.message}`);
+    console.error(`⚠️ Unable to read Chrome Preferences, preserving file (${systemErrorCode(err)})`);
     return PREFS_UNREADABLE;
   });
   if (raw === PREFS_MISSING || raw === PREFS_UNREADABLE) return raw;
@@ -134,8 +142,8 @@ async function tryReadJson(path) {
       return PREFS_UNREADABLE;
     }
     return value;
-  } catch (err) {
-    console.error(`⚠️ Corrupt Chrome Preferences, preserving file: ${err.message}`);
+  } catch {
+    console.error('⚠️ Corrupt Chrome Preferences, preserving file');
     return PREFS_UNREADABLE;
   }
 }
@@ -247,12 +255,12 @@ export function createBrowserSupervisor(options = {}) {
 
   // Chrome falls back to its own download folder, so an unavailable configured
   // one (an unplugged or unmapped drive) must not keep the browser down.
-  async function prepareDownloadDir(downloadDir) {
+  async function prepareDownloadDir(downloadDir, downloadSource) {
     try {
       await deps.ensureDirectory(downloadDir, deps.mkdir);
       return true;
     } catch (err) {
-      console.log(`⚠️ Download folder ${downloadDir} is unavailable, keeping Chrome's download folder: ${err.message}`);
+      console.log(`⚠️ Chrome download folder setup failed (download=${downloadSource}, code=${systemErrorCode(err)}), keeping Chrome's download folder`);
       return false;
     }
   }
@@ -262,6 +270,7 @@ export function createBrowserSupervisor(options = {}) {
     const config = await deps.loadConfig();
     if (shuttingDown) return;
     const downloadDir = config.downloadDir || DEFAULT_DOWNLOAD_DIR;
+    const downloadSource = config.downloadDir ? 'configured' : 'default';
     headlessMode = config.headless === true;
     spawnError = null;
 
@@ -269,7 +278,7 @@ export function createBrowserSupervisor(options = {}) {
     if (await deps.checkCdp()) {
       if (shuttingDown) return;
       console.log(`♻️ Existing Chrome CDP found at ${CDP_HOST}:${CDP_PORT}, reusing`);
-      await prepareDownloadDir(downloadDir);
+      await prepareDownloadDir(downloadDir, downloadSource);
       // Chrome owns Preferences while it runs and rewrites the file from memory
       // on exit, so a running instance keeps whatever download dir it launched
       // with; the pref is applied on the next launch.
@@ -279,21 +288,23 @@ export function createBrowserSupervisor(options = {}) {
 
     if (shuttingDown) return;
     const profileDir = config.userDataDir || DEFAULT_PROFILE_DIR;
+    const profileSource = config.userDataDir ? 'configured' : 'default';
+    const launchSettings = `headless=${headlessMode}, profile=${profileSource}, download=${downloadSource}`;
     const chromePath = browserExecutablePath(config);
     const macAppBundle = getMacAppBundle(config, chromePath);
 
     try {
       await deps.ensureDirectory(profileDir, deps.mkdir);
-    } catch (err) {
-      throw new Error(`Chrome profile folder ${profileDir} is unavailable: ${err.message}`);
-    }
-    if (shuttingDown) return;
-    const downloadDirReady = await prepareDownloadDir(downloadDir);
-    if (shuttingDown) return;
+      if (shuttingDown) return;
+      const downloadDirReady = await prepareDownloadDir(downloadDir, downloadSource);
+      if (shuttingDown) return;
 
-    // Chrome is not running yet, so Preferences is ours to write.
-    if (downloadDirReady && await deps.applyDownloadDirPreference(profileDir, downloadDir)) {
-      console.log(`📥 Download directory pref set → ${downloadDir}`);
+      // Chrome is not running yet, so Preferences is ours to write.
+      if (downloadDirReady && await deps.applyDownloadDirPreference(profileDir, downloadDir)) {
+        console.log(`📥 Chrome download preference set (download=${downloadSource})`);
+      }
+    } catch (err) {
+      return `Chrome profile setup failed (${launchSettings}, code=${systemErrorCode(err)})`;
     }
     if (shuttingDown) return;
 
@@ -311,7 +322,7 @@ export function createBrowserSupervisor(options = {}) {
 
     if (headlessMode) args.push('--headless=new');
 
-    console.log(`🌐 Launching Chrome (headless=${headlessMode}, profile=${profileDir}, binary=${deps.platform === 'darwin' && !headlessMode ? macAppBundle : chromePath}) CDP on ${CDP_HOST}:${CDP_PORT}`);
+    console.log(`🌐 Launching Chrome (${launchSettings}) CDP on ${CDP_HOST}:${CDP_PORT}`);
 
     // macOS headed mode: launch via LaunchServices (`open -na`) so Chrome owns
     // its own TCC identity. As a direct subprocess of node/PM2, Chrome inherits
@@ -347,8 +358,8 @@ export function createBrowserSupervisor(options = {}) {
       // 'error'; with no listener that becomes an uncaughtException → PM2
       // restart-loop. Log and null out so the supervise loop relaunches.
       child.on('error', (err) => {
-        spawnError = err.message;
-        console.error(`❌ Failed to spawn Chrome via open: ${err.message}`);
+        spawnError = `Failed to spawn Chrome via open (code=${systemErrorCode(err)})`;
+        console.error(`❌ ${spawnError}`);
         if (chromeProcess === child) chromeProcess = null;
       });
     } else {
@@ -369,8 +380,8 @@ export function createBrowserSupervisor(options = {}) {
       // 'error'; with no listener that becomes an uncaughtException → PM2
       // restart-loop. Log and null out so the supervise loop relaunches.
       child.on('error', (err) => {
-        spawnError = err.message;
-        console.error(`❌ Failed to spawn Chrome (${chromePath}): ${err.message}`);
+        spawnError = `Failed to spawn Chrome (code=${systemErrorCode(err)})`;
+        console.error(`❌ ${spawnError}`);
         if (chromeProcess === child) chromeProcess = null;
         detachKeepAlive({ intentional: false });
       });
@@ -429,12 +440,16 @@ export function createBrowserSupervisor(options = {}) {
       pendingRecoveryLog = true;
       console.log(`🔁 Relaunching Chrome (attempt ${attempt})`);
     }
+    let failure;
     try {
-      await launchBrowser();
+      failure = await launchBrowser();
     } catch (err) {
+      failure = `Chrome launch failed (headless=${headlessMode}, code=${systemErrorCode(err)})`;
+    }
+    if (failure) {
       sawFailure = true;
-      lastError = err.message;
-      console.error(`❌ Chrome launch failed: ${err.message}`);
+      lastError = failure;
+      console.error(`❌ ${failure}`);
       return false;
     }
     if (shuttingDown) return false;

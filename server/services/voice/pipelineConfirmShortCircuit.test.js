@@ -43,8 +43,8 @@ vi.mock('./llm.js', () => ({
 // verify the short-circuit also stops executing siblings.
 const dispatchToolMock = vi.fn();
 vi.mock('./tools.js', () => ({
-  getToolSpecsForIntent: () => ({ specs: [{ type: 'function', function: { name: 'ui_click' } }], activeGroups: new Set(['ui']) }),
-  classifyIntent: () => new Set(),
+  getTurnToolSpecs: () => ({ specs: [{ type: 'function', function: { name: 'ui_click' } }], activeGroups: new Set(['ui']) }),
+  resolveTurnIntent: () => ({ activeGroups: new Set(), formFill: false }),
   dispatchTool: (...args) => dispatchToolMock(...args),
   getAllToolNames: () => ['ui_click'],
   UI_KINDS: ['tab', 'button', 'link', 'input', 'textarea', 'select', 'checkbox', 'radio'],

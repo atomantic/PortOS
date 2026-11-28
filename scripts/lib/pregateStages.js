@@ -25,8 +25,8 @@ export const UNCOVERED_SUITES = Object.freeze({
   smoke: 'npm run smoke',
   windows: 'CI is the only proof',
   linuxContainment: 'a Linux host with bubblewrap: PORTOS_REQUIRE_LINUX_CONTAINMENT=1 npm test --prefix server -- --run <LINUX_CONTAINMENT_TESTS>',
-  supercolliderLive: 'a native amd64/arm64 Linux Docker engine: npm run setup:supercollider -- --yes, then PORTOS_SUPERCOLLIDER_LIVE=1 npx vitest run services/superColliderRender.live.test.js from server/',
-  dockerContainmentLive: 'a local Docker engine with Linux containers and npm registry access: PORTOS_DOCKER_CONTAINMENT_LIVE=1 npx vitest run services/dockerContainment.live.test.js from server/',
+  supercolliderLive: 'a native amd64/arm64 Linux Docker engine: npm run setup:supercollider -- --yes, then PORTOS_SUPERCOLLIDER_LIVE=1 npx vitest run --configLoader native services/superColliderRender.live.test.js from server/',
+  dockerContainmentLive: 'a local Docker engine with Linux containers and npm registry access: PORTOS_DOCKER_CONTAINMENT_LIVE=1 npx vitest run --configLoader native services/dockerContainment.live.test.js from server/',
   macosNative: 'a Mac: npm test --prefix server -- --run lib/windowsAgentProcess.darwin.test.js',
 });
 
@@ -93,7 +93,7 @@ export function uncoveredSuites(plan, { options = {}, downgraded = false, prereq
       : hop === 2
       ? `${count} suite(s) two imports away from ${source} beyond the ${RELATED_SUITE_CAP}-per-source and ${SECOND_HOP_RUN_CAP}-per-run caps`
       : `${count} suite(s) referencing ${source} beyond the ${RELATED_SUITE_CAP}-suite cap`;
-    uncovered.push({ suite: 'related tests', reason, remedy: 'run the referencing suites directly with `server/node_modules/.bin/vitest run --configLoader runner <files>`; CI runs them' });
+    uncovered.push({ suite: 'related tests', reason, remedy: 'run the referencing suites directly with `server/node_modules/.bin/vitest run --configLoader native <files>`; CI runs them' });
   }
   return uncovered;
 }

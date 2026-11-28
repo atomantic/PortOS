@@ -41,6 +41,10 @@ export const notePathSchema = z.object({
   path: safeRelativePath
 });
 
+export const noteReadQuerySchema = notePathSchema.extend({
+  backlinks: z.enum(['true', 'false']).optional()
+});
+
 export const createNoteSchema = z.object({
   path: safeRelativePath,
   content: z.string().max(500000).optional().default('')

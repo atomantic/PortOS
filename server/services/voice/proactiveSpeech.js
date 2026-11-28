@@ -7,7 +7,7 @@
 //
 // Pure quiet-hour / barge-in helpers are exported separately for unit tests.
 
-import { synthesize } from './tts.js';
+import { synthesizeAgentSpeech } from './channelAgent.js';
 import { getVoiceConfig } from './config.js';
 import { rememberTtsForAllSockets } from './echo.js';
 import { emitVoiceOutput } from './voiceOutput.js';
@@ -68,7 +68,7 @@ export const speakProactive = async ({ io, text, priority = 'normal', source = '
   const trimmed = (text || '').trim();
   if (!trimmed) return { ok: false, reason: 'empty' };
   if (trimmed.length > MAX_PROACTIVE_TEXT_LEN) {
-    console.warn(`🔕 voice: proactive too-long (${trimmed.length} > ${MAX_PROACTIVE_TEXT_LEN}) "${trimmed.slice(0, 60)}…"`);
+    console.log(`🔕 voice: proactive too-long (${trimmed.length} > ${MAX_PROACTIVE_TEXT_LEN} chars)`);
     return { ok: false, reason: 'too-long', chars: trimmed.length, maxChars: MAX_PROACTIVE_TEXT_LEN };
   }
 
@@ -84,12 +84,12 @@ export const speakProactive = async ({ io, text, priority = 'normal', source = '
     // Logging it on every task dequeue drowns the server log in lines that
     // describe a choice already made. Quiet hours and oversized text are events.
     if (decision.reason !== 'voice-disabled' && decision.reason !== 'proactive-disabled') {
-      console.log(`🔕 voice: proactive suppressed (${decision.reason}) "${trimmed.slice(0, 60)}"`);
+      console.log(`🔕 voice: proactive suppressed (${decision.reason}, chars=${trimmed.length})`);
     }
     return decision;
   }
 
-  const { wav, latencyMs } = await synthesize(trimmed);
+  const { wav, latencyMs } = await synthesizeAgentSpeech(trimmed);
   // `voice:speak` is distinct from per-turn `voice:tts:audio` so the client can
   // render a subtle pill and skip dialogue history.
   const delivery = await emitVoiceOutput(io, 'voice:speak', {
@@ -107,7 +107,6 @@ export const speakProactive = async ({ io, text, priority = 'normal', source = '
   // mic and must suppress it too, or the bot answers its own voice. The cost is a
   // rare false drop of a close 4+ word phrase within the 8s window.
   rememberTtsForAllSockets(trimmed);
-  const dest = delivery.socketId ?? `fallback (${delivery.fallbackCount} sockets)`;
-  console.log(`🔔 voice: proactive sent (${priority}) → ${dest} "${trimmed.slice(0, 80)}" (${latencyMs}ms synth)`);
+  console.log(`🔔 voice: proactive sent (${priority}, chars=${trimmed.length}, ${latencyMs}ms synth)`);
   return { ok: true, latencyMs };
 };

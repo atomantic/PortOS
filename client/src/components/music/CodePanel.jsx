@@ -106,6 +106,8 @@ export default function CodePanel({
   const [recordedSec, setRecordedSec] = useState(0);
   const [takeSec, setTakeSec] = useState(TAKE_SEC.DEFAULT);
   const saveContextRef = useRef({});
+  const recordingIdRef = useRef(0);
+  const pendingRecordingRef = useRef(null);
   // The track resolveTrackId created, held across re-renders until the parent passes it down.
   const createdTrackRef = useRef(null);
   saveContextRef.current = { trackId: trackId || createdTrackRef.current, description, title, onRendered };
@@ -115,9 +117,8 @@ export default function CodePanel({
 
   const post = (msg) => frameRef.current?.contentWindow?.postMessage(msg, '*');
 
-  const uploadTake = async (wav, durationSec) => {
-    const { trackId: id, description: prompt, title: takeTitle, onRendered: done } = saveContextRef.current;
-    if (!id) return;
+  const uploadTake = async (id, wav, durationSec) => {
+    const { description: prompt, title: takeTitle, onRendered: done } = saveContextRef.current;
     setSavePhase('uploading');
     const form = new FormData();
     form.append('track', new Blob([wav], { type: 'audio/wav' }), 'code-take.wav');
@@ -127,7 +128,7 @@ export default function CodePanel({
       .catch((err) => { toast.error(err?.message || 'Could not save the take'); return null; });
     if (!mountedRef.current) return;
     setSavePhase(null);
-    if (!res?.track) return;
+    if (!res?.track || saveContextRef.current.trackId !== id) return;
     toast.success(`Saved the code take (${res.durationSec ?? Math.round(durationSec)}s)`);
     done?.(res.track);
   };
@@ -143,10 +144,19 @@ export default function CodePanel({
       else if (msg.type === 'state') setFrameState(msg.state);
       else if (msg.type === 'progress') setRecordedSec(Number(msg.seconds) || 0);
       else if (msg.type === 'error') {
+        pendingRecordingRef.current = null;
         setFrameError(String(msg.message || 'The code failed to run'));
         setSavePhase((phase) => (phase === 'recording' ? null : phase));
       } else if (msg.type === 'recorded' && msg.wav instanceof ArrayBuffer) {
-        uploadTake(msg.wav, Number(msg.durationSec) || 0);
+        const pending = pendingRecordingRef.current;
+        // The sandbox runs generated code, so only a pending Save grants a write.
+        if (!pending || pending.recordingId !== msg.recordingId) return;
+        pendingRecordingRef.current = null;
+        if (pending.trackId !== saveContextRef.current.trackId) {
+          setSavePhase(null);
+          return;
+        }
+        uploadTake(pending.trackId, msg.wav, Number(msg.durationSec) || 0);
       }
     };
     window.addEventListener('message', onMessage);
@@ -197,6 +207,7 @@ export default function CodePanel({
   };
   // Stop also cancels a recording (or one waiting on the audio unlock).
   const stop = () => {
+    pendingRecordingRef.current = null;
     post({ type: 'stop' });
     setSavePhase((phase) => (phase === 'recording' ? null : phase));
   };
@@ -213,15 +224,19 @@ export default function CodePanel({
   };
 
   const save = async () => {
-    if (!code.trim() || filmTooLong) return;
+    if (!code.trim() || filmTooLong || pendingRecordingRef.current) return;
     // Short-circuits so a known track records in the same tick as the tap.
-    if (!(trackId || createdTrackRef.current || await ensureTrackId()) || !mountedRef.current) return;
+    const targetTrackId = trackId || createdTrackRef.current || await ensureTrackId();
+    if (!targetTrackId || !mountedRef.current || pendingRecordingRef.current
+      || targetTrackId !== saveContextRef.current.trackId) return;
+    const recordingId = ++recordingIdRef.current;
+    pendingRecordingRef.current = { recordingId, trackId: targetTrackId };
     const seconds = fixedLengthSec || clamp(Number(lengthInput) || TAKE_SEC.DEFAULT, TAKE_SEC.MIN, TAKE_SEC.MAX);
     setTakeSec(seconds);
     setFrameError('');
     setRecordedSec(0);
     setSavePhase('recording');
-    post({ type: 'record', code, seconds });
+    post({ type: 'record', code, seconds, recordingId });
   };
 
   const hasCode = !!code.trim();

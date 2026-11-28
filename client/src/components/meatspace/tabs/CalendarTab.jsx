@@ -1,4 +1,7 @@
+import ConfirmButtonPair from '../../../components/ui/ConfirmButtonPair';
+import useConfirmDelete from '../../../hooks/useConfirmDelete';
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { clampPercent } from '../../ui/ProgressBar';
 import { Calendar, Trash2 } from 'lucide-react';
 import { Link } from 'react-router';
 import toast from '../../ui/Toast';
@@ -43,6 +46,7 @@ const activityMatcher = ({ id, name }) => {
 };
 
 export default function CalendarTab() {
+  const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -200,7 +204,14 @@ export default function CalendarTab() {
               <span>Life Progress</span>
               <span className={pctColor}>{formatPercent(pctSpent)}</span>
             </div>
-            <div className="h-2 bg-port-bg rounded-full overflow-hidden">
+            <div
+              className="h-2 bg-port-bg rounded-full overflow-hidden"
+              role="progressbar"
+              aria-label="Life progress"
+              aria-valuenow={clampPercent(pctSpent)}
+              aria-valuemin={0}
+              aria-valuemax={100}
+            >
               <div
                 className={`h-full rounded-full transition-all ${
                   pctSpent < 50 ? 'bg-port-accent' : pctSpent < 75 ? 'bg-port-warning' : 'bg-port-error'
@@ -264,26 +275,41 @@ export default function CalendarTab() {
           <AddActivityForm onAdd={handleAddActivity} />
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2">
-          {budgets.map((b, i) => (
-            <div key={isKey(b.id) ? `id:${b.id}` : i} className="bg-port-bg border border-port-border rounded-lg p-2.5 flex items-center gap-2.5 group">
-              <IconForName name={b.icon} size={16} className="text-port-accent shrink-0" />
-              <div className="flex-1 min-w-0">
-                <div className="text-sm font-medium text-white truncate">{b.name}</div>
-                <div className="text-[10px] text-gray-500">{b.frequency}{CADENCE_LABELS[b.cadence]}</div>
+          {budgets.map((b, i) => {
+            // Legacy rows only retain confirmation while the same row object is present.
+            const confirmationTarget = isKey(b.id) ? b.id : b;
+            return (
+              <div key={isKey(b.id) ? `id:${b.id}` : i} className="bg-port-bg border border-port-border rounded-lg p-2.5 flex flex-wrap items-center gap-2.5 group">
+                <IconForName name={b.icon} size={16} className="text-port-accent shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-medium text-white truncate">{b.name}</div>
+                  <div className="text-[10px] text-gray-500">{b.frequency}{CADENCE_LABELS[b.cadence]}</div>
+                </div>
+                <div className="text-right shrink-0">
+                  <div className="text-base font-bold text-white">{formatCount(b.remaining)}</div>
+                </div>
+                {isConfirming(confirmationTarget) ? (
+                  <ConfirmButtonPair
+                    prompt="Remove activity?"
+                    confirmText="Remove"
+                    onConfirm={() => confirmDelete(() => handleRemoveActivity(i))}
+                    onCancel={cancelDelete}
+                    busy={removingKeys.includes(activityKey(b, i))}
+                    className="basis-full flex-wrap"
+                  />
+                ) : (
+                  <button
+                    onClick={() => requestDelete(confirmationTarget)}
+                    disabled={removingKeys.includes(activityKey(b, i))}
+                    className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center opacity-40 [@media(hover:hover)]:sm:opacity-0 sm:group-hover:opacity-100 focus-visible:opacity-100 transition-opacity text-gray-600 hover:text-port-error p-0.5 disabled:opacity-30 disabled:cursor-progress"
+                    title="Remove activity" aria-label="Remove activity"
+                  >
+                    <Trash2 size={12} />
+                  </button>
+                )}
               </div>
-              <div className="text-right shrink-0">
-                <div className="text-base font-bold text-white">{formatCount(b.remaining)}</div>
-              </div>
-              <button
-                onClick={() => handleRemoveActivity(i)}
-                disabled={removingKeys.includes(activityKey(b, i))}
-                className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center opacity-40 [@media(hover:hover)]:sm:opacity-0 sm:group-hover:opacity-100 focus-visible:opacity-100 transition-opacity text-gray-600 hover:text-port-error p-0.5 disabled:opacity-30 disabled:cursor-progress"
-                title="Remove activity" aria-label="Remove activity"
-              >
-                <Trash2 size={12} />
-              </button>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
 

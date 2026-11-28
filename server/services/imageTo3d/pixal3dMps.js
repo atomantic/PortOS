@@ -15,7 +15,7 @@
 
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFile, spawn } from '../../lib/childProcess.js';
 import { appendMissingModules, describeDegradedInstall } from './degradedInstall.js';
@@ -371,6 +371,7 @@ export function runPixal3dMpsGenerate({
   const renderEnv = {
     ...(env ?? process.env),
     PYTHONUNBUFFERED: '1',
+    FLEX_GEMM_AUTOTUNE_CACHE_PATH: resolve(pixal3dMpsRoot(base), 'autotune_cache.json'),
   };
   return runGenerateSubprocess({
     command,

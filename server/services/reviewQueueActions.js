@@ -12,8 +12,8 @@ import * as reviewQueueTriageStore from './reviewQueueTriageStore.js';
 import { isTerminalThreadStatus } from '../lib/brainThreads.js';
 import { ACTION_KINDS, PRODUCERS_BY_SOURCE, __resetAlertsCache } from './reviewQueueProducers.js';
 import { invalidateQueueSnapshots, scheduleQueueClockInvalidation } from './reviewQueueSnapshots.js';
-
-export const MAX_REVIEW_QUEUE_SNOOZE_MS = 30 * 24 * 60 * 60 * 1000;
+import { MAX_REVIEW_QUEUE_SNOOZE_MS } from '../lib/reviewQueueLimits.js';
+export { MAX_REVIEW_QUEUE_SNOOZE_MS } from '../lib/reviewQueueLimits.js';
 
 async function resolveMemoryAction(id, operation) {
   const memory = await import('./memory.js');

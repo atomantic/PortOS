@@ -4,9 +4,8 @@
  * READ-ONLY probe of each people-search broker for the user's exposure, using
  * search vectors DERIVED FROM THE VAULT (scan-eligible records only — the vault
  * hard-excludes ssn/passport/etc.). Records a per-broker verdict in the case
- * ledger (`found | not_found | indirect_exposure | blocked`); a 404 is
- * INCONCLUSIVE (leaves the case unscanned) and an antibot wall records `blocked`
- * — NEVER bypassed (no CAPTCHA/anti-bot defeat, per the design's hard rule).
+ * ledger (`found | not_found | indirect_exposure | blocked`). Unreadable results
+ * leave the ledger untouched. An antibot wall or rate limit records `blocked`.
  *
  * Two lanes: a plain HTTP GET of the broker's search URL first (most brokers
  * render static HTML), escalating to the SSRF-pinned real-Chrome fetch
@@ -31,8 +30,9 @@ import { fetchPublicResponse } from '../lib/safeUrlFetch.js';
 import { fetchUrlMainText } from './catalog/catalogIngestSources.js';
 import { listScanEligibleValues } from './privacyVault.js';
 import { listBrokers, listBrokerCases, recordScanVerdict } from './privacyBrokers.js';
-import { resolveSubjectId, assertSubjectConsent } from './privacySubjects.js';
+import { resolveSubjectId, assertSubjectConsent, dispatchWithSubjectConsent } from './privacySubjects.js';
 import { parseCityState } from '../lib/cityState.js';
+import { htmlToText } from '../lib/htmlToText.js';
 
 // Case states a scan pass may (re)touch: no case yet, or a settled SCAN verdict.
 // Cases mid-opt-out (optout_in_progress…awaiting_processing), confirmed_removed,
@@ -46,6 +46,7 @@ const HTTP_FETCH_TIMEOUT_MS = 15000;
 // likely saw an SPA shell — escalate to the browser lane.
 const JS_SHELL_MAX_LEN = 600;
 const JS_WALL_MARKERS = ['enable javascript', 'please enable js', 'noscript', '__next_data__'];
+const SEARCH_RESULTS = /\b(?:no (?:matching )?(?:results|records|matches|profiles|listings)|\d+ (?:matching )?results? found)\b/i;
 // Antibot / hard-challenge markers — record `blocked`, never solve. Challenge-
 // specific tokens only: a bare vendor name like "cloudflare" appears in CDN
 // script URLs on legitimate 200 result pages and would false-positive.
@@ -76,17 +77,22 @@ export function buildSearchVectors(scanValues = []) {
   const emails = [];
   const phones = [];
   const locations = [];
+  const sources = [];
   for (const v of scanValues) {
     if (!v || typeof v.value !== 'string' || !v.value.trim()) continue;
-    if (v.type === 'legal_name') names.push({ full: v.value.trim(), ...splitName(v.value) });
-    else if (v.type === 'email') emails.push(v.value.trim());
+    if (v.type === 'legal_name') {
+      names.push({ full: v.value.trim(), ...splitName(v.value) });
+      sources.push({ id: v.id, version: v.version });
+    } else if (v.type === 'email') emails.push(v.value.trim());
     else if (v.type === 'phone') phones.push(v.value.trim());
     else if (v.type === 'address') {
       const { city, state } = parseCityState(v.value);
-      if (city || state) locations.push({ city, state, status: v.status ?? 'current' });
+      if (!city && !state) continue;
+      locations.push({ city, state, status: v.status ?? 'current' });
+      sources.push({ id: v.id, version: v.version });
     }
   }
-  return { names, emails, phones, locations };
+  return { names, emails, phones, locations, sources };
 }
 
 const enc = (s) => encodeURIComponent(String(s ?? '').trim());
@@ -115,29 +121,23 @@ function containsAntibot(html) {
   return ANTIBOT_MARKERS.some((m) => h.includes(m));
 }
 
-function looksLikeJsShell(html) {
-  if (!html || html.length < JS_SHELL_MAX_LEN) return true;
-  const h = html.toLowerCase();
-  return JS_WALL_MARKERS.some((m) => h.includes(m));
-}
-
 /**
  * Classify a fetched broker page against the search vectors. Pure.
- *  - HTTP 404 → INCONCLUSIVE (verdict null): the case stays `unscanned`.
- *  - antibot wall (or a 403) → `blocked` (never bypassed).
+ *  - HTTP 403/429 or an antibot wall → `blocked`.
+ *  - Other statuses without a complete result body → inconclusive.
  *  - name + a location token (city/state) co-occur → `found`.
  *  - name alone → `indirect_exposure` (a listing may exist but the match is
  *    weaker — namesake risk).
- *  - otherwise → `not_found`.
- * `broker.antibot` tips a short/blank page toward `blocked` rather than
- * `not_found` (the wall likely hid the result).
+ *  - unreadable JS shell → inconclusive (blocked for a known antibot broker).
+ *  - readable search results without a match → `not_found`.
  */
 export function classifyScanResult({ status, html = '', vectors = {}, broker = {} }) {
-  if (status === 404) return { verdict: null, inconclusive: true, evidence: { match_basis: 'http_404' } };
-  if (status === 403 || containsAntibot(html)) {
+  if (status === 429) return { verdict: 'blocked', evidence: { match_basis: 'http_429', http_status: status } };
+  if (status === 403 || (status === 200 && containsAntibot(html))) {
     return { verdict: 'blocked', evidence: { match_basis: 'antibot_wall', http_status: status } };
   }
-  if (status && status >= 500) return { verdict: null, inconclusive: true, evidence: { match_basis: `http_${status}` } };
+  // Require a complete response: a 206 partial body cannot establish absence.
+  if (status !== 200) return { verdict: null, inconclusive: true, evidence: { match_basis: `http_${status ?? 'unknown'}` } };
 
   const h = html.toLowerCase();
   const names = vectors.names || [];
@@ -154,9 +154,14 @@ export function classifyScanResult({ status, html = '', vectors = {}, broker = {
     }
     return { verdict: 'indirect_exposure', found: null, evidence: { match_basis: 'name_only', matched_name: nameHit.full } };
   }
-  if (broker.antibot && looksLikeJsShell(html)) {
-    return { verdict: 'blocked', evidence: { match_basis: 'antibot_shell' } };
+  // Check rendered copy rather than counting the scripts and markup in a shell.
+  const pageText = htmlToText(html, { collapseSpaces: true });
+  const hasResults = SEARCH_RESULTS.test(pageText);
+  if (JS_WALL_MARKERS.some((m) => h.includes(m)) || (!hasResults && pageText.length < JS_SHELL_MAX_LEN)) {
+    if (broker.antibot) return { verdict: 'blocked', evidence: { match_basis: 'antibot_shell' } };
+    return { verdict: null, inconclusive: true, evidence: { match_basis: 'js_shell' } };
   }
+  if (!hasResults) return { verdict: null, inconclusive: true, evidence: { match_basis: 'unrecognized_results' } };
   return { verdict: 'not_found', found: false, evidence: { match_basis: 'no_match' } };
 }
 
@@ -173,12 +178,11 @@ async function isScanUrlSafe(target) {
   return !(resolved?.address && isBlockedIngestHost(resolved.address));
 }
 
-// Default HTTP lane transport: every hop (including redirects) is DNS-pinned and
-// revalidated, and private/LAN addresses are refused, so a broker page cannot
-// bounce the scan into loopback or LAN services. A refused hop yields null.
-const pinnedScanFetch = (url, { headers }) => fetchPublicResponse(url, {
-  headers, timeoutMs: HTTP_FETCH_TIMEOUT_MS, blockPrivate: true, throwOnUnsafe: false,
-});
+// Fetch failures are inconclusive. A withdrawn grant or erased subject stops the pass.
+export function onBrokerFetchFailure(error) {
+  if (error?.code === 'SUBJECT_CONSENT_REQUIRED' || error?.code === 'SUBJECT_NOT_FOUND') throw error;
+  return null;
+}
 
 // Plain HTTP GET lane. Returns { status, html } or null on network failure.
 async function httpFetchLane(url, fetchImpl) {
@@ -192,9 +196,8 @@ async function httpFetchLane(url, fetchImpl) {
     if (!res) return null;
     const html = await res.text();
     return { status: res.status, html };
-  } catch {
-    // An unreadable body is inconclusive, even when headers reported success.
-    return null;
+  } catch (error) {
+    return onBrokerFetchFailure(error);
   } finally {
     clearTimeout(timer);
   }
@@ -209,7 +212,7 @@ async function httpFetchLane(url, fetchImpl) {
  * `deps` injectable so tests/verification never hit the network.
  */
 export async function probeBroker(broker, vectors, {
-  fetchImpl = pinnedScanFetch, browserFetch = fetchUrlMainText, urlSafe = isScanUrlSafe,
+  fetchImpl, browserFetch, urlSafe = isScanUrlSafe, subjectId, verifyingRemoval = false,
 } = {}) {
   const template = broker?.urls?.search;
   const name = (vectors.names || [])[0];
@@ -222,51 +225,30 @@ export async function probeBroker(broker, vectors, {
     return { skipped: true, reason: 'unsafe_or_unfillable_url' };
   }
 
-  const result = await httpFetchLane(url, fetchImpl);
-  let html = result?.html ?? '';
-  let status = result?.status ?? null;
+  const scope = verifyingRemoval ? 'broker_optout' : 'broker_scan';
+  const dispatchRequest = start => dispatchWithSubjectConsent(subjectId, { scope, action: 'broker exposure probe' }, start);
+  // The pinned transport checks each hop after DNS, including redirects.
+  const result = await httpFetchLane(url, (target, options) => fetchImpl
+    ? dispatchRequest(() => fetchImpl(target, options))
+    : fetchPublicResponse(target, { ...options, timeoutMs: HTTP_FETCH_TIMEOUT_MS, blockPrivate: true, throwOnUnsafe: false, dispatchRequest }));
+  if (!result) return { skipped: true, reason: 'fetch_failed' };
 
-  // Escalate to the pinned browser lane when the static fetch saw a JS shell,
-  // OR hit a bot wall (403/antibot markers). A real-Chrome fetch is a
-  // legitimate client that passes many PASSIVE bot checks — an interactive
-  // challenge in the browsed page still classifies as `blocked` below (never
-  // solved). On a wall, only adopt substantive browsed content: a shell-length
-  // browsed page would otherwise flip a real wall into a false `not_found`.
-  // 404/5xx stay out of the wall gate even when the error page carries an
-  // incidental antibot token — those statuses are inconclusive by contract
-  // (classifyScanResult), and escalating them could adopt a substantive error
-  // page as a definitive not_found. 429 is also deliberately excluded: the
-  // host just asked us to back off, so firing a second (heavier) browser
-  // request at it is counterproductive — `blocked` + the 14-day recheck is
-  // the right verdict for a rate-limited probe.
-  const walled = result && (status === 403 || (status < 400 && containsAntibot(html)));
-  const jsShell = result && !walled && status >= 200 && status < 400 && looksLikeJsShell(html);
-  if (walled || jsShell) {
-    const browsed = await browserFetch(url).catch(() => null);
-    if (browsed?.text) {
-      if (jsShell || !looksLikeJsShell(browsed.text)) {
-        html = browsed.text;
-        status = 200;
-      } else {
-        // Wall + shell-length browsed text: adopt only when it carries a
-        // positive name signal — a concise page naming the person is a real
-        // result, while a short page without it is indistinguishable from a
-        // challenge shell and must stay `blocked` (never become not_found).
-        const peek = classifyScanResult({ status: 200, html: browsed.text, vectors, broker });
-        if (peek.verdict === 'found' || peek.verdict === 'indirect_exposure') {
-          html = browsed.text;
-          status = 200;
-        }
-      }
+  let classified = classifyScanResult({ ...result, vectors, broker });
+  // Only the existing wall and JS rendering cases can use the browser lane.
+  // A rate limit is a request to back off. If rendering yields no verdict,
+  // keep the original blocked or inconclusive result.
+  const needsBrowser = result.status === 403 || (result.status === 200 &&
+    (classified.verdict === 'blocked' || classified.evidence.match_basis === 'js_shell'));
+  if (needsBrowser) {
+    const browsed = await dispatchRequest(() => browserFetch
+      ? browserFetch(url)
+      : fetchUrlMainText(url, { dispatchRequest, disposableContext: true })).catch(onBrokerFetchFailure);
+    if (browsed) {
+      const rendered = classifyScanResult({ status: browsed.status, html: browsed.text, vectors, broker });
+      if (rendered.verdict) classified = rendered;
     }
   }
 
-  if (!result && !html) {
-    // Total network failure — inconclusive.
-    return { skipped: true, reason: 'fetch_failed' };
-  }
-
-  const classified = classifyScanResult({ status, html, vectors, broker });
   // search_url lets the UI offer "check manually in your browser" on blocked
   // cases — the human IS the sanctioned path past an antibot wall.
   const evidence = { ...classified.evidence, search_url: url, listing_urls: classified.verdict === 'found' ? [url] : [] };
@@ -281,23 +263,23 @@ export async function probeBroker(broker, vectors, {
  * read-only probeBroker that then writes the ledger verdict. Re-asserts the
  * subject's consent even though runScanPass already did: this is an exported
  * entry point, so a direct caller (route, agent, single-broker recheck) must not
- * be able to reach a ledger write around the gate. One indexed SELECT per broker. `deps` are
+ * be able to reach a ledger write around the gate. `deps` are
  * injectable so tests never hit the network/browser:
- *   - `fetchImpl` (default global fetch) — the HTTP lane.
+ *   - `fetchImpl` (default DNS-pinned fetch) — the HTTP lane.
  *   - `browserFetch` (default fetchUrlMainText) — the JS-required escalation.
  * Returns the recorded case, or `{ skipped: true, reason }` when the broker has
  * no usable search URL (blind scan not possible) or the URL is unsafe.
  */
 export async function scanBroker(broker, vectors, {
-  fetchImpl = pinnedScanFetch, browserFetch = fetchUrlMainText, urlSafe = isScanUrlSafe, now = new Date(),
+  fetchImpl, browserFetch, urlSafe = isScanUrlSafe, now = new Date(),
   subjectId,
 } = {}) {
   const resolvedSubjectId = resolveSubjectId(subjectId);
   await assertSubjectConsent(resolvedSubjectId, { scope: 'broker_scan', action: `broker exposure scan (${broker?.id})` });
-  const probed = await probeBroker(broker, vectors, { fetchImpl, browserFetch, urlSafe });
+  const probed = await probeBroker(broker, vectors, { fetchImpl, browserFetch, urlSafe, subjectId: resolvedSubjectId });
   if (probed.skipped) return { skipped: true, reason: probed.reason };
   const kase = await recordScanVerdict(broker.id, probed.verdict, {
-    evidence: probed.evidence, found: probed.found ?? null, now, subjectId: resolvedSubjectId,
+    evidence: probed.evidence, found: probed.found ?? null, scanSources: vectors.sources, now, subjectId: resolvedSubjectId,
   });
   return kase;
 }
@@ -309,7 +291,7 @@ export async function scanBroker(broker, vectors, {
  *
  * Returns a summary { scanned, verdicts: {<verdict>: n}, skipped, brokers }.
  */
-export async function runScanPass({ concurrency = 3, fetchImpl = pinnedScanFetch, browserFetch = fetchUrlMainText, urlSafe = isScanUrlSafe, now = new Date(), subjectId } = {}) {
+export async function runScanPass({ concurrency = 3, fetchImpl, browserFetch, urlSafe = isScanUrlSafe, now = new Date(), subjectId } = {}) {
   // CONSENT GATE — BEFORE any vault read or broker fetch. A subject without an
   // active `broker_scan` grant is refused outright (403); the UI hiding the Scan
   // button is not sufficient, since a cron/API/agent caller reaches this same

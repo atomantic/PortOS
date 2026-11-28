@@ -77,3 +77,7 @@ export const CANDIDATE_COUNT_MIN = 2;
 export const CANDIDATE_COUNT_MAX = 8;
 
 export const VOLUME_BEATS_MODES = Object.freeze(['skip-existing', 'regenerate-all']);
+
+export const DISMISS_REASONS = Object.freeze(['false-positive']);
+
+export const REVIEW_RUN_MODES = Object.freeze(['merge', 'fresh']);

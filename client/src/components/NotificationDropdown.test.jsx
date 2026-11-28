@@ -86,8 +86,10 @@ describe('NotificationDropdown', () => {
     // The bell sits mid-screen in the sidebar footer. An absolutely-positioned
     // panel ran off the right edge of a phone; placement now comes from the
     // shared viewport-clamping hook, which owns the measure/flip/clamp plumbing.
-    it('portals the panel out of the trigger subtree and places it in viewport coordinates', () => {
+    it('portals a height-constrained panel out of the trigger subtree', () => {
       renderDropdown();
+      const trigger = screen.getByRole('button', { name: /^Notifications/ });
+      vi.spyOn(trigger, 'getBoundingClientRect').mockReturnValue(new DOMRect(160, 300, 44, 44));
       const panel = openPanel();
 
       expect(panel.parentElement).toBe(document.body);
@@ -95,6 +97,7 @@ describe('NotificationDropdown', () => {
       expect(panel.style.left).not.toBe('');
       expect(panel.style.top).not.toBe('');
       expect(panel.style.width).not.toBe('');
+      expect(panel.style.maxHeight).toBe('284px');
     });
 
     it('carries no trigger-anchored positioning classes that would fight the hook', () => {
@@ -335,17 +338,26 @@ describe('NotificationDropdown', () => {
   });
 
   describe('overflow beyond the collapsed limit', () => {
-    it('caps the list at 10 and reveals the rest on demand', () => {
+    it('reveals older notifications by keyboard and returns focus to Close', async () => {
+      const user = userEvent.setup();
       renderDropdown({ notifications: makeNotifications(24) });
-      openPanel();
+      const bell = screen.getByRole('button', { name: /^Notifications/ });
+      bell.focus();
+      await user.keyboard('{Enter}');
 
       expect(screen.getByText('Notification 9')).toBeTruthy();
       expect(screen.queryByText('Notification 10')).toBeNull();
 
-      fireEvent.click(screen.getByRole('button', { name: 'Show 14 more notifications' }));
+      await user.tab({ shift: true });
+      expect(screen.getByRole('button', { name: 'Show 14 more notifications' })).toHaveFocus();
+      await user.keyboard('{Enter}');
 
       expect(screen.getByText('Notification 23')).toBeTruthy();
       expect(screen.queryByRole('button', { name: /Show \d+ more/ })).toBeNull();
+      expect(screen.getByRole('button', { name: 'Close notifications' })).toHaveFocus();
+      await user.keyboard('{Escape}');
+      expect(queryPanel()).toBeNull();
+      expect(bell).toHaveFocus();
     });
 
     it('singularizes the overflow control for a single hidden notification', () => {

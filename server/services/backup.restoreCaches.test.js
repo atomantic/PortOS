@@ -11,12 +11,20 @@ import { restoreSnapshot } from './backup.js';
 import * as apps from './apps.js';
 import * as notifications from './notifications.js';
 import * as feeds from './feeds.js';
+import { searchSNP, saveMarker, updateMarkerNotes } from './genome.js';
+import { getAccountById, updateAccount } from './socialAccounts.js';
 import * as personalities from './agent/agentPersonalities.js';
 import * as automation from './automationScheduler.js';
 import { cancelAll, getEvent } from './eventScheduler.js';
 import { updateMeta } from './digital-twin-meta.js';
 import { getDigitalTwinForPrompt } from './digital-twin-context.js';
 import { scheduleTimer, __resetVoiceTimers } from './voice/timers.js';
+import * as decisionLog from './decisionLog.js';
+import * as memoryClassifier from './memoryClassifier.js';
+import * as feedbackStore from './feedbackStore.js';
+import * as tasteQuestionnaire from './taste-questionnaire.js';
+import * as taskLearningStore from './taskLearning/store.js';
+import * as tools from './tools.js';
 
 describe('live file restore caches', () => {
   beforeEach(() => { spawn.mockReset(); });
@@ -162,6 +170,61 @@ describe('live file restore caches', () => {
     expect(JSON.parse(await fs.readFile(path, 'utf8')).notifications).toEqual([{ id: 'restored', read: true }]);
   });
 
+  it('invalidates the genome index and fences marker edits after a partial MeatSpace restore', async () => {
+    const rawPath = join(PATHS.meatspace, 'genome-raw.txt');
+    const metaPath = join(PATHS.meatspace, 'genome.json');
+    const rsid = 'rs999999999';
+    const install = async (genotype, id) => {
+      await fs.writeFile(rawPath, `${rsid}\t1\t1\t${genotype}\n`);
+      await fs.writeFile(metaPath, JSON.stringify({ uploaded: true, savedMarkers: { [id]: { rsid } } }));
+    };
+    await fs.mkdir(PATHS.meatspace, { recursive: true });
+    await install('AA', 'original');
+    await expect(searchSNP(rsid)).resolves.toMatchObject({ genotype: 'A/A' });
+
+    const proc = fakeProc();
+    spawn.mockReturnValue(proc);
+    const pending = restoreSnapshot('/dest', 'snap-1', { dryRun: false, subdirFilter: 'meatspace' });
+    await flush();
+    const staleMarker = saveMarker({ rsid });
+    const edit = updateMarkerNotes('restored', 'edited');
+    await install('CC', 'restored');
+    proc.emit('close', 1);
+
+    await expect(pending).rejects.toThrow(/Some files may already have been overwritten/);
+    await expect(staleMarker).resolves.toMatchObject({ error: expect.stringContaining('Genome data changed') });
+    await expect(edit).resolves.toMatchObject({ id: 'restored', notes: 'edited' });
+    await expect(searchSNP(rsid)).resolves.toMatchObject({ genotype: 'C/C' });
+    expect(JSON.parse(await fs.readFile(metaPath, 'utf8')).savedMarkers).toEqual({ restored: { rsid, notes: 'edited' } });
+  });
+
+  it('releases queued social account edits onto a restored account file', async () => {
+    const path = join(PATHS.digitalTwin, 'social-accounts.json');
+    const install = id => fs.writeFile(path, JSON.stringify({ accounts: { [id]: { platform: 'github', username: id } } }));
+    await fs.mkdir(PATHS.digitalTwin, { recursive: true });
+    await install('original');
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now());
+    try {
+      await expect(getAccountById('original')).resolves.toMatchObject({ username: 'original' });
+      const proc = fakeProc();
+      spawn.mockReturnValue(proc);
+      const pending = restoreSnapshot('/dest', 'snap-1', { dryRun: false, subdirFilter: 'digital-twin/social-accounts.json' });
+      await flush();
+      const edit = updateAccount('restored', { notes: 'edited' });
+      await install('restored');
+      proc.emit('close', 0);
+
+      await pending;
+      await expect(edit).resolves.toMatchObject({ username: 'restored', notes: 'edited' });
+      await expect(getAccountById('original')).resolves.toBeNull();
+      const { accounts } = JSON.parse(await fs.readFile(path, 'utf8'));
+      expect(accounts).toMatchObject({ restored: { notes: 'edited' } });
+      expect(accounts).not.toHaveProperty('original');
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   it('allows apps reads during a scoped restore without persisting baseline normalization', async () => {
     const path = join(testDataRoot(), 'apps.json');
     const original = { apps: { original: { name: 'Original app' } } };
@@ -253,6 +316,128 @@ describe('live file restore caches', () => {
     } finally {
       setAIToolkitInstance(null);
       await fs.rm(join(testDataRoot(), 'voice-timers.json'), { force: true });
+    }
+  });
+
+  it('reconciles decision log, classifier config, twin feedback/taste, learning and tools caches across live restore', async () => {
+    const decisionPath = join(PATHS.cos, 'decisions.json');
+    const learningPath = join(PATHS.cos, 'learning.json');
+    const classifierPath = join(testDataRoot(), 'memory-classifier-config.json');
+    const feedbackPath = join(PATHS.digitalTwin, 'feedback.json');
+    const tastePath = join(PATHS.digitalTwin, 'taste-profile.json');
+    const toolPath = join(PATHS.tools, 'tool-restored.json');
+    const oldToolPath = join(PATHS.tools, 'tool-before.json');
+    const nowIso = new Date().toISOString();
+
+    await Promise.all([
+      fs.mkdir(PATHS.cos, { recursive: true }),
+      fs.mkdir(PATHS.digitalTwin, { recursive: true }),
+      fs.mkdir(PATHS.tools, { recursive: true }),
+    ]);
+
+    decisionLog.invalidateCache();
+    memoryClassifier.invalidateCache();
+    feedbackStore.invalidateCache();
+    tasteQuestionnaire.invalidateCache();
+    taskLearningStore.clearLearningCache();
+    tools.invalidateCache();
+
+    await Promise.all([
+      fs.writeFile(decisionPath, JSON.stringify({
+        version: 1,
+        decisions: [{ id: 'dec-before', type: 'idle', reason: 'before', count: 1, timestamp: nowIso }],
+        stats: { totalDecisions: 1, byType: { idle: 1 } },
+      })),
+      fs.writeFile(learningPath, JSON.stringify({
+        version: 2, lastUpdated: nowIso, byTaskType: {}, byTaskTypeExecution: {},
+        byModelTier: {}, errorPatterns: {}, failureSignatures: {}, routingAccuracy: {},
+        environmentalFailures: {}, correlationWindow: [],
+        totals: { completed: 1, succeeded: 1, failed: 0, totalDurationMs: 100, avgDurationMs: 100 },
+      })),
+      fs.writeFile(classifierPath, JSON.stringify({ enabled: true, model: 'before-model', timeout: 11111 })),
+      fs.writeFile(feedbackPath, JSON.stringify({
+        version: '1.0.0', entries: [{ id: 'fb-before', rating: 'sounds_like_me' }],
+        stats: { totalFeedback: 1, soundsLikeMe: 1, doesntSoundLikeMe: 0 },
+        documentWeightAdjustments: {}, lastCalculatedAt: null,
+      })),
+      fs.writeFile(tastePath, JSON.stringify({
+        version: '1.0.0', createdAt: nowIso, updatedAt: nowIso, profileSummary: 'before-summary',
+        lastSessionAt: null, sections: {},
+      })),
+      fs.writeFile(oldToolPath, JSON.stringify({ id: 'tool-before', name: 'Before Tool', category: 'test', enabled: true })),
+    ]);
+
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now());
+    try {
+      // Warm every in-memory cache with pre-restore data.
+      expect((await decisionLog.getDecisionSummary()).last24Hours.total).toBe(1);
+      expect((await memoryClassifier.getConfig()).model).toBe('before-model');
+      expect((await feedbackStore.loadFeedback()).entries).toMatchObject([{ id: 'fb-before' }]);
+      expect((await tasteQuestionnaire.getTasteProfile()).profileSummary).toBe('before-summary');
+      expect((await taskLearningStore.loadLearningData()).totals.completed).toBe(1);
+      expect((await tools.getTools()).map((t) => t.id)).toEqual(['tool-before']);
+
+      const proc = fakeProc();
+      spawn.mockReturnValue(proc);
+      const pending = restoreSnapshot('/dest', 'snap-1', { dryRun: false });
+      await flush();
+
+      // Queue live mutations while rsync is running — they must wait for restore and apply onto restored bytes.
+      const queuedDecision = decisionLog.recordDecision('task_selected', 'after-restore');
+      const queuedClassifier = memoryClassifier.updateConfig({ timeout: 22222 });
+      const queuedTool = tools.updateTool('tool-restored', { description: 'edited-after-restore' });
+
+      // Simulate rsync installing the snapshot files.
+      await Promise.all([
+        fs.writeFile(decisionPath, JSON.stringify({
+          version: 1,
+          decisions: [{ id: 'dec-restored', type: 'idle', reason: 'restored', count: 5, timestamp: nowIso }],
+          stats: { totalDecisions: 5, byType: { idle: 5 } },
+        })),
+        fs.writeFile(learningPath, JSON.stringify({
+          version: 2, lastUpdated: nowIso, byTaskType: {}, byTaskTypeExecution: {},
+          byModelTier: {}, errorPatterns: {}, failureSignatures: {}, routingAccuracy: {},
+          environmentalFailures: {}, correlationWindow: [],
+          totals: { completed: 42, succeeded: 40, failed: 2, totalDurationMs: 4200, avgDurationMs: 100 },
+        })),
+        fs.writeFile(classifierPath, JSON.stringify({ enabled: false, model: 'restored-model', timeout: 33333 })),
+        fs.writeFile(feedbackPath, JSON.stringify({
+          version: '1.0.0', entries: [{ id: 'fb-restored', rating: 'sounds_like_me' }],
+          stats: { totalFeedback: 1, soundsLikeMe: 1, doesntSoundLikeMe: 0 },
+          documentWeightAdjustments: {}, lastCalculatedAt: null,
+        })),
+        fs.writeFile(tastePath, JSON.stringify({
+          version: '1.0.0', createdAt: nowIso, updatedAt: nowIso, profileSummary: 'restored-summary',
+          lastSessionAt: null, sections: {},
+        })),
+        fs.rm(oldToolPath, { force: true }),
+        fs.writeFile(toolPath, JSON.stringify({ id: 'tool-restored', name: 'Restored Tool', category: 'test', enabled: true })),
+      ]);
+
+      proc.emit('close', 0);
+      await pending;
+      await Promise.all([queuedDecision, queuedClassifier, queuedTool]);
+
+      const storedDecisions = JSON.parse(await fs.readFile(decisionPath, 'utf8'));
+      expect(storedDecisions.stats.totalDecisions).toBe(6);
+      expect(storedDecisions.decisions.map((d) => d.reason)).toEqual(['after-restore', 'restored']);
+
+      const storedClassifier = JSON.parse(await fs.readFile(classifierPath, 'utf8'));
+      expect(storedClassifier).toMatchObject({ enabled: false, model: 'restored-model', timeout: 22222 });
+      expect((await memoryClassifier.getConfig()).model).toBe('restored-model');
+
+      expect((await feedbackStore.loadFeedback()).entries).toMatchObject([{ id: 'fb-restored' }]);
+      expect((await tasteQuestionnaire.getTasteProfile()).profileSummary).toBe('restored-summary');
+      expect((await taskLearningStore.loadLearningData()).totals.completed).toBe(42);
+      expect(await tools.getTools()).toMatchObject([{ id: 'tool-restored', description: 'edited-after-restore' }]);
+    } finally {
+      clock.mockRestore();
+      decisionLog.invalidateCache();
+      memoryClassifier.invalidateCache();
+      feedbackStore.invalidateCache();
+      tasteQuestionnaire.invalidateCache();
+      taskLearningStore.clearLearningCache();
+      tools.invalidateCache();
     }
   });
 });

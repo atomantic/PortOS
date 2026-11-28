@@ -1,3 +1,4 @@
+import { cancelJevTraining, trainScopeAdherenceHead } from '../services/jevTraining.js';
 import { recordingOperatorIo } from '../test/recordingOperatorIo.js';
 import { EventEmitter } from 'node:events';
 import { registerModelObservationSocket } from '../services/modelObservation.js';
@@ -16,7 +17,7 @@ import { getMeasuredFits } from '../services/localModelAssessmentStore.js';
 import { listEndpointRuntimeModels } from '../services/localRuntimeEndpoints.js';
 import { runAssessment } from '../services/localModelAssessments.js';
 import { startSweep, getSweepStatus, cancelSweep } from '../services/localModelAssessmentSweep.js';
-import { runOpenCodeAgentBenchmark } from '../services/localModelAgentBenchmark.js';
+import { cancelOpenCodeAgentBenchmark, runOpenCodeAgentBenchmark } from '../services/localModelAgentBenchmark.js';
 import { getLoadedModels, unloadModel } from '../services/ollamaManager.js';
 import { getLoadedModels as getLoadedLmStudioModels, getLastLoadedModelsError as getLmStudioResidencyError, controlLmStudioServer } from '../services/lmStudioManager.js';
 import { getSettings, readSettingsStrict, updateSettingsWith } from '../services/settings.js';
@@ -136,7 +137,12 @@ vi.mock('../services/localModelAssessmentSweep.js', () => ({
   cancelSweep: vi.fn(() => ({ status: 'cancelled', total: 3, completed: 1, results: [] })),
 }));
 
+vi.mock('../services/jevTraining.js', () => ({
+  cancelJevTraining: vi.fn(),
+  trainScopeAdherenceHead: vi.fn(),
+}));
 vi.mock('../services/localModelAgentBenchmark.js', () => ({
+  cancelOpenCodeAgentBenchmark: vi.fn(),
   runOpenCodeAgentBenchmark: vi.fn(async ({ backend, modelId, timeoutMs }) => ({
     backend, modelId, timeoutMs, completed: true, taskCharsPerSecond: 100,
   })),
@@ -470,11 +476,17 @@ describe('local LLM playground routes', () => {
     );
   });
 
-  it('answers a canceled install as canceled, not as a 502 failure', async () => {
+  it('reports a canceled install over HTTP and progress', async () => {
+    const app = makeApp();
     installModel.mockResolvedValue({ success: false, canceled: true, code: 'INSTALL_CANCELED', modelId: 'llama3.2' });
-    const res = await request(makeApp()).post('/api/local-llm/install').send({ backend: 'ollama', modelId: 'llama3.2' });
+    const res = await request(app).post('/api/local-llm/install').send({ backend: 'ollama', modelId: 'llama3.2' });
+
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ success: false, canceled: true, modelId: 'llama3.2' });
+    expect(res.body).toEqual({ status: 'canceled', canceled: true, modelId: 'llama3.2' });
+    expect(app.get('io').emit.mock.calls).toEqual([
+      ['localLlm:progress', { event: 'start', message: 'Installing llama3.2 on ollama…' }],
+      ['localLlm:progress', { event: 'canceled', message: 'llama3.2 download canceled' }],
+    ]);
   });
 
   it('POST /install/cancel stops a running download and 404s when none is running', async () => {
@@ -974,6 +986,14 @@ describe('measured assessments wiring', () => {
     expect(runOpenCodeAgentBenchmark).toHaveBeenCalledWith({
       backend, modelId, timeoutMs: 120000,
     });
+  });
+
+  it('returns the benchmark cancellation outcome', async () => {
+    cancelOpenCodeAgentBenchmark.mockReturnValueOnce({ cancelled: true });
+    const response = await request(makeApp()).post('/api/local-llm/assessments/agent-benchmark/cancel');
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ cancelled: true });
+    expect(cancelOpenCodeAgentBenchmark).toHaveBeenCalledOnce();
   });
 
   it('rejects an agent benchmark backend outside the configured local targets', async () => {
@@ -1545,6 +1565,32 @@ describe('Hugging Face catalog search', () => {
     expect(searchHuggingFaceModels).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
       backend: 'lmstudio', query: 'example', category: 'all', limit: 7, installedIds: [`${id}@Q4_K_M`],
     }));
+  });
+});
+
+describe('JEV head training cancellation', () => {
+  it('acknowledges a cancellation and reports it on the original training request', async () => {
+    const result = { ok: false, cancelled: true, code: 'jev-head-training-cancelled' };
+    const { promise: started, resolve: markStarted } = Promise.withResolvers();
+    const { promise: finished, resolve: finishTraining } = Promise.withResolvers();
+    trainScopeAdherenceHead.mockImplementationOnce(() => {
+      markStarted();
+      return finished;
+    });
+    cancelJevTraining.mockImplementationOnce(() => {
+      finishTraining(result);
+      return { cancelled: true };
+    });
+
+    const app = makeApp();
+    const training = request(app).post('/api/local-llm/jev/heads/train').send({}).then(response => response);
+    await started;
+    const cancelled = await request(app).post('/api/local-llm/jev/heads/train/cancel');
+    expect(cancelled.status).toBe(200);
+    expect(cancelled.body).toEqual({ cancelled: true });
+    const response = await training;
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual(result);
   });
 });
 

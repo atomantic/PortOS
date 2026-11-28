@@ -490,7 +490,7 @@ export default function CmdKSearch({ open: controlledOpen, setOpen: controlledSe
         ref={(el) => { resultRefs.current[currentIdx] = el; }}
         onClick={() => dispatchCommand(item)}
         className={`flex items-start gap-3 px-3 py-2 min-h-[44px] rounded-lg cursor-pointer transition-colors ${
-          isFocused ? 'bg-port-accent/10' : 'hover:bg-white/5'
+          isFocused ? 'bg-port-accent/10 cmdk-option-active' : 'hover:bg-white/5'
         }`}
         role="option"
         aria-selected={isFocused}

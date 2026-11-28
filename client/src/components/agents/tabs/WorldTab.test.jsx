@@ -162,6 +162,28 @@ describe('WorldTab activity history', () => {
     expect(screen.getByRole('button', { name: 'Add to Queue' })).toBeInTheDocument();
   });
 
+  it('refreshes the world status and selected history after a REST move', async () => {
+    moltworldExplore.mockResolvedValueOnce({
+      x: 3, y: 4, messages: [{ id: 'msg-1', fromName: 'Example agent', message: 'Hello from nearby' }]
+    });
+
+    render(<WorldTab agentId="agent-1" />);
+    await screen.findByRole('button', { name: 'Move Here' });
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText('Filter history'), { target: { value: 'mw_explore' } });
+    });
+    getAgentActivityTimeline.mockClear();
+    fireEvent.change(screen.getByLabelText('X (-240 to 240)'), { target: { value: '3' } });
+    fireEvent.change(screen.getByLabelText('Y (-240 to 240)'), { target: { value: '4' } });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Move Here' })); });
+
+    expect(moltworldExplore).toHaveBeenCalledWith({ accountId: 'acct-1', agentId: 'agent-1', x: 3, y: 4 });
+    expect(await screen.findByText('Hello from nearby')).toBeInTheDocument();
+    expect(moltworldStatus).toHaveBeenCalledTimes(2);
+    expect(moltworldRateLimits).toHaveBeenCalledTimes(2);
+    expect(getAgentActivityTimeline).toHaveBeenCalledExactlyOnceWith(30, ['agent-1'], null, 'mw_explore', { silent: true });
+  });
+
   it('does not toast a WebSocket move as sent when the relay rejects', async () => {
     wsState.connectionStatus = 'connected';
     moltworldWsMove.mockRejectedValue(new Error('ws down'));
@@ -195,6 +217,25 @@ describe('WorldTab account loading', () => {
     moltworldRateLimits.mockResolvedValue(null);
     moltworldGetQueue.mockResolvedValue([]);
     getAgentActivityTimeline.mockResolvedValue([]);
+  });
+
+  it('keeps action and queue drafts while the account is reloaded', async () => {
+    getPlatformAccounts.mockResolvedValueOnce([{ id: 'acct-1', status: 'active' }]);
+    const { rerender } = render(<WorldTab agentId="agent-1" />);
+    const thought = await screen.findByRole('textbox', { name: 'Thought text' });
+    fireEvent.change(thought, { target: { value: 'Draft thought' } });
+    fireEvent.click(screen.getByRole('button', { name: '+ Add' }));
+    fireEvent.change(screen.getByLabelText('Queued action thinking (optional)'), { target: { value: 'Draft queue action' } });
+
+    let resolveAccount;
+    getPlatformAccounts.mockReturnValueOnce(new Promise(resolve => { resolveAccount = resolve; }));
+    rerender(<WorldTab agentId="agent-2" />);
+    expect(await screen.findByText('Loading world tools')).toBeInTheDocument();
+    expect(screen.queryByRole('textbox', { name: 'Thought text' })).not.toBeInTheDocument();
+
+    await act(async () => { resolveAccount([{ id: 'acct-2', status: 'active' }]); });
+    expect(await screen.findByRole('textbox', { name: 'Thought text' })).toHaveValue('Draft thought');
+    expect(screen.getByLabelText('Queued action thinking (optional)')).toHaveValue('Draft queue action');
   });
 
   it('shows a retryable error instead of "No active Moltworld account" when the account read fails', async () => {

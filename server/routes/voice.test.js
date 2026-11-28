@@ -7,6 +7,10 @@ const { request } = await import('../lib/testHelper.js');
 vi.mock('../lib/uploadLimits.js', async (importActual) => ({ ...(await importActual()), MAX_BASE64_UPLOAD_BYTES: 8 }));
 vi.mock('../services/voice/aukRuntime.js', () => ({ cancelAukSetup: vi.fn() }));
 vi.mock('../services/voice/studio.js', () => ({ createStudioVoice: vi.fn(), assignStudioVoice: vi.fn() }));
+vi.mock('../services/voice/realtimeRuntime.js', () => ({
+  realtimeStatus: vi.fn(),
+  ensureRealtimeSidecar: vi.fn(),
+}));
 
 // Mock all voice service modules before importing the router so the route
 // file's top-level imports resolve to the mocks.
@@ -14,6 +18,15 @@ vi.mock('../services/voice/config.js', () => ({
   getVoiceConfig: vi.fn(),
   updateVoiceConfig: vi.fn(),
 }));
+vi.mock('../services/voice/channelAgent.js', async (importActual) => ({
+  ...(await importActual()),
+  getAgentVoiceConfig: vi.fn(),
+}));
+vi.mock('../services/voice/llm.js', async (importActual) => ({
+  ...(await importActual()),
+  readVoiceLlmResidency: vi.fn(),
+}));
+vi.mock('../services/voice/pipeline.js', () => ({ warmPromptPrefix: vi.fn() }));
 vi.mock('../services/voice/health.js', () => ({
   checkAll: vi.fn(),
   invalidateHealthCache: vi.fn(),
@@ -78,7 +91,10 @@ vi.mock('../services/voice/callSession.js', () => ({
 
 const callSession = await import('../services/voice/callSession.js');
 const config = await import('../services/voice/config.js');
+const llm = await import('../services/voice/llm.js');
+const channelAgent = await import('../services/voice/channelAgent.js');
 const health = await import('../services/voice/health.js');
+const pipeline = await import('../services/voice/pipeline.js');
 const bootstrap = await import('../services/voice/bootstrap.js');
 const tts = await import('../services/voice/tts.js');
 const voiceProfiles = await import('../services/voice/profiles.js');
@@ -88,6 +104,7 @@ const { ServerError } = await import('../lib/errorHandler.js');
 const piperVoices = await import('../services/voice/piper-voices.js');
 const facetimeBridge = await import('../services/voice/facetimeBridge.js');
 const { default: voiceRoutes } = await import('./voice.js');
+const { hostControlRouteGate } = await import('../services/authGate.js');
 const { errorEvents } = await import('../lib/errorHandler.js');
 
 // Node's EventEmitter throws if 'error' is emitted with zero listeners.
@@ -298,6 +315,75 @@ describe('Voice Routes', () => {
       expect(fineTuning.getFineTuningJobStatus).not.toHaveBeenCalled();
     });
 
+  });
+
+  describe('POST /api/voice/llm/preload', () => {
+    it('starts the warm-up and answers without waiting for the load', async () => {
+      let finish;
+      pipeline.warmPromptPrefix.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+      const res = await request(buildApp()).post('/api/voice/llm/preload').send({});
+      expect(res.status).toBe(202);
+      expect(res.body).toEqual({ preloading: true });
+      await vi.waitFor(() => expect(pipeline.warmPromptPrefix).toHaveBeenCalledWith({ reason: 'pick' }));
+      finish({ warmed: true });
+    });
+
+    it('answers even when the load fails, and refuses unknown body keys', async () => {
+      pipeline.warmPromptPrefix.mockRejectedValue(new Error('model server offline'));
+      expect((await request(buildApp()).post('/api/voice/llm/preload').send({})).status).toBe(202);
+      expect((await request(buildApp()).post('/api/voice/llm/preload').send({ model: 'x' })).status).toBe(400);
+    });
+  });
+
+  describe('GET /api/voice/llm/residency', () => {
+    it('reports residency for the on-air channel\'s Voice LLM and refuses unknown query keys', async () => {
+      channelAgent.getAgentVoiceConfig.mockResolvedValue({ ...DEFAULT_CFG, llm: { provider: 'ollama', model: 'model-a' } });
+      llm.readVoiceLlmResidency.mockResolvedValue({ state: 'unloaded', runtime: 'ollama', model: 'model-a' });
+      const res = await request(buildApp()).get('/api/voice/llm/residency');
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ state: 'unloaded', runtime: 'ollama', model: 'model-a' });
+      expect(llm.readVoiceLlmResidency).toHaveBeenCalledWith({ provider: 'ollama', model: 'model-a' });
+
+      const bad = await request(buildApp()).get('/api/voice/llm/residency?model=other');
+      expect(bad.status).toBe(400);
+    });
+  });
+
+  describe('GET /api/voice/realtime/status host-control gate', () => {
+    it('refuses remote password-free requests and allows local or operator-session requests', async () => {
+      const runtime = await import('../services/voice/realtimeRuntime.js');
+      runtime.realtimeStatus.mockReturnValue({
+        home: '~/.portos/sophon-mac',
+        size: '32B',
+        parts: { python: false, engine: false, weights: false },
+        installed: false,
+        running: false,
+      });
+      const makeGatedApp = (authContext, remoteAddress) => {
+        const app = express();
+        app.use((req, _res, next) => {
+          req.portosAuthContext = authContext;
+          if (remoteAddress) Object.defineProperty(req.socket, 'remoteAddress', { value: remoteAddress, configurable: true });
+          next();
+        });
+        app.use(hostControlRouteGate);
+        app.use('/api/voice', voiceRoutes);
+        return app;
+      };
+
+      const remote = await request(makeGatedApp({ enabled: false }, '192.0.2.10')).get('/api/voice/realtime/status');
+      expect(remote.status).toBe(403);
+      expect(remote.body.code).toBe('HOST_CONTROL_FORBIDDEN');
+      expect(runtime.realtimeStatus).not.toHaveBeenCalled();
+
+      const local = await request(makeGatedApp({ enabled: false }, '127.0.0.1')).get('/api/voice/realtime/status');
+      expect(local.status).toBe(200);
+      expect(local.body).toHaveProperty('installed');
+
+      const operator = await request(makeGatedApp({ enabled: true, authenticated: true, method: 'session' }, '192.0.2.10')).get('/api/voice/realtime/status');
+      expect(operator.status).toBe(200);
+      expect(operator.body).toHaveProperty('installed');
+    });
   });
 
   describe('GET /api/voice/config', () => {
@@ -727,5 +813,81 @@ describe('Voice Studio HTTP contract', () => {
     const valid = await request(app).post('/api/voice/studio/design').send({ label: 'Example', instructions: 'Alto', text: 'Hello' });
     expect(valid.status).toBe(201);
     expect(emit).toHaveBeenCalledWith('voice-studio:changed', {});
+  });
+});
+
+describe('GET /api/voice/realtime/status', () => {
+  it('reports realtime install and running status without starting the sidecar', async () => {
+    const runtime = await import('../services/voice/realtimeRuntime.js');
+    config.getVoiceConfig.mockResolvedValue({
+      ...DEFAULT_CFG,
+      enabled: true,
+      realtime: { enabled: true, home: '/tmp/sophon-mac', size: '4B' },
+    });
+    runtime.realtimeStatus.mockReturnValue({
+      home: '/tmp/sophon-mac',
+      size: '4B',
+      parts: { python: true, engine: true, weights: true },
+      installed: true,
+      running: false,
+    });
+
+    const res = await request(buildApp()).get('/api/voice/realtime/status');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      enabled: true,
+      voiceEnabled: true,
+      home: '/tmp/sophon-mac',
+      size: '4B',
+      parts: { python: true, engine: true, weights: true },
+      installed: true,
+      running: false,
+    });
+    expect(runtime.realtimeStatus).toHaveBeenCalledWith({ enabled: true, home: '/tmp/sophon-mac', size: '4B' });
+    expect(runtime.ensureRealtimeSidecar).not.toHaveBeenCalled();
+  });
+
+  it('surfaces voiceEnabled: false when top-level Voice mode is off', async () => {
+    const runtime = await import('../services/voice/realtimeRuntime.js');
+    config.getVoiceConfig.mockResolvedValue({ enabled: false, realtime: { enabled: true, size: '4B' } });
+    runtime.realtimeStatus.mockReturnValue({
+      home: '/models/sophon',
+      size: '4B',
+      parts: { python: true, engine: true, weights: true },
+      installed: true,
+      running: false,
+    });
+    const res = await request(buildApp()).get('/api/voice/realtime/status');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      enabled: true,
+      voiceEnabled: false,
+      home: '/models/sophon',
+      size: '4B',
+      parts: { python: true, engine: true, weights: true },
+      installed: true,
+      running: false,
+    });
+  });
+
+  it('reports enabled: false when realtime is omitted from config', async () => {
+    const runtime = await import('../services/voice/realtimeRuntime.js');
+    config.getVoiceConfig.mockResolvedValue(DEFAULT_CFG);
+    runtime.realtimeStatus.mockReturnValue({
+      home: '/tmp/sophon-mac',
+      size: '32B',
+      parts: { python: false, engine: false, weights: false },
+      installed: false,
+      running: false,
+    });
+
+    const res = await request(buildApp()).get('/api/voice/realtime/status');
+
+    expect(res.status).toBe(200);
+    expect(res.body.enabled).toBe(false);
+    expect(res.body.voiceEnabled).toBe(false);
+    expect(res.body.installed).toBe(false);
+    expect(runtime.ensureRealtimeSidecar).not.toHaveBeenCalled();
   });
 });

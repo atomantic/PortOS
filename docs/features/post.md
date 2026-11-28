@@ -1,6 +1,6 @@
 # POST (Power On Self Test)
 
-Open **MeatSpace → POST** to practice mental math, memory, wordplay, verbal agility, ideation and cognitive drills. A **Full** session runs the enabled drills. A **Quick** session samples one from each enabled domain. Morse practice is training-only.
+Open **POST → Launcher** to practice mental math, memory, wordplay, verbal agility, ideation and cognitive drills. A **Full** session runs the enabled drills. A **Quick** session samples one from each enabled domain. Morse practice is training-only.
 
 ## Choose a session
 
@@ -13,3 +13,5 @@ Adaptive math difficulty is opt-in. Preview its changes before enabling it. Whil
 ## Memory Builder
 
 Add a song, poem, speech or sequence, then practice progressively revealed chunks, fill-in-the-blank, continuation, speed runs or spaced review. The spaced mode brings weaker chunks back sooner. The built-in Elements song has a periodic-table practice view.
+
+Use `PUT /api/meatspace/post/memory-items/:id` in the API Explorer to edit an existing memory item by ID.

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import * as fetchWithTimeoutModule from './fetchWithTimeout.js';
-import { probeOpenAiModels } from './openAiModelsProbe.js';
+import { probeOpenAiModels, probeOpenAiModelsWithVersionFallback } from './openAiModelsProbe.js';
 
 const jsonResponse = (body) => ({ ok: true, status: 200, text: async () => JSON.stringify(body) });
 
@@ -164,5 +164,33 @@ it('attaches a Bearer header only when a key is supplied', async () => {
       expect(cancel).toHaveBeenCalled();
       vi.restoreAllMocks();
     }
+  });
+});
+
+describe('probeOpenAiModelsWithVersionFallback', () => {
+  const listed = { reachable: true, models: ['m'], contextWindows: {}, error: null };
+  const notFound = { reachable: false, models: null, contextWindows: null, error: 'HTTP 404' };
+
+  it('retries a bare host under /v1 after a 404', async () => {
+    const probe = vi.fn().mockResolvedValueOnce(notFound).mockResolvedValueOnce(listed);
+    await expect(probeOpenAiModelsWithVersionFallback('http://localhost:11434/', { timeoutMs: 5 }, probe)).resolves.toBe(listed);
+    expect(probe.mock.calls.map((c) => c[0])).toEqual(['http://localhost:11434/', 'http://localhost:11434/v1']);
+    expect(probe.mock.calls[1][1]).toEqual({ timeoutMs: 5 });
+  });
+
+  it.each(['http://host/v1', 'https://host/api/v1beta'])('does not retry a versioned base %s', async (base) => {
+    const probe = vi.fn().mockResolvedValue(notFound);
+    await expect(probeOpenAiModelsWithVersionFallback(base, {}, probe)).resolves.toBe(notFound);
+    expect(probe).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the first answer when it is not a 404 or the retry also fails', async () => {
+    const refused = { ...notFound, error: 'ECONNREFUSED' };
+    const once = vi.fn().mockResolvedValue(refused);
+    await expect(probeOpenAiModelsWithVersionFallback('http://host', {}, once)).resolves.toBe(refused);
+    expect(once).toHaveBeenCalledTimes(1);
+    const twice = vi.fn().mockResolvedValue(notFound);
+    await expect(probeOpenAiModelsWithVersionFallback('http://host', {}, twice)).resolves.toBe(notFound);
+    expect(twice).toHaveBeenCalledTimes(2);
   });
 });

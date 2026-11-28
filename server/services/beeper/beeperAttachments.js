@@ -33,7 +33,7 @@
 
 import { createHash, randomUUID } from 'crypto';
 import { createWriteStream } from 'fs';
-import { mkdir, link, rename, rm, readdir, stat, unlink } from 'fs/promises';
+import { link, rename, rm, readdir, stat, unlink } from 'fs/promises';
 import { dirname, join } from 'path';
 import { Readable } from 'stream';
 import { pipeline } from 'stream/promises';
@@ -41,6 +41,7 @@ import { query } from '../../lib/db.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { createRecordWriteQueue } from '../../lib/fileWriteQueue.js';
 import { ServerError } from '../../lib/errorHandler.js';
+import { ensureDir } from '../../lib/fileCore.js';
 import { PATHS, pathExists } from '../../lib/fileUtils.js';
 import {
   BEEPER_ATTACHMENT_MAX_BYTES,
@@ -58,6 +59,7 @@ const DEFAULT_BUDGET_GB = 5;
 // Data Manager, and a half-written `.partial` sitting in a hash-prefix dir
 // would read as a corrupt mirror entry to both.
 const TMP_DIR_NAME = '.tmp';
+const PRIVATE_DIR_MODE = 0o700;
 // A partial older than this is from a process that is no longer running: an
 // in-flight transfer is abandoned after `STREAM_IDLE_TIMEOUT_MS` without a
 // chunk, so nothing legitimate is still writing an hour-old `.partial`.
@@ -237,6 +239,9 @@ const tooLarge = (bytes) => new ServerError(
  * past a ceiling the pre-flight could not see.
  */
 async function streamAssetToStore(mxcId, { maxBytes, extension, baseUrl, token, commit }) {
+  await ensureDir(attachmentsRoot(), { mode: PRIVATE_DIR_MODE });
+  await ensureDir(tmpRoot(), { mode: PRIVATE_DIR_MODE });
+
   // Abort on SILENCE, not on elapsed time — see STREAM_IDLE_TIMEOUT_MS. The
   // controller is handed to the client so the abort tears down the live socket,
   // not just this side's reader. `abort()` cannot throw, which matters because
@@ -261,7 +266,6 @@ async function streamAssetToStore(mxcId, { maxBytes, extension, baseUrl, token, 
       status: 502, code: 'ATTACHMENT_DOWNLOAD_FAILED',
     });
   }
-  await mkdir(tmpRoot(), { recursive: true });
   const tmpPath = join(tmpRoot(), `${randomUUID()}.partial`);
 
   const hash = createHash('sha256');
@@ -282,7 +286,7 @@ async function streamAssetToStore(mxcId, { maxBytes, extension, baseUrl, token, 
     }
   };
 
-  const out = createWriteStream(tmpPath);
+  const out = createWriteStream(tmpPath, { mode: 0o600 });
   const failure = await pipeline(
     Readable.fromWeb(response.body),
     counter,
@@ -310,7 +314,7 @@ async function streamAssetToStore(mxcId, { maxBytes, extension, baseUrl, token, 
     // The transfer is complete. Serialize installation/dedupe and row commit
     // with orphan cleanup for this hash; admit BEFORE waiting on that queue.
     return await publishAttachment(relativePath, async () => {
-      await mkdir(dirname(destPath), { recursive: true });
+      await ensureDir(dirname(destPath), { mode: PRIVATE_DIR_MODE });
       const stored = { sha256, relativePath, bytes: received };
       // link never replaces already referenced bytes. Portable fallback keeps
       // this same path queue held through the metadata claim.
@@ -715,7 +719,7 @@ export async function sweepAttachmentOrphans() {
   // but never mirrored a byte the directory does not exist yet, and THAT ENOENT
   // really is "empty"; making it once means every later listing failure is a
   // genuine anomaly worth logging and refusing to act on.
-  await mkdir(attachmentsRoot(), { recursive: true }).catch(() => {});
+  await ensureDir(attachmentsRoot(), { mode: PRIVATE_DIR_MODE }).catch(() => {});
   // Fence for the row-healing direction: a download that lands after this
   // instant is newer than the listing and must not be read as "missing".
   const listingStartedAt = new Date();

@@ -1,3 +1,5 @@
+import { openExternalUrl } from '../../utils/openExternalUrl.js';
+import { Link } from 'react-router';
 import { useState, useEffect, useCallback } from 'react';
 import { useSearchParams } from 'react-router';
 import { Plus, Trash2, RefreshCw, Mail, Globe, MessageSquare, Save, ExternalLink, User, Key, Monitor, Wand2 } from 'lucide-react';
@@ -133,7 +135,7 @@ export default function ConfigTab({ accounts, setAccounts, accountsUnavailable =
     setReauthorizing(true);
     getGoogleAuthUrl({ returnTo: 'messages', silent: true })
       .then(({ url }) => {
-        window.open(url, '_blank');
+        if (!openExternalUrl(url)) return toast.error('Could not get the Google authorization URL');
         toast.success('Complete authorization in the opened browser tab');
       })
       .catch(err => toast.error(failureMessage('Could not get the Google authorization URL', err)))
@@ -620,7 +622,7 @@ export default function ConfigTab({ accounts, setAccounts, accountsUnavailable =
       <section>
         <h2 className="text-lg font-semibold text-white mb-3">AI Provider & Model</h2>
         <p className="text-sm text-gray-500 mb-3">
-          Email analysis requires a local text API provider. Configure screening and dedicated source overrides in <a href="/models/llms/abuse" className="text-port-accent underline">Abuse Guard</a>; those overrides take priority over the selections below.
+          Email analysis requires a local text API provider. Configure screening and dedicated source overrides in <Link to="/models/llms/abuse" className="text-port-accent underline">Abuse Guard</Link>; those overrides take priority over the selections below.
         </p>
         <div className="space-y-3">
           {configLoadError && (

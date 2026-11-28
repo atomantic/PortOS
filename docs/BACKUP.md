@@ -92,6 +92,19 @@ On POSIX, file restore publishes `settings.json` and
 `managed-visitor-credentials.json` at mode `0600`, including from older
 snapshots with broader permissions. Preview reports needed permission changes.
 
+### Restore an inbox from before migration 081
+
+PortOS refuses a scoped preview or restore that selects `brain/inbox_log.jsonl`
+without a usable newer inbox in the same scope. This includes the exact JSONL
+path and the `brain` folder when the JSONL is its only usable inbox format.
+Scoped restores keep the live migration ledger, so they cannot replay the
+upgrade that makes those captures readable.
+
+If the snapshot has a readable migration ledger with migrations 081 and 200
+pending, preview a full file restore to replay the conversions in order. To
+recover only the inbox, upgrade a disposable copy of the snapshot, make a fresh
+snapshot of the upgraded data, and restore the `brain/inbox` folder from it.
+
 ### Federation identity is kept unless adopted
 
 When the snapshot belongs to a different federation identity, file restore

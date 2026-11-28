@@ -152,6 +152,24 @@ describe.skipIf(!runDb)('Writers Room DB adapter round-trip', () => {
     expect(dcol.content_hash).toBe('h'.repeat(64));
   });
 
+  it('projects library summaries with active word counts and preserves snapshot order', async () => {
+    await db.writeWork(manifest('wr-work-1', {
+      activeDraftVersionId: 'wr-draft-b', pipelineSeriesId: 'example-series',
+      notes: 'Private draft notes',
+      drafts: [draft('wr-draft-a'), draft('wr-draft-b', { wordCount: 24 })],
+    }));
+    await db.writeWork(manifest('wr-work-2', { activeDraftVersionId: 'missing', drafts: [] }));
+    const summaries = await db.listWorkSummaries(['wr-work-2', 'wr-work-1']);
+    expect(summaries).toMatchObject([
+      { id: 'wr-work-2', draftCount: 0, wordCount: 0, pipelineSeriesId: null },
+      { id: 'wr-work-1', draftCount: 2, wordCount: 24, pipelineSeriesId: 'example-series',
+        folderId: null, updatedAt: '2026-01-02T00:00:00.000Z' },
+    ]);
+    expect(summaries[1]).not.toHaveProperty('drafts');
+    expect(summaries[1]).not.toHaveProperty('notes');
+    expect(await db.listWorkSummaries()).toEqual(expect.arrayContaining(summaries));
+  });
+
   it('deleteWork soft-deletes (tombstone) — hidden from live reads, row + drafts retained for federation', async () => {
     await db.writeWork(manifest('wr-work-1'));
     await db.writeWork(manifest('wr-work-2', { drafts: [draft('wr-draft-c')], activeDraftVersionId: 'wr-draft-c' }));
@@ -163,7 +181,7 @@ describe.skipIf(!runDb)('Writers Room DB adapter round-trip', () => {
     expect(await db.readWork('wr-work-2')).toBeNull();
     expect(await db.listWorkIds()).toEqual(['wr-work-1']);
     expect(await db.listOrderedWorkIds()).toEqual(['wr-work-1']);
-    expect(await db.readWorksPage(['wr-work-2', 'wr-work-1'])).toEqual(works);
+    expect((await db.listWorkSummaries(['wr-work-2', 'wr-work-1'])).map(work => work.id)).toEqual(['wr-work-1']);
     // …but the row, its draft rows, and the tombstone trio survive until prune.
     expect((await query(`SELECT deleted FROM writers_room_works WHERE id = 'wr-work-2'`)).rows[0].deleted).toBe(true);
     expect((await query(`SELECT 1 FROM writers_room_draft_versions WHERE work_id = 'wr-work-2'`)).rows).toHaveLength(1);

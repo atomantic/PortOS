@@ -46,6 +46,7 @@ describe('MtplxServerCard', () => {
   });
 
   it.each([
+    ['Port', '', { model: 'Example/Qwen-MTP', port: null, tuning: { draftTokens: 4 } }],
     ['Port', '8011', { model: 'Example/Qwen-MTP', port: 8011, tuning: { draftTokens: 4 } }],
     ['Checkpoint', 'Example/Other-MTP', { model: 'Example/Other-MTP', port: 8010, tuning: { draftTokens: 4 } }],
   ])('hydrates once when status arrives and preserves the saved field when editing %s', async (field, value, payload) => {
@@ -72,13 +73,10 @@ describe('MtplxServerCard', () => {
     expect(onSaveLaunch).toHaveBeenCalledWith(payload);
   });
 
-  // An untouched port stays off the saved config so a lazy start falls through
-  // to the shipped default; an untouched checkpoint is saved as an explicit
-  // `null`, which is what CLEARS a previously-saved pick back to "Auto".
-  it('omits an untouched port and clears an untouched checkpoint', async () => {
+  it('saves default launch options when left blank', async () => {
     const handlers = await renderCard({ installed: true, running: false, supported: true, cachedModels: ['Example/Qwen-MTP'] });
     fireEvent.click(screen.getByRole('button', { name: /Save configuration/ }));
-    expect(handlers.onSaveLaunch).toHaveBeenCalledWith({ model: null });
+    expect(handlers.onSaveLaunch).toHaveBeenCalledWith({ model: null, port: null });
   });
 
   it('offers an in-app download instead of a config that cannot bind', async () => {

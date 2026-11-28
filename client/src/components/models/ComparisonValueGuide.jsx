@@ -44,12 +44,12 @@ export default function ComparisonValueGuide({ rows, onConfigureResearch }) {
       : { status: 'queued' } }));
   };
   return <section className="min-w-0 rounded-xl border border-port-border bg-port-card p-4 space-y-3" aria-label="Effort value guide">
-    <div className="flex flex-wrap items-end justify-between gap-3"><div><h2 className="font-semibold">Which efforts are worth the cost?</h2><p className="text-sm text-port-text-muted">Cheapest effort within your tolerance of each model’s best selected score.</p></div>
+    <div className="flex flex-wrap items-end justify-between gap-3"><div><h3 className="font-semibold">Which efforts are worth the cost?</h3><p className="text-sm text-port-text-muted">Cheapest effort within your tolerance of each model’s best selected score.</p></div>
       <div><label className="block text-xs mb-1" htmlFor="comparison-tolerance">Acceptable intelligence difference</label><select id="comparison-tolerance" className="max-w-full rounded-lg border border-port-border bg-port-bg p-2 text-sm" value={tolerance} onChange={event => setTolerance(Number(event.target.value))}>{[0, 0.5, 1, 2, 3, 5].map(value => <option key={value} value={value}>{number(value)} index points</option>)}</select></div></div>
     <p className="text-xs text-port-text-muted">Uses sourced Intelligence Index task costs across the selected models and efforts, regardless of the chart’s token-price axis. Estimates are excluded. A near match is a score tradeoff, not proof of equal ability; latency, coding, tools, context and reliability can still favor another choice. These API reference costs may differ from your endpoint or subscription.</p>
-    {guide.some(item => !item.pick) && <p className="text-xs text-port-text-muted">Research uses the saved research provider or the CoS default and may use its quota. The agent investigates all efforts, updates this instance, and proposes public evidence as shipped data in a PortOS PR. <button type="button" className="rounded border border-port-border px-2 py-1" onClick={onConfigureResearch}>Research settings</button></p>}
+    {guide.some(item => !item.pick) && <p className="text-xs text-port-text-muted">Research uses the saved research provider or the CoS default and may use its quota. The agent investigates all efforts, updates this instance, and proposes public evidence as shipped data in a PortOS PR. <button type="button" className="inline-flex items-center rounded-lg border border-port-border bg-port-bg/50 px-2.5 py-1 pointer-coarse:min-h-11 text-xs text-port-text transition-colors hover:bg-port-border/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-port-accent" onClick={onConfigureResearch}>Research settings</button></p>}
     <div className="grid grid-cols-1 gap-3 @3xl:grid-cols-2">{guide.slice(0, limit).map(({ model, points, best, pick, pricing, peer }) => <article key={model} className="min-w-0 rounded-lg border border-port-border p-3">
-      <h3 className="font-medium break-all">{model}</h3>
+      <h4 className="font-medium break-all">{model}</h4>
       {!pick ? <>
         <p className="mt-2 text-sm text-port-text-muted">{pricing.length ? 'Partial comparison data: token pricing is available, but no selected effort has both a sourced intelligence score and benchmark task cost. Reloading preserves these gaps until supporting evidence is added.' : 'Research needed: no selected effort has both a sourced score and task cost.'}</p>
         {pricing.length > 0 && <div className="mt-2 space-y-3 text-sm" aria-label={`${model} token pricing`}>
@@ -62,7 +62,7 @@ export default function ComparisonValueGuide({ rows, onConfigureResearch }) {
             </div>)}
           </div>)}
         </div>}
-        <button type="button" className="mt-2 rounded-lg border border-port-border px-3 py-2 text-sm hover:bg-port-bg disabled:opacity-50" aria-label={`Research ${model}`} disabled={['queuing', 'queued'].includes(research[model]?.status)} onClick={() => researchModel(model)}>{research[model]?.status === 'queuing' ? 'Queuing…' : research[model]?.status === 'queued' ? 'Research requested' : 'Research this model'}</button>
+        <button type="button" className="mt-2 rounded-lg border border-port-border bg-port-bg/50 px-3 py-2 pointer-coarse:min-h-11 text-sm transition-colors hover:bg-port-border/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-port-accent disabled:opacity-50" aria-label={`Research ${model}`} disabled={['queuing', 'queued'].includes(research[model]?.status)} onClick={() => researchModel(model)}>{research[model]?.status === 'queuing' ? 'Queuing…' : research[model]?.status === 'queued' ? 'Research requested' : 'Research this model'}</button>
         {research[model]?.status === 'queued' && <p role="status" className="mt-2 text-xs text-port-text-muted">Research request queued in CoS. Follow its progress in CoS Schedule, then reload this page.</p>}
         {research[model]?.status === 'error' && <p role="alert" className="mt-2 text-sm text-port-error">{research[model].error}</p>}
       </> : <>
@@ -76,6 +76,6 @@ export default function ComparisonValueGuide({ rows, onConfigureResearch }) {
         })}</ul></details>
       </>}
     </article>)}</div>
-    {guide.length > limit && <button className="rounded-lg border border-port-border px-3 py-2 text-xs" onClick={() => setLimit(value => value + 20)}>Show 20 more models</button>}
+    {guide.length > limit && <button type="button" className="rounded-lg border border-port-border bg-port-bg/50 px-3 py-2 pointer-coarse:min-h-11 text-xs transition-colors hover:bg-port-border/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-port-accent" onClick={() => setLimit(value => value + 20)}>Show 20 more models</button>}
   </section>;
 }

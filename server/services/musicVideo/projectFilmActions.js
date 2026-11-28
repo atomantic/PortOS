@@ -12,7 +12,7 @@ import { randomUUID } from 'crypto';
 import { ServerError } from '../../lib/errorHandler.js';
 import { normalizeBlenderRecord } from '../../lib/musicVideo/musicVideoBlender.js';
 import { updateTrack } from '../tracks/index.js';
-import { cloneProjectWith, createProjectWith, getProject, getStoredProjectRecord, getStoredProjectsByIds, listCompletionCandidateIds, updateProject } from './projects.js';
+import { cloneProjectWith, createProjectWith, getProject, getStoredProjectRecord, getProjectSummariesByIds, listCompletionCandidateIds, updateProject } from './projects.js';
 
 /** `{ id, name, isCompleted }` for complete projects, optionally only those casting `ingredientIds` or matching a name. */
 export async function listProjectCompletion({ ingredientIds, matchesName } = {}) {
@@ -26,7 +26,7 @@ export async function listProjectCompletion({ ingredientIds, matchesName } = {})
   const states = [];
   const batchSize = 30;
   for (let offset = 0; offset < ids.length; offset += batchSize) {
-    const records = await getStoredProjectsByIds(ids.slice(offset, offset + batchSize));
+    const records = await getProjectSummariesByIds(ids.slice(offset, offset + batchSize));
     const candidates = records.filter(project => project.status === 'complete' && (!matchesName || matchesName(project)));
     states.push(...await Promise.all(candidates.map(async (project) => ({
       id: project.id,

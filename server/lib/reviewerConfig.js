@@ -1,26 +1,72 @@
 /**
- * Review-Loop reviewer vocabulary: roster, aliases, `DEFAULT_REVIEWER`, per-reviewer CLI/model
- * contracts, and `buildReviewWithArgs` for slashdo argv.
+ * Review-loop configuration, reviewer CLI and prompt contracts, and slashdo argv construction.
  */
 import { isPlainObject } from './objects.js';
+import { CODE_REVIEWERS_PAGE_BREADCRUMB } from './navManifest.js';
 import { isTruthyMeta } from './metadataFlags.js';
-import { EFFORT_LEVELS, effortLevelsForProvider, buildEffortArgs, foldCursorEffortIntoModel, splitAntigravityModel, antigravityModelEffortLevels } from './provider/providerModels.js';
+import { EFFORT_LEVELS, buildEffortArgs, foldCursorEffortIntoModel, splitAntigravityModel } from './provider/providerModels.js';
 import { providersForReviewer } from './reviewerProviderMatchers.js';
-import { ANTIGRAVITY_COMMAND } from './antigravity.js';
-import { CURSOR_COMMAND } from './cursor.js';
 import { PR_COMPLETIONS } from './prDisposition.js';
 import { activeReviewerGroupIndex } from './reviewerHealth.js';
+import {
+  BRACKET_MODEL_REVIEWERS,
+  DEFAULT_REVIEWER,
+  DEFAULT_REVIEWERS,
+  DEFAULT_REVIEW_STOP_MODE,
+  EFFORT_SELECTABLE_REVIEWERS,
+  LOCAL_LLM_REVIEWERS,
+  MAX_REVIEWER_MAX_ROUNDS,
+  MAX_REVIEWER_MODEL_LENGTH,
+  MODEL_SELECTABLE_REVIEWERS,
+  PORTOS_ONLY_REVIEWERS,
+  REVIEWER_ALIASES,
+  REVIEWER_MODEL_FORBIDDEN_RE,
+  isApplyCapableReviewer,
+  isProviderReviewer,
+  isReviewer,
+  normalizeReviewUsernames,
+  normalizeReviewerList,
+  normalizeReviewers,
+  resolveProviderReviewerSlug,
+  reviewerCliBinary,
+  reviewerEffortLevels,
+} from './reviewerVocabulary.js';
+
+export {
+  APPLY_CAPABLE_REVIEWERS,
+  BRACKET_MODEL_REVIEWERS,
+  DEFAULT_REVIEWER,
+  DEFAULT_REVIEWERS,
+  DEFAULT_REVIEW_STOP_MODE,
+  EFFORT_SELECTABLE_REVIEWERS,
+  LOCAL_LLM_EFFORT_LEVELS,
+  LOCAL_LLM_REVIEWERS,
+  MAX_REVIEWER_MAX_ROUNDS,
+  MAX_REVIEWER_MODEL_LENGTH,
+  MAX_REVIEW_USERNAMES,
+  MODEL_CAPABLE_CLI_REVIEWERS,
+  MODEL_SELECTABLE_REVIEWERS,
+  PORTOS_ONLY_REVIEWERS,
+  REVIEWER_ALIASES,
+  REVIEWER_CLI_BINARIES,
+  REVIEWER_EFFORT_LEVELS,
+  REVIEWER_LIST_OVERRIDE_KEYS,
+  REVIEWER_OVERRIDE_KEYS,
+  REVIEWER_VALUES,
+  REVIEW_STOP_MODES,
+  hasReviewerOverride,
+  isApplyCapableReviewer,
+  isProviderReviewer,
+  isReviewer,
+  normalizeReviewUsernames,
+  normalizeReviewerList,
+  normalizeReviewers,
+  resolveProviderReviewerSlug,
+  reviewerCliBinary,
+  reviewerEffortLevels,
+} from './reviewerVocabulary.js';
 export { isReviewerConfigFault } from './reviewerHealth.js';
 
-// Reviewer choices for the Review Loop. `copilot` requests a native GitHub Copilot review;
-// `claude`/`antigravity`/`codex`/`grok`/`cursor`/`opencode`/`kimi` instruct the review-loop
-// follow-up agent to invoke the named CLI to critique the PR diff; `lmstudio`/`ollama`/`mtplx`
-// route the diff through PortOS's local code-review endpoint (`POST /api/code-review/local`) which
-// runs the configured local LLM model.
-export const REVIEWER_VALUES = ['copilot', 'claude', 'antigravity', 'codex', 'grok', 'cursor', 'pi', 'opencode', 'kilo', 'kimi', 'lmstudio', 'ollama', 'mtplx'];
-// Provider records retain their own identity instead of collapsing to a harness.
-export const isProviderReviewer = (value) => typeof value === 'string' && /^provider:[a-z0-9][a-z0-9-]{0,79}$/.test(value);
-export const isReviewer = (value) => REVIEWER_VALUES.includes(value) || isProviderReviewer(value);
 // Legacy name: identifies bridge-dispatched reviewers, not an enforced tool policy.
 export const isToolFreeReviewer = (value) => LOCAL_LLM_REVIEWERS.includes(value) || isProviderReviewer(value);
 
@@ -45,11 +91,11 @@ export const FORGE_REVIEWER_WAIT_NOTE = 'An `@<login>` is often a person, not a 
  * `REVIEW_UNAVAILABLE_REPORTING_NOTE`: the rule reaches prompt sites and run-summary builders, and
  * spelled out at each one it drifts.
  */
-export const ZERO_REVIEWER_COVERAGE_NOTE = 'No reviewer reviewed this branch — every configured reviewer returned a configuration fault. The review loop is currently a no-op. Check Settings → Code Reviewers for the setting that fixes each reviewer.';
+export const ZERO_REVIEWER_COVERAGE_NOTE = `No reviewer reviewed this branch — every configured reviewer returned a configuration fault. The review loop is currently a no-op. Check ${CODE_REVIEWERS_PAGE_BREADCRUMB} for the setting that fixes each reviewer.`;
 
 /**
  * Vendors PortOS can spawn that are deliberately NOT reviewers, each mapped to the reason. The
- * roster above claims to cover every spawnable vendor; this is the other half of that claim, and
+ * shared roster claims to cover every spawnable vendor; this is the other half of that claim, and
  * `reviewerConfig.test.js` fails on a `PROVIDER_VENDORS` id that appears in neither — so a future
  * vendor is either offered as a reviewer or has its exclusion written down, instead of being
  * silently missing from ten hand-maintained lists.
@@ -59,61 +105,6 @@ export const NON_REVIEWER_VENDORS = Object.freeze({
   hermes: 'a reviewer reads untrusted diff text, which needs a no-tool posture, and Hermes has no switch that disables its tools (--toolsets only enables sets), so no enforced public-review recipe exists for it',
   openchamber: "a reviewer is a one-shot critique of a diff, and OpenChamber's only prompt path creates a persistent session inside a running workspace runtime the user owns — a review round would leave a session behind per reviewer per PR, and cannot run at all when that runtime is down",
 });
-
-export const REVIEWER_ALIASES = { gemini: 'antigravity', 'cursor-agent': 'cursor' };
-export const DEFAULT_REVIEWER = 'copilot';
-export const DEFAULT_REVIEWERS = [];
-// Reviewers slashdo's `--reviewer-applies` actually reaches. Its loop forces every OTHER local CLI
-// back to review-only and reverts what it wrote — codex is the one with a verified write-isolated
-// profile — and the flag is meaningless for the cloud (`copilot`, `@login`) and non-agentic
-// (`ollama`) paths, so a list without one of these emits no flag rather than a promise slashdo
-// drops.
-export const APPLY_CAPABLE_REVIEWERS = Object.freeze(['codex']);
-// Aliases resolve first, matching the client mirror — a predicate that accepted `codex` but not a
-// future alias of it would silently drop the flag for a user who typed the alias, and the two
-// sides would disagree about the same reviewer.
-export const isApplyCapableReviewer = (slug) => {
-  if (typeof slug !== 'string') return false;
-  const lower = slug.trim().toLowerCase();
-  return APPLY_CAPABLE_REVIEWERS.includes(REVIEWER_ALIASES[lower] || lower);
-};
-// Reviewers that resolve to a local-LLM backend (rather than a CLI or GitHub bot). Used by the
-// code-review endpoint, settings panel, and prompt builder to gate model-id resolution.
-export const LOCAL_LLM_REVIEWERS = ['lmstudio', 'ollama', 'mtplx'];
-// Reviewers PortOS serves ITSELF, with no counterpart in slashdo's reviewer vocabulary
-// (`copilot`/`codex`/`agy`/`claude`/`grok`/`pi`/`cursor`/`opencode`/ `ollama`/`@login`):
-// `lmstudio`/`mtplx` run through `POST /api/code-review/local`, which takes their model in the
-// request body, and `kilo`/`kimi` are CLIs PortOS's own review procedure spawns. slashdo has no
-// such slug, so none can carry a `[<model>]` bracket or appear in a `--review-with` list (an
-// unknown value aborts the command). `opencode` left this set when slashdo added it (v3.38.0,
-// `--review-with opencode`, aliases `zen`/`opencode-zen`); PortOS was still dropping it from the
-// flag and silently reviewing with whatever the host's saved defaults named.
-export const PORTOS_ONLY_REVIEWERS = ['lmstudio', 'mtplx', 'kilo', 'kimi'];
-// CLI reviewers whose binary accepts a `--model <id>` tier the user can pin on the Code Review
-// Defaults panel (stored as a `<reviewer>Model` settings scalar, e.g. `codexModel` / `claudeModel`
-// / `antigravityModel`).
-export const MODEL_CAPABLE_CLI_REVIEWERS = ['codex', 'claude', 'antigravity', 'grok', 'cursor', 'pi', 'opencode', 'kilo', 'kimi'];
-// Every reviewer whose model the user can PICK in the UI: the model-capable CLIs above (threaded
-// into the follow-up prompt as `<reviewer> --model <id>`) plus the local-LLM backends (whose id is
-// injected server-side by `POST /api/code-review/local`, or emitted as slashdo's `[<model>]`
-// bracket for a claim flow). `copilot` and `@username` reviewers are excluded — neither is a
-// model-taking backend, matching slashdo rejecting `copilot[…]`/`@login[…]`.
-export const MODEL_SELECTABLE_REVIEWERS = [...MODEL_CAPABLE_CLI_REVIEWERS, ...LOCAL_LLM_REVIEWERS];
-// The executable a CLI reviewer's slug actually resolves to on PATH. Every slug except
-// `antigravity` names its own binary; `antigravity` is the STORED, federated reviewer identity
-// (aliased from the older `gemini`) while the shipped executable is `agy` — there is no
-// `antigravity` command.
-export const REVIEWER_CLI_BINARIES = {
-  claude: 'claude',
-  antigravity: ANTIGRAVITY_COMMAND,
-  codex: 'codex',
-  grok: 'grok',
-  cursor: CURSOR_COMMAND,
-  pi: 'pi',
-  opencode: 'opencode',
-  kilo: 'kilo',
-  kimi: 'kimi',
-};
 
 // The `--model` flag a CLI reviewer's binary actually spells. Only a reviewer that deviates from
 // `--model` appears; `reviewerModelFlag` supplies the default for the rest.
@@ -142,18 +133,6 @@ export function isCliReviewer(reviewer) {
 }
 
 /**
- * The PATH executable for a CLI reviewer slug, or `null` when the reviewer is not a spawnable CLI.
- * Accepts the `gemini` alias.
- * @param {string} reviewer - reviewer slug (`antigravity`, `gemini`, `codex`, …)
- * @returns {string|null}
- */
-export function reviewerCliBinary(reviewer) {
-  if (typeof reviewer !== 'string') return null;
-  const slug = reviewer.trim().toLowerCase();
-  return REVIEWER_CLI_BINARIES[REVIEWER_ALIASES[slug] || slug] || null;
-}
-
-/**
  * Render a reviewer slug for an agent prompt as the command it must actually run, keeping the slug
  * visible so the text still lines up with the configured reviewer list and slashdo's
  * `--review-with` token. `antigravity` → `` `agy` (the `antigravity` reviewer)``; every other
@@ -166,71 +145,6 @@ export function describeReviewerCli(reviewer) {
   const binary = reviewerCliBinary(reviewer);
   if (!binary || binary === reviewer) return `\`${reviewer}\``;
   return `\`${binary}\` (the \`${reviewer}\` reviewer)`;
-}
-// Stop-mode for the multi-reviewer loop (slashdo `--review-stop-on-*`).
-export const REVIEW_STOP_MODES = ['all', 'on-findings', 'on-clean'];
-export const DEFAULT_REVIEW_STOP_MODE = 'all';
-
-// The task-metadata keys that TOGETHER form a task-local reviewer override — everything the picker
-// writes, and so everything its "Use system Code Review Defaults" reset has to remove. A key
-// missing here leaves a pin behind after a reset the user believes cleared it.
-export const REVIEWER_OVERRIDE_KEYS = Object.freeze([
-  // Legacy singular, still stored on schedules saved before the list existed.
-  'reviewer',
-  'reviewers',
-  'usernames',
-  'optionalReviewers',
-  'reviewerMaxRounds',
-  'reviewerModels',
-  'reviewerEfforts',
-  'reviewStopMode',
-  'reviewerApplies',
-]);
-
-// The subset `resolveReviewerConfig` actually READS. `reviewStopMode` and `reviewerApplies` are
-// deliberately absent: they are slashdo run flags, and a claim flow has no flag string to put them
-// in (the claim prompt gets a reviewer CSV), so neither can change which reviewers a claim runs.
-export const REVIEWER_LIST_OVERRIDE_KEYS = Object.freeze(
-  REVIEWER_OVERRIDE_KEYS.filter((key) => key !== 'reviewStopMode' && key !== 'reviewerApplies')
-);
-
-/**
- * Does this task metadata pin any part of the reviewer list itself (as opposed to a run flag)? Key
- * PRESENCE is the signal, not truthiness: an explicitly empty `optionalReviewers: []` or
- * `reviewerModels: {}` is a real override — it clears the defaults' value — so collapsing it into
- * "nothing configured" would report the wrong source.
- */
-export function hasReviewerOverride(metadata) {
-  return isPlainObject(metadata) && REVIEWER_LIST_OVERRIDE_KEYS.some((key) => key in metadata);
-}
-
-// Arbitrary GitHub reviewer usernames (e.g. Usernames are appended to slashdo's `--review-with` as
-// `@user` tokens after the keyed reviewers; the review-loop follow-up prompt instructs the agent
-// to request each as a PR reviewer and gate the merge on it.
-export const MAX_REVIEW_USERNAMES = 20;
-const REVIEW_USERNAME_RE = /^[A-Za-z0-9_](?:[A-Za-z0-9._-]{0,254})(?:\/[A-Za-z0-9._-]{1,100})?$/;
-
-/**
- * Normalize a raw list of reviewer usernames: strip an optional leading `@`, trim, drop anything
- * that isn't a shell-safe GitHub/GitLab username/team slug, case-insensitively dedupe (GitHub
- * logins are case-insensitive) while preserving first-occurrence order, and cap at
- * MAX_REVIEW_USERNAMES. Returns a clean array of usernames WITHOUT the `@` prefix.
- */
-export function normalizeReviewUsernames(list) {
-  if (!Array.isArray(list)) return [];
-  const seen = new Set();
-  const out = [];
-  for (const raw of list) {
-    if (typeof raw !== 'string') continue;
-    const trimmed = raw.trim().replace(/^@+/, '');
-    if (!trimmed || !REVIEW_USERNAME_RE.test(trimmed)) continue;
-    const key = trimmed.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(trimmed);
-    if (out.length >= MAX_REVIEW_USERNAMES) break;
-  }
-  return out;
 }
 
 /**
@@ -378,11 +292,6 @@ function keyedReviewerPinResolver(normalizeMap) {
     : (normalizeMap(defaultMap) || {}));
 }
 
-// Ceiling on a per-reviewer `~max=<n>` cap. slashdo's inner loops carry their own 10-iteration
-// safety guardrail, so a budget above it can never be spent — accepting one would just be a lie in
-// the flag string.
-export const MAX_REVIEWER_MAX_ROUNDS = 10;
-
 /**
  * Per-reviewer iteration caps — slashdo's `~max=<n>` suffix (v3.25.0). Caps how many review → fix
  * → re-review cycles ONE reviewer runs before it stops, so a slow local model can be included in a
@@ -404,20 +313,6 @@ export const normalizeReviewerMaxRounds = keyedReviewerPinNormalizer((rawValue) 
  */
 export const resolveReviewerMaxRounds = keyedReviewerPinResolver(normalizeReviewerMaxRounds);
 
-// Upper bound on a pinned reviewer model id. Generous (Bedrock/Ollama ids get long) but present so
-// a hand-edited settings.json can't smuggle in a blob that then round-trips the TASKS.md store.
-export const MAX_REVIEWER_MODEL_LENGTH = 200;
-
-// Characters a model id may not contain, because they are STRUCTURAL in the emitted
-// `--review-with` token and there is no escape for them: - `]` would close the `[<model>]`
-// selector early (`foo]~opt` → a corrupt entry whose remainder slashdo then parses as suffixes), -
-// `[` would open a nested one, - `,` would split the entry list, turning one reviewer into two
-// bogus ones, - whitespace that breaks lines would split the single-line flag string. Everything
-// else stays legal on purpose: the value is free-form in slashdo's grammar (`agy[Gemini 3.5 Flash
-// (High)]` is valid), and the field has to accept whatever id the user's environment actually
-// needs.
-const REVIEWER_MODEL_FORBIDDEN_RE = /[[\],\r\n\t]/;
-
 /**
  * Validate ONE reviewer model id — the single definition shared by the token-keyed map normalizer,
  * the `<reviewer>Model` settings scalars, and the defaults→map adapter, so a pin can't be accepted
@@ -435,12 +330,6 @@ export function normalizeReviewerModel(raw, reviewer = null) {
   if (REVIEWER_MODEL_FORBIDDEN_RE.test(model)) return undefined;
   return model;
 }
-
-// Reviewers whose slashdo `--review-with` entry accepts a `[<model>]` bracket
-// (`lib/multi-reviewer-loop.md`: codex/claude/agy/grok/cursor/ollama). A PORTOS_ONLY_REVIEWERS
-// entry has no slashdo counterpart at all, so a pinned model for it never becomes a bracket, and
-// `copilot`/`@login` entries reject one outright.
-export const BRACKET_MODEL_REVIEWERS = MODEL_SELECTABLE_REVIEWERS.filter(r => !PORTOS_ONLY_REVIEWERS.includes(r));
 
 /**
  * Per-reviewer model pins — the model id ONE reviewer runs with, keyed by the same emitted
@@ -471,53 +360,6 @@ export function reviewerModelsFromDefaults(defaults) {
     if (model) out[r] = model;
   }
   return out;
-}
-
-// Reasoning-effort ladder for the local-LLM reviewers. Their review request goes out as an
-// OpenAI-compatible `/v1/chat/completions` call, whose `reasoning_effort` field both LM Studio and
-// Ollama accept for thinking models — but only over the low/medium/high tier names.
-export const LOCAL_LLM_EFFORT_LEVELS = Object.freeze(['low', 'medium', 'high']);
-
-/**
- * Reviewer slug → the reasoning-effort ladder that reviewer accepts. Only reviewers WITH an effort
- * control appear: `copilot` is a GitHub review, `grok`'s CLI has no effort control of any kind,
- * and an `@username` reviewer is a person.
- */
-export const REVIEWER_EFFORT_LEVELS = Object.freeze(Object.fromEntries(
-  REVIEWER_VALUES
-    .map((slug) => {
-      if (LOCAL_LLM_REVIEWERS.includes(slug)) return [slug, LOCAL_LLM_EFFORT_LEVELS];
-      const binary = reviewerCliBinary(slug);
-      return [slug, binary ? effortLevelsForProvider({ id: slug, command: binary }) : null];
-    })
-    .filter(([, levels]) => levels?.length)
-));
-
-/**
- * Every reviewer the user can pick an effort for — the effort-capable CLIs (`claude`, `codex`,
- * `antigravity`, `cursor`) plus the local-LLM backends.
- */
-export const EFFORT_SELECTABLE_REVIEWERS = Object.freeze(Object.keys(REVIEWER_EFFORT_LEVELS));
-
-/**
- * The ladder for ONE reviewer token, or `null` when it takes no effort. Accepts the `gemini`
- * alias; an `@username` token resolves to null like any non-reviewer.
- * @param {string} reviewer - reviewer slug
- * @param {string|null|undefined} [model] - optional pinned model id
- * @returns {readonly string[]|null}
- */
-export function reviewerEffortLevels(reviewer, model = null, catalog = []) {
-  if (typeof reviewer !== 'string') return null;
-  const slug = reviewer.trim().toLowerCase();
-  const normalized = REVIEWER_ALIASES[slug] ?? slug;
-
-  if (normalized === 'antigravity') return antigravityModelEffortLevels(model, catalog) ?? REVIEWER_EFFORT_LEVELS.antigravity;
-  // For codex, derive the ladder from the model if provided
-  if (normalized === 'codex' && model) {
-    return effortLevelsForProvider({ id: normalized, command: reviewerCliBinary(normalized), models: catalog }, model);
-  }
-
-  return REVIEWER_EFFORT_LEVELS[normalized] || null;
 }
 
 /**
@@ -854,56 +696,6 @@ export const reviewerTokenSlug = (token) => String(token).split('[')[0].split('~
  * a PORTOS_ONLY_REVIEWERS slug in that flag doesn't degrade the run — it kills it, and the PR the
  * invocation existed to open never gets created.
  * @param {string[]} tokens - emitted reviewer tokens (decorated or bare)
- * @returns {{flagTokens: string[], portosOnly: string[]}}
- */
-/**
- * Resolve a provider record (or provider ID) to a canonical reviewer slug (e.g. 'codex', 'claude',
- * 'antigravity', etc.).
- * @param {object|string} provider
- * @param {string} [providerId]
- * @returns {string|null}
- */
-export function resolveProviderReviewerSlug(provider, providerId = null) {
-  if (provider && typeof provider === 'object') {
-    const candidates = [
-      provider.harnessId && provider.harnessId !== 'direct' ? provider.harnessId : null,
-      provider.command === 'agy' ? 'antigravity' : provider.command === 'cursor-agent' ? 'cursor' : provider.command,
-      provider.executionSourceProviderId && !provider.executionSourceProviderId.startsWith('selection-')
-        ? provider.executionSourceProviderId.replace(/-(cli|tui)$/, '')
-        : null,
-      provider.id ? provider.id.replace(/-(cli|tui)$/, '') : null,
-      provider.id
-    ].filter(Boolean);
-
-    for (const raw of candidates) {
-      if (typeof raw !== 'string') continue;
-      const normalized = REVIEWER_ALIASES[raw.toLowerCase()] || raw.toLowerCase();
-      if (REVIEWER_VALUES.includes(normalized)) {
-        return normalized;
-      }
-    }
-  }
-
-  const rawId = typeof provider === 'string' ? provider : (providerId || (provider?.id ?? null));
-  if (typeof rawId === 'string' && rawId) {
-    const stripped = rawId.replace(/^provider:/, '').replace(/-(cli|tui)$/, '').toLowerCase();
-    const normalized = REVIEWER_ALIASES[stripped] || stripped;
-    if (REVIEWER_VALUES.includes(normalized)) return normalized;
-    for (const v of REVIEWER_VALUES) {
-      if (stripped === v || stripped.startsWith(`${v}-`) || stripped.endsWith(`-${v}`)) {
-        return v;
-      }
-    }
-  }
-  return null;
-}
-
-/**
- * Partition emitted `--review-with` tokens into the ones slashdo can parse and the ones PortOS
- * serves itself. slashdo's parser ABORTS the whole command on an unknown `--review-with` value, so
- * a PORTOS_ONLY_REVIEWERS slug in that flag doesn't degrade the run — it kills it, and the PR the
- * invocation existed to open never gets created.
- * @param {string[]} tokens - emitted reviewer tokens (decorated or bare)
  * @param {Array<object>} [providers] - configured provider records to resolve provider tokens
  * @returns {{flagTokens: string[], portosOnly: string[]}}
  */
@@ -1025,21 +817,6 @@ function markSuffixes(token, optSet, maxLookup, modelLookup, effortLookup, provi
 }
 
 /**
- * Resolve task metadata to an ordered, deduped reviewer list. Prefers the new `reviewers` array;
- * falls back to the legacy single `reviewer` string.
- */
-export function normalizeReviewers(meta, fallback = DEFAULT_REVIEWERS) {
-  const raw = meta && typeof meta === 'object' && !Array.isArray(meta) ? meta : {};
-  const source = Array.isArray(raw.reviewers)
-    ? raw.reviewers
-    : (typeof raw.reviewer === 'string' && raw.reviewer ? [raw.reviewer] : []);
-  const out = normalizeReviewerList(source);
-  if (out.length) return out;
-  const fallbackList = normalizeReviewerList(fallback);
-  return fallbackList.length ? [...fallbackList] : [...DEFAULT_REVIEWERS];
-}
-
-/**
  * True when the winning layer explicitly lists NO keyed (AI/CLI) reviewers and forge reviewers
  * (`@login`) remain: the user chose "review by these people or bots only", which must not fall
  * back to the install default chain.
@@ -1076,20 +853,6 @@ export function resolveReviewerGroup(metadata, codeReviewDefaults, defaultReview
   const groups = [taskGroup, ...fallbackGroups];
   const activeGroup = groups[activeReviewerGroupIndex(groups, codeReviewDefaults?.reviewerHealth)];
   return prioritizeToolFreeReviewers(activeGroup || taskGroup);
-}
-
-export function normalizeReviewerList(list) {
-  const seen = new Set();
-  const out = [];
-  for (const raw of Array.isArray(list) ? list : []) {
-    if (typeof raw !== 'string') continue;
-    const normalized = REVIEWER_ALIASES[raw] || raw;
-    if (isReviewer(normalized) && !seen.has(normalized)) {
-      seen.add(normalized);
-      out.push(normalized);
-    }
-  }
-  return out;
 }
 
 /**

@@ -10,6 +10,7 @@ import { join } from 'node:path';
 import { tryReadFile } from '../lib/fileUtils.js';
 import { safeChildProcessEnv } from '../lib/processEnv.js';
 import { getSettings } from './settings.js';
+export { HF_TOKEN_REGEX } from '../lib/hfTokenFormat.js';
 
 const HF_CLI_TOKEN_PATH = join(homedir(), '.cache', 'huggingface', 'token');
 
@@ -63,7 +64,3 @@ export async function hfTokenEnv() {
 export async function hfChildEnv(extra = {}) {
   return safeChildProcessEnv({ ...(await hfTokenEnv()), ...extra });
 }
-
-// HF tokens are `hf_` + ~36 alphanumeric chars. Exported as a Zod-friendly
-// regex so route schemas validate at the boundary instead of post-parse.
-export const HF_TOKEN_REGEX = /^hf_[A-Za-z0-9_-]+$/;

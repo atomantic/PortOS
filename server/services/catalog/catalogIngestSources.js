@@ -95,7 +95,7 @@ async function assertIngestUrlSafe(target) {
  * Uses CDP (the same headed/headless Chrome the rest of PortOS drives) so
  * JS-rendered pages and login-walled content the user is already signed into
  * resolve correctly — a bare `fetch()` would only see the server-rendered
- * HTML shell of an SPA.
+ * HTML shell of an SPA. Pass `disposableContext` for an off-the-record fetch.
  *
  * SSRF pin: Chrome re-resolves DNS independently of our pre-check, so a rebinding
  * DNS answer could steer Chrome's connection to a blocked address after
@@ -109,10 +109,10 @@ async function assertIngestUrlSafe(target) {
  * agree. The pin owns the settle wait, so there is no separate stale-DNS re-vet
  * (which would itself be rebindable) after it returns.
  *
- * Returns `{ text, title, finalUrl }`. Throws when the browser can't reach
+ * Returns `{ text, title, finalUrl, status }`. Throws when the browser can't reach
  * the page or extracts nothing usable, so the route surfaces a clean 4xx/5xx.
  */
-export async function fetchUrlMainText(url, { settleMs = PAGE_SETTLE_MS } = {}) {
+export async function fetchUrlMainText(url, { settleMs = PAGE_SETTLE_MS, dispatchRequest, disposableContext } = {}) {
   await assertIngestUrlSafe(url);
 
   // Prefer the page's own <article>/<main> if present (skips nav/footer chrome),
@@ -138,6 +138,8 @@ export async function fetchUrlMainText(url, { settleMs = PAGE_SETTLE_MS } = {}) 
   // Every ingested URL would otherwise leave one open in the user's browser.
   const page = await navigateToUrlPinned(url, {
     verifyRemoteIp: (ip) => !isBlockedIngestHost(ip),
+    dispatchRequest,
+    disposableContext,
     settleMs,
     evaluateExpression: expression,
   });
@@ -145,7 +147,7 @@ export async function fetchUrlMainText(url, { settleMs = PAGE_SETTLE_MS } = {}) 
   const parsed = page.evalResult ? safeJSONParse(page.evalResult, null) : null;
   const text = clampText(parsed?.text || '');
   if (!text.trim()) throw new Error('no readable text extracted from page');
-  return { text, title: parsed?.title || page.title || '', finalUrl: page.url || url };
+  return { text, title: parsed?.title || page.title || '', finalUrl: page.url || url, status: page.responseStatus };
 }
 
 /**

@@ -1,19 +1,52 @@
-// Browser-side voice capture + playback (two modes).
-//
-// Browser-side voice capture + playback. Supports two modes:
-//   - Push-to-talk: MediaRecorder, manual start/stop.
-//   - Continuous:   AudioWorklet + energy VAD auto-submits on silence,
-//                   and fires barge-in (voice:interrupt + cancelVoicePlayback) when
-//                   the user starts talking over the bot.
-// Both emit 'voice:turn' over Socket.IO and play incoming TTS via Web Audio.
+/** Coordinate push-to-talk, capture lifetimes, and the browser voice client interface. */
 
 import socket from './socket';
-import { throwApiError } from './apiCore.js';
-import { subscribeVisibility } from '../hooks/useVisibilityEvent.js';
-import { sleep } from '../utils/sleep.js';
-import { resumeAudioContext, acquireAudioSession } from '../lib/audioContext.js';
-import { blobToWav16k, float32ToWav16k, MAX_VOICE_AUDIO_BYTES, RECORDING_TOO_LONG_MESSAGE } from '../lib/audioRecorder.js';
-import { ECHO_WINDOW_MS, MIN_TOKENS_FOR_ECHO_CHECK, MIN_SHARED_TRIGRAMS, tokenize, trigramsOf } from '../../../server/lib/voiceEcho.js';
+import { acquireAudioSession } from '../lib/audioContext.js';
+import { blobToWav16k, MAX_VOICE_AUDIO_BYTES, RECORDING_TOO_LONG_MESSAGE } from '../lib/audioRecorder.js';
+import { cancelVoicePlayback, detectAudioRoute, joinVoiceOutput } from './voicePlayback.js';
+import { disposeContinuousCapture, startContinuous as startContinuousVad } from './voiceContinuousVad.js';
+import { disposeWebSpeechCapture, startWebSpeechCapture as startSpeechRecognition } from './voiceWebSpeech.js';
+import { invalidateVisionCapture } from './voiceVision.js';
+import { markVoiceTiming } from './voiceTimingDebug.js';
+
+export {
+  getVoiceVolume,
+  setVoiceVolume,
+  isVoiceMuted,
+  setVoiceMuted,
+  onVoiceAudioPrefs,
+  getVoiceOutputLevel,
+  prepareVoicePlayback,
+  bindVoiceOutputVisualizer,
+  onProactiveSpeech,
+  claimVoiceOutput,
+  onVoiceOutputPrimary,
+  playWav,
+  speakSynthesized,
+  whenPlaybackDrained,
+  whenVoiceTurnAudioDrained
+} from './voicePlayback.js';
+export {
+  stopContinuous,
+  isContinuous,
+  getVadLevel
+} from './voiceContinuousVad.js';
+export {
+  webSpeechSupported,
+  stopWebSpeechCapture,
+  isWebSpeechCapturing
+} from './voiceWebSpeech.js';
+export {
+  isVisionCaptureEnabled,
+  onVisionCaptureEnded,
+  enableVisionCapture,
+  disableVisionCapture,
+  captureVisionFrame,
+  imageFileToDataUrl,
+  attachVoiceImage,
+  removeVoiceImage,
+  sendScreenshotResult
+} from './voiceVision.js';
 
 // iOS audio-session claims held while a mic stream is open — one per capture
 // mode, because push-to-talk and hands-free listening can overlap. `getUserMedia`
@@ -23,7 +56,6 @@ import { ECHO_WINDOW_MS, MIN_TOKENS_FOR_ECHO_CHECK, MIN_SHARED_TRIGRAMS, tokeniz
 // both working — that session ignores the ring/silent switch too, so whatever is
 // playing stays audible. See the audio-session note in lib/audioContext.js.
 let releaseCaptureSession = null;
-let releaseWebSpeechSession = null;
 
 let stream = null;
 let recorder = null;
@@ -31,7 +63,6 @@ let chunks = [];
 let recorderGeneration = 0;
 let recorderStartPendingGeneration = null;
 let recorderSessionGeneration = null;
-let audioCtx = null;
 
 // Capture engines are module-level because the widget can be hidden and shown
 // without recreating the browser resources. The widget itself is not immortal:
@@ -41,20 +72,10 @@ let audioCtx = null;
 let captureOwnerGeneration = 0;
 
 const isOwnerCurrent = (generation) => generation === captureOwnerGeneration;
-// One owner for shared playback. Server-turn admission is independent of the
-// two invalidation lifetimes: cancellation retires decode/queue work AND
-// pending synthesis fetches; a new synthetic reply retires only older fetches.
-const playback = {
-  queue: Promise.resolve(),
-  decoding: new Set(),
-  animation: null,
-  source: null,
-  startedAt: 0,
-  depth: 0,
-  echoTailUntil: 0,
-  acceptsServerTurnAudio: true,
-  decodeGeneration: 0,
-  synthesisGeneration: 0,
+
+const getCaptureOwnerGuard = () => {
+  const generation = captureOwnerGeneration;
+  return () => isOwnerCurrent(generation);
 };
 
 const pickMime = () => {
@@ -64,432 +85,6 @@ const pickMime = () => {
   }
   return 'audio/webm';
 };
-
-const ensureCtx = () => {
-  if (!audioCtx) {
-    const Ctor = window.AudioContext || window.webkitAudioContext;
-    audioCtx = new Ctor();
-  }
-  // Fire-and-forget so ensureCtx stays sync — TTS playback schedules against the
-  // context a beat later. Covers iOS's `'interrupted'`, not just `'suspended'`.
-  resumeAudioContext(audioCtx).catch(() => {});
-  return audioCtx;
-};
-
-// Call synchronously from the user's tap/submit so WebKit can start playback
-// before the asynchronous reply arrives. This never opens the microphone.
-export function prepareVoicePlayback() {
-  if (!window.AudioContext && !window.webkitAudioContext) return;
-  try { ensureCtx(); } catch { /* Native audio unavailable; don't block the typed turn. */ }
-}
-
-const cancelVoicePlayback = () => {
-  playback.decodeGeneration += 1;
-  playback.animation?.stop();
-  playback.animation = null;
-  playback.decoding.clear();
-  if (playback.source) {
-    try { playback.source.stop(); } catch { /* already stopped */ }
-    playback.source = null;
-  }
-  playback.queue = Promise.resolve();
-  playback.depth = 0;
-  playback.echoTailUntil = 0;
-  // Any chunks still in-flight from the cancelled turn must not be played —
-  // they'll arrive asynchronously after we've torn down local playback.
-  playback.acceptsServerTurnAudio = false;
-  // Supersede any fast-path synthesized reply whose fetch is still in flight.
-  playback.synthesisGeneration += 1;
-};
-
-// A transcript reopens server audio without invalidating any pending work.
-const beginServerTurnAudio = () => {
-  playback.acceptsServerTurnAudio = true;
-};
-
-// Client-side replies have no transcript. Reopen admission and supersede older
-// synthesis fetches, while preserving already-decoding/queued playback.
-const beginSynthesizedReply = () => {
-  const generation = ++playback.synthesisGeneration;
-  playback.acceptsServerTurnAudio = true;
-  return generation;
-};
-
-// Only Voice Call registers a visualizer. It gets assistant output WAV, never mic audio.
-let outputVisualizer;
-export function bindVoiceOutputVisualizer(prepare) {
-  outputVisualizer = prepare;
-  return () => { if (outputVisualizer === prepare) outputVisualizer = undefined; };
-}
-
-const waitForAvatar = (ready) => new Promise(resolve => {
-  const timer = setTimeout(resolve, 750);
-  Promise.resolve(ready).finally(() => { clearTimeout(timer); resolve(); }).catch(() => {});
-});
-
-async function playDecodedVoice(buffer, bytes, ctx, generation, animate) {
-  if (generation !== playback.decodeGeneration) return;
-  let animation;
-  if (animate && outputVisualizer) {
-    try { animation = outputVisualizer(bytes); } catch { /* Avatar never owns the voice transport. */ }
-  }
-  playback.animation = animation;
-  if (animation) await waitForAvatar(animation.ready);
-  if (generation !== playback.decodeGeneration) return;
-  const src = ctx.createBufferSource();
-  src.buffer = buffer;
-  src.connect(ctx.destination);
-  playback.source = src;
-  playback.startedAt = ctx.currentTime;
-  animation?.start(() => ctx.currentTime - playback.startedAt);
-  await new Promise((resolve, reject) => {
-    src.onended = resolve;
-    try { src.start(); } catch (error) { reject(error); }
-  }).catch(error => console.warn('[voice] could not start playback:', error));
-  animation?.stop();
-  if (generation !== playback.decodeGeneration) return;
-  playback.animation = null;
-  playback.source = null;
-  playback.depth -= 1;
-  if (playback.depth === 0 && playback.acceptsServerTurnAudio) {
-    playback.echoTailUntil = performance.now() + VAD.ttsTailMs;
-  }
-}
-
-const enqueuePlay = (bytes, { animate = false } = {}) => {
-  const generation = playback.decodeGeneration;
-  const ctx = ensureCtx();
-  // decodeAudioData consumes its buffer; preserve the TTS bytes for Voice Call.
-  const decoded = ctx.decodeAudioData(bytes.slice(0)).then(buffer => {
-    if (generation !== playback.decodeGeneration) return;
-    playback.depth += 1;
-    playback.queue = playback.queue.then(() => playDecodedVoice(buffer, bytes, ctx, generation, animate));
-  });
-  playback.decoding.add(decoded);
-  return decoded.finally(() => playback.decoding.delete(decoded));
-};
-
-// Sample only the already-decoded output that is actually playing. No mic,
-// second audio graph, network, or queue changes for the visualizer.
-export function getVoiceOutputLevel() {
-  const buffer = playback.source?.buffer;
-  if (!buffer?.numberOfChannels || audioCtx?.state !== 'running') return 0;
-  const elapsed = audioCtx.currentTime - playback.startedAt;
-  if (elapsed < 0 || elapsed >= buffer.duration) return 0;
-  const sample = Math.floor(elapsed * buffer.sampleRate);
-  // Use a bounded sample window (~20 ms) at the current audio-clock position.
-  const stride = Math.max(1, Math.floor(buffer.sampleRate / 1600));
-  const samples = buffer.getChannelData(0);
-  let energy = 0;
-  let count = 0;
-  for (let i = Math.max(0, sample - 16 * stride); i < Math.min(samples.length, sample + 16 * stride); i += stride) {
-    energy += samples[i] ** 2;
-    count += 1;
-  }
-  return count ? Math.min(1, Math.sqrt(energy / count) * 4) : 0;
-}
-
-const isTtsActive = () => playback.depth > 0 || playback.source !== null;
-const isInTtsEchoWindow = () => isTtsActive() || performance.now() < playback.echoTailUntil;
-
-// Ring of recently-spoken TTS sentences (with cached trigrams). Echo
-// detection uses two stacked filters:
-//   1. Length gate: utterances < MIN_TOKENS_FOR_ECHO_CHECK words bypass the
-//      check entirely, so short barge-ins ("wait", "stop", "hold on") still
-//      interrupt the bot even if those words appear in TTS.
-//   2. Trigram overlap: for longer utterances, require ≥ 2 shared 3-word
-//      windows with a recent TTS sentence. Two contiguous 3-word matches
-//      are strong evidence — coincidental overlap on common words rarely
-//      produces multiple shared trigrams. A clean substring match also
-//      counts (handles the case where STT picks up a clean slice of TTS).
-//
-// This client gate runs only on the Web Speech path where transcripts are
-// produced in-browser and sent as voice:text. Whisper-based continuous mode
-// sends audio to the server, so its echo gate lives in
-// server/services/voice/echo.js. Pure helpers are shared via
-// server/lib/voiceEcho.js.
-const recentTtsSentences = [];
-
-const rememberTtsSentence = (sentence) => {
-  const tokens = tokenize(sentence);
-  if (!tokens.length) return;
-  const now = performance.now();
-  while (recentTtsSentences.length && now - recentTtsSentences[0].t > ECHO_WINDOW_MS) {
-    recentTtsSentences.shift();
-  }
-  recentTtsSentences.push({
-    text: tokens.join(' '),
-    trigrams: new Set(trigramsOf(tokens)),
-    t: now,
-  });
-};
-
-const looksLikeTtsEcho = (text) => {
-  // Headphone setups have no acoustic echo path — the speaker output goes
-  // into the user's ears, not the open air around the mic. Bypass the
-  // content gate entirely so we never misclassify the user's actual speech.
-  if (audioRoute.likelyHeadset) return false;
-
-  const tokens = tokenize(text);
-  if (tokens.length < MIN_TOKENS_FOR_ECHO_CHECK) return false;
-  const heardText = tokens.join(' ');
-  const heardTrigrams = trigramsOf(tokens);
-  if (!heardTrigrams.length) return false;
-  const now = performance.now();
-  for (const entry of recentTtsSentences) {
-    if (now - entry.t > ECHO_WINDOW_MS) continue;
-    if (entry.text.includes(heardText)) return true;
-    let shared = 0;
-    for (const tg of heardTrigrams) {
-      if (entry.trigrams.has(tg)) {
-        shared += 1;
-        if (shared >= MIN_SHARED_TRIGRAMS) return true;
-      }
-    }
-  }
-  return false;
-};
-
-// ─── Audio route detection (headset vs built-in) ────────────────────────
-// Headphones eliminate the speaker-into-mic acoustic path that causes the
-// echo loop, so we can relax echo gates when we're confident the user is
-// on a headset. Default-tight on uncertainty: a false "headset" detection
-// re-opens the loop, while a false "built-in" detection only makes barge-in
-// slightly less twitchy.
-//
-// Strong signal: the active mic shares a `groupId` with an audiooutput
-// device AND the device label looks headset-y (AirPods, headset, buds, …).
-// `groupId` alone isn't enough — a laptop's built-in mic + built-in speakers
-// also share a groupId. Labels alone aren't enough either — a custom-named
-// device ("Adam's USB Mic") won't match. Both required → high confidence.
-
-const HEADSET_LABEL_RE = /(headphone|headset|airpods|buds|earphone|in[- ]?ear|jabra|sennheiser|bose|sony wh-|sony wf-)/i;
-const BUILTIN_LABEL_RE = /(macbook|built[- ]?in|internal)/i;
-
-const audioRoute = {
-  likelyHeadset: false,
-  label: null,
-  reason: 'not detected',
-  checkedAt: 0,
-};
-
-const detectAudioRoute = async (activeStream) => {
-  if (!navigator.mediaDevices?.enumerateDevices) {
-    audioRoute.likelyHeadset = false;
-    audioRoute.reason = 'enumerateDevices unsupported';
-    return audioRoute;
-  }
-  const devices = await navigator.mediaDevices.enumerateDevices().catch(() => []);
-  const mics = devices.filter((d) => d.kind === 'audioinput');
-  const outs = devices.filter((d) => d.kind === 'audiooutput');
-  const settings = activeStream?.getAudioTracks?.()?.[0]?.getSettings?.() || {};
-  const activeMic = mics.find((d) => d.deviceId === settings.deviceId)
-    || mics.find((d) => d.deviceId === 'default')
-    || mics[0];
-  if (!activeMic) {
-    audioRoute.likelyHeadset = false;
-    audioRoute.reason = 'no active mic';
-    return audioRoute;
-  }
-  const sameGroup = activeMic.groupId
-    && outs.some((o) => o.groupId === activeMic.groupId);
-  const label = activeMic.label || '';
-  const headsetByLabel = HEADSET_LABEL_RE.test(label);
-  const builtInByLabel = BUILTIN_LABEL_RE.test(label);
-  // Require BOTH groupId match AND headset-y label, AND not explicitly a
-  // built-in device. This is the conservative configuration.
-  audioRoute.likelyHeadset = !!(sameGroup && headsetByLabel && !builtInByLabel);
-  audioRoute.label = label;
-  audioRoute.reason = audioRoute.likelyHeadset
-    ? 'groupId+label match'
-    : `sameGroup=${!!sameGroup} headsetByLabel=${headsetByLabel} builtInByLabel=${builtInByLabel}`;
-  audioRoute.checkedAt = performance.now();
-  console.log(`🎧 [voice] audio route: ${audioRoute.likelyHeadset ? 'headset' : 'open-air'} (${audioRoute.reason}) label="${label}"`);
-  return audioRoute;
-};
-
-// Re-detect when the user plugs/unplugs hardware mid-session. Without this,
-// disconnecting headphones leaves us in "headset" mode and the loop returns.
-if (typeof navigator !== 'undefined' && navigator.mediaDevices?.addEventListener) {
-  navigator.mediaDevices.addEventListener('devicechange', () => {
-    // We don't have an active stream reference here, so re-detect against
-    // whatever device the next getUserMedia() picks. Until then, be safe
-    // and assume open-air.
-    audioRoute.likelyHeadset = false;
-    audioRoute.reason = 'devicechange — pending re-detect';
-  });
-}
-
-// Live introspection from the browser console: `window.__portosAudioRoute`.
-// Mirrors the existing `__portosVadDebug` pattern so both diagnostics live
-// at the same handle.
-if (typeof window !== 'undefined') {
-  Object.defineProperty(window, '__portosAudioRoute', {
-    configurable: true,
-    get: () => ({ ...audioRoute }),
-  });
-}
-
-// socket.io may deliver a plain ArrayBuffer, a sliced TypedArray/DataView,
-// or a serialized Buffer-like { type: 'Buffer', data: [...] }. Using the raw
-// `wav.buffer` for a sliced view would pass extra bytes to decodeAudioData,
-// causing intermittent decode failures; always hand off an exact slice.
-const toExactArrayBuffer = (wav) => {
-  if (wav instanceof ArrayBuffer) return wav;
-  if (ArrayBuffer.isView(wav)) {
-    return wav.buffer.slice(wav.byteOffset, wav.byteOffset + wav.byteLength);
-  }
-  if (wav?.type === 'Buffer' && Array.isArray(wav.data)) {
-    return new Uint8Array(wav.data).buffer;
-  }
-  return null;
-};
-
-const playServerTurnAudio = ({ sentence, wav }) => {
-  if (!playback.acceptsServerTurnAudio) return; // stale chunk from a cancelled turn — drop it
-  rememberTtsSentence(sentence);
-  const ab = toExactArrayBuffer(wav);
-  if (!ab) return;
-  enqueuePlay(ab, { animate: true }).catch((err) => console.warn('[voice] playback failed:', err));
-};
-
-socket.on('voice:tts:audio', playServerTurnAudio);
-
-// A provider timeout can happen after earlier sentences were already emitted.
-// Clear those browser-side frames too, so recovery does not leave the stale
-// reply speaking over the next turn.
-socket.on('voice:tts:cancel', () => cancelVoicePlayback());
-
-// Proactive CoS speech. Server-pushed lines (alerts/briefings/reminders) come
-// in on a separate channel so the client can render a distinct visual cue;
-// VoiceWidget decides whether/how to display them (toast + history appending).
-// Reuse the same audio playback queue + TTS echo memory as user-initiated
-// turns so mic barge-in (voice:interrupt → cancelVoicePlayback) cancels proactive
-// audio for free.
-//
-// Proactive events bypass server-turn admission without reopening it. A
-// canceled turn must not silence later reminders while awaiting a transcript.
-const proactiveListeners = new Set();
-const playProactiveAudio = ({ sentence, wav, priority, source, ts }) => {
-  rememberTtsSentence(sentence);
-  const ab = toExactArrayBuffer(wav);
-  if (!ab) return;
-  enqueuePlay(ab).catch((err) => console.warn('[voice] proactive playback failed:', err));
-  for (const fn of proactiveListeners) {
-    fn({ sentence, priority: priority || 'normal', source: source || 'cos', ts: ts || Date.now() });
-  }
-};
-
-socket.on('voice:speak', playProactiveAudio);
-
-// Subscribe to proactive-speech UI events. Returns an unsubscribe function.
-// The CoS speech audio plays unconditionally (it's the whole point), but
-// surfaces (toast, pill, conversation pane) decide independently whether to
-// render a visual hint.
-export const onProactiveSpeech = (handler) => {
-  proactiveListeners.add(handler);
-  return () => proactiveListeners.delete(handler);
-};
-
-// ─── Voice-output ownership (single-recipient proactive speech) ────────────
-// Proactive server-pushed lines (voice:speak) must play on exactly ONE tab —
-// otherwise every open tab and every federated machine speaks the same reminder
-// at once. The server routes voice:speak to a single designated "primary" tab;
-// the tab the user is actively looking at claims that role. We claim on focus,
-// on becoming visible, and on (re)connect while visible — so audio follows the
-// user's attention — and expose an explicit claim() for a "speak on this tab"
-// button. The server confirms ownership with voice:output:primary and tells the
-// displaced tab via voice:output:detached.
-let isVoiceOutputPrimary = false;
-const voiceOutputPrimaryListeners = new Set();
-
-const notifyVoiceOutputPrimary = () => {
-  for (const fn of voiceOutputPrimaryListeners) fn(isVoiceOutputPrimary);
-};
-
-export const claimVoiceOutput = () => {
-  if (socket.connected) socket.emit('voice:output:claim');
-};
-
-// Announce this browser tab as a voice-output surface so the server registers
-// it as a proactive-audio candidate. Sent unconditionally (even for a
-// backgrounded, never-focused tab) so audio still has a home when no tab has
-// claimed — but ONLY real browser tabs load this module, so non-playing sockets
-// (e.g. a federated peer's Socket.IO relay) never announce and can't be elected.
-const announceVoiceOutputAvailable = () => {
-  if (socket.connected) socket.emit('voice:output:available');
-};
-
-// Subscribe to voice-output ownership changes. Fires immediately with the
-// current value so a late subscriber (widget mount) reflects state without
-// waiting for the next handoff. Returns an unsubscribe function.
-export const onVoiceOutputPrimary = (handler) => {
-  voiceOutputPrimaryListeners.add(handler);
-  handler(isVoiceOutputPrimary);
-  return () => voiceOutputPrimaryListeners.delete(handler);
-};
-
-socket.on('voice:output:primary', () => {
-  if (isVoiceOutputPrimary) return;
-  isVoiceOutputPrimary = true;
-  notifyVoiceOutputPrimary();
-});
-socket.on('voice:output:detached', () => {
-  if (!isVoiceOutputPrimary) return;
-  isVoiceOutputPrimary = false;
-  notifyVoiceOutputPrimary();
-  // Another tab just took over proactive output. Drain any proactive audio
-  // still playing/queued here so the handoff is clean — otherwise this tab
-  // keeps speaking a briefing while the new primary starts the next one and
-  // both talk at once, breaking the single-recipient contract. Cancellation
-  // closes server-turn admission; playProactiveAudio bypasses it, so a future
-  // proactive line still plays if this tab later reclaims output.
-  cancelVoicePlayback();
-});
-// A disconnect ends this socket's ownership — the server released it and, on
-// reconnect, this tab gets a fresh socket with no claim (it only re-announces
-// availability, and re-claims only if focused). Clear the flag so the widget
-// doesn't keep showing "speaker" while output is routed to another tab. The
-// server's voice:output:detached can't reach an already-disconnected socket, so
-// this local reset is the only signal.
-socket.on('disconnect', () => {
-  if (!isVoiceOutputPrimary) return;
-  isVoiceOutputPrimary = false;
-  notifyVoiceOutputPrimary();
-});
-
-// Register this tab as a voice-output candidate, and claim output when it is
-// the tab the user is looking at. Only a visible+focused tab claims, so a
-// backgrounded tab never steals output from the foreground one. Both emits are
-// no-ops while the socket is down.
-const joinVoiceOutput = () => {
-  announceVoiceOutputAvailable();
-  if (typeof document !== 'undefined'
-    && document.visibilityState === 'visible'
-    && (document.hasFocus?.() ?? true)) {
-    claimVoiceOutput();
-  }
-};
-
-// Claim on focus / visibility so proactive audio follows the active tab. Reuse
-// the shared visibility singleton (one document-level listener for the whole
-// app) rather than adding another `visibilitychange` handler. `focus` has no
-// shared singleton, so it stays a direct listener. Guard for non-browser
-// (test/SSR) contexts.
-if (typeof window !== 'undefined' && typeof document !== 'undefined') {
-  window.addEventListener('focus', claimVoiceOutput);
-  subscribeVisibility((state) => { if (state === 'visible') claimVoiceOutput(); });
-  // This module loads lazily (the first time voice is on), usually after the
-  // socket connected, so the `connect` handler below has already been missed:
-  // join now, or the focused tab stays unclaimed until its next focus event
-  // and the first reminder can go to whichever tab announced last.
-  joinVoiceOutput();
-}
-
-// voice:transcript marks the start of a new turn's outputs — any pending
-// rejection from a previous cancellation should be lifted now so this turn's
-// TTS chunks actually play.
-socket.on('voice:transcript', beginServerTurnAudio);
 
 export const startCapture = async () => {
   if (recorder || recorderStartPendingGeneration !== null) return;
@@ -595,6 +190,7 @@ export const stopCapture = async ({ submit = true } = {}) => {
   if (recorderGeneration === generation) recorderGeneration += 1;
   const stoppedGeneration = recorderGeneration;
   if (!isOwnerCurrent(ownerGeneration) || stoppedGeneration !== generation + 1) return null;
+  if (submit) markVoiceTiming('mic.stop', { startsTurn: true });
 
   const blob = new Blob(recordedChunks, { type: rec.mimeType });
   // Mode-switch cancellation (e.g. user toggled hands-free mid-utterance):
@@ -608,6 +204,7 @@ export const stopCapture = async ({ submit = true } = {}) => {
     refuseLongRecording();
     return null;
   }
+  markVoiceTiming(`audio.sent ${wav.byteLength}B (encoded)`);
   socket.emit('voice:turn', { audio: wav, mimeType: 'audio/wav' });
   return { mimeType: 'audio/wav', size: wav.byteLength, sourceSize: blob.size, peak };
 };
@@ -616,6 +213,7 @@ export const sendText = (text, source = 'text') => {
   const trimmed = (text || '').trim();
   if (!trimmed) return;
   cancelVoicePlayback();
+  markVoiceTiming(`text.sent ${source}`, { startsTurn: true });
   socket.emit('voice:text', { text: trimmed, source });
 };
 
@@ -664,7 +262,7 @@ const refuseLongRecording = () => {
 
 /**
  * Subscribe to voice events. Returns an unsubscribe function.
- * Events: voice:transcript, voice:llm:delta, voice:llm:done, voice:error, voice:idle
+ * Events: voice:transcript, voice:llm:loading, voice:llm:delta, voice:llm:done, voice:error, voice:idle
  */
 export const onVoiceEvent = (event, handler) => {
   socket.on(event, handler);
@@ -675,680 +273,13 @@ export const onVoiceEvent = (event, handler) => {
   };
 };
 
-// Persistent, user-authorized screen-capture stream for the voice agent's
-// ui_describe_visually tool. getDisplayMedia is the only browser-native way to
-// grab WebGL/canvas content (OpenWorld, charts) without a heavy DOM-to-canvas
-// dependency — but browsers REQUIRE a transient user gesture to call it, and the
-// screenshot request is server-initiated (mid voice turn), not a click. So the
-// user authorizes a capture stream ONCE via a click (enableVisionCapture, which
-// the VoiceWidget wires to a button), we keep that stream alive, and
-// captureScreenForVision grabs a frame from it on demand without re-prompting.
-let visionStream = null;
-// Bumped by every enable/disable/dispose so a getDisplayMedia() picker that
-// resolves AFTER teardown can detect it was superseded and release its stream
-// (visionStream is still null while the picker is open, so clear can't see it).
-let visionGeneration = 0;
-// Optional callback invoked whenever the authorized stream ends — either via
-// disableVisionCapture() or because the user clicked "Stop sharing" in the
-// browser's own chrome (track 'ended'). Lets the UI sync its toggle state
-// instead of going stale until the next screenshot request.
-let onVisionEndedCb = null;
-
-const clearVisionStream = ({ notify = true } = {}) => {
-  visionGeneration += 1;
-  const stream = visionStream;
-  // Null the global BEFORE stopping tracks: t.stop() synchronously fires the
-  // track 'ended' handler, and that handler no-ops unless `visionStream === its
-  // own stream` — so clearing first keeps a caller-initiated stop (notify:false)
-  // from re-entering via the 'ended' path and firing onVisionCaptureEnded.
-  visionStream = null;
-  if (stream) stream.getTracks().forEach((t) => t.stop());
-  if (notify && typeof onVisionEndedCb === 'function') onVisionEndedCb();
-};
-
-// True when a live, user-authorized capture stream is available to grab frames.
-export const isVisionCaptureEnabled = () => !!(visionStream && visionStream.active);
-
-// Register a callback fired when the capture stream ends (user stops sharing via
-// the browser, or disableVisionCapture runs). Pass null to clear. Returns an
-// unsubscribe fn for symmetry with the other subscribe helpers.
-export const onVisionCaptureEnded = (cb) => {
-  onVisionEndedCb = typeof cb === 'function' ? cb : null;
-  return () => { onVisionEndedCb = null; };
-};
-
-// Authorize a screen-capture stream. MUST be called from within a user gesture
-// (a click handler) — getDisplayMedia rejects outside transient activation,
-// which is exactly why the server-initiated screenshot path can't call it.
-// Returns true once a live stream is authorized. The stream self-clears when the
-// user stops sharing via the browser's own chrome (track 'ended') so the next
-// enable re-prompts instead of grabbing a dead track.
-export const enableVisionCapture = async () => {
-  if (!navigator.mediaDevices?.getDisplayMedia) return false;
-  if (isVisionCaptureEnabled()) return true;
-  const generation = ++visionGeneration;
-  const stream = await navigator.mediaDevices.getDisplayMedia({
-    video: { displaySurface: 'browser' },
-    audio: false,
-  }).catch(() => null);
-  if (!stream) return false;
-  if (generation !== visionGeneration) {
-    stream.getTracks().forEach((t) => t.stop());
-    return false;
-  }
-  visionStream = stream;
-  // User-stopped (browser chrome) → clear + notify the UI so the toggle flips.
-  // Guard on `visionStream === stream` so a late 'ended' from a SUPERSEDED
-  // stream (quick disable→re-enable) can't tear down the newer capture session.
-  stream.getVideoTracks().forEach((t) => t.addEventListener('ended', () => {
-    if (visionStream === stream) clearVisionStream();
-  }, { once: true }));
-  return true;
-};
-
-// Stop and release the authorized capture stream (widget teardown / user
-// toggle-off). Caller-initiated, so it does NOT fire onVisionCaptureEnded — the
-// caller already owns the state change (and on unmount the cb is gone).
-export const disableVisionCapture = () => clearVisionStream({ notify: false });
-
-// Grab one frame from the authorized vision stream as a JPEG data URL. Returns
-// null when no stream is authorized yet (the caller prompts the user to enable
-// it) or on any frame-grab failure, so ui_describe_visually degrades to a clear
-// "I can't see your screen" rather than crashing.
-export const captureScreenForVision = async () => {
-  if (typeof document === 'undefined' || !isVisionCaptureEnabled()) return null;
-  const video = document.createElement('video');
-  video.srcObject = visionStream;
-  video.muted = true;
-  const playing = await video.play().then(() => true).catch(() => false);
-  if (!playing) return null;
-  // One frame is enough; give the decoder a tick to paint dimensions.
-  await sleep(120);
-  const w = video.videoWidth || 1280;
-  const h = video.videoHeight || 720;
-  const canvas = document.createElement('canvas');
-  canvas.width = w;
-  canvas.height = h;
-  const cctx = canvas.getContext('2d');
-  video.pause();
-  if (!cctx) return null;
-  cctx.drawImage(video, 0, 0, w, h);
-  // JPEG @ 0.8 keeps normal tab captures below the encoded 8 MiB cap.
-  return canvas.toDataURL('image/jpeg', 0.8);
-};
-
-// Reply to a server voice:screenshot:request. Always emits a result (data URL
-// or null) so the server-side waiter resolves instead of timing out. Echo the
-// requestId so the server resolves the matching waiter and a late reply can't
-// satisfy a newer capture.
-export const sendScreenshotResult = (requestId, dataUrl) => {
-  socket.emit('voice:screenshot:result', { requestId, dataUrl: typeof dataUrl === 'string' && dataUrl.length <= MAX_VOICE_AUDIO_BYTES ? dataUrl : null });
-};
-
-const playPreviewAudio = (arrayBuffer) => enqueuePlay(arrayBuffer);
-
-export const playWav = (arrayBuffer) => playPreviewAudio(arrayBuffer);
-
-// Speak arbitrary text through the server's configured TTS WITHOUT running the
-// LLM. Used by the fast-resolution cascade to voice trigger confirmations and
-// on-device Nano replies (see voiceFastPath.js). Reuses the same playback queue
-// + echo memory as server-streamed TTS, so barge-in (cancelVoicePlayback) and
-// echo-suppression keep working exactly as they do for normal turns. Resolves
-// once the audio is decoded and queued (not when playback finishes).
-export const speakSynthesized = async (text, { engine, voice, rate, signal, animate = false } = {}) => {
-  const clean = (text || '').trim();
-  if (!clean) return false;
-  const gen = beginSynthesizedReply();
-  rememberTtsSentence(clean);
-  const body = { text: clean };
-  if (engine) body.engine = engine;
-  if (voice) body.voice = voice;
-  if (typeof rate === 'number') body.rate = rate;
-  const res = await fetch('/api/voice/public/synthesize', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-    signal,
-  });
-  if (!res.ok) await throwApiError(res);
-  const wav = await res.arrayBuffer();
-  // Superseded while the synth was in flight — drop this stale audio rather than
-  // playing it over/after the newer turn's reply.
-  if (gen !== playback.synthesisGeneration) return false;
-  await enqueuePlay(wav, { animate });
-  return true;
-};
-
-// Resolves once every currently-queued TTS chunk has finished playing locally.
-// Used by continuous mode to know when to return from 'speaking' → listening.
-export const whenPlaybackDrained = () => playback.queue.then(() => !isTtsActive());
-
-// voice:idle is sent as soon as the server sends its last WAV; that WAV may
-// still be decoding before it becomes visible to the normal playback queue.
-export async function whenVoiceTurnAudioDrained() {
-  await Promise.allSettled([...playback.decoding]);
-  return whenPlaybackDrained();
-}
-
-// ─── Continuous mode (hands-free VAD) ─────────────────────────────────────
-// AudioWorklet streams PCM, RMS-based VAD auto-submits on silence, and
-// barge-in (voice:interrupt + cancelVoicePlayback) fires when the user talks over
-// the bot. Thresholds are auto-calibrated from ambient noise at startup.
-
-// Persisted voice.vad overrides (callbacks.vad); anything not a positive number keeps the built-in default.
-const vadThreshold = (override, fallback) => (Number.isFinite(override) && override > 0 ? override : fallback);
-
-const VAD = {
-  minOnRms: 0.010,
-  minOffRms: 0.005,
-  maxOnRms: 0.060,
-  silenceMs: 600,        // silence duration that ends a turn
-  minSpeechMs: 250,      // ignore utterances shorter than this (noise blips)
-  preRollMs: 250,        // audio kept before detected speech start
-  onsetConfirmMs: 80,    // frames required above onRms before firing speech-start
-  bargeInOnsetConfirmMs: 220, // during TTS + echo tail, require longer
-                         // sustained signal before confirming barge-in — a
-                         // brief leak from the bot's own voice shouldn't
-                         // look like the user starting to speak.
-  calibrationMs: 600,    // ambient-noise sampling window at startup
-  bargeInMul: 2.5,       // multiplier applied to onRms during TTS + echo
-                         // tail. Was 1.15 which let loud TTS re-trigger the
-                         // VAD; 2.5 still allows deliberate barge-in while
-                         // rejecting speaker-to-mic bleed. Lower this only
-                         // if users complain barge-in is unresponsive.
-  ttsTailMs: 700,        // echo-tail window: keep bargeInMul active for this
-                         // long after the last TTS chunk ends to ignore
-                         // room reverb. 300ms was too short for typical
-                         // rooms — the bot's final syllable kept trailing
-                         // back through the mic and getting transcribed.
-  maxSpeechMs: 15000,    // runaway-speech watchdog: if silence never registers
-                         // (noisy env, stuck state), force submit/discard.
-  debug: false,          // window.__portosVadDebug = true to enable logging
-};
-
-// Module-level on purpose: a display reading for the widget's level meter and
-// a log throttle — neither is detection state, so neither belongs to an attempt.
-let lastRmsValue = 0;
-let lastDebugLogAt = 0;
-
-let continuousAttempt = null;
-
-// Detector state for ONE capture attempt (`attempt.vad`). This is the single
-// list of starting values; a new attempt gets a fresh record and a detached one
-// drops it, so nothing carries over between hands-free sessions.
-const createVadState = (sampleRate) => {
-  const preRollLimit = Math.max(1, Math.ceil((VAD.preRollMs / 1000) * sampleRate / 128));
-  return {
-    // Live thresholds (set by calibration, then static for the session).
-    onRms: VAD.minOnRms,
-    offRms: VAD.minOffRms,
-    calibrating: true,
-    calibrationSamples: [],
-    calibrationUntil: performance.now() + VAD.calibrationMs,
-    vadState: 'idle',
-    speechChunks: [],
-    // Fixed-size ring buffer of the last `preRollLimit` frames; avoids the
-    // O(n) Array.shift() that would otherwise run ~375 times/second.
-    preRoll: new Array(preRollLimit),
-    preRollLimit,
-    preRollIdx: 0,
-    preRollFilled: 0,
-    silenceStartedAt: 0,
-    speechStartedAt: 0,
-    onsetFrames: 0,
-  };
-};
-
-const WORKLET_SOURCE = `
-class VADProcessor extends AudioWorkletProcessor {
-  process(inputs) {
-    const ch = inputs[0] && inputs[0][0];
-    if (ch && ch.length) this.port.postMessage(ch.slice(0));
-    return true;
-  }
-}
-registerProcessor('vad-processor', VADProcessor);
-`;
-
-const isCurrentContinuousAttempt = (attempt) => Boolean(
-  attempt?.active
-  && attempt.ownerGeneration === captureOwnerGeneration
-  && continuousAttempt === attempt,
+export const startContinuous = (callbacks = {}) => (
+  startContinuousVad(callbacks, getCaptureOwnerGuard, refuseLongRecording)
 );
 
-const settleContinuousStart = (attempt) => {
-  attempt.pending = false;
-};
-
-// Detach before any asynchronous close. A stale startup may still receive a
-// stream later, but it can release only resources on its own attempt.
-const detachContinuousAttempt = (attempt) => {
-  if (!attempt) return null;
-  attempt.active = false;
-  settleContinuousStart(attempt);
-  if (continuousAttempt === attempt) {
-    continuousAttempt = null;
-    attempt.vad = null;
-  }
-  return attempt;
-};
-
-const releaseContinuousResources = (attempt) => {
-  if (!attempt) return null;
-  const { source, workletNode, stream, releaseSession } = attempt;
-  attempt.source = null;
-  attempt.workletNode = null;
-  attempt.stream = null;
-  attempt.releaseSession = null;
-  try {
-    source?.disconnect();
-    workletNode?.disconnect();
-    if (workletNode) workletNode.port.onmessage = null;
-  } catch { /* ignore teardown errors */ }
-  stream?.getTracks().forEach((track) => track.stop());
-  return releaseSession;
-};
-
-const submitUtterance = async (capture) => {
-  if (!isCurrentContinuousAttempt(capture)) return;
-  const { vad } = capture;
-  if (!vad.speechChunks.length) return;
-  const chunksToSubmit = vad.speechChunks;
-  vad.speechChunks = [];
-
-  const total = chunksToSubmit.reduce((n, c) => n + c.length, 0);
-  const samples = new Float32Array(total);
-  let off = 0;
-  for (const c of chunksToSubmit) { samples.set(c, off); off += c.length; }
-
-  const rate = capture.context?.sampleRate || 48000;
-  const { wav, peak } = await float32ToWav16k(samples, rate);
-  if (!isCurrentContinuousAttempt(capture)) return;
-  if (!wav || wav.byteLength < 800) {
-    capture.callbacks?.onSubmit?.({ submitted: false, peak });
-    return;
-  }
-  if (wav.byteLength > MAX_VOICE_AUDIO_BYTES) {
-    refuseLongRecording();
-    capture.callbacks?.onSubmit?.({ submitted: false, peak });
-    return;
-  }
-  socket.emit('voice:turn', { audio: wav, mimeType: 'audio/wav' });
-  capture.callbacks?.onSubmit?.({ submitted: true, peak, size: wav.byteLength });
-};
-
-const finishCalibration = (vad) => {
-  vad.calibrating = false;
-  const samples = vad.calibrationSamples;
-  vad.calibrationSamples = [];
-  if (!samples.length) return;
-  samples.sort((a, b) => a - b);
-  // Median is robust if the user accidentally speaks during calibration —
-  // up to ~50% of frames can be speech without poisoning the floor estimate.
-  const floor = samples[Math.floor(samples.length * 0.5)] ?? samples[samples.length - 1];
-  vad.offRms = Math.max(VAD.minOffRms, floor * 2.0);
-  vad.onRms = Math.min(VAD.maxOnRms, Math.max(VAD.minOnRms, floor * 4.0, vad.offRms * 2));
-  console.log(`🎙️  [vad] calibrated floor=${floor.toFixed(4)} → on=${vad.onRms.toFixed(4)} off=${vad.offRms.toFixed(4)}`);
-};
-
-const snapshotPreRoll = ({ preRoll, preRollLimit, preRollIdx, preRollFilled }) => {
-  if (!preRollFilled) return [];
-  const out = new Array(preRollFilled);
-  const start = preRollFilled < preRollLimit ? 0 : preRollIdx;
-  for (let i = 0; i < preRollFilled; i++) out[i] = preRoll[(start + i) % preRollLimit];
-  return out;
-};
-
-// Speech -> idle transition shared by the watchdog and end-of-speech paths.
-const returnToIdle = (vad) => {
-  vad.vadState = 'idle';
-  vad.silenceStartedAt = 0;
-  vad.onsetFrames = 0;
-};
-
-const handleFrame = (frame, capture) => {
-  if (!isCurrentContinuousAttempt(capture)) return;
-  let sum = 0;
-  for (let i = 0; i < frame.length; i++) sum += frame[i] * frame[i];
-  const rms = Math.sqrt(sum / frame.length);
-  lastRmsValue = rms;
-
-  const { vad } = capture;
-  vad.preRoll[vad.preRollIdx] = frame;
-  vad.preRollIdx = (vad.preRollIdx + 1) % vad.preRollLimit;
-  if (vad.preRollFilled < vad.preRollLimit) vad.preRollFilled += 1;
-
-  const now = performance.now();
-
-  if (vad.calibrating) {
-    vad.calibrationSamples.push(rms);
-    if (now >= vad.calibrationUntil) finishCalibration(vad);
-    else return;
-  }
-
-  if (VAD.debug && now - lastDebugLogAt > 250) {
-    lastDebugLogAt = now;
-    console.log(`[vad] state=${vad.vadState} rms=${rms.toFixed(4)} on=${vad.onRms.toFixed(4)} off=${vad.offRms.toFixed(4)} tts=${isTtsActive()}`);
-  }
-
-  if (vad.vadState === 'idle') {
-    // Raise the bar while TTS plays AND during the echo tail so neither the
-    // bot's live audio nor reverb through the mic trigger a false barge-in.
-    // Skip the bump entirely on a confirmed headset — there's no acoustic
-    // path from speaker to mic, so the user can interrupt at normal volume.
-    const inEcho = isInTtsEchoWindow() && !audioRoute.likelyHeadset;
-    const effectiveOnRms = inEcho ? vad.onRms * VAD.bargeInMul : vad.onRms;
-    const effectiveConfirmMs = inEcho ? VAD.bargeInOnsetConfirmMs : VAD.onsetConfirmMs;
-    if (rms > effectiveOnRms) {
-      vad.onsetFrames += 1;
-      const frameMs = (frame.length / (capture.context?.sampleRate || 48000)) * 1000;
-      if (vad.onsetFrames * frameMs >= effectiveConfirmMs) {
-        // Confirmed speech onset — barge-in + start capturing
-        vad.vadState = 'speaking';
-        vad.speechStartedAt = now;
-        vad.silenceStartedAt = 0;
-        vad.onsetFrames = 0;
-        if (isTtsActive()) {
-          socket.emit('voice:interrupt');
-          cancelVoicePlayback();
-        }
-        vad.speechChunks = snapshotPreRoll(vad);
-        capture.callbacks?.onSpeechStart?.();
-      }
-    } else {
-      vad.onsetFrames = 0;
-    }
-    return;
-  }
-
-  // state === 'speaking'
-  vad.speechChunks.push(frame);
-
-  // Watchdog: if silence never crosses offRms (e.g. noisy env, echo tail,
-  // stuck mic), force the turn to end so VAD doesn't jam here forever.
-  if (now - vad.speechStartedAt >= VAD.maxSpeechMs) {
-    returnToIdle(vad);
-    capture.callbacks?.onSpeechEnd?.();
-    if (vad.speechChunks.length) {
-      submitUtterance(capture).catch((err) => console.warn('[voice] watchdog submit failed:', err));
-    } else {
-      capture.callbacks?.onSubmit?.({ submitted: false, peak: 0, discarded: true });
-    }
-    return;
-  }
-
-  if (rms < vad.offRms) {
-    if (!vad.silenceStartedAt) vad.silenceStartedAt = now;
-    if (now - vad.silenceStartedAt >= vadThreshold(capture.callbacks?.vad?.endOfSpeechMs, VAD.silenceMs)) {
-      const speechMs = vad.silenceStartedAt - vad.speechStartedAt;
-      returnToIdle(vad);
-      capture.callbacks?.onSpeechEnd?.();
-      if (speechMs >= vadThreshold(capture.callbacks?.vad?.minUtteranceMs, VAD.minSpeechMs)) {
-        submitUtterance(capture).catch((err) => console.warn('[voice] submit failed:', err));
-      } else {
-        // Too short to submit — notify the widget so it leaves 'thinking'
-        // instead of waiting for a server response that won't arrive.
-        vad.speechChunks = [];
-        capture.callbacks?.onSubmit?.({ submitted: false, peak: 0, discarded: true });
-      }
-    }
-  } else {
-    vad.silenceStartedAt = 0;
-  }
-};
-
-export const startContinuous = async (callbacks = {}) => {
-  if (continuousAttempt?.context || continuousAttempt?.pending) return;
-  const attempt = {
-    ownerGeneration: captureOwnerGeneration,
-    active: true,
-    pending: true,
-    callbacks,
-    releaseSession: null,
-    stream: null,
-    context: null,
-    source: null,
-    workletNode: null,
-    vad: null,
-  };
-  continuousAttempt = attempt;
-
-  // Claimed BEFORE getUserMedia — an output-only session already in force would
-  // refuse the request outright — and handed back on failure, since a denied mic
-  // never reaches stopContinuous (the attempt has no context yet).
-  attempt.releaseSession = acquireAudioSession('play-and-record');
-
-  // AGC is intentionally OFF here — it boosts silence to maintain a target
-  // output level, which destroys the energy-difference signal the VAD needs.
-  const nextStream = await navigator.mediaDevices.getUserMedia({
-    audio: {
-      echoCancellation: true,
-      noiseSuppression: true,
-      autoGainControl: false,
-    },
-  }).catch((err) => {
-    detachContinuousAttempt(attempt);
-    releaseContinuousResources(attempt)?.();
-    throw err;
-  });
-  attempt.stream = nextStream;
-  if (!isCurrentContinuousAttempt(attempt)) {
-    releaseContinuousResources(attempt)?.();
-    return null;
-  }
-  detectAudioRoute(attempt.stream).catch(() => {});
-
-  // Constructors and graph wiring can throw synchronously too. Roll back every
-  // partial setup, including one that acquired the mic but never got a context.
-  let blobUrl = null;
-  try {
-    const Ctor = window.AudioContext || window.webkitAudioContext;
-    attempt.context = new Ctor();
-    await resumeAudioContext(attempt.context);
-    if (!isCurrentContinuousAttempt(attempt)) return null;
-
-    // Inline worklet module so we don't need a separate file in the build.
-    blobUrl = URL.createObjectURL(new Blob([WORKLET_SOURCE], { type: 'application/javascript' }));
-    await attempt.context.audioWorklet.addModule(blobUrl);
-    if (!isCurrentContinuousAttempt(attempt)) return null;
-
-    attempt.source = attempt.context.createMediaStreamSource(attempt.stream);
-    attempt.workletNode = new AudioWorkletNode(attempt.context, 'vad-processor');
-
-    attempt.vad = createVadState(attempt.context.sampleRate);
-
-    attempt.workletNode.port.onmessage = (e) => handleFrame(e.data, attempt);
-    attempt.source.connect(attempt.workletNode);
-    // Worklet output must be pulled by the graph or process() stops running;
-    // sinking through a zero-gain node keeps it alive without echoing the mic.
-    const sink = attempt.context.createGain();
-    sink.gain.value = 0;
-    attempt.workletNode.connect(sink).connect(attempt.context.destination);
-    settleContinuousStart(attempt);
-  } catch (err) {
-    // A disposed or stopped attempt already released its resources. Its late
-    // rejection must not stop a newer capture that has since started.
-    if (isCurrentContinuousAttempt(attempt)) await stopContinuous();
-    throw err;
-  } finally {
-    if (blobUrl !== null) URL.revokeObjectURL(blobUrl);
-  }
-};
-
-export const stopContinuous = async () => {
-  const attempt = detachContinuousAttempt(continuousAttempt);
-  releaseContinuousResources(attempt)?.();
-  // Reset shared state before awaiting close so a retry owns fresh VAD state.
-  await Promise.resolve().then(() => attempt?.context?.close?.()).catch(() => {});
-};
-
-export const isContinuous = () => continuousAttempt?.context != null;
-
-export const getVadLevel = () => lastRmsValue;
-
-// Toggle verbose VAD logging at runtime: window.__portosVadDebug = true
-if (typeof window !== 'undefined') {
-  Object.defineProperty(window, '__portosVadDebug', {
-    configurable: true,
-    get: () => VAD.debug,
-    set: (v) => { VAD.debug = !!v; },
-  });
-}
-
-// ─── Web Speech API mode ─────────────────────────────────────────────────
-// Browser-native STT via SpeechRecognition. Transcription happens entirely
-// in the browser — no whisper.cpp server needed. Final transcripts are sent
-// as voice:text (reusing the existing text-input path on the server).
-
-const SpeechRecognition = typeof window !== 'undefined'
-  && (window.SpeechRecognition || window.webkitSpeechRecognition);
-
-let webSpeechRecognition = null;
-let webSpeechShouldListen = false;
-let webSpeechGeneration = 0;
-// Chrome fires onend immediately when a mic error, OS permission flicker, or
-// driver glitch prevents recognition from ever binding. Blindly calling
-// start() from onend in that state hot-loops the CPU. Count consecutive
-// restarts that never produced a result and back off.
-let webSpeechRestartFailures = 0;
-let webSpeechRestartTimer = null;
-const WEB_SPEECH_MAX_RESTART_FAILURES = 5;
-
-export const webSpeechSupported = !!SpeechRecognition;
-
-// BCP-47 tag that SpeechRecognition expects. Short codes like 'en' → 'en-US',
-// 'es' → 'es-ES', 'fr' → 'fr-FR'. Anything already region-tagged or unknown
-// passes through; finally fall back to navigator.language then en-US.
-const SHORT_LANG_TO_BCP47 = { en: 'en-US', es: 'es-ES', fr: 'fr-FR', de: 'de-DE', it: 'it-IT', pt: 'pt-BR', ja: 'ja-JP', ko: 'ko-KR', zh: 'zh-CN' };
-const resolveRecognitionLang = (configured) => {
-  const raw = (configured || '').trim();
-  if (raw.includes('-')) return raw;
-  if (raw && SHORT_LANG_TO_BCP47[raw.toLowerCase()]) return SHORT_LANG_TO_BCP47[raw.toLowerCase()];
-  if (typeof navigator !== 'undefined' && navigator.language) return navigator.language;
-  return 'en-US';
-};
-
-export const startWebSpeechCapture = ({ language, ...callbacks } = {}) => {
-  if (!SpeechRecognition) return;
-  stopWebSpeechCapture();
-  const ownerGeneration = captureOwnerGeneration;
-  const generation = ++webSpeechGeneration;
-
-  // Barge-in: abort any in-flight turn and silence current playback
-  socket.emit('voice:interrupt');
-  cancelVoicePlayback();
-
-  const recognition = new SpeechRecognition();
-  recognition.continuous = true;
-  recognition.interimResults = true;
-  // Honor cfg.stt.language (threaded in by VoiceWidget) so a user on a
-  // non-English locale doesn't silently get US English STT.
-  recognition.lang = resolveRecognitionLang(language);
-
-  recognition.onresult = (event) => {
-    if (!isOwnerCurrent(ownerGeneration) || webSpeechGeneration !== generation || webSpeechRecognition !== recognition) return;
-    let interim = '';
-    let final = '';
-    for (let i = event.resultIndex; i < event.results.length; i++) {
-      const transcript = event.results[i][0].transcript;
-      if (event.results[i].isFinal) {
-        final += transcript;
-      } else {
-        interim += transcript;
-      }
-    }
-    if (interim) callbacks.onInterim?.(interim);
-    if (final) {
-      callbacks.onInterim?.('');
-      webSpeechRestartFailures = 0;
-      // Drop finals that are the bot's own TTS echoed back through the mic.
-      // Two gates: (1) TTS is currently playing or within the echo tail, or
-      // (2) the text is a substring of a recently-spoken sentence. The
-      // content gate catches late echoes that sneak past the time window.
-      const ttsActive = isInTtsEchoWindow();
-      if (ttsActive || looksLikeTtsEcho(final)) {
-        console.warn(`🔇 [voice] dropping TTS echo "${final.trim()}" (ttsActive=${ttsActive})`);
-        return;
-      }
-      callbacks.onFinal?.(final);
-      // Fast-resolution cascade: when the caller supplies routeFinal it OWNS
-      // this turn (triage through trigger/Nano/server itself). Otherwise fall
-      // back to the default — send straight to the server pipeline.
-      // source='voice' so the server still treats this as a spoken utterance
-      // for dictation-mode routing — the text path otherwise bypasses it.
-      if (typeof callbacks.routeFinal === 'function') callbacks.routeFinal(final);
-      else sendText(final, 'voice');
-    }
-  };
-
-  recognition.onend = () => {
-    if (!webSpeechShouldListen
-      || !isOwnerCurrent(ownerGeneration)
-      || webSpeechGeneration !== generation
-      || webSpeechRecognition !== recognition) return;
-    webSpeechRestartFailures += 1;
-    if (webSpeechRestartFailures >= WEB_SPEECH_MAX_RESTART_FAILURES) {
-      // Full teardown, not a bare flag flip: every caller-side cleanup is gated
-      // on isWebSpeechCapturing(), so clearing the flag without releasing the
-      // audio-session claim strands it — pinning the document to
-      // 'play-and-record' for the rest of the page session, which outranks the
-      // 'playback' claim a SongBook play-along needs to beat the silent switch.
-      stopWebSpeechCapture();
-      callbacks.onError?.('restart-loop');
-      return;
-    }
-    // Exponential backoff (50ms → 800ms) so a broken driver doesn't pin the CPU.
-    const delay = Math.min(50 * 2 ** (webSpeechRestartFailures - 1), 800);
-    clearTimeout(webSpeechRestartTimer);
-    webSpeechRestartTimer = setTimeout(() => {
-      if (webSpeechShouldListen
-        && isOwnerCurrent(ownerGeneration)
-        && webSpeechGeneration === generation
-        && webSpeechRecognition === recognition) {
-        recognition.start();
-      }
-    }, delay);
-  };
-
-  recognition.onerror = (event) => {
-    if (!isOwnerCurrent(ownerGeneration) || webSpeechGeneration !== generation || webSpeechRecognition !== recognition) return;
-    if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
-      // Same reason as onend's restart-cap branch: release the claim here or a
-      // denied mic leaves the session pinned record-capable forever.
-      stopWebSpeechCapture();
-      callbacks.onError?.(event.error);
-    }
-    // "no-speech" and "aborted" are expected, ignore them
-  };
-
-  webSpeechRecognition = recognition;
-  webSpeechShouldListen = true;
-  webSpeechRestartFailures = 0;
-  // The recognizer opens the mic itself — no getUserMedia here to hang a claim
-  // off — so it needs the same record-capable session the other two capture
-  // paths take, or an output-only session held by a play-along gets its request
-  // refused. Held for the whole recognition lifetime, including the auto-restart
-  // cycles, since those re-open the mic too.
-  releaseWebSpeechSession?.();
-  releaseWebSpeechSession = acquireAudioSession('play-and-record');
-  recognition.start();
-};
-
-export const stopWebSpeechCapture = () => {
-  webSpeechGeneration += 1;
-  webSpeechShouldListen = false;
-  clearTimeout(webSpeechRestartTimer);
-  webSpeechRestartTimer = null;
-  webSpeechRestartFailures = 0;
-  if (webSpeechRecognition) {
-    try { webSpeechRecognition.stop(); } catch { /* already stopped */ }
-    webSpeechRecognition = null;
-  }
-  releaseWebSpeechSession?.();
-  releaseWebSpeechSession = null;
-};
-
-export const isWebSpeechCapturing = () => webSpeechShouldListen;
+export const startWebSpeechCapture = (options = {}) => (
+  startSpeechRecognition(options, getCaptureOwnerGuard, sendText)
+);
 
 /**
  * Invalidate the widget that currently owns capture before its React cleanup
@@ -1358,7 +289,7 @@ export const isWebSpeechCapturing = () => webSpeechShouldListen;
  */
 export const disposeCaptureOwner = () => {
   captureOwnerGeneration += 1;
-  visionGeneration += 1;
+  invalidateVisionCapture();
 
   const activeRecorder = recorder;
   recorder = null;
@@ -1372,18 +303,6 @@ export const disposeCaptureOwner = () => {
   recorderSessionGeneration = null;
   try { activeRecorder?.stop(); } catch { /* already stopped */ }
 
-  const attempt = detachContinuousAttempt(continuousAttempt);
-  const releaseSession = releaseContinuousResources(attempt);
-  Promise.resolve(attempt?.context?.close?.()).catch(() => {});
-  releaseSession?.();
-
-  const recognition = webSpeechRecognition;
-  webSpeechRecognition = null;
-  webSpeechGeneration += 1;
-  webSpeechShouldListen = false;
-  clearTimeout(webSpeechRestartTimer);
-  webSpeechRestartTimer = null;
-  try { recognition?.stop(); } catch { /* already stopped */ }
-  releaseWebSpeechSession?.();
-  releaseWebSpeechSession = null;
+  disposeContinuousCapture();
+  disposeWebSpeechCapture();
 };

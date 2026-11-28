@@ -407,19 +407,22 @@ describe('Messages Routes', () => {
   });
 
   describe('POST /api/messages/drafts/generate', () => {
-    it('should generate a draft', async () => {
-      const account = { id: VALID_UUID, type: 'outlook', provider: 'playwright' };
-      const created = { id: DRAFT_UUID, generatedBy: 'ai', status: 'draft' };
-
-      messageAccounts.getAccount.mockResolvedValue(account);
-      messageDrafts.createDraft.mockResolvedValue(created);
-
+    it.each([
+      ['missing', {}],
+      ['empty', { replyToMessageId: '' }],
+    ])('rejects a generation request with an %s original message ID without side effects', async (_label, fields) => {
+      const emit = vi.fn();
+      app.set('io', recordingOperatorIo(emit));
       const response = await request(app)
         .post('/api/messages/drafts/generate')
-        .send({ accountId: VALID_UUID, context: 'meeting follow-up' });
+        .send({ accountId: VALID_UUID, ...fields });
 
-      expect(response.status).toBe(201);
-      expect(response.body.generatedBy).toBe('ai');
+      expect(response.status).toBe(400);
+      expect(messageAccounts.getAccount).not.toHaveBeenCalled();
+      expect(messageSync.getMessage).not.toHaveBeenCalled();
+      expect(generateReplyBody).not.toHaveBeenCalled();
+      expect(messageDrafts.createDraft).not.toHaveBeenCalled();
+      expect(emit).not.toHaveBeenCalledWith('messages:draft:created', expect.anything());
     });
 
     it('returns screening/setup failures without persisting or announcing a fake AI draft', async () => {
@@ -427,7 +430,7 @@ describe('Messages Routes', () => {
       app.set('io', recordingOperatorIo(emit));
       messageAccounts.getAccount.mockResolvedValue({ id: VALID_UUID, type: 'gmail' });
       messageSync.getMessage.mockResolvedValue({ id: 'message-example', bodyText: 'Example message.', from: { email: 'alice@example.com' } });
-      generateReplyBody.mockRejectedValue(new ServerError('Configure a local API provider in Models > LLMs > Abuse Guard.', { status: 422, code: 'untrusted-content-provider-unavailable' }));
+      generateReplyBody.mockRejectedValue(new ServerError('Configure a local API provider in Models → Abuse Guard.', { status: 422, code: 'untrusted-content-provider-unavailable' }));
       const response = await request(app).post('/api/messages/drafts/generate').send({ accountId: VALID_UUID, replyToMessageId: 'message-example' });
       expect(response.status).toBe(422);
       expect(response.body.code).toBe('untrusted-content-provider-unavailable');
@@ -478,12 +481,21 @@ describe('Messages Routes', () => {
       expect(messageDrafts.createDraft).not.toHaveBeenCalled();
     });
 
+    it('leaves standalone manual draft creation available', async () => {
+      messageAccounts.getAccount.mockResolvedValue({ id: VALID_UUID, type: 'gmail', provider: 'api' });
+      messageDrafts.createDraft.mockImplementation(async (draft) => ({ id: DRAFT_UUID, ...draft }));
+      const response = await request(app).post('/api/messages/drafts').send({ accountId: VALID_UUID, body: 'Manual note' });
+      expect(response.status).toBe(201);
+      expect(response.body.body).toBe('Manual note');
+      expect(response.body.generatedBy).toBe('manual');
+    });
+
     it('should return 404 if account not found', async () => {
       messageAccounts.getAccount.mockResolvedValue(null);
 
       const response = await request(app)
         .post('/api/messages/drafts/generate')
-        .send({ accountId: VALID_UUID });
+        .send({ accountId: VALID_UUID, replyToMessageId: 'message-example' });
 
       expect(response.status).toBe(404);
       expect(response.body.error).toBe('Account not found');
@@ -492,6 +504,8 @@ describe('Messages Routes', () => {
 
   describe('PUT /api/messages/drafts/:id', () => {
     it('should update a draft', async () => {
+      const emit = vi.fn();
+      app.set('io', recordingOperatorIo(emit));
       const updated = { id: DRAFT_UUID, subject: 'Updated', status: 'draft' };
       messageDrafts.updateDraft.mockResolvedValue(updated);
 
@@ -501,9 +515,13 @@ describe('Messages Routes', () => {
 
       expect(response.status).toBe(200);
       expect(messageDrafts.updateDraft.mock.calls[0][0]).toBe(DRAFT_UUID);
+      expect(emit).toHaveBeenCalledTimes(1);
+      expect(emit).toHaveBeenCalledWith('messages:changed', {});
     });
 
     it('should return 404 if draft not found', async () => {
+      const emit = vi.fn();
+      app.set('io', recordingOperatorIo(emit));
       messageDrafts.updateDraft.mockResolvedValue(null);
 
       const response = await request(app)
@@ -512,11 +530,14 @@ describe('Messages Routes', () => {
 
       expect(response.status).toBe(404);
       expect(response.body.error).toBe('Draft not found');
+      expect(emit).not.toHaveBeenCalledWith('messages:changed', expect.anything());
     });
   });
 
   describe('POST /api/messages/drafts/:id/approve', () => {
     it('should approve a draft', async () => {
+      const emit = vi.fn();
+      app.set('io', recordingOperatorIo(emit));
       const approved = { id: DRAFT_UUID, status: 'approved' };
       messageDrafts.approveDraft.mockResolvedValue(approved);
 
@@ -524,14 +545,19 @@ describe('Messages Routes', () => {
 
       expect(response.status).toBe(200);
       expect(messageDrafts.approveDraft.mock.calls[0][0]).toBe(DRAFT_UUID);
+      expect(emit).toHaveBeenCalledTimes(1);
+      expect(emit).toHaveBeenCalledWith('messages:changed', {});
     });
 
     it('should return 404 if draft not found', async () => {
+      const emit = vi.fn();
+      app.set('io', recordingOperatorIo(emit));
       messageDrafts.approveDraft.mockResolvedValue(null);
 
       const response = await request(app).post(`/api/messages/drafts/${DRAFT_UUID_2}/approve`);
 
       expect(response.status).toBe(404);
+      expect(emit).not.toHaveBeenCalledWith('messages:changed', expect.anything());
     });
   });
 
@@ -593,29 +619,39 @@ describe('Messages Routes', () => {
     ['put', '', 'updateDraft'],
     ['post', '/send', 'sendDraft']
   ])('returns the conflict envelope from %s drafts/:id%s', async (method, suffix, service) => {
+    const emit = vi.fn();
+    app.set('io', recordingOperatorIo(emit));
     const owner = service === 'sendDraft' ? messageSender : messageDrafts;
     owner[service].mockRejectedValueOnce(new ServerError('Draft state conflict', { status: 409, code: 'DRAFT_STATE_CONFLICT' }));
     const response = await request(app)[method](`/api/messages/drafts/${DRAFT_UUID}${suffix}`).send({});
     expect(response.status).toBe(409);
     expect(response.body).toMatchObject({ error: 'Draft state conflict', code: 'DRAFT_STATE_CONFLICT' });
+    expect(emit).not.toHaveBeenCalledWith('messages:changed', expect.anything());
   });
 
   describe('DELETE /api/messages/drafts/:id', () => {
     it('should delete a draft', async () => {
+      const emit = vi.fn();
+      app.set('io', recordingOperatorIo(emit));
       messageDrafts.deleteDraft.mockResolvedValue(true);
 
       const response = await request(app).delete(`/api/messages/drafts/${DRAFT_UUID}`);
 
       expect(response.status).toBe(204);
       expect(messageDrafts.deleteDraft.mock.calls[0][0]).toBe(DRAFT_UUID);
+      expect(emit).toHaveBeenCalledTimes(1);
+      expect(emit).toHaveBeenCalledWith('messages:changed', {});
     });
 
     it('should return 404 if draft not found', async () => {
+      const emit = vi.fn();
+      app.set('io', recordingOperatorIo(emit));
       messageDrafts.deleteDraft.mockResolvedValue(false);
 
       const response = await request(app).delete(`/api/messages/drafts/${DRAFT_UUID_2}`);
 
       expect(response.status).toBe(404);
+      expect(emit).not.toHaveBeenCalledWith('messages:changed', expect.anything());
     });
   });
 
@@ -796,16 +832,29 @@ describe('Messages Routes', () => {
   });
 
   describe('PUT /api/messages/selectors/:provider', () => {
-    it('should update selectors for a valid provider', async () => {
-      const updated = { inbox: '.new-inbox' };
+    it('updates selectors and accepts a localized pattern and a blank reset', async () => {
+      const updated = { inbox: '.new-inbox', sendAckPattern: '^Nachricht gesendet$', sendRefusalPattern: '' };
       messagePlaywrightSync.updateSelectors.mockResolvedValue(updated);
 
       const response = await request(app)
         .put('/api/messages/selectors/outlook')
-        .send({ selectors: { inbox: '.new-inbox' } });
+        .send({ selectors: updated });
 
       expect(response.status).toBe(200);
-      expect(messagePlaywrightSync.updateSelectors).toHaveBeenCalledWith('outlook', { inbox: '.new-inbox' });
+      expect(messagePlaywrightSync.updateSelectors).toHaveBeenCalledWith('outlook', updated);
+    });
+
+    it.each(['sendAckPattern', 'sendRefusalPattern'])('rejects an invalid %s without updating selectors', async key => {
+      const response = await request(app)
+        .put('/api/messages/selectors/outlook')
+        .send({ selectors: { [key]: '(unclosed' } });
+
+      expect(response.status).toBe(400);
+      expect(response.body.context.details).toContainEqual({
+        path: `selectors.${key}`,
+        message: 'Enter a valid regular expression.',
+      });
+      expect(messagePlaywrightSync.updateSelectors).not.toHaveBeenCalled();
     });
 
     it('should return 400 for invalid provider', async () => {

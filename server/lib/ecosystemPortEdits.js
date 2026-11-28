@@ -571,23 +571,14 @@ export function discoverEcosystemConfig(content, { currentUsername = defaultUser
 
 /** All edits are planned against the original source. A failed attribution or
  * overlapping/shared source leaves the entire input byte-identical. */
-export function planEcosystemPortEdits(content, remap = [], edits = []) {
-  const pairs = [...(remap || [])].filter(([oldPort, newPort]) => oldPort !== newPort);
+export function planEcosystemPortEdits(content, edits = []) {
   const requested = (edits || []).filter(edit => edit.oldPort !== edit.newPort);
-  const failed = () => ({ content, applied: [], unapplied: requested, remapApplied: false });
-  if (!pairs.length && !requested.length) return { ...failed(), unapplied: [] };
+  const failed = () => ({ content, applied: [], unapplied: requested });
+  if (!requested.length) return failed();
   const processes = analyzeEcosystemPorts(content);
   if (!processes) return failed();
-  const expanded = [...requested];
-  for (const [oldPort, newPort] of pairs) {
-    const matches = processes.flatMap(proc => Object.entries(proc.ports).filter(([, value]) => value === oldPort)
-      .map(([label]) => ({ processName: proc.name, label, oldPort, newPort })));
-    // Legacy value remaps have no process identity. Multiple owners are ambiguous.
-    if (matches.length !== 1) return failed();
-    expanded.push(...matches);
-  }
   const replacements = new Map();
-  for (const edit of expanded) {
+  for (const edit of requested) {
     const proc = processes.find(proc => proc.name === edit.processName);
     const label = edit.label === 'ui' && proc?.ports.ui === undefined && proc?.usesVite ? 'devUi' : edit.label;
     if (!proc || proc.ports[label] !== edit.oldPort || !isPort(edit.newPort)) return failed();
@@ -602,7 +593,7 @@ export function planEcosystemPortEdits(content, remap = [], edits = []) {
       for (const other of processes) {
         for (const [otherLabel, otherSources] of other.sources) {
           if (!otherSources.some(item => item?.start === source.start && item?.end === source.end)) continue;
-          if (!expanded.some(item => item.processName === other.name &&
+          if (!requested.some(item => item.processName === other.name &&
               (item.label === otherLabel || item.label === 'ui' && otherLabel === 'devUi' && other.usesVite) && item.newPort === edit.newPort)) return failed();
         }
       }
@@ -616,5 +607,5 @@ export function planEcosystemPortEdits(content, remap = [], edits = []) {
     updated = updated.slice(0, span.start) + span.text + updated.slice(span.end);
     boundary = span.start;
   }
-  return { content: updated, applied: requested, unapplied: [], remapApplied: pairs.length > 0 };
+  return { content: updated, applied: requested, unapplied: [] };
 }

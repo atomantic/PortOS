@@ -12,15 +12,12 @@ import { isValidAnnotationKey as isValidKey } from '../lib/mediaItemKey.js';
 import { getInstanceId, UNKNOWN_INSTANCE_ID } from './instanceIdentity.js';
 import { resolveLocalAuthorName } from './sharing/annotationIdentity.js';
 import { codedError } from '../lib/codedError.js';
+import { NOTE_MAX_LENGTH, MEDIA_RATINGS } from '../lib/mediaAnnotationConstraints.js';
+export { NOTE_MAX_LENGTH, MEDIA_RATINGS } from '../lib/mediaAnnotationConstraints.js';
 
 const STATE_PATH = join(PATHS.data, 'media-annotations.json');
 
 export const ERR_VALIDATION = 'VALIDATION_ERROR';
-
-export const NOTE_MAX_LENGTH = 2000;
-// Good = keep it for its use; bad = a garbage file worth deleting. Absent =
-// unrated. "Rejected" (wrong for one shot) belongs to music video takes only.
-export const MEDIA_RATINGS = Object.freeze(['good', 'bad']);
 
 const DEFAULT_STATE = { annotations: {} };
 const queueWrite = createFileWriteQueue();
@@ -233,8 +230,6 @@ export async function mergePeerAnnotations(payload) {
     return { changed, projections };
   });
 }
-
-
 
 /**
  * Partial merge with prune-on-empty — writes the local-instance author entry.

@@ -7,6 +7,9 @@ const auth = vi.hoisted(() => ({ enabled: false, session: false }));
 vi.mock('../services/auth.js', () => ({
   isAuthEnabled: vi.fn(async () => auth.enabled),
   verifyRequestSession: vi.fn(async () => auth.session),
+  verifyRequestSessionIdentity: vi.fn(async () => auth.session
+    ? { kind: 'session', sessionId: 'example-session', label: null }
+    : null),
   verifyPassword: vi.fn(async () => true),
 }));
 vi.mock('../services/settings.js', () => ({
@@ -16,7 +19,7 @@ vi.mock('../services/settings.js', () => ({
 vi.mock('../services/voice/config.js', () => ({
   getVoiceConfig: vi.fn(async () => ({
     enabled: true,
-    llm: { model: 'test-model', usePersonality: false, systemPrompt: 'sys',
+    llm: { provider: 'example-cli', model: 'test-model', usePersonality: false, systemPrompt: 'sys',
       tools: { enabled: true, maxIterations: 1 }, codeAgent: { enabled: true } },
   })),
 }));
@@ -36,9 +39,20 @@ vi.mock('../services/provider/providers.js', () => ({
   getActiveProvider: vi.fn(async () => ({ id: 'example-cli', type: 'cli', enabled: true })),
   getProviderById: vi.fn(), getAllProviders: vi.fn(),
 }));
+vi.mock('../services/visionCli.js', () => ({ describeImageViaCli: vi.fn() }));
 vi.mock('../services/brain.js', () => ({
-  captureThought: vi.fn(async () => ({ inboxLog: { id: 'example-inbox' } })),
-  getInboxLog: vi.fn(async () => []),
+  captureThought: vi.fn(async () => ({ inboxLog: { id: 'example-inbox' } }))
+}));
+vi.mock('../services/brainStorage.js', async (importOriginal) => ({
+  ...await importOriginal(),
+  getInboxLog: vi.fn(async () => [])
+}));
+vi.mock('../services/apps.js', () => ({
+  getActiveApps: vi.fn(async () => [{ id: 'example-app', name: 'Example App' }]),
+}));
+vi.mock('../services/workspaceContext.js', () => ({
+  snapshotOnRepoSwitch: vi.fn(async () => ({ appId: 'previous-app' })),
+  restoreContext: vi.fn(async () => ({ saved: true, restorable: { shellSessions: [] } })),
 }));
 vi.mock('../services/imageGen/index.js', async () => ({
   ...await vi.importActual('../lib/generationModes.js'),
@@ -82,6 +96,9 @@ import { restartApp } from '../services/pm2.js';
 import { addTask } from '../services/cos/cosTaskStore.js';
 import { captureThought } from '../services/brain.js';
 import { generateImage } from '../services/imageGen/index.js';
+import { snapshotOnRepoSwitch } from '../services/workspaceContext.js';
+import { getProviderById } from '../services/provider/providers.js';
+import { describeImageViaCli } from '../services/visionCli.js';
 
 const runner = {
   createRun: vi.fn(), executeCliRun: vi.fn(), executeTuiRun: vi.fn(), executeApiRun: vi.fn(),
@@ -98,10 +115,11 @@ const runBody = { providerId: 'example-provider', prompt: 'Fix the example test'
 const hostTools = [
   ['pm2_restart', { name: 'example-api' }, restartApp],
   ['dispatch_code_agent', { task: 'Fix the example test' }, addTask],
-  // HTTP twins are gated whole-operation: POST /api/brain/capture (#11036)
-  // and POST /api/image-gen/generate (#9667).
+  // HTTP twins are gated whole-operation: POST /api/brain/capture (#11036),
+  // POST /api/image-gen/generate (#9667), and POST /api/workspace-contexts/:appId/*.
   ['brain_capture', { text: 'https://github.com/example/example-repo' }, captureThought],
   ['image_generate', { prompt: 'An example lighthouse at dusk' }, generateImage],
+  ['workspace_switch', { workspace: 'Example App' }, snapshotOnRepoSwitch],
 ];
 const expectNoHostEffects = () => {
   for (const [, , effect] of hostTools) expect(effect).not.toHaveBeenCalled();
@@ -215,5 +233,38 @@ describe.each(['voice:text', 'voice:turn', 'voice:call:audio'])('%s tool authori
     expect(streamChat).toHaveBeenCalled();
     expect(socket.emit).not.toHaveBeenCalledWith('voice:error', expect.objectContaining({ code: 'HOST_CONTROL_FORBIDDEN' }));
     expect(socket.emit).toHaveBeenCalledWith('voice:tool', expect.objectContaining({ name: 'pm2_status' }));
+  });
+});
+
+describe('voice screenshot description authority', () => {
+  it.each([
+    { caller: 'remote password-free', address: '192.0.2.10', enabled: false, allowed: false },
+    { caller: 'local password-free', address: '127.0.0.1', enabled: false, allowed: true },
+    { caller: 'verified operator session', address: '192.0.2.10', enabled: true, allowed: true },
+  ])('requires host control for CLI vision ($caller)', async ({ address, enabled, allowed }) => {
+    auth.enabled = enabled;
+    auth.session = enabled;
+    getProviderById.mockResolvedValue({ id: 'example-cli', type: 'cli', defaultModel: 'example-vision' });
+    describeImageViaCli.mockResolvedValue({ text: 'An example chart.' });
+    streamChat.mockResolvedValue(responseFor('ui_describe_visually', { question: 'What is on the chart?' }));
+    const socket = await socketFor(address);
+    socket.emit.mockImplementation((event, payload) => {
+      if (event === 'voice:screenshot:request') {
+        socket.fire('voice:screenshot:result', { requestId: payload.requestId, dataUrl: 'data:image/png;base64,Zm9v' });
+      }
+    });
+
+    await socket.fire('voice:text', { text: 'Describe this chart' });
+
+    expect(describeImageViaCli).toHaveBeenCalledTimes(allowed ? 1 : 0);
+    if (allowed) {
+      expect(socket.emit).toHaveBeenCalledWith('voice:tool', expect.objectContaining({
+        name: 'ui_describe_visually', result: expect.objectContaining({ ok: true, content: 'An example chart.' }),
+      }));
+    } else {
+      expect(socket.emit).toHaveBeenCalledWith('voice:error', expect.objectContaining({
+        stage: 'tool', code: 'HOST_CONTROL_FORBIDDEN',
+      }));
+    }
   });
 });

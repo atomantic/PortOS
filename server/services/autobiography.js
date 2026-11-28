@@ -30,6 +30,8 @@ import {
 import { addNotification, NOTIFICATION_TYPES, PRIORITY_LEVELS } from './notifications.js';
 import { getActiveProvider, getProviderById } from './provider/providers.js';
 import { callProviderAISimple, parseLLMJSON } from './aiProvider.js';
+import { CUSTOM_PROMPT_ID } from '../lib/autobiographyValidation.js';
+export { CUSTOM_PROMPT_ID } from '../lib/autobiographyValidation.js';
 
 // Tiny pub/sub, mirroring meatspacePost.js's postConfigEvents: the reminder
 // scheduler subscribes so ANY caller of updateConfig() reschedules the cron for
@@ -40,11 +42,6 @@ export const autobiographyConfigEvents = new EventEmitter();
 // a short menu is an invitation, and the user picks whichever memory is
 // actually live for them today.
 export const PROMPT_SUGGESTION_COUNT = 3;
-
-// The promptId stories written against the user's own question carry. Not a
-// bank id, so getPromptById() returns null for it and the story's own
-// promptText is the only question of record.
-export const CUSTOM_PROMPT_ID = 'custom';
 
 const DATA_DIR = join(PATHS.digitalTwin, 'autobiography');
 const STORIES_FILE = join(DATA_DIR, 'stories.json');

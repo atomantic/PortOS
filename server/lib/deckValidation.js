@@ -122,3 +122,11 @@ export const deckRenderSchema = z.object({
   model: z.string().trim().max(200).optional(),
   seed: z.number().int().min(0).optional(),
 }).strict();
+
+// Ids are UUIDs minted by the service; validating up front turns a malformed
+// id into a 400 instead of a Postgres cast error surfacing as a 500.
+export const deckParams = z.object({ id: z.uuid() });
+
+export const cardParams = deckParams.extend({ cardId: z.uuid() });
+
+export const sampleParams = deckParams.extend({ sampleId: z.string().trim().min(1).max(200) });

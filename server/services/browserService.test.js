@@ -676,12 +676,21 @@ describe('navigateToUrlPinned tab ownership (closeAfterRead)', () => {
   // Minimal CDP: PUT /json/new hands out a blank tab, /json/close/<id> is
   // recorded, and the socket answers Page.navigate with a frameId + a pinned
   // main-frame Document response, then Runtime.evaluate with `evalValue`.
-  async function startFakeCdp({ evalValue = null, remoteIPAddress = '93.184.216.34', navigateError = null } = {}) {
+  async function startFakeCdp({ evalValue = null, remoteIPAddress = '93.184.216.34', navigateError = null, status = 200, createTargetError = false } = {}) {
+    const contextCommands = [];
     const opened = [];
     const closed = [];
+    const navigations = [];
     let port = 0;
     const server = createServer((req, res) => {
       const path = req.url || '';
+      if (path === '/json/version' || path === '/json/list') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify(path === '/json/version'
+          ? { webSocketDebuggerUrl: `ws://127.0.0.1:${port}/devtools/browser/example` }
+          : [{ id: 'private-tab', webSocketDebuggerUrl: `ws://127.0.0.1:${port}/devtools/page/private-tab` }]));
+        return;
+      }
       if (req.method === 'PUT' && path.startsWith('/json/new')) {
         const id = `tab-${opened.length + 1}`;
         opened.push(id);
@@ -699,10 +708,25 @@ describe('navigateToUrlPinned tab ownership (closeAfterRead)', () => {
       res.end('');
     });
     const wss = new WebSocketServer({ server });
-    wss.on('connection', (ws) => {
+    wss.on('connection', (ws, req) => {
       ws.on('message', (raw) => {
         const msg = JSON.parse(raw.toString());
+        if (req.url.startsWith('/devtools/browser/')) {
+          contextCommands.push([msg.method, msg.params]);
+          if (msg.method === 'Target.createTarget' && createTargetError) {
+            ws.send(JSON.stringify({ id: msg.id, error: { message: 'target unavailable' } }));
+            return;
+          }
+          const result = {
+            'Target.createBrowserContext': { browserContextId: 'private-context' },
+            'Target.createTarget': { targetId: 'private-tab' },
+            'Target.disposeBrowserContext': {},
+          }[msg.method];
+          ws.send(JSON.stringify({ id: msg.id, result }));
+          return;
+        }
         if (msg.method === 'Page.navigate') {
+          navigations.push(msg.params.url);
           if (navigateError) {
             ws.send(JSON.stringify({ id: msg.id, error: { message: navigateError } }));
             return;
@@ -715,7 +739,7 @@ describe('navigateToUrlPinned tab ownership (closeAfterRead)', () => {
           }));
           ws.send(JSON.stringify({
             method: 'Network.responseReceived',
-            params: { requestId: 'R1', loaderId: 'R1', frameId: 'F1', type: 'Document', response: { url, remoteIPAddress, status: 200 } },
+            params: { requestId: 'R1', loaderId: 'R1', frameId: 'F1', type: 'Document', response: { url, remoteIPAddress, status } },
           }));
           return;
         }
@@ -732,6 +756,8 @@ describe('navigateToUrlPinned tab ownership (closeAfterRead)', () => {
       port,
       opened,
       closed,
+      navigations,
+      contextCommands,
       stop: () => new Promise((resolve) => { wss.close(() => server.close(resolve)); }),
     };
   }
@@ -771,6 +797,28 @@ describe('navigateToUrlPinned tab ownership (closeAfterRead)', () => {
     }
   });
 
+  it.each(['success', 'pin refusal', 'target setup failure'])('disposes the off-the-record context after %s', async (outcome) => {
+    fake = await startFakeCdp({ evalValue: 'read-body', createTargetError: outcome === 'target setup failure' });
+    const service = await importServicePointedAtFake();
+    const url = 'https://example.com/search?name=Sample+Person&city=Example';
+    const navigation = service.navigateToUrlPinned(url, {
+      disposableContext: true,
+      verifyRemoteIp: () => outcome !== 'pin refusal',
+      evaluateExpression: 'document.body.innerText',
+    });
+    if (outcome === 'success') await expect(navigation).resolves.toMatchObject({ id: 'private-tab', evalResult: 'read-body' });
+    else await expect(navigation).rejects.toThrow(outcome === 'pin refusal' ? 'refusing to ingest' : 'CDP Target.createTarget failed');
+
+    expect(fake.opened).toEqual([]);
+    expect(fake.closed).toEqual([]);
+    expect(fake.navigations).toEqual(outcome === 'target setup failure' ? [] : [url]);
+    expect(fake.contextCommands).toEqual([
+      ['Target.createBrowserContext', { disposeOnDetach: true }],
+      ['Target.createTarget', { url: 'about:blank', browserContextId: 'private-context', hidden: true, background: true }],
+      ['Target.disposeBrowserContext', { browserContextId: 'private-context' }],
+    ]);
+  });
+
   it('does not promote CDP error payloads into thrown errors and closes the failed tab', async () => {
     const url = 'https://example.com/private-record?token=example-secret#private-fragment';
     fake = await startFakeCdp({ navigateError: `Cannot navigate to ${url}` });
@@ -780,14 +828,27 @@ describe('navigateToUrlPinned tab ownership (closeAfterRead)', () => {
     expect(fake.closed).toEqual(['tab-1']);
   });
 
+  it('closes the blank tab without handing off its URL when dispatch is refused', async () => {
+    fake = await startFakeCdp();
+    const service = await importServicePointedAtFake();
+    const refused = new Error('dispatch refused');
+    await expect(service.navigateToUrlPinned('https://example.com/search', {
+      verifyRemoteIp: () => true,
+      dispatchRequest: async () => { throw refused; },
+    })).rejects.toBe(refused);
+    expect(fake.navigations).toEqual([]);
+    expect(fake.closed).toEqual(['tab-1']);
+  });
+
   it('tears down the tab it read from when evaluateExpression was supplied', async () => {
-    fake = await startFakeCdp({ evalValue: 'read-body' });
+    fake = await startFakeCdp({ evalValue: 'read-body', status: 503 });
     const service = await importServicePointedAtFake();
     const page = await service.navigateToUrlPinned('https://ex.com/a', {
       verifyRemoteIp: () => true,
       evaluateExpression: 'document.body.innerText',
     });
     expect(page.evalResult).toBe('read-body');
+    expect(page.responseStatus).toBe(503);
     expect(fake.closed).toEqual(fake.opened);
   });
 
@@ -822,6 +883,58 @@ describe('navigateToUrlPinned tab ownership (closeAfterRead)', () => {
       evaluateExpression: 'document.body.innerText',
     })).rejects.toThrow(/refusing to ingest/);
     expect(fake.closed).toEqual(fake.opened);
+  });
+
+  it('fails closed promptly when the CDP websocket closes mid-navigation or evaluation', async () => {
+    let port = 0;
+    const closedTabs = [];
+    const server = createServer((req, res) => {
+      const path = req.url || '';
+      if (req.method === 'PUT' && path.startsWith('/json/new')) {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ id: 'tab-close', webSocketDebuggerUrl: `ws://127.0.0.1:${port}/devtools/page/tab-close` }));
+        return;
+      }
+      if (path.startsWith('/json/close/')) {
+        closedTabs.push(decodeURIComponent(path.slice('/json/close/'.length)));
+        res.writeHead(200, { 'content-type': 'text/plain' });
+        res.end('ok');
+        return;
+      }
+      res.writeHead(404);
+      res.end('');
+    });
+    const wss = new WebSocketServer({ server });
+    wss.on('connection', (ws) => {
+      ws.on('message', () => ws.close());
+    });
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    port = server.address().port;
+    fake = { port, stop: () => new Promise((resolve) => { wss.close(() => server.close(resolve)); }) };
+
+    const service = await importServicePointedAtFake();
+    const start = Date.now();
+    await expect(service.navigateToUrlPinned('https://ex.com/a', {
+      verifyRemoteIp: () => true,
+      navigateTimeoutMs: 5000,
+    })).rejects.toThrow(/CDP websocket closed during navigation/);
+    expect(Date.now() - start).toBeLessThan(2000);
+    expect(closedTabs).toEqual(['tab-close']);
+
+    const evalStart = Date.now();
+    const result = await service.evaluateOnPage(
+      { webSocketDebuggerUrl: `ws://127.0.0.1:${port}/devtools/page/tab-close` },
+      'document.title',
+      { timeout: 5000 },
+    );
+    expect(result).toBeNull();
+    expect(Date.now() - evalStart).toBeLessThan(2000);
+
+    const session = await service.openCdpSession(`ws://127.0.0.1:${port}/devtools/page/tab-close`, { commandTimeoutMs: 5000 });
+    const sendStart = Date.now();
+    await expect(session.send('Runtime.evaluate', { expression: '1' })).rejects.toThrow(/CDP session closed/);
+    expect(Date.now() - sendStart).toBeLessThan(2000);
+    session.close();
   });
 });
 

@@ -71,7 +71,7 @@ vi.mock('../services/agent/agentDrafts.js', () => ({
 // The AI Assignments facade reads unrelated catalogs after writing. Keep its
 // real socialAgent writer while excluding other features and provider calls.
 vi.mock('../services/provider/providers.js', () => ({ getSelectableProviders: async () => ({ providers: [] }) }));
-vi.mock('../services/brain.js', () => ({ loadMeta: async () => null }));
+vi.mock('../services/brainStorage.js', async (importOriginal) => ({ ...await importOriginal(), loadMeta: async () => null }));
 vi.mock('../services/universeBuilder.js', () => ({ listUniverses: async () => [] }));
 vi.mock('../services/storyBuilder.js', () => ({ listStorySessions: async () => [] }));
 vi.mock('../services/pipeline/series.js', () => ({ listSeries: async () => [] }));
@@ -254,6 +254,10 @@ describe('Moltbook publication behind the default-deny gate (#16114)', () => {
     for (const path of ['/schedules/example-schedule', '/personalities/example-agent']) {
       expect((await call(app, ['delete', path, {}])).status).toBe(200);
     }
+    const [agentsFile, schedulesFile] = await savedState();
+    expect(Object.keys(JSON.parse(agentsFile).agents)).toEqual(['other-agent']);
+    expect(JSON.parse(schedulesFile).schedules).toEqual({});
+
     for (const fn of [effects.createPost, effects.createComment, effects.replyToComment, effects.upvote, effects.upvoteComment]) {
       expect(fn).not.toHaveBeenCalled();
     }

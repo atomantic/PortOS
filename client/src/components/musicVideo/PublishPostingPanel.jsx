@@ -72,8 +72,8 @@ function verticalCutChoices(project) {
     .map((e) => ({ id: e.id, layout: 'native', stale: e.dependencyState?.status !== 'current', label: `Social cut ${fmtSec(e.startSec ?? 0)}-${fmtSec(e.endSec ?? 0)}` }));
   const crop = (kit.exports || []).find((e) => e.kind === 'vertical-9x16' && e.filename);
   if (crop && (kit.master?.renderHistoryId ?? null) === (project?.renderHistoryId ?? null)) {
-    const layout = ['native', 'crop'].includes(crop.layout) ? crop.layout : 'fit';
-    const layoutLabel = layout === 'crop' ? 'custom crop' : layout;
+    const layout = ['native', 'crop', 'framed'].includes(crop.layout) ? crop.layout : 'fit';
+    const layoutLabel = layout === 'crop' ? 'custom crop' : layout === 'framed' ? 'framed 16:9' : layout;
     cuts.unshift({ id: 'kit-vertical', layout, stale: false, fitReason: crop.fitReason, startSec: crop.startSec ?? 0, endSec: crop.endSec ?? 0,
       label: `Kit vertical (${layoutLabel}) ${fmtSec(crop.startSec ?? 0)}-${fmtSec(crop.endSec ?? 0)}` });
   }

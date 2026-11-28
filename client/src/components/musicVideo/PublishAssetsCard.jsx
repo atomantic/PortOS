@@ -4,6 +4,7 @@ import { Package, Download, Copy, Captions, ListOrdered } from 'lucide-react';
 import { copyToClipboard } from '../../lib/clipboard.js';
 import PublishCard from './PublishCard.jsx';
 import PublishCropPreview from './PublishCropPreview.jsx';
+import PublishVerticalPreview from './PublishVerticalPreview.jsx';
 import VideoUpscaleDrawer from '../media/VideoUpscaleDrawer.jsx';
 import MediaJobsQueue from '../media/MediaJobsQueue.jsx';
 import { formatLoudness } from '../../utils/formatters.js';
@@ -92,17 +93,29 @@ export default function PublishAssetsCard({ project, publishKit }) {
           </div>
         )}>
         {!canBuild && <p className="text-xs text-port-text-muted">Render the final video first. The kit is made from it.</p>}
-        {(publishKit.canCrop || crop) && (
+        {(publishKit.canCrop || crop || publishKit.verticalMode === 'framed') && (
           <div className="space-y-2">
             <label className="flex flex-wrap items-center gap-2 text-xs">
               Vertical 9:16 layout
-              <select value={crop ? 'crop' : 'auto'} disabled={publishKit.building}
-                onChange={event => publishKit.setCropMode(event.target.value === 'crop')}
+              <select value={publishKit.verticalMode || (crop ? 'crop' : 'auto')} disabled={publishKit.building}
+                onChange={event => (publishKit.setVerticalMode ? publishKit.setVerticalMode(event.target.value) : publishKit.setCropMode(event.target.value === 'crop'))}
                 className="rounded border border-port-border bg-port-bg px-2 py-1.5 min-h-11 pointer-fine:sm:min-h-0">
                 <option value="auto">Automatic (native or fit)</option>
+                <option value="framed">Framed 16:9 (TikTok header + footer)</option>
                 <option value="crop">Crop from master</option>
               </select>
             </label>
+            {publishKit.verticalMode === 'framed' && publishKit.verticalFrame && (
+              <PublishVerticalPreview
+                key={`${project?.id || ''}:${project?.renderHistoryId || ''}`}
+                project={project}
+                span={publishKit.verticalSpan || 'full'}
+                frame={publishKit.verticalFrame}
+                onSpanChange={publishKit.setVerticalSpan}
+                onFrameChange={publishKit.updateVerticalFrame}
+                disabled={publishKit.building}
+              />
+            )}
             {crop && publishKit.cropBlockedReason && <p role="status" className="text-xs text-port-text-muted">{publishKit.cropBlockedReason}</p>}
             {crop && !crop.pending && (crop.error || crop.preview?.renderHistoryId !== project.renderHistoryId) && (
               <button type="button" onClick={publishKit.refreshCropPreview}
@@ -113,6 +126,7 @@ export default function PublishAssetsCard({ project, publishKit }) {
             {crop?.preview && !crop.error && crop.preview.renderHistoryId === project.renderHistoryId && (
               <PublishCropPreview key={`${crop.preview.renderHistoryId}:${crop.preview.startSec}:${crop.preview.endSec}`}
                 preview={crop.preview} position={crop.position}
+                span={publishKit.verticalSpan || 'hook'} onSpanChange={publishKit.setVerticalSpan}
                 onPosition={publishKit.setCropPosition} onMediaState={publishKit.setCropMediaState} />
             )}
           </div>

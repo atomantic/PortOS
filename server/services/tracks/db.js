@@ -13,6 +13,7 @@ export const {
   pruneTombstoned: pruneTombstonedTracks,
 } = createLwwRecordDbBackend({
   kind: 'track',
+  clearOnLocalWrite: ['bundledByPeerId'],
   table: 'tracks',
   idPrefix: 'track-',
   labelColumn: 'title',

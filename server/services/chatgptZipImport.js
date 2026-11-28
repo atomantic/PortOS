@@ -154,7 +154,7 @@ const UNSAFE_MEMBER_WARNING = '⚠️ ChatGPT import: skipped a ZIP member with 
 // Resolves with the sniffed extension (or null when the magic bytes aren't
 // recognized — the caller then falls back to the friendly name / `.bin`).
 const streamAssetToFile = (entry, filePath, max, budget) => new Promise((resolve, reject) => {
-  const outPromise = createWriteStreamGuarded(filePath);
+  const outPromise = createWriteStreamGuarded(filePath, { mode: 0o600 });
   const head = [];
   let headLen = 0;
   let size = 0;
@@ -227,7 +227,7 @@ const streamAssetToFile = (entry, filePath, max, budget) => new Promise((resolve
  * at `/data/brain-imports/<assetId><ext>`.
  */
 export async function extractChatgptZip(zipPath, { assetDir = PATHS.brainImportAssets, maxTotalBytes, maxEntries, maxAssetBytes = 20 * 1024 ** 3 } = {}) {
-  await ensureDir(assetDir);
+  await ensureDir(assetDir, { mode: 0o700 });
 
   const assetBudget = createZipBudget({ maxTotalBytes: maxAssetBytes });
   const jsonBudget = createZipBudget({ maxTotalBytes, maxEntries });

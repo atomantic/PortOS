@@ -40,6 +40,8 @@ export const SECTION_FEATURE = new Map([
 
 export const PROVIDERS_PAGE_PATH = '/ai/presets';
 export const ABUSE_GUARD_PAGE_PATH = '/models/llms/abuse';
+export const CODE_REVIEWERS_PAGE_PATH = '/models/code-reviewers';
+export const EMBEDDINGS_PAGE_PATH = '/models/embeddings';
 
 const RAW_NAV_COMMANDS = [
   { id: 'nav.dashboard', path: '/', label: 'Dashboard', section: 'Main' },
@@ -586,6 +588,8 @@ export const getNavPageForPath = (pathname) => {
 
 export const PROVIDERS_PAGE_BREADCRUMB = getNavPageForPath(PROVIDERS_PAGE_PATH)?.breadcrumb ?? 'the Providers page';
 export const ABUSE_GUARD_PAGE_BREADCRUMB = getNavPageForPath(ABUSE_GUARD_PAGE_PATH)?.breadcrumb ?? 'the Abuse Guard page';
+export const CODE_REVIEWERS_PAGE_BREADCRUMB = getNavPageForPath(CODE_REVIEWERS_PAGE_PATH)?.breadcrumb ?? 'the Code Reviewers page';
+export const EMBEDDINGS_PAGE_BREADCRUMB = getNavPageForPath(EMBEDDINGS_PAGE_PATH)?.breadcrumb ?? 'the Embeddings page';
 
 // Expand the `{page}` token user-facing copy writes instead of a breadcrumb,
 // resolved from `runtime.manageUrl` (or any object carrying that field) via

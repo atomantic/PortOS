@@ -5,6 +5,7 @@ import { DISTROKID_REMEMBERED_OPTIONS } from '../../distrokidGenres.js';
 import { COVER_DESIGN_OPTIONS } from '../musicVideoCoverOverlay.js';
 import { CROSS_LINK_EDIT_TARGETS } from '../musicVideoCrossLinks.js';
 import { MUSIC_VIDEO_PUBLISH_TARGETS } from '../musicVideoValidation.js';
+import { VERTICAL_FRAME_THEME_IDS } from '../musicVideoVerticalFrame.js';
 import { videoHistoryIdSchema } from './shared.js';
 
 // #9281: publishing kit — per-platform copy edits, the copy draft request, the chosen thumbnail.
@@ -80,6 +81,16 @@ export const musicVideoPublishKitBuildSchema = z.object({
     endSec: z.number().finite().positive(),
     position: z.number().finite().min(0).max(1),
   }).strict().refine(({ startSec, endSec }) => endSec > startSec, { path: ['endSec'], message: 'Must be after the start time' }).optional(),
+  vertical: z.object({
+    mode: z.enum(['auto', 'crop', 'framed']).default('auto'),
+    span: z.enum(['hook', 'full']).default('hook'),
+    theme: z.enum(VERTICAL_FRAME_THEME_IDS).default('cinema-matte'),
+    title: z.string().max(120).optional(),
+    subtitle: z.string().max(160).optional(),
+    footerNote: z.string().max(120).optional(),
+    showLyrics: z.boolean().optional(),
+    showWaveform: z.boolean().optional(),
+  }).strict().optional(),
 }).strict();
 
 // Release cover art: a source (a kit thumbnail or a gallery image) composed

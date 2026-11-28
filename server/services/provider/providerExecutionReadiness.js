@@ -11,6 +11,7 @@
  * and lifecycle policy.
  */
 
+import { PROVIDERS_PAGE_BREADCRUMB } from '../../lib/navManifest.js';
 import { describeMissingPrerequisites, providerPrerequisites } from '../../lib/provider/providerPrerequisites.js';
 import { ensureProviderReady as ensureOllamaProviderReady, isOllamaProvider } from '../ollamaManager.js';
 import { ensureMtplxProviderReady, isMtplxProvider } from '../mtplxServerManager.js';
@@ -61,7 +62,7 @@ export async function ensureProviderReadyForExecution(provider) {
     const providerName = provider?.name || provider?.id || 'API provider';
     return {
       success: false,
-      error: `Authentication unavailable for ${providerName}: ${describeMissingPrerequisites(missingApiKey)}. Add it in Settings > AI Providers.`,
+      error: `Authentication unavailable for ${providerName}: ${describeMissingPrerequisites(missingApiKey)}. Add it in ${PROVIDERS_PAGE_BREADCRUMB}.`,
     };
   }
 

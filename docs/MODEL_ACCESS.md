@@ -10,7 +10,7 @@ of thirty.
 Entitlement is **not in the catalog response** — NVIDIA's entries carry `id`,
 `object`, `created` and `owned_by` and no pricing, tier or entitlement field — so
 PortOS cannot detect it. It is declared instead, per provider, in
-**Settings → AI Providers → Edit → Models → Model Access**.
+**Models → Providers → Edit → Models → Model Access**.
 
 ## Shipped model additions
 
@@ -31,7 +31,7 @@ keep that allowlist.
 | `deny` | Everything except models matching the pattern list. |
 
 Once set, the scope applies to **every model picker in PortOS** — provider cards,
-the Settings > AI assignment page, the AI Providers → Services catalog summaries, CoS agent
+the **Settings → AI Assignments** page, the **Models → AI Services** catalog summaries, CoS agent
 and task pickers, pipeline stage pickers, reviewer model selection — and to the
 **model comparison chart**, whose default pills and coverage list are built from
 the models your providers can dispatch.

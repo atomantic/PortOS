@@ -99,32 +99,41 @@ beforeEach(() => {
  * the SAME pinned session — the real function reads the DOM itself, so no
  * separate read is mocked. It owns the settle wait, so it ignores `settleMs`.
  */
-function pinnedNav({ finalUrl, hops, evalResult = null }) {
+function pinnedNav({ finalUrl, hops, evalResult = null, responseStatus = 200 }) {
   return async (url, { verifyRemoteIp } = {}) => {
     for (const ip of hops) {
       if (!verifyRemoteIp(ip)) {
         throw new Error(`refusing to ingest: Chrome connected to a disallowed address ${ip} for ${url}`);
       }
     }
-    return { id: 'p1', url: finalUrl || url, title: '', webSocketDebuggerUrl: 'ws://x', evalResult };
+    return { id: 'p1', url: finalUrl || url, title: '', webSocketDebuggerUrl: 'ws://x', evalResult, responseStatus };
   };
 }
 
 describe('fetchUrlMainText', () => {
-  it('navigates + reads main text, returning title + text + finalUrl', async () => {
-    const out = await fetchUrlMainText('https://ex.com/a', { settleMs: 0 });
-    expect(out).toEqual({ text: 'Body text here.', title: 'Article A', finalUrl: 'https://ex.com/a' });
+  it('navigates and returns the main text, title, final URL and HTTP status', async () => {
+    const dispatchRequest = start => start();
+    const out = await fetchUrlMainText('https://ex.com/a', { settleMs: 0, dispatchRequest });
+    expect(out).toEqual({ text: 'Body text here.', title: 'Article A', finalUrl: 'https://ex.com/a', status: 200 });
     // Navigated through the PINNED path with a remote-IP verifier predicate AND
     // the DOM-read expression (the read happens on the same pinned session).
     expect(browserService.navigateToUrlPinned).toHaveBeenCalledWith(
       'https://ex.com/a',
-      expect.objectContaining({ verifyRemoteIp: expect.any(Function), evaluateExpression: expect.any(String) }),
+      expect.objectContaining({ verifyRemoteIp: expect.any(Function), evaluateExpression: expect.any(String), dispatchRequest }),
     );
     // The read ran on that session, so the tab is scratch — every ingested URL
     // would otherwise leave one open in the user's browser. Passing
     // `evaluateExpression` IS the request for that teardown (#3365), so this
     // service must not close the tab itself; `navigateToUrlPinned` already did.
     expect(browserService.closeCdpPage).not.toHaveBeenCalled();
+  });
+
+  it('forwards off-the-record navigation only when requested', async () => {
+    await fetchUrlMainText('https://ex.com/a', { settleMs: 0 });
+    await fetchUrlMainText('https://ex.com/a', { settleMs: 0, disposableContext: true });
+
+    expect(browserService.navigateToUrlPinned.mock.calls.map(([, options]) => options.disposableContext))
+      .toEqual([undefined, true]);
   });
 
   it('throws when the page extracts no readable text', async () => {

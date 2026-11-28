@@ -39,6 +39,7 @@ export {
   // The Grok Build CLI/TUI predicate lives in the server leaf (#7339): the reviewer -> provider matcher table keys on it and a browser copy is the drift that table removes.
   isGrokBuildCli,
 } from '../../../server/lib/provider/providerTypes.js';
+export { familyForProvider } from '../../../server/lib/provider/providerFamilies.js';
 
 /**
  * Can a human launch this provider at a shell prompt? Only TUI has an interactive form (`cli` args are headless, `api` has no binary). `tuiCommandLine` is the server's own resolution of the launch

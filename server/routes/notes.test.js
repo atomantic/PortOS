@@ -32,6 +32,29 @@ beforeEach(() => {
   obsidian.updateNote.mockReset();
 });
 
+describe('GET /api/notes/vaults/:id/note backlinks query', () => {
+  it.each([
+    ['', true],
+    ['&backlinks=true', true],
+    ['&backlinks=false', false],
+  ])('handles query suffix %j with includeBacklinks=%s', async (suffix, includeBacklinks) => {
+    obsidian.getNote.mockResolvedValue({ path: 'a.md' });
+
+    const res = await request(app).get(`/api/notes/vaults/v1/note?path=a.md${suffix}`);
+
+    expect(res.status).toBe(200);
+    expect(obsidian.getNote).toHaveBeenCalledWith('v1', 'a.md', { includeBacklinks });
+  });
+
+  it.each(['0', 'no', 'true&backlinks=false'])('rejects backlinks query %s', async (query) => {
+    const res = await request(app).get(`/api/notes/vaults/v1/note?path=a.md&backlinks=${query}`);
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+    expect(obsidian.getNote).not.toHaveBeenCalled();
+  });
+});
+
 describe('GET /api/notes/vaults/:id/note error mapping', () => {
   it('maps NOTE_EVICTED to 503 with a retryable message', async () => {
     obsidian.getNote.mockResolvedValue({

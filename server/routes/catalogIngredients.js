@@ -9,6 +9,7 @@ import { projectToCanon } from '../services/catalog/catalogCanonProjection.js';
 import { withTransaction } from '../lib/db.js';
 import { changedMusicVideoDescriptionOverLimit, MUSIC_VIDEO_SUBJECT_DESCRIPTION_MAX } from '../lib/musicVideo/musicVideoSubjectLimits.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
+import { EMBEDDINGS_PAGE_BREADCRUMB } from '../lib/navManifest.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import {
   catalogIngredientCreateRouteSchema, catalogIngredientPatchSchema, catalogIngredientLinkSchema,
@@ -384,7 +385,7 @@ router.post('/embeddings/backfill', asyncHandler(async (req, res) => {
   // caller sees an actionable error instead of `failed: N`.
   const cfg = await getEmbeddingsConfig();
   if (cfg.provider === 'none') {
-    throw new ServerError('Embeddings are disabled. Choose a provider in Settings → Embeddings before backfilling.', {
+    throw new ServerError(`Embeddings are disabled. Choose a provider in ${EMBEDDINGS_PAGE_BREADCRUMB} before backfilling.`, {
       status: 400,
       code: 'EMBEDDINGS_DISABLED',
     });

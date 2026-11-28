@@ -36,11 +36,12 @@ import './services/creativeDirector/completionHook.js';
 import './services/serviceLoaders.js';
 import './services/localModelObservations.js';
 import { initSocket } from './services/socket.js';
+import { registerSessionRevocation } from './sessionRevocation.js';
 import { remoteDesktopBroker } from './services/remoteDesktop.js';
-import { revokeAllHostedSessions } from './services/fableLoom/hostedSession.js';
+import { revokeAllHostedSessions, revokeHostedSessionsByOwner } from './services/fableLoom/hostedSession.js';
 import { authEvents } from './services/auth.js';
 import { mountEidoverseOnServer } from './services/eidoverseHost.js';
-import { closeEidoverseProxySockets } from './services/eidoverseProxy.js';
+import { closeEidoverseProxySockets, closeEidoverseProxySocketsForSessions } from './services/eidoverseProxy.js';
 import { bootstrapServices, runBootSequence, registerShutdownHandlers } from './services/bootstrap.js';
 import { syncLocalProviderModels } from './services/localLlm.js';
 import { errorMiddleware } from './lib/errorHandler.js';
@@ -256,19 +257,18 @@ const io = new Server(httpServer, {
 // request input. Mount the HTTPS server and its optional loopback HTTP mirror.
 remoteDesktopBroker.mountWebSocket(httpServer);
 remoteDesktopBroker.mountWebSocket(localHttpServer);
-// Viewer tokens obey the same revocation contract as every other session credential.
-authEvents.on('sessions:revoked-all', () => remoteDesktopBroker.revokeAll('PortOS sessions revoked'));
-authEvents.on('sessions:revoked-all', () => {
-  try {
-    revokeAllHostedSessions({ io });
-  } catch (err) {
-    console.error(`❌ FableLoom hosted-session revocation failed: ${err.message}`);
-  }
+registerSessionRevocation({
+  authEvents,
+  io,
+  remoteDesktopBroker,
+  revokeAllHostedSessions,
+  revokeHostedSessionsByOwner,
+  closeEidoverseProxySockets,
+  closeEidoverseProxySocketsForSessions,
 });
 // Eidoverse same-origin path + root allowlist (active only after the on-demand
 // host starts). Upgrade for `/ws` and `/eidoverse-host/**` on both listeners.
 mountEidoverseOnServer(null, [httpServer, localHttpServer]);
-authEvents.on('sessions:revoked-all', closeEidoverseProxySockets);
 
 // Close unclaimed upgrade sockets after a bounded timeout (replaces engine.io's
 // destroyUpgrade timer so reverse proxies with slow upstreams aren't cut short).
@@ -635,6 +635,9 @@ if (!isSmokeBoot()) {
   // Reminders for scheduled human action steps (Brain threads); zero provider calls.
   import('./services/humanActionReminders.js').then(({ initHumanActionReminders }) => initHumanActionReminders())
     .catch((err) => console.error(`❌ Human action reminders could not start: ${err.message}`));
+  // Opt-in (Start with PortOS): replays the saved llama-server launch line; a local process start, no model call.
+  import('./services/llamaServerAutoStart.js').then(({ autoStartLlamaServer }) => autoStartLlamaServer())
+    .catch((err) => console.error(`❌ llama-server auto-start could not load: ${err.message}`));
   import('./services/fleetLlmHost.js').then(({ startFleetLlmHost, describeFleetHostError }) => startFleetLlmHost().catch((err) => {
     console.error(`❌ Dedicated model host listener could not start (${describeFleetHostError(err)}); open AI Providers → Model host setup.`);
   }))

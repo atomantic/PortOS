@@ -67,6 +67,16 @@ export const HOST_CONTROL_GET_ROUTES = Object.freeze([
   'GET /api/midi-runtime/install',
   'GET /api/music/setup/runtime-install',
   'GET /api/remote-desktop/status',
+  // Host version, iTerm and Python probes; image/video setup also return host paths (#20300).
+  'GET /api/local-llm/llama-server/update-status',
+  'GET /api/iterm/status',
+  'GET /api/image-gen/setup/python',
+  'GET /api/image-gen/setup/flux2-status',
+  'GET /api/image-gen/setup/flux2-install',
+  'GET /api/video-gen/status',
+  // Inspects host git repositories and enumerates live PTY shell sessions and host paths.
+  'GET /api/workspace-contexts',
+  'GET /api/workspace-contexts/:appId',
   // Materializes generated HTML on demand and returns its host path.
   'GET /api/html-pages/runs/:id/pages/:index/path',
   // Raw backup archives export private records and credentials (#8772).
@@ -153,6 +163,8 @@ export const HOST_CONTROL_GET_ROUTES = Object.freeze([
   'GET /api/image-gen/setup/moss-install',
   'GET /api/voice/facetime/status',
   'GET /api/voice/avatar/status',
+  'GET /api/voice/realtime/status',
+  'GET /api/local-llm/conversational-gemma/status',
   'GET /api/update/software',
   'GET /api/update/node-runtime',
   'GET /api/docker-containment/status',

@@ -607,7 +607,7 @@ describe('source-aware playback', () => {
     const shortBed = { ...bedEntry, durationSec: 10, fadeInSec: 4, fadeOutSec: 4 };
     // The lane block is the one carrying an inline width; a selected bed's
     // inspector repeats the filename.
-    const bedBlock = () => screen.getAllByText('bed.mp3').map((node) => node.parentElement).find((node) => node.style.width);
+    const bedBlock = () => screen.getByRole('button', { name: 'bed.mp3' }).parentElement;
     const reportBedLength = (el, seconds) => {
       Object.defineProperty(el, 'duration', { configurable: true, value: seconds });
       // No act here: the early-metadata fixture calls this inside render's act; test-side callers use reportBedLengthInAct.

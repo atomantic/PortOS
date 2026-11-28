@@ -9,6 +9,7 @@ import { zodToOpenApiSchema } from './apiContractSchemas.js';
 import { generatedPreviewPlaybackSchema } from './generatedPreviewPlaybackSchema.js';
 import {
   appDeployCancelSchema,
+  appDeployCompleteSchema,
   appDeploySchema,
   appStandardizeSchema,
   appUpdateSchema,
@@ -52,6 +53,79 @@ const loomRunSnapshot = (production) => Object.freeze({
 
 export const SOCKET_EVENT_CONTRACTS = Object.freeze({
   'voice:avatar:changed': { direction: 'server-to-client', summary: 'Invalidate the machine-local Voice Call avatar runtime status; no payload.' },
+  'voice:avatar:library:changed': { direction: 'server-to-client', summary: 'Invalidate the Voice Call avatar library (Avatars collection and channel assignments); no payload.' },
+  'voice:llm:residency:changed': { direction: 'server-to-client', summary: 'Invalidate the Voice LLM residency badge when a warm-up starts or finishes loading the model; no payload.' },
+  'voice:conversationalGemma:changed': { direction: 'server-to-client', summary: 'Invalidate the machine-local Conversational Gemma 4 31B llama.cpp setup status; no payload.' },
+  'voice:timing': {
+    direction: 'server-to-client',
+    summary: 'One Voice turn stage timing line, sent only while the socket turned on the Voice Call timing debug.',
+    payloadSchema: {
+      type: 'object', required: ['turnId', 'label', 'ms'], additionalProperties: false,
+      properties: { turnId: { type: 'string' }, label: { type: 'string' }, ms: { type: 'integer' } },
+    },
+  },
+  'voice:realtime:state': {
+    direction: 'server-to-client',
+    summary: 'Lifecycle state of the socket’s realtime speech-to-speech Voice call.',
+    payloadSchema: {
+      type: 'object', required: ['active'], additionalProperties: false,
+      properties: {
+        active: { type: 'boolean' },
+        loading: { type: 'boolean' },
+        reason: { type: 'string', enum: ['hangup', 'sidecar-closed'] },
+        error: { type: 'string' },
+      },
+    },
+  },
+  'voice:realtime:audio': {
+    direction: 'server-to-client',
+    summary: 'Streamed 24 kHz mono PCM16 reply audio chunk from the realtime voice sidecar.',
+    payloadSchema: {
+      type: 'object', required: ['pcm', 'sampleRate'], additionalProperties: false,
+      properties: { pcm: { type: 'string', format: 'binary' }, sampleRate: { type: 'integer' } },
+    },
+  },
+  'voice:realtime:interrupt': {
+    direction: 'server-to-client',
+    summary: 'User barged in; client drops buffered realtime reply audio.',
+    payloadSchema: { type: 'object', additionalProperties: false, properties: {} },
+  },
+  'voice:realtime:reply': {
+    direction: 'server-to-client',
+    summary: 'Spoken transcript of a completed or interrupted realtime voice reply.',
+    payloadSchema: {
+      type: 'object', required: ['text', 'cancelled'], additionalProperties: false,
+      properties: { text: { type: 'string' }, cancelled: { type: 'boolean' } },
+    },
+  },
+  'voice:realtime:delegate': {
+    direction: 'server-to-client',
+    summary: 'Realtime voice handed a lookup or action to the PortOS Voice tool pipeline.',
+    payloadSchema: {
+      type: 'object', required: ['callId', 'task'], additionalProperties: false,
+      properties: { callId: { type: 'string' }, task: { type: 'string' } },
+    },
+  },
+  'voice:realtime:result': {
+    direction: 'server-to-client',
+    summary: 'Tool-pipeline result returned to the realtime voice for its follow-up spoken reply.',
+    payloadSchema: {
+      type: 'object', required: ['callId', 'task', 'text'], additionalProperties: false,
+      properties: { callId: { type: 'string' }, task: { type: 'string' }, text: { type: 'string' } },
+    },
+  },
+  'voice:realtime:event': {
+    direction: 'server-to-client',
+    summary: 'Forwarded realtime sidecar lifecycle event (first_audio, barge_in, reply_start, merge_abort, error).',
+    payloadSchema: {
+      type: 'object', required: ['ev', 'afterSilenceS', 'followup'], additionalProperties: false,
+      properties: {
+        ev: { type: 'string', enum: ['first_audio', 'barge_in', 'reply_start', 'merge_abort', 'error'] },
+        afterSilenceS: { type: ['number', 'null'] },
+        followup: { type: 'boolean' },
+      },
+    },
+  },
   'generated-preview:playback': input(generatedPreviewPlaybackSchema, 'Calibrate or control an advertised cooperative document preview; audio remains in the client.'),
   'generated-preview:playback-state': {
     direction: 'server-to-client',
@@ -456,7 +530,7 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
   },
   'codex-account:subscribe': {
     direction: 'client-to-server',
-    summary: 'Start shared observation while a viewer is mounted.',
+    summary: 'Start shared Codex account observation with operator authority.',
     payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
   'codex-account:unsubscribe': {
@@ -668,6 +742,11 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
   'fableloom:shots:run': loomRunSnapshot(false),
   'app:deploy': input(appDeploySchema, 'Deploy a managed app with allowlisted flags.'),
   'app:deploy:cancel': input(appDeployCancelSchema, 'Request cancellation of an active deploy. The acknowledgement reports acceptance or an error code.'),
+  'app:deploy:complete': {
+    direction: 'server-to-client',
+    summary: 'Terminal outcome of a managed app deploy, including explicit cancellation and timeout flags.',
+    payloadSchema: zodToOpenApiSchema(appDeployCompleteSchema),
+  },
   'app:standardize': input(appStandardizeSchema, 'Standardize one registered app.'),
   'app:update': input(appUpdateSchema, 'Run the update lifecycle for one registered app.'),
   'detect:start': input(detectStartSchema, 'Start streamed application detection.'),
@@ -831,7 +910,15 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
         processes: { type: ['array', 'null'], items: { type: 'object', properties: {
           name: { type: 'string' }, status: { type: 'string' }, pid: { type: 'number' },
           pm_id: { type: 'number' }, cpu: { type: 'number' }, memory: { type: 'number' },
-          uptime: { type: ['number', 'null'] }, restarts: { type: 'number' }, unstableRestarts: { type: 'number' }
+          uptime: { type: ['number', 'null'] }, restarts: { type: 'number' }, unstableRestarts: { type: 'number' },
+          restartEvidence: {
+            type: 'object',
+            required: ['kind', 'instanceId', 'generationStartedAt', 'startedAt'],
+            properties: {
+              kind: { enum: ['errored', 'crashLoop'] }, instanceId: { type: ['string', 'null'] },
+              generationStartedAt: { type: ['number', 'null'] }, startedAt: { type: ['number', 'null'] }
+            }
+          }
         } } }
       }
     }

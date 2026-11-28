@@ -1,3 +1,5 @@
+import { openExternalUrl } from '../../../utils/openExternalUrl.js';
+import { isHttpUrl } from '../../../utils/urlNormalize.js';
 import { memo } from 'react';
 import { Link } from 'react-router';
 import { ChevronDown, ChevronRight, CircleDot, ExternalLink, MessageSquare, User } from 'lucide-react';
@@ -155,18 +157,18 @@ export default memo(function IssueRow({
               className={`${ISSUE_ACTION_BUTTON} bg-port-bg text-gray-300 hover:text-white border border-port-border flex items-center gap-1.5 transition-colors`}
             />
           )}
-          {issue.url && (
+          {isHttpUrl(issue.url) && (
             <a
               href={issue.url}
               target="_blank"
-              rel="noreferrer"
+              rel="noopener noreferrer"
               role="button"
               aria-label={`Open issue ${issue.number} on ${forgeLabel}`}
               title={`Open issue ${issue.number} on ${forgeLabel}`}
               onKeyDown={(e) => {
                 if (e.key === ' ' || e.key === 'Spacebar') {
                   e.preventDefault();
-                  window.open(issue.url, '_blank', 'noreferrer');
+                  openExternalUrl(issue.url);
                 }
               }}
               className={`${ISSUE_ACTION_BUTTON} inline-flex items-center gap-1.5 border border-port-border bg-port-bg text-gray-300 hover:text-white hover:border-port-accent/40 hover:bg-port-border/40 transition-colors`}

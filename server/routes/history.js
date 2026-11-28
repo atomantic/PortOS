@@ -1,20 +1,8 @@
+import { historyQuerySchema, historyClearQuerySchema } from '../lib/historyValidation.js';
 import { Router } from 'express';
-import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import * as history from '../services/history.js';
-
-const historyQuerySchema = z.object({
-  limit: z.preprocess(v => (v !== undefined ? Number(v) : undefined), z.number().int().min(1).max(1000).optional()),
-  offset: z.preprocess(v => (v !== undefined ? Number(v) : undefined), z.number().int().min(0).optional()),
-  action: z.string().optional(),
-  target: z.string().optional(),
-  success: z.preprocess(v => (v === 'true' ? true : v === 'false' ? false : undefined), z.boolean().optional()),
-});
-
-const historyClearQuerySchema = z.object({
-  olderThanDays: z.preprocess(v => (v !== undefined ? Number(v) : undefined), z.number().int().min(1).max(36500).optional()),
-});
 
 const router = Router();
 

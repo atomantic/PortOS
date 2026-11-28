@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
 const navigateMock = vi.hoisted(() => vi.fn());
@@ -41,7 +41,7 @@ import {
   getGoalScorecardSettings,
   refreshGoalScorecardNarrative,
 } from '../services/apiSystem.js';
-import { OverviewTab, TABS } from './Insights';
+import Insights, { OverviewTab, TABS } from './Insights';
 import { expectPageNavTabs } from '../test/pageNavTabAssertions.js';
 
 describe('Insights TABS ↔ nav manifest', () => {
@@ -57,6 +57,28 @@ const renderOverview = () => render(
     <OverviewTab />
   </MemoryRouter>,
 );
+
+describe('Insights section navigation', () => {
+  it('renders all five sections as named, compact mobile icon tabs', async () => {
+    getGenomeHealthCorrelations.mockResolvedValue({ available: false });
+    getInsightThemes.mockResolvedValue({ available: false, reason: 'no_taste_data' });
+    getInsightNarrative.mockResolvedValue({ available: false });
+
+    render(<MemoryRouter><Insights /></MemoryRouter>);
+    await screen.findByText('Analyze now');
+
+    const tabList = screen.getByRole('tablist', { name: 'Insights sections' });
+    const tabs = within(tabList).getAllByRole('tab');
+    expect(tabs).toHaveLength(5);
+    for (const [index, tab] of tabs.entries()) {
+      const { label } = TABS[index];
+      expect(tab).toHaveAccessibleName(label);
+      expect(tab).toHaveClass('max-sm:min-w-[44px]', 'max-sm:min-h-[44px]');
+      expect(within(tab).getByText(label)).toHaveClass('max-sm:sr-only');
+      expect(tab.querySelector('svg')).toBeTruthy();
+    }
+  });
+});
 
 describe('Insights OverviewTab cards', () => {
   beforeEach(() => {

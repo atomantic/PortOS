@@ -96,18 +96,26 @@ router.get('/embeddings/config', asyncHandler(async (req, res) => {
   res.json(await embeddings.resolveEmbeddingSource());
 }));
 
-// POST /api/memory/search - Semantic search with a lexical fallback
+// POST /api/memory/search - Keyword + semantic search with a lexical-only fallback.
+// The Memory tab's search is how the user finds a memory by words they saw in a
+// prompt, so keyword matches must always surface: vector-only search misses
+// exact terms and every memory that has no embedding yet. Lexical ranks weigh
+// more than vector ranks so an exact-term hit is never buried under loosely
+// similar memories. Fused results are a ranked top-N: `offset` skips into
+// that ranking and `total` counts the fused candidates, not every match.
 router.post('/search', asyncHandler(async (req, res) => {
   const { query, types, categories, tags, appId, minRelevance, limit, offset } = validateRequest(memorySearchSchema, req.body);
-  const options = { types, categories, tags, appId, limit, offset };
+  const filters = { types, categories, tags, appId };
   const queryEmbedding = await embeddings.generateQueryEmbedding(query, { types, categories });
 
   if (queryEmbedding) {
-    const result = await memory.searchMemories(queryEmbedding, { ...options, minRelevance });
-    return res.json({ ...result, searchMode: 'semantic' });
+    const { total, memories } = await memory.hybridSearchMemories(query, queryEmbedding, {
+      ...filters, limit: offset + limit, minRelevance, lexicalMatch: 'any', ftsWeight: 0.6, vectorWeight: 0.4,
+    });
+    return res.json({ total, memories: memories.slice(offset), searchMode: 'hybrid' });
   }
 
-  const result = await memory.hybridSearchMemories(query, null, { ...options, lexicalMatch: 'any' });
+  const result = await memory.hybridSearchMemories(query, null, { ...filters, limit, offset, lexicalMatch: 'any' });
   res.json({ ...result, searchMode: 'lexical' });
 }));
 

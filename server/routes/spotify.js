@@ -1,6 +1,6 @@
+import { spotifyCredentialsSchema } from '../lib/spotifyValidation.js';
 import { Router } from 'express';
 import { oauthCallbackQuerySchema } from '../lib/queryValidation.js';
-import { z } from 'zod';
 
 import { asyncHandler } from '../lib/errorHandler.js';
 import { INVALID_OAUTH_STATE_MESSAGE } from '../lib/oauthState.js';
@@ -41,11 +41,7 @@ router.post('/playlists/sync', asyncHandler(async (_req, res) => {
 
 // Save the user-created Spotify developer app credentials (client id/secret).
 router.post('/auth/credentials', asyncHandler(async (req, res) => {
-  const schema = z.object({
-    clientId: z.string().min(1),
-    clientSecret: z.string().min(1),
-  });
-  const data = validateRequest(schema, req.body);
+  const data = validateRequest(spotifyCredentialsSchema, req.body);
   const result = await spotifyAuth.saveCredentials(data, requestRedirectOptions(req));
   res.set('Cache-Control', 'no-store');
   res.json(result);

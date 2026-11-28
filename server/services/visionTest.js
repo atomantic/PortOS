@@ -11,6 +11,7 @@ import { getProviderById } from './provider/providers.js';
 import { PATHS, resolveScreenshot } from '../lib/fileUtils.js';
 import { describeFrameStats, isDegenerateFrame } from '../lib/imageFrameStats.js';
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
+import { ServerError } from '../lib/errorHandler.js';
 import { describeImageViaCli } from './visionCli.js';
 import { assertSecretEndpoint, evaluateSecretEndpoint } from '../lib/aiToolkit/endpointGuard.js';
 
@@ -245,10 +246,11 @@ export async function testVision({ imagePath, prompt, expectedContent, providerI
  * @param {Object} options
  * @param {string} options.dataUrl - base64 image data URL (data:image/...;base64,...)
  * @param {string} options.prompt - What to ask about the image
- * @param {string} [options.providerId='lmstudio'] - Vision-capable API provider
+ * @param {string} [options.providerId='lmstudio'] - Vision-capable provider
  * @param {string} [options.model] - Model override (defaults to provider default)
  * @param {number} [options.maxTokens] - Completion budget; raise it above the
  *   default when asking the model for a long/structured reply (see callVisionAPI).
+ * @param {() => boolean|Promise<boolean>} [options.hasHostControl] - Live authority check required for CLI providers.
  * @returns {Promise<string>} - The model's description text
  */
 export async function describeImageDataUrl(opts) {
@@ -278,7 +280,7 @@ function extractReasoning(message) {
  * that burned its whole budget thinking and returned no caption.
  * @returns {Promise<{ text: string, finishReason: string|null, usage: object|null, reasoning: string }>}
  */
-export async function describeImageDataUrlDetailed({ dataUrl, prompt, providerId = 'lmstudio', model, maxTokens }) {
+export async function describeImageDataUrlDetailed({ dataUrl, prompt, providerId = 'lmstudio', model, maxTokens, hasHostControl }) {
   if (typeof dataUrl !== 'string' || !dataUrl.startsWith('data:image/')) {
     throw new Error('dataUrl must be a base64 image data URL');
   }
@@ -289,6 +291,11 @@ export async function describeImageDataUrlDetailed({ dataUrl, prompt, providerId
   // returns the same { text, finishReason, usage, reasoning } shape. maxTokens
   // has no CLI analogue (the CLI manages its own budget) so it's dropped.
   if (provider.type === 'cli') {
+    if (typeof hasHostControl !== 'function' || await hasHostControl() !== true) {
+      throw new ServerError('CLI vision requires an operator session or a local connection when no password is set.', {
+        status: 403, code: 'HOST_CONTROL_FORBIDDEN',
+      });
+    }
     return describeImageViaCli({
       provider, dataUrl, prompt: prompt || 'Describe what you see in this image.', model,
       // Honor the provider's configured timeout (seeded codex/claude CLI

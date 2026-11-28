@@ -80,5 +80,5 @@ Run the opt-in live boundary suite after setup. CI runs it on native
 amd64 and arm64 Linux engines. Verify Docker Desktop on the intended host.
 
 ```sh
-cd server && PORTOS_SUPERCOLLIDER_LIVE=1 npx vitest run services/superColliderRender.live.test.js
+cd server && PORTOS_SUPERCOLLIDER_LIVE=1 npx vitest run --configLoader native services/superColliderRender.live.test.js
 ```

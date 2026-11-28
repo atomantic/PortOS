@@ -83,7 +83,7 @@ import {
 } from '../lib/youtubeIngestFormat.js';
 import * as obsidian from './obsidian.js';
 import * as brainStorage from './brainStorage.js';
-import { createLinkFromUrl } from './brain.js';
+import { createLinkFromUrl } from './brainLinks.js';
 import * as brainJournal from './brainJournal.js';
 import { recordEvents } from './humanActivity.js';
 import { trackedRenderMap } from './renderActivity.js';

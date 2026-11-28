@@ -17,3 +17,14 @@ export const AUDIO_FILENAME_MAX = 256;
 export const RENDER_ID_MAX = 80;
 export const RENDER_SOURCE_MAX = 40;
 export const RENDERS_MAX = 100;
+
+export const RENDER_SOURCES = Object.freeze({ UPLOAD: 'upload', SUNO: 'suno', YOUTUBE: 'youtube' });
+
+// Cap the render history per track so a runaway generate loop can't grow the
+// record unboundedly. Oldest renders fall off first (slice(-RENDERS_MAX)); the
+// audio bytes stay in the shared library (they may be referenced elsewhere).
+// A track clip's usable duration band — wide enough for a long-form generation,
+// bounded so a garbage value can't poison the record.
+export const DURATION_MIN_SEC = 1;
+
+export const DURATION_MAX_SEC = 3600;

@@ -18,8 +18,9 @@ import exportRoutes from './meatspaceExportRoutes.js';
 const router = Router();
 
 router.use(coreRoutes);
-router.use(alcoholRoutes);
-router.use(nicotineRoutes);
+// Literal mounts keep both factory-backed route families visible to the API catalog.
+router.use('/alcohol', alcoholRoutes);
+router.use('/nicotine', nicotineRoutes);
 router.use(healthRoutes);
 router.use(postRoutes);
 router.use(calendarRoutes);

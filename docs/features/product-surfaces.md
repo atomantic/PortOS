@@ -21,14 +21,14 @@ This document is the **canonical user-facing feature inventory** for PortOS. It 
 
 ## 1. Run and Manage Software (App Management & Dev Tools)
 
-Manage local applications, terminal environments, system resources, and developer integrations.
+Manage local applications, terminal environments, system resources, and developer integrations. See [optional features](../README.md#optional-features) for enablement and defaults.
 
 | Surface / Page | Route(s) | Key Capabilities & Workflows | Related Guides |
 |---|---|---|---|
 | **Dashboard** | `/` | System overview, active agent count, PM2 process vitals, Quick Capture widget, fast jump to recent projects. | [ARCHITECTURE.md](../ARCHITECTURE.md) |
 | **Apps Manager** | `/apps`, `/apps/:id` | Managed app registry: launch, stop, restart processes, live process logs, environment variables, Git branch switcher, and per-app feature tabs. | [PM2.md](../PM2.md) |
 | **App Templates & Scaffolding** | `/templates` | Pre-configured starter stacks (React, Vite, Node, Python) and interactive project scaffolding. | [App Wizard](./app-wizard.md) |
-| **PortOS Submodules** | `/apps/portos-default/submodules`, `/devtools/submodules` | Git submodule management for PortOS and managed repositories, submodule update checks, and recursive synchronization. | [CONTRIBUTING.md](../../CONTRIBUTING.md#development-setup) |
+| **PortOS Submodules** | `/apps/portos-default/submodules` | Git submodule management for PortOS and managed repositories, submodule update checks, and recursive synchronization. | [CONTRIBUTING.md](../../CONTRIBUTING.md#development-setup) |
 | **Web Shell** | `/shell` | Browser-based interactive terminal multiplexer for host command execution and active debugging. | — |
 | **Process Manager** | `/devtools/processes` | Real-time PM2 process table, status inspection, memory/CPU usage, and manual process restarts. | [PM2.md](../PM2.md) |
 | **Security Camera** | `/security` | Live webcam and microphone monitor with audio level meter, device selection, and a feed that can route host microphone audio to the speakers. | — |
@@ -40,9 +40,9 @@ Manage local applications, terminal environments, system resources, and develope
 | **Loops** | `/loops` | Run an agent prompt at a configured interval. Choose a provider, inspect iteration output, and stop or resume the loop. | — |
 | **Code & Script Runner** | `/devtools/runner` | Ad-hoc code execution environment and script runner for quick operational utilities. | — |
 | **GitHub Integration** | `/devtools/github` | Pull request tracking, open issue triage, commit log browsing, branch switching, and upstream synchronization. | [GITHUB_ACTIONS.md](../GITHUB_ACTIONS.md) |
-| **JIRA Sprint Manager & Reports** | `/devtools/jira`, `/devtools/jira/reports` | JIRA sprint planning, active board triage, backlog management, velocity metrics, and sprint burndown reports. | [JIRA Sprint Manager](./jira-sprint-manager.md) |
-| **DataDog Monitoring** | `/devtools/datadog` | APM dashboard, service error tracking, latency metrics, and synthetic monitoring. | — |
-| **GSD Project Planning** | `/cos/gsd`, app tab | "Get Stuff Done" hierarchical milestone tracking, project breakdown, and execution roadmaps. | — |
+| **JIRA Sprint Manager & Reports** | `/devtools/jira`, `/devtools/jira/reports` | Optional. Disabled until configured or explicitly enabled in Settings → Features. JIRA sprint planning, active board triage, backlog management, velocity metrics, and sprint burndown reports. | [JIRA Sprint Manager](./jira-sprint-manager.md) |
+| **DataDog Monitoring** | `/devtools/datadog` | Optional. Disabled until configured or explicitly enabled in Settings → Features. APM dashboard, service error tracking, latency metrics, and synthetic monitoring. | — |
+| **GSD Project Planning** | `/cos/gsd`, app tab | Optional. Disabled by default. "Get Stuff Done" hierarchical milestone tracking, project breakdown, and execution roadmaps. | — |
 | **Browser Control** | `/browser` | Persistent managed Chrome instance over Chrome DevTools Protocol (CDP) for automated web extraction, UI testing, and assisted browsing. | [Browser Management](./browser.md) |
 | **Image Cleaner** | `/devtools/image-clean` | Strips metadata, C2PA, and Content Credentials from images; Sharp-based image optimization and denoising. | — |
 | **Video Downloader** | `/devtools/video-download` | Video and audio capture from YouTube, X.com, and web links via `yt-dlp`. | — |
@@ -70,11 +70,11 @@ Submit tasks, manage durable autonomous agents, schedule recurring automations, 
 | **Feature Agents** | `/feature-agents` | Durable, specialized agents assigned to specific feature domains or managed codebases. | — |
 | **Review Hub** | `/review` | Centralized triage inbox for agent-generated diffs, pull request reviews, approval requests, and code quality findings. | — |
 | **Social Agents** | `/agents` | Autonomous agent personas for managing external social communications and community presence. | — |
-| **AI Providers & Model Runner** | `/ai` | Multi-provider configuration supporting CLI agents (Claude Code, Codex, Antigravity, OpenCode), cloud APIs (OpenAI, Anthropic, Gemini, Grok), and local endpoints (Ollama, LM Studio, vLLM, SGLang). | [Claude on Ollama](./claude-ollama.md) |
+| **AI Providers & Model Runner** | `/ai/presets` | Multi-provider configuration supporting CLI agents (Claude Code, Codex, Antigravity, OpenCode), cloud APIs (OpenAI, Anthropic, Gemini, Grok), and local endpoints (Ollama, LM Studio, vLLM, SGLang). | [Claude on Ollama](./claude-ollama.md) |
 | **Fleet LLM Setup** | `/ai/fleet` | Connect this install to a dedicated model server on a PortOS peer. Configure providers to send requests directly to that host. | [Dedicated LLM Host](./fleet-llm-host.md) |
 | **Prompt Manager** | `/prompts` | Reusable prompt template library, variable substitution engine, prompt versioning, and auto-upgrade migrations. | [Prompt Manager](./prompt-manager.md) |
 | **Runs & Run Events Ledger** | `/cos/runs`, `/cos/run-events` | Comprehensive ledger of past and in-flight AI runs, lifecycle event replay, and orphaned process recovery. | — |
-| **Code Reviewers** | `/settings/code-reviewers` | Configure reviewer chains, model settings, and when a review stops. Enable goal-fidelity review to check whether completed agent work meets the original task and route confirmed gaps for follow-up. | [Chief of Staff](./chief-of-staff.md) |
+| **Code Reviewers** | `/models/code-reviewers` | Configure reviewer chains, model settings, and when a review stops. Enable goal-fidelity review to check whether completed agent work meets the original task and route confirmed gaps for follow-up. | [Chief of Staff](./chief-of-staff.md) |
 
 ---
 
@@ -103,11 +103,11 @@ An end-to-end creative production suite for authors, worldbuilders, filmmakers, 
 | **Objects** | `/catalog/objects` | Manage reusable props and objects with visual references and links to canon. | [Catalog Creative Primitives](./catalog-primitives.md) |
 | **Catalog Ingest** | `/catalog/ingest` | Paste unstructured scraps, scenes, or notes to automatically extract structured catalog ingredients. | — |
 | **Mood Boards** | `/mood-boards` | Collect visual references, generate more images from saved descriptions, and retry failed generations. Combine the board’s visual direction into a prompt or render a poster from it. | — |
-| **Media Gen (Image & Video)** | `/media`, `/media/image`, `/media/video` | Local and federated text-to-image (Stable Diffusion, FLUX, MFLUX) and text-to-video (LTX-Video, MiniMax H3) generation. | [Video generation](./video-generation.md) |
+| **Media Gen (Image & Video)** | `/media`, `/media/image`, `/media/video` | Local and federated text-to-image (Stable Diffusion, FLUX, MFLUX) and text-to-video (LTX-Video, MiniMax H3) generation. | [Local image model setup](#local-image-model-setup), [Video generation](./video-generation.md) |
 | **Media History & Timeline** | `/media/history`, `/media/timeline` | Asset gallery, multi-track video timeline editor, clip trimming, audio overlay, and video stitching. | — |
 | **Image Annotation** | `/media/annotate` | Canvas drawing, sketch-over, visual markup, and region labeling for image conditioning. | — |
 | **Media Collections** | `/media/collections` | Visual asset organization, project stacks, and media albums. | — |
-| **Code Animation** | `/code-animation`, `/code-animation/gallery`, `/code-animation/production` | Generate and preview code-driven animation, then render it to video. Production supports building films across multiple shots. | [Blender Models](./blender-models.md) |
+| **Code Animation** | `/code-animation`, `/code-animation/gallery`, `/code-animation/production` | Generate and preview code-driven animation, then render it to video. Production supports building films across multiple shots. | [Code Animation Packages](../CODE_ANIMATION_PACKAGES.md) |
 | **HTML Pages** | `/html-pages`, `/html-pages/runs`, `/html-pages/gallery` | Generate standalone web pages from the same briefs across models and compare the rendered previews side by side. | — |
 | **Decks** | `/decks` | Design playing or tarot cards from a shared style guide. Write or generate each card’s prompt and render cards individually or as a deck. | — |
 | **3D Meshes & Three.js** | `/3d`, `/3d/threejs` | Neural image-to-3D mesh generation (TRELLIS, Pixal3D), Blender models built from Python with checked GLB builds (`/3d/blender/:id`), and procedural Three.js 3D model generation with interactive WebGL preview. | [Procedural Three.js](#procedural-threejs), [Blender Models](./blender-models.md) |
@@ -139,6 +139,16 @@ animation player runs from the host's render loop using `update(deltaSeconds)`.
 Scrubbing is silent and playback can deliver cue IDs to an optional host
 callback. For neural mesh installation, use the separate
 [3D runtime profiles](../RUNTIME_LOCKS.md#native-3d-profiles).
+
+### Local image model setup
+
+Select a model in **Create → Media Gen** (**Image**, **Local** mode at `/media/image`) and follow its runtime status actions.
+
+| Model | Setup | Supported inputs |
+| --- | --- | --- |
+| FLUX.3 Klein | Install or repair its dedicated runtime. Requires Apple Silicon, macOS 14+, `uv`, and 32 GB unified memory. Q4, Q6, and Q8 checkpoints download separately. Review the [weight license](https://huggingface.co/black-forest-labs/flux-3-image-klein/blob/main/LICENSE.md). | Text and up to ten edit references. Federated edits allow up to eight. |
+| MOSS Image SFT Preview | Install the Swift runtime, then download or repair the 27.2 GB weights. Requires arm64 macOS 26+, Swift 6.3+, Apple's Metal compiler, and 48 GiB unified memory. Allow 10 GiB of build space in addition to the weights. | Text with optional negative prompts, up to 4,096 prompt tokens including the template. |
+| Qwen-Image 2.1 | Install or repair the shared FLUX.2 image runtime. Weights load on demand. Review the [model terms](https://huggingface.co/Qwen/Qwen-Image-2.1). | Text, an optional Init Image, and up to ten image inputs total. Prompt for an alpha channel when you want transparent PNG output. |
 
 ## 4. Personal Knowledge, Life Modeling, Identity, & Health
 
@@ -199,16 +209,16 @@ Unified communication channels, local voice assistant, community stewardship, an
 
 | Surface / Page | Route(s) | Key Capabilities & Workflows | Related Guides |
 |---|---|---|---|
-| **Comms Inbox & Drafts** | `/messages/inbox`, `/messages/drafts`, `/messages/sync` | Centralized message triage, drafting assistant, and cross-channel message synchronization. | [Messages Security](./messages-security.md) |
+| **Comms Inbox & Drafts** | `/messages/inbox`, `/messages/drafts`, `/messages/sync` | Inbox and triage for connected Gmail, Outlook, and Teams accounts, with email drafts held for review before sending. | [Messages Security](./messages-security.md) |
 | **iMessage Sync & Contacts** | `/messages/imessage`, `/messages/imessage?settings=1`, `/messages/contacts` | Local macOS `chat.db` SQLite ingestion, sender identity resolution, spam filtering, and address book contact merging. | [Messages Security](./messages-security.md) |
 | **Messages Setup** | `/messages/config` | Connect email accounts, complete Gmail authorization, and configure how messages sync. | [Messages Security](./messages-security.md) |
 | **Signal Integration** | `/messages/signal` | Read-only SQLCipher snapshot of the local Signal Desktop database, including committed WAL messages, into Tribe and the activity timeline. Fails setup instead of ingesting a partial copy when the bundled driver cannot capture a consistent view. | [Messages Security](./messages-security.md) |
-| **Beeper Bridge** | `/messages/beeper`, `/messages/beeper?settings=1` | Local Beeper Desktop bridge mirroring WhatsApp, Discord, Telegram, and other bridged networks into a machine-local store, with a human-gated one-message-at-a-time outbox; the settings drawer connects an account and configures scheduled sync. | [Beeper](./beeper.md) |
+| **Beeper Bridge** | `/messages/beeper`, `/messages/beeper?settings=1` | Optional. Disabled by default. Local Beeper Desktop bridge mirroring WhatsApp, Discord, Telegram, and other bridged networks into a machine-local store, with a human-gated one-message-at-a-time outbox; the settings drawer connects an account and configures scheduled sync. | [Beeper](./beeper.md) |
 | **Telegram & X (Twitter)** | `/settings/telegram`, `/x` | Social channel monitoring, outreach staging, engagement diagnostics, and shadowban checks. | — |
 | **Stacker News Stewardship** | `/stacker-news` | Community territory moderation, Bitcoin Lightning tipping, post review, and encrypted credential storage. | [Stacker News](./stacker-news.md) |
-| **OpenClaw Operator Chat** | `/openclaw` | Real-time interactive operator agent runtime with streaming sessions and persistent execution. | [OpenClaw Operator Chat](./openclaw-operator-chat.md) |
+| **OpenClaw Operator Chat** | `/openclaw` | Optional. Disabled by default. Real-time interactive operator agent runtime with streaming sessions and persistent execution. | [OpenClaw Operator Chat](./openclaw-operator-chat.md) |
 | **Evergreen Personal Wiki** | `/wiki/*` | Curated personal knowledge base with markdown editing, link graphs, and full-text search. | — |
-| **Voice Mode** | `/settings/voice` | Hands-free voice assistant with continuous VAD (AudioWorklet), speech-to-text (Whisper local or Web Speech), local LLM orchestration, text-to-speech (Piper or Qwen3-TTS), barge-in support, and `ui_navigate` tool execution. | [Voice Mode](./voice.md) |
+| **Voice Mode & Voice Call** | `/settings/voice`, `/voice/call` | Hands-free voice assistant with continuous VAD (AudioWorklet), speech-to-text (Whisper local or Web Speech), local LLM orchestration, text-to-speech (Piper or Qwen3-TTS), full-duplex realtime speech-to-speech calls, barge-in support, and `ui_navigate` tool execution. | [Voice Mode](./voice.md) |
 | **Ambient Display Mode** | `/ambient` | Fullscreen idle dashboard, ambient animations, system status ticker, and display screensaver. | — |
 | **Eidoverse Worlds** | `/eidoverse` | Private, install-local 3D world for the human and Persistent Mind/CoS agents, with durable name-based identity, world history, deterministic PortOS resource projection, and governed world augmentation. | [Eidoverse Worlds](./eidoverse.md) |
 | **OpenWorld (retired compatibility surface)** | `/openworld`, `/city` | Historical Three.js / React Three Fiber world; legacy routes redirect to Eidoverse so existing bookmarks remain usable. | [Eidoverse Worlds](./eidoverse.md) |
@@ -223,6 +233,7 @@ Local AI model acceleration, multi-machine peer federation, storage classificati
 |---|---|---|---|
 | **Local LLM Runtimes** | `/models/llms-runtimes` | Manage Ollama, LM Studio, llama-server, MTPLX, Slotstream, Splash, and mkserve. Find vLLM and SGLang setup in AI Providers. | [MTPLX](./local-llm-runtimes.md#mtplx-on-apple-silicon), [Slotstream](./slotstream.md), [Splash](./splash.md), [mkserve](./mkserve.md) |
 | **Model Library** | `/models/llms` | The Ollama / LM Studio weights catalog — find, install, compare, and remove models — plus the Abuse Guard classifier at `/models/llms/abuse`. | [Claude on Ollama](./claude-ollama.md) |
+| **Decision Classifiers** | `/models/decision-classifiers` | Run local closed-set decisions with Jev or use Laya-MLX for manual Apple Silicon experiments. Both are discoverable when disabled. For Laya-MLX, use native Apple Silicon Python 3.11+ on macOS 14+, install the runtime and weights from its page, then enable experiments and supply a question, premise, and 2–12 choices. | [Jev setup](../JEV_SETUP.md) |
 | **Speculative Decoding** | `/models/llms-runtimes` | Accelerated token generation using DSpark, DFlash 2, and MTPLX speculative drafting pairs. | [DFlash2 & DSpark](./local-llm-runtimes.md#speculative-decoding-in-llama-server), [MTPLX](./local-llm-runtimes.md#mtplx-on-apple-silicon), [RTX 3090 vLLM](./local-llm-runtimes.md#vllm-on-rtx-3090), [SGLang Qwen](./local-llm-runtimes.md#sglang-on-hopper-or-blackwell) |
 | **Embeddings Management** | `/models/embeddings` | Local text embedding models (Nomic, Ollama) and pgvector semantic index configuration. | [STORAGE.md](../STORAGE.md) |
 | **LoRAs** | `/models/loras` (`/models/training` redirects here) | Supported LoRA adapter discovery and inference management, Civitai downloads, and removal of retired LoRA training datasets and runs. LoRA training is retired. | [Data Maintenance](../DATA_MAINTENANCE.md) |
@@ -234,6 +245,7 @@ Local AI model acceleration, multi-machine peer federation, storage classificati
 | **3D Neural Runtimes** | `/models/3d` | TRELLIS and Pixal3D image-to-3D on-device installation and diagnostics. | [3D runtime setup](../RUNTIME_LOCKS.md#native-3d-profiles) |
 | **Instances & Peer Federation** | `/instances`, `/settings/sharing` | Multi-install peer federation across Tailscale VPN, capability discovery, and federated media generation offloading. | [FEDERATED_MEDIA_PROVIDERS.md](../FEDERATED_MEDIA_PROVIDERS.md) |
 | **Setup** | `/capabilities` | Check install readiness and see what still needs configuration before using PortOS features. | [Setup Guide](../SETUP.md) |
+| **Docker containment** | `/settings/features` | Optional. Disabled by default. Enable Docker verification and configure profiles for untrusted install and test runs. | [Containment](../CONTAINMENT.md) |
 | **PostgreSQL Datastore** | `/settings/database` | Mandatory local PostgreSQL datastore with pgvector extension, migrations, and storage classification contract. | [STORAGE.md](../STORAGE.md), [Postgres ADR](../decisions/2026-06-07-postgres-as-primary-datastore.md) |
 | **Data Manager** | `/data` | Inspect installed data, open source records, manage backup archives, and clean up deleted records. | [Data Maintenance](../DATA_MAINTENANCE.md), [Backup & Restore](../BACKUP.md) |
 | **Backup & Restore** | `/settings/backup` | Automated filesystem rsync snapshots and database dumps with point-in-time restore. | [BACKUP.md](../BACKUP.md) |

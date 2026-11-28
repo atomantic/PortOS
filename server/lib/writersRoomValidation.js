@@ -443,3 +443,5 @@ export const writersRoomWorksResponseSchema = z.union([
 export const writersRoomSceneImageBodySchema = z.object({
   sceneId: nullishString, filename: nullishString, jobId: nullishString, prompt: nullishString,
 });
+
+export const promoteSchema = z.object({ force: z.boolean().optional() });

@@ -106,12 +106,17 @@ router.get('/jobs', asyncHandler(async (req, res) => {
     : await pageCodeAnimationJobs(validateRequest(jobsPageSchema, req.query)));
 }));
 
-router.get('/jobs/:id/poster', asyncHandler(async (req, res) => {
+router.get('/jobs/:id/poster', asyncHandler(async (req, res, next) => {
   const { id } = validateRequest(exportParamsSchema, req.params);
   // The gallery requests it with ?v=<poster mtime>, so a recapture is a new URL.
   // The header rides only a sent file, so a missing poster's 404 is not cached.
   res.sendFile(codeAnimationPosterPath(id), { headers: { 'Cache-Control': 'private, max-age=31536000, immutable' } }, (error) => {
-    if (error && !res.headersSent) res.status(404).json({ error: 'Poster not found', code: 'NOT_FOUND' });
+    if (!error) return;
+    if (error.code === 'ENOENT') {
+      next(new ServerError('Poster not found', { status: 404, code: 'NOT_FOUND', severity: 'warning' }));
+      return;
+    }
+    next(error);
   });
 }));
 

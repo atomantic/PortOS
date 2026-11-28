@@ -9,6 +9,7 @@
 
 import { describe, it, expect, vi, afterAll, beforeAll, beforeEach } from 'vitest';
 import { randomUUID } from 'node:crypto';
+import express from 'express';
 import { rmSync } from 'fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'path';
@@ -17,9 +18,18 @@ import { musicVideoClipReferenceChoices } from '../../lib/musicVideo/musicVideoC
 import { checkHealth, ensureSchema, query, close } from '../../lib/db.js';
 import * as database from '../../lib/db.js';
 import { toPgJson } from '../../lib/pgJson.js';
-import { compareMusicVideoProjectsNewestFirst } from '../../lib/musicVideo/musicVideoSummary.js';
+import { compareMusicVideoProjectsNewestFirst, summarizeMusicVideoProject } from '../../lib/musicVideo/musicVideoSummary.js';
+import { request } from '../../lib/testHelper.js';
 import { requireDbOrSkip } from '../../lib/dbTestGate.js';
 import { getSyncBaseHash, __resetBaseHashCacheForTests } from '../../lib/conflictJournal.js';
+
+// Exercise PostgreSQL through the Music Video dispatcher, leaving the DB test-runner guards active.
+vi.mock('../../lib/pgFileFacade.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, createRecordStoreBackendSelector: (options) => actual.createRecordStoreBackendSelector(
+    options.label === 'Music Video' ? { ...options, isTestMode: () => false } : options,
+  ) };
+});
 
 const testState = vi.hoisted(() => ({ dataRoot: null, writeCounter: { baseHash: 0 } }));
 
@@ -125,12 +135,6 @@ describe.skipIf(!runDb)('music video projects DB adapter', () => {
   });
 
   it('reads a newer catalog description and saves a video edit without overwriting a later catalog edit', async () => {
-    vi.doMock('../../lib/pgFileFacade.js', async (importOriginal) => {
-      const actual = await importOriginal();
-      return { ...actual, createRecordStoreBackendSelector: (options) => actual.createRecordStoreBackendSelector(
-        options.label === 'Music Video' ? { ...options, isTestMode: () => false } : options,
-      ) };
-    });
     const service = await import('./projects.js');
     const catalog = await import('../catalog/catalogDB.js');
     const id = `cat-obj-test-${randomUUID()}`;
@@ -365,6 +369,67 @@ describe.skipIf(!runDb)('music video projects DB adapter', () => {
     } finally {
       read.mockRestore();
     }
+  });
+
+  it('projects summary card and status reads, and heals a thumbnail against the full record', async () => {
+    const { default: router } = await import('../../routes/musicVideo.js');
+    const app = express().use('/api/music-video', router);
+    const review = {
+      draft: { lyricsMode: 'instrumental' },
+      approvals: { art: { basis: 'reviewed-art' } },
+      reviewedRevisions: { 'reviewed-art': { draft: { visualLanguage: 'Example direction' } } },
+      approvalHistory: [{ stage: 'art', basis: 'reviewed-art' }],
+    };
+    const completed = {
+      id: 'mv-summary-done', name: 'Example done', status: 'complete', renderHistoryId: 'example-final',
+      uploadedAudioFilename: 'fixture.wav', createdAt: '2026-01-01', updatedAt: '2026-01-01', scenes: [],
+      productionReview: review,
+      castAndSets: { source: 'catalog' },
+    };
+    completed.renderDependencies = captureMusicVideoEvidence(completed);
+    const stale = { ...completed, id: 'mv-summary-stale', name: 'Example stale', uploadedAudioFilename: 'edited.wav', createdAt: '2026-02-01' };
+    for (const record of [completed, stale]) {
+      await query(`INSERT INTO music_video_projects (id, status, data, created_at, updated_at)
+        VALUES ($1, 'complete', $2::jsonb, $3, $3)`, [record.id, toPgJson(record), record.createdAt]);
+    }
+
+    const full = await request(app).get('/api/music-video?limit=50');
+    expect(full.status).toBe(200);
+    expect(full.body.items.map(({ productionReview }) => productionReview)).toEqual([review, review]);
+    const cards = full.body.items.map(project => JSON.parse(toPgJson(summarizeMusicVideoProject(project, project.productionReadiness))));
+    expect(cards.map(({ isCompleted }) => isCompleted)).toEqual([true, false]);
+
+    const read = vi.spyOn(database, 'query');
+    try {
+      const summary = await request(app).get('/api/music-video?summary=1&q=example&statusFilter=completed&limit=1');
+      const progress = await request(app).get('/api/music-video?summary=1&q=example&statusFilter=in-progress&limit=1');
+      const unpaged = await request(app).get('/api/music-video');
+      expect(summary.status).toBe(200);
+      expect(progress.status).toBe(200);
+      expect(unpaged.status).toBe(200);
+      expect(summary.body).toEqual({ items: [cards[0]], total: 1, limit: 1, offset: 0, nextCursor: null });
+      expect(progress.body).toEqual({ items: [cards[1]], total: 1, limit: 1, offset: 0, nextCursor: null });
+      expect(unpaged.body).toEqual(cards);
+
+      const results = await Promise.all(read.mock.results.map(result => result.value));
+      const reviews = results.flatMap(result => result.rows).flatMap(row => row.data ? [row.data.productionReview] : []);
+      // Two candidate batches, two page hydrations and the unpaged card list.
+      expect(reviews).toHaveLength(8);
+      expect(reviews).toEqual(Array(8).fill({ draft: review.draft, approvals: review.approvals }));
+    } finally {
+      read.mockRestore();
+    }
+
+    await db.mutateProjectRecord(completed.id, current => ({ project: { ...current, publishKit: {
+      youtubeThumbnail: { pending: { requestId: 'fixture-paint', requestedAt: '2026-01-01T00:00:00Z' } },
+    } } }));
+    const healed = await request(app).get('/api/music-video?summary=1&statusFilter=completed');
+    expect(healed.status).toBe(200);
+    expect(healed.body.items).toEqual([cards[0]]);
+    const stored = await db.getProject(completed.id);
+    expect(stored.publishKit.youtubeThumbnail).toMatchObject({ pending: null, lastError: 'interrupted by restart' });
+    expect(stored.productionReview).toEqual(review);
+    expect(stored.castAndSets).toEqual(completed.castAndSets);
   });
 
   it('reads affected completion only after committed catalog media changes', async () => {

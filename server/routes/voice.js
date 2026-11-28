@@ -2,7 +2,7 @@ import { emitToOperatorsOn } from '../services/socketIo.js';
 import * as callSession from '../services/voice/callSession.js';
 import { voiceObservation } from '../services/localModelObservations.js';
 import { observeModelMutations } from '../services/modelObservation.js';
-import { voiceEngineQuerySchema } from '../lib/queryValidation.js';
+import { emptyQuerySchema, voiceEngineQuerySchema } from '../lib/queryValidation.js';
 /**
  * Voice Routes
  *
@@ -16,6 +16,7 @@ import { TTS_ENGINE_CONFIG_KEYS } from '../lib/voiceEngines.js';
 import {
   voicePiperFetchBodySchema,
   facetimeActionSchema,
+  voiceLlmPreloadSchema,
   voiceConfigPatchSchema,
   voiceProfileListSchema,
   promotePresetProfileSchema,
@@ -39,6 +40,8 @@ import { validateRequest } from '../lib/validateRequest.js';
 import { MAX_BASE64_UPLOAD_BYTES } from '../lib/uploadLimits.js';
 import { getVoiceConfig, updateVoiceConfig } from '../services/voice/config.js';
 import { invalidateHealthCache } from '../services/voice/health.js';
+import { readVoiceLlmResidency } from '../services/voice/llm.js';
+import { getAgentVoiceConfig } from '../services/voice/channelAgent.js';
 import * as facetimeBridge from '../services/voice/facetimeBridge.js';
 import { reconcile, downloadPiperVoice, startWhisper, stopWhisper } from '../services/voice/bootstrap.js';
 import { synthesize, listVoices, listVoiceEngines, VALID_ENGINES } from '../services/voice/tts.js';
@@ -112,13 +115,44 @@ router.put('/config', asyncHandler(async (req, res) => {
     vad: { endOfSpeechMs: next.vad?.endOfSpeechMs, minUtteranceMs: next.vad?.minUtteranceMs },
     fastPath: next.llm?.fastPath || null,
     personality: next.llm?.usePersonality === false ? null : (next.llm?.personality || null),
+    llmProvider: next.llm?.provider,
+    llmModel: next.llm?.model,
   });
   res.json({ config: next, reconciliation });
+}));
+
+// GET /api/voice/realtime/status — is the realtime (speech-to-speech) voice installed, and is it loaded? Never starts it.
+router.get('/realtime/status', asyncHandler(async (req, res) => {
+  validateRequest(emptyQuerySchema, req.query);
+  const { realtimeStatus } = await import('../services/voice/realtimeRuntime.js');
+  const cfg = await getVoiceConfig();
+  const { home, size, parts, installed, running } = realtimeStatus(cfg.realtime);
+  res.json({ enabled: cfg.realtime?.enabled === true, voiceEnabled: cfg.enabled === true, home, size, parts, installed, running });
 }));
 
 // GET /api/voice/status — reachability + enabled flag + binary/model presence
 router.get('/status', asyncHandler(async (_req, res) => {
   res.json(await voiceObservation.read());
+}));
+
+// GET /api/voice/llm/residency — is the on-air channel's Voice LLM resident in memory? Read-only; never loads it.
+router.get('/llm/residency', asyncHandler(async (req, res) => {
+  validateRequest(emptyQuerySchema, req.query);
+  const { llm } = await getAgentVoiceConfig();
+  res.json(await readVoiceLlmResidency({ provider: llm?.provider, model: llm?.model }));
+}));
+
+// POST /api/voice/llm/preload — load the on-air Voice LLM now (picking a model is the user's
+// action) so the first reply skips the cold load. Local backends only; the
+// warm-up skips hosted providers. Answers at once: the residency badge
+// follows the load, and a failed load leaves the model to load on first reply.
+router.post('/llm/preload', asyncHandler(async (req, res) => {
+  validateRequest(voiceLlmPreloadSchema, req.body || {});
+  import('../services/voice/pipeline.js')
+    .then(({ warmPromptPrefix }) => warmPromptPrefix({ reason: 'pick' }))
+    .then((result) => { if (!result.warmed) console.log(`🎙️ voice.llm.preload skipped: ${result.reason}`); })
+    .catch((err) => console.log(`⚠️ voice.llm.preload failed, model loads on first reply: ${err.message}`));
+  res.status(202).json({ preloading: true });
 }));
 
 router.get('/facetime/status', asyncHandler(async (_req, res) => {

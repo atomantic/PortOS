@@ -1,9 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render as renderView, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter } from 'react-router';
 import JevIntegrations from './JevIntegrations';
 import { getJevPolicy, updateJevPolicy } from '../../services/apiLocalLlm.js';
 import { updateInstanceFeature } from '../../services/apiSystem.js';
 import { publishInstanceFeatures } from '../../hooks/useInstanceFeatures';
+
+const render = (ui) => renderView(ui, { wrapper: MemoryRouter });
 
 vi.mock('../../services/apiLocalLlm.js', () => ({
   getJevPolicy: vi.fn(),

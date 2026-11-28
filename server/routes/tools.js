@@ -4,30 +4,13 @@
  * CRUD endpoints for managing onboard tools available to CoS agents.
  */
 
+import { toolIdSchema, registerToolSchema, updateToolSchema } from '../lib/toolsValidation.js';
 import { Router } from 'express';
-import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import * as toolsService from '../services/tools.js';
 
 const router = Router();
-
-const toolIdSchema = z.string()
-  .min(1)
-  .max(100)
-  .regex(/^[a-zA-Z0-9_-]+$/, 'Tool ID must contain only alphanumeric characters, hyphens, and underscores');
-
-const registerToolSchema = z.object({
-  id: toolIdSchema.optional(),
-  name: z.string().min(1).max(100),
-  category: z.string().min(1).max(50),
-  description: z.string().max(500).optional(),
-  enabled: z.boolean().optional(),
-  config: z.record(z.unknown()).optional(),
-  promptHints: z.string().max(1000).optional()
-});
-
-const updateToolSchema = registerToolSchema.omit({ id: true }).partial();
 
 // GET /api/tools - List all tools
 router.get('/', asyncHandler(async (req, res) => {

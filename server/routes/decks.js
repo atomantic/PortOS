@@ -9,11 +9,10 @@
 
 import { randomUUID } from 'node:crypto';
 import { Router } from 'express';
-import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { assertCancelResult } from '../lib/cancelResponse.js';
 import { cancelOperationSchema } from '../lib/sharedSchemas.js';
-import { emptyQuerySchema } from '../lib/queryValidation.js';
+import { emptyQuerySchema, isPaginationRequested, paginateArray, paginationQuerySchema } from '../lib/queryValidation.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import {
   deckAddSampleSchema,
@@ -23,6 +22,9 @@ import {
   deckGeneratePromptsSchema,
   deckRenderSchema,
   deckUpdateSchema,
+  deckParams,
+  cardParams,
+  sampleParams,
 } from '../lib/deckValidation.js';
 import { resolveGalleryImageOrThrow } from './universeBuilder/shared.js';
 import { resolveLlmRoutePin } from '../lib/llmRoutePin.js';
@@ -42,17 +44,14 @@ const activePromptRuns = new Map();
 
 const describePromptRun = ({ runId, controller }) => ({ runId, status: controller.signal.aborted ? 'cancelling' : 'running' });
 
-// Ids are UUIDs minted by the service; validating up front turns a malformed
-// id into a 400 instead of a Postgres cast error surfacing as a 500.
-const deckParams = z.object({ id: z.uuid() });
-const cardParams = deckParams.extend({ cardId: z.uuid() });
-const sampleParams = deckParams.extend({ sampleId: z.string().trim().min(1).max(200) });
 const deckId = (req) => validateRequest(deckParams, req.params).id;
 const cardIds = (req) => validateRequest(cardParams, req.params);
 
-router.get('/', asyncHandler(async (_req, res) => {
+router.get('/', asyncHandler(async (req, res) => {
+  const query = validateRequest(paginationQuerySchema, req.query);
   const { listDecks } = await decks();
-  res.json(await listDecks());
+  const records = await listDecks();
+  res.json(isPaginationRequested(query) ? paginateArray(records, query, { maxLimit: 500 }) : records);
 }));
 
 router.post('/', asyncHandler(async (req, res) => {

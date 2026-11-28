@@ -63,6 +63,25 @@ describe('projectsFile backend', () => {
     expect(page.items[0].id).not.toBe(first.id);
   });
 
+  it('projects only summary reads and leaves review history on disk', async () => {
+    const review = {
+      approvals: { art: { basis: 'approved-art' } },
+      reviewedRevisions: { 'approved-art': { draft: { visualLanguage: 'Example direction' } } },
+      approvalHistory: [{ stage: 'art', basis: 'approved-art' }],
+    };
+    const project = await file.createProject({ name: 'Example review' });
+    await file.mutateProjectRecord(project.id, current => ({ project: { ...current, productionReview: review } }));
+
+    const expected = { ...await file.getProject(project.id), productionReview: { approvals: review.approvals } };
+    expect(await file.listProjectSummaries()).toEqual([expected]);
+    expect(await file.getProjectSummariesByIds([project.id])).toEqual([expected]);
+    expect(await file.listProjectPage({ summary: true })).toEqual({ items: [expected], total: 1, limit: 50, offset: 0 });
+
+    expect((await file.listProjects())[0].productionReview).toEqual(review);
+    expect((await file.listProjectPage()).items[0].productionReview).toEqual(review);
+    expect((await file.getProject(project.id)).productionReview).toEqual(review);
+  });
+
   it('updates project metadata', async () => {
     const p = await file.createProject({ name: 'A' });
     const updated = await file.updateProject(p.id, { name: 'B', status: 'ready' });

@@ -18,13 +18,9 @@
 //   - once the click has happened, anything short of a positive provider signal
 //     is "delivery unknown" — never success, never an automatic retry.
 import { readOutlookMessageRow } from './messageBrowserIdentity.js';
-import { MESSAGE_SELECTOR_DEFAULTS, resolveComposeSelectors } from './messageSelectorDefaults.js';
+import { MESSAGE_COMPOSE_PATTERN_DEFAULTS, MESSAGE_SELECTOR_DEFAULTS, isValidComposePattern, resolveComposeSelectors } from './messageSelectorDefaults.js';
 import { normalizeEmail } from './messageRecipientEmail.js';
-
-// What the page says when a send went through / was refused. Matched against NEW
-// live-region text only (anything already on screen before the click is ignored).
-export const SEND_ACK_PATTERN = '(^|\\b)(message sent|your message (was|has been) sent|sent successfully)\\b';
-export const SEND_REFUSAL_PATTERN = "couldn.?t send|could not send|failed to send|unable to send|didn.?t send|wasn.?t sent|not sent|try again";
+import { matchesReplySubject, REPLY_SUBJECT_MISMATCH_MESSAGE } from './messageReplySubject.js';
 
 export const SUBMIT_OBSERVE_MS = 20000;
 // Must outlast the in-page observation window or a slow-but-successful send reads as a lost connection.
@@ -33,16 +29,14 @@ export const SUBMIT_EVALUATE_TIMEOUT_MS = SUBMIT_OBSERVE_MS + 10000;
 /** Merge the stored per-provider overrides over the defaults. Unknown keys are ignored. */
 export function resolveComposeConfig(provider, stored) {
   if (!Object.hasOwn(MESSAGE_SELECTOR_DEFAULTS, provider)) return null;
-  const override = key => (typeof stored?.[key] === 'string' && stored[key].trim() ? stored[key].trim() : null);
-  const validPattern = key => {
-    const candidate = override(key);
-    if (!candidate) return null;
-    try { new RegExp(candidate, 'i'); return candidate; } catch { return null; }
+  const resolvePattern = key => {
+    const pattern = typeof stored?.[key] === 'string' ? stored[key].trim() : '';
+    return pattern && isValidComposePattern(pattern) ? pattern : MESSAGE_COMPOSE_PATTERN_DEFAULTS[key];
   };
   return {
     sels: resolveComposeSelectors(provider, stored),
-    ackPattern: validPattern('sendAckPattern') ?? SEND_ACK_PATTERN,
-    refusalPattern: validPattern('sendRefusalPattern') ?? SEND_REFUSAL_PATTERN
+    ackPattern: resolvePattern('sendAckPattern'),
+    refusalPattern: resolvePattern('sendRefusalPattern')
   };
 }
 
@@ -80,6 +74,9 @@ export function planDelivery(accountType, draft, replyTarget = null) {
     // Outlook replies are located by the provider's row id; a title match is a guess about whose mail to answer.
     if (!isTeams && !replyTarget.providerRowId) {
       return refuse(409, 'REPLY_TARGET_UNIDENTIFIABLE', 'This message has no provider identity yet — sync the account and retry');
+    }
+    if (!isTeams && !matchesReplySubject(draft.subject, replyTarget.subject)) {
+      return refuse(422, 'OUTLOOK_REPLY_SUBJECT_MISMATCH', REPLY_SUBJECT_MISMATCH_MESSAGE);
     }
   }
 

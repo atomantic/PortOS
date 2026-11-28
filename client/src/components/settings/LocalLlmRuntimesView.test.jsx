@@ -692,7 +692,10 @@ describe('LocalLlmRuntimesView runtime servers', () => {
     expect(screen.getByRole('button', { name: `Remove ${active}` })).toBeDisabled();
   });
 
-  it('clears a cancelled Slotstream download without a failure or completion toast', async () => {
+  it.each([
+    ['canceled', { status: 'canceled', canceled: true }],
+    ['cancelled', { success: false, cancelled: true }],
+  ])('clears a Slotstream download on %s without a failure or completion toast', async (event, outcome) => {
     const { getSlotstreamServerStatus, downloadSlotstreamModel, cancelSlotstreamModelDownload } = await import('../../services/apiLocalLlm.js');
     const toast = (await import('../ui/Toast')).default;
     const model = 'example-org/example-model';
@@ -702,7 +705,8 @@ describe('LocalLlmRuntimesView runtime servers', () => {
     });
     const transfer = Promise.withResolvers();
     downloadSlotstreamModel.mockReturnValueOnce(transfer.promise);
-    cancelSlotstreamModelDownload.mockResolvedValueOnce({ success: true, cancelled: true });
+    const cancellation = Promise.withResolvers();
+    cancelSlotstreamModelDownload.mockReturnValueOnce(cancellation.promise);
 
     await renderRuntimes('slotstream');
     fireEvent.change(screen.getByLabelText('Add a checkpoint'), { target: { value: model } });
@@ -713,16 +717,22 @@ describe('LocalLlmRuntimesView runtime servers', () => {
     expect(downloadSlotstreamModel).toHaveBeenCalledWith(model, { silent: true });
     const receiveProgress = socket.on.mock.calls.find(([event]) => event === 'slotstream:download')?.[1];
     act(() => receiveProgress({ event: 'start', model, message: 'Starting transfer' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
-    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Cancelling checkpoint download…'));
+    const cancel = screen.getByRole('button', { name: 'Cancel' });
+    fireEvent.click(cancel);
+    expect(cancel).toBeDisabled();
+    await act(async () => cancellation.resolve({ success: true, cancelled: true }));
+    expect(toast.info).toHaveBeenCalledWith('Cancelling checkpoint download…');
+    act(() => receiveProgress({ event, model }));
+    expect(screen.queryByRole('button', { name: 'Cancel' })).not.toBeInTheDocument();
+    expect(download).toBeDisabled();
     expect(cancelSlotstreamModelDownload).toHaveBeenCalledWith(model, { silent: true });
 
-    await act(async () => transfer.resolve({ success: false, cancelled: true, model }));
+    await act(async () => transfer.resolve({ ...outcome, model }));
 
     expect(screen.queryByRole('button', { name: 'Cancel' })).not.toBeInTheDocument();
     expect(download).toBeEnabled();
     expect(toast.error).not.toHaveBeenCalled();
-    expect(toast.success).toHaveBeenCalledTimes(1);
+    expect(toast.success).not.toHaveBeenCalled();
   });
 
   it('saves the PM2 process list so the managed daemons survive a reboot', async () => {
@@ -1497,7 +1507,9 @@ describe('LocalLlmRuntimesView llama-server management', () => {
   // an operator who came here to stop a local model server found every one they
   // were NOT running and no sign of the one they were.
   describe('dedicated Qwen host row', () => {
-    it('shows the host as running and stops it on request', async () => {
+    it.each([undefined, 'The container could not be stopped'])('reports the stop result (error: %s)', async (error) => {
+      const toast = (await import('../ui/Toast')).default;
+      stopFleetLlmHost.mockResolvedValueOnce({ success: true, containerStopped: !error, error });
       getFleetLlmHost.mockResolvedValue({
         enabled: true,
         listening: true,
@@ -1515,7 +1527,12 @@ describe('LocalLlmRuntimesView llama-server management', () => {
       expect(within(row).getByText('1 generating · 0 queued')).toBeInTheDocument();
 
       fireEvent.click(within(row).getByRole('button', { name: /Stop/ }));
-      await waitFor(() => expect(stopFleetLlmHost).toHaveBeenCalledTimes(1));
+      await waitFor(() => {
+        if (error) {
+          expect(toast.error).toHaveBeenCalledWith(error);
+          expect(toast.success).not.toHaveBeenCalled();
+        } else expect(toast.success).toHaveBeenCalledWith('Dedicated Qwen host stopped and its container removed');
+      });
     });
 
     it('offers no Stop on a machine that is not hosting, and still links to the setup page', async () => {

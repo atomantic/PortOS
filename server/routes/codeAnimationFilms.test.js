@@ -119,6 +119,23 @@ it('creates without work, syncs a silent film, renders stills and cuts, and acce
   expect(runPromptThroughProvider).not.toHaveBeenCalled();
 });
 
+it('deletes the selected film source and keeps other authored files', async () => {
+  await create();
+  const file = api('/file');
+  const selected = 'shots/remove.py';
+  const kept = 'shots/keep.py';
+  const fileAt = path => `${file}?${new URLSearchParams({ path })}`;
+  expect((await request(app).put(file).send({ path: selected, content: '# remove' })).status).toBe(200);
+  expect((await request(app).put(file).send({ path: kept, content: '# keep' })).status).toBe(200);
+
+  expect((await request(app).delete(fileAt(selected))).status).toBe(200);
+  expect((await request(app).get(fileAt(selected))).status).toBe(404);
+  const remaining = await request(app).get(fileAt(kept));
+  expect(remaining.status).toBe(200);
+  expect(remaining.body).toEqual({ path: kept, content: '# keep' });
+  expect((await request(app).delete(fileAt(selected))).status).toBe(404);
+});
+
 it('explicitly analyzes attached library audio, requires its last frame, and joins a cut with sound', async () => {
   await create(); mkdirSync(join(ROOT(), 'music'), { recursive: true }); writeFileSync(join(ROOT(), 'music', 'example.wav'), 'audio');
   expect((await post(`${base()}/audio`, { source: 'track', trackId: 'track' })).status).toBe(200);

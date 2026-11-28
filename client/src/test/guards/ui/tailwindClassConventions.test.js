@@ -130,14 +130,6 @@ const ALLOWED_WIDE_GRIDS = new Map([
     'src/components/calendar/MonthView.jsx',
     'A month grid is inherently seven days wide; collapsing the columns would stop it being a calendar.',
   ],
-  [
-    'src/components/digital-twin/tabs/ImportTab.jsx',
-    'Big Five traits are a fixed five-across bar chart; each cell is one bar plus a five-character label, kept legible with a reduced gap and a smaller label below `sm`.',
-  ],
-  [
-    'src/components/digital-twin/InterviewAnalysisCard.jsx',
-    'Same Big Five five-across readout, in the interview-analysis summary.',
-  ],
 ]);
 
 // A column count that is the phone default: no `variant:` in front of it. Global,

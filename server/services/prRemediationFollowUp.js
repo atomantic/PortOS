@@ -1,46 +1,9 @@
 /**
  * Queue the agent that lands a reviewed public PR PortOS could not merge.
  *
- * The pr-reviewer coordinator reviews an external contributor's PR and merges
- * it when everything lines up. When it does not — blocking findings, red CI, a
- * conflict — the PR needs someone to do the remaining work. If the contributor
- * left the head branch writable ("Allow edits by maintainers", or the branch is
- * in our own repo), that someone can be PortOS: this module queues a normal CoS
- * agent task whose job is to implement the review PortOS already posted, get the
- * PR green and mergeable, and merge it.
- *
- * Four properties matter and are easy to get wrong:
- *
- *  - **No contributor prose reaches the session.** The prompt names the PR
- *    number and has the agent read only the reviews and review comments its
- *    OWN `gh` account authored, filtered by `gh --jq` before output, so other
- *    authors' comments never enter a tool-enabled session. Titles,
- *    descriptions, and diffs stay where the Stage 1 model-abuse boundary
- *    screened them. `gh pr view --comments` is exactly the read this forbids.
- *  - **The checkout is pinned to the screened head.** `prRemediationHeadSha`
- *    is the commit PortOS reviewed; workspace prep attaches the branch only
- *    when its remote tip is still that commit (`createWorktree`'s
- *    `expectedHeadSha`). The agent runs the PR's tests, so a head the
- *    contributor moved after review is never checked out: the task is blocked
- *    and the PR handed back (`handBackPrRemediation`).
- *  - **The work happens in a throwaway worktree PortOS provisions.** The task
- *    ships `useWorktree: true` plus the PR's head branch and — for a fork PR —
- *    its `forkHead` coordinates, so the shared attach in
- *    `worktreeManager.createWorktree` checks the branch out on a fork remote and
- *    leaves `git push` aimed at the CONTRIBUTOR's fork (#6064). This used to be
- *    prose telling the agent to run `git worktree add` + `gh pr checkout`
- *    itself, in the app's live checkout: unenforced, and one forgotten step away
- *    from hijacking whatever branch the user had open.
- *  - **No provider pin is inherited.** Stage 3's provider is pinned to a
- *    sandboxed, network-denied review recipe. This task is the opposite job — a
- *    coding harness with forge credentials — so it resolves through the normal
- *    active-provider path.
- *
- * The CI-gate/merge/confirm-MERGED tail is the shared `buildCiMergeGateSteps`,
- * not a third hand-rolled copy — it already owns the ambiguous "no checks
- * reported" case, the rebase-on-conflict loop, and the merge-method fallback for
- * a repo that disallows merge commits. It is asked for `deleteBranch: false`:
- * push rights on a fork are not permission to delete a contributor's branch.
+ * Same-repository heads use the normal coding agent in a worktree pinned to the
+ * reviewed commit. The agent reads only its own account's review comments and
+ * operates on that PR. External heads use the coordinator's contributor handback.
  *
  * `addTask`'s first-line + app dedup is what keeps a scheduled sweep from
  * queueing a second remediation while the first is still pending or running;
@@ -50,25 +13,18 @@
 
 import { emitLog } from './cos/cosEvents.js';
 import { addTask } from './cos/cosTaskStore.js';
-import { buildCiMergeGateSteps, buildForkBranchInstructions } from './promptSections/reviewLifecycle.js';
+import { buildCiMergeGateSteps } from './promptSections/reviewLifecycle.js';
 import { isMergeHandoffEnabled } from '../lib/mergeGateContract.js';
-import { normalizeForkHead, forkLocalBranch } from '../lib/forkHead.js';
 import { UNTRUSTED_PULL_REQUEST_NOTICE } from '../lib/promptFencing.js';
-import { PR_WRITE_ACCESS } from '../lib/prHandbackPolicy.js';
+import { canRunHostPrRemediation } from '../lib/prHandbackPolicy.js';
 
 /**
  * The remediation procedure. `reason` names why the PR did not land, so the
  * agent starts from the right end of the problem instead of re-deriving it.
  */
-function renderContext({ repoFullName, number, url, headRefName, headSha, authorLogin, reason, writeAccess, forkHead, mergeHandoff = false }) {
+function renderContext({ repoFullName, number, url, headRefName, headSha, authorLogin, reason, mergeHandoff = false }) {
   const [owner, repo] = repoFullName.split('/');
   const prRef = `${number} --repo ${repoFullName}`;
-  // Both halves stay conditional: a same-repo head has no contributor who "left
-  // the branch writable", and saying otherwise puts a false claim about a real
-  // person into an operator-facing instruction.
-  const accessNote = writeAccess === PR_WRITE_ACCESS.OWN_REPO
-    ? `The head branch \`${headRefName}\` lives in ${repoFullName} itself, so it is yours to push to and \`git push\` goes to origin.`
-    : `@${authorLogin} left the head branch writable by maintainers ("Allow edits by maintainers"), and \`${headRefName}\` lives in their FORK. Your worktree's branch already tracks that fork, so use the explicit fork push command below — never re-point it at origin, and never open a second PR.`;
   // The shared gate owns everything from "wait for CI" through "confirm MERGED",
   // including clearing conflicts, so step 3 stays scoped to the review itself.
   const { lines: mergeGate } = buildCiMergeGateSteps(5, {
@@ -98,10 +54,9 @@ function renderContext({ repoFullName, number, url, headRefName, headSha, author
     `   gh api graphql --paginate -f owner=${owner} -f repo=${repo} -F number=${number} -f query='query($owner:String!,$repo:String!,$number:Int!,$endCursor:String){repository(owner:$owner,name:$repo){pullRequest(number:$number){reviewThreads(first:100,after:$endCursor){pageInfo{hasNextPage endCursor} nodes{id isResolved comments(first:1){nodes{author{login}}}}}}}}' --jq ".data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false and .comments.nodes[0].author.login == \\"$ME\\") | .id"`,
     '   gh api graphql -f id=<thread-id> -f query=\'mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{isResolved}}}\'',
     '   ```',
-    `2. You are ALREADY in an isolated worktree with \`${forkLocalBranch(headRefName, forkHead)}\` checked out at \`${headSha}\`, the commit PortOS reviewed — PortOS attached it for you. Do not check the PR out again, do not create another worktree, do not switch branches, and never pull new commits from the PR's head branch into it. ${accessNote}`,
-    buildForkBranchInstructions(headRefName, forkHead),
+    `2. You are ALREADY in an isolated worktree with \`${headRefName}\` checked out at \`${headSha}\`, the commit PortOS reviewed — PortOS attached it for you. Do not check the PR out again, do not create another worktree, do not switch branches, and never pull new commits from the PR's head branch into it. The head branch lives in ${repoFullName} itself, so push to its upstream on origin.`,
     '3. Fix everything the review asked for, including non-blocking findings and nits. Do not bundle refactors, unrelated cleanups, or your own review opinions onto a contributor\'s branch.',
-    `4. Run the repo's own tests for the code you touched and confirm they pass, then commit with a message that says what you fixed and that it answers the review, and push to the PR's own branch (use the explicit fork push command above for a fork, otherwise \`git push\`). Never force-push over the contributor's commits unless a rebase you performed requires it, and never open a new PR.`,
+    `4. Run the repo's own tests for the code you touched and confirm they pass, then commit with a message that says what you fixed and that it answers the review, and push to the PR's own branch with \`git push\`. Never force-push over the contributor's commits unless a rebase you performed requires it, and never open a new PR.`,
     ...mergeGate,
     '',
     '## Stop instead of merging if',
@@ -138,13 +93,8 @@ export async function spawnPrRemediationFollowUp({ app, repoFullName, pullReques
   const headRefName = typeof pullRequest?.headRefName === 'string' ? pullRequest.headRefName.trim() : '';
   const authorLogin = typeof pullRequest?.authorLogin === 'string' ? pullRequest.authorLogin.trim() : '';
   const headSha = typeof pullRequest?.headSha === 'string' ? pullRequest.headSha.trim().toLowerCase() : '';
-  // `headRefName` joins the required set now that PortOS attaches the worktree
-  // itself: without the branch name there is nothing to check out, and cutting a
-  // fresh branch would put the fixes somewhere the PR never sees.
-  // The screened head is required too: it is what the worktree is pinned to, and
-  // an unpinned agent would run whatever the branch holds when it starts.
   if (!app?.id || !app?.repoPath || !repoFullName || !Number.isInteger(number) || !authorLogin || !headRefName
-    || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(headSha)) {
+    || !canRunHostPrRemediation(writeAccess, pullRequest.forkHead) || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(headSha)) {
     return { status: PR_REMEDIATION_SPAWN.FAILED, task: null };
   }
 
@@ -169,13 +119,8 @@ export async function spawnPrRemediationFollowUp({ app, repoFullName, pullReques
       // worktree attach to it (see the module header).
       prRemediationHeadSha: headSha,
       prRemediationAuthorLogin: authorLogin,
-      prRemediationWriteAccess: writeAccess || null,
-      // Attach the worktree to the PR's own head branch rather than cutting a
-      // fresh one — the deliverable is commits ON that branch. `forkHead` is how
-      // the attach reaches a branch that lives in a fork and therefore has no
-      // `origin/<branch>`; null for a same-repo head, where origin resolves it.
+      prRemediationWriteAccess: writeAccess,
       existingBranch: headRefName,
-      forkHead: normalizeForkHead(pullRequest?.forkHead),
     },
     context: renderContext({
       repoFullName,
@@ -183,14 +128,10 @@ export async function spawnPrRemediationFollowUp({ app, repoFullName, pullReques
       url,
       headRefName,
       headSha,
-      forkHead: pullRequest.forkHead,
       authorLogin,
       reason: reason || 'the review did not clear it for an automatic merge',
-      writeAccess,
       mergeHandoff: isMergeHandoffEnabled(app?.mergeHandoffMinQueuedRuns),
     }),
-    // PortOS provisions the worktree and checks out the PR's head branch, fork
-    // or not (see the module header).
     useWorktree: true,
     // The PR already exists. Cleanup must not open a second one.
     openPR: false,

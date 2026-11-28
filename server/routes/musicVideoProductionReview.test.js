@@ -4,6 +4,7 @@ import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import { makePathsProxy, lazyTempDataRoot, cleanupTempDataRoots } from '../lib/mockPathsDataRoot.js';
 import { applyMusicVideoEdit } from '../lib/musicVideo/musicVideoEditResult.js';
+import { summarizeMusicVideoProject } from '../lib/musicVideo/musicVideoSummary.js';
 
 const author = vi.hoisted(() => ({ sections: [], calls: 0, prompts: [] }));
 vi.mock('../services/promptRunner.js', () => ({
@@ -95,12 +96,16 @@ describe('human-reviewed Music Video workflow', () => {
     const full = await request(app).get(base);
     expect(full.body.renderDependencyState.status).toBe('current');
     expect(full.body.productionReadiness).toMatchObject({ art: { approved: true }, storyboard: { approved: true } });
+    expect(full.body.productionReview.approvalHistory).toHaveLength(2);
+    expect(Object.keys(full.body.productionReview.reviewedRevisions)).toHaveLength(2);
     const summary = async () => {
       const response = await request(app).get('/api/music-video?summary=1&limit=500');
       expect(response.status).toBe(200);
       return response.body.items.find(item => item.id === project.id);
     };
-    expect(await summary()).toMatchObject({ status: 'complete', runStatus: 'awaiting-approval', runAwaiting: false });
+    const card = await summary();
+    expect(card).toMatchObject({ status: 'complete', runStatus: 'awaiting-approval', runAwaiting: false });
+    expect(card).toEqual(JSON.parse(JSON.stringify(summarizeMusicVideoProject(full.body, full.body.productionReadiness))));
     expect(await store.getProject(project.id)).toEqual(before);
     await store.mutateProjectRecord(project.id, current => ({ project: { ...current,
       revisions: [{ id: 'synthetic-revision', status: 'open', sections: [] }],

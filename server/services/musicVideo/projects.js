@@ -78,11 +78,19 @@ const syncCatalogLinks = (id) => queueProjectCatalogLinkSync(id, { getProject })
 
 const hasLinkedSubjects = (project) => Array.isArray(project?.concept?.subjects) && project.concept.subjects.some((subject) => subject?.ingredientId);
 
-export async function listProjects(options = {}) {
-  const projects = await (await selectBackend()).listProjects(options);
+async function describeListedProjects(projects) {
   if (getBackendName() !== 'postgres' || !projects.some(hasLinkedSubjects)) return projects;
   const { resolveProjectsCatalogDescriptions } = await import('./subjectDescriptionSync.js');
   return resolveProjectsCatalogDescriptions(projects);
+}
+
+export async function listProjects(options = {}) {
+  return describeListedProjects(await (await selectBackend()).listProjects(options));
+}
+
+/** Inputs for index cards, with archived review evidence omitted. */
+export async function listProjectSummaries(options = {}) {
+  return describeListedProjects(await (await selectBackend()).listProjectSummaries(options));
 }
 
 /** Live `{ id, name }` rows for the sidebar's Music Video sub-nav. */
@@ -100,9 +108,7 @@ export async function listMidiSourceRows() {
 
 export async function listProjectPage(options = {}) {
   const page = await (await selectBackend()).listProjectPage(options);
-  if (getBackendName() !== 'postgres' || !page.items.some(hasLinkedSubjects)) return page;
-  const { resolveProjectsCatalogDescriptions } = await import('./subjectDescriptionSync.js');
-  return { ...page, items: await resolveProjectsCatalogDescriptions(page.items) };
+  return { ...page, items: await describeListedProjects(page.items) };
 }
 
 /** Ids of projects that may count toward a catalog record's completion (projectFilmActions.listProjectCompletion). */
@@ -110,9 +116,9 @@ export async function listCompletionCandidateIds(ingredientIds) {
   return (await selectBackend()).listCompletionCandidateIds(ingredientIds);
 }
 
-/** Stored records for a batch of ids, unpresented (projectFilmActions.listProjectCompletion). */
-export async function getStoredProjectsByIds(ids) {
-  return (await selectBackend()).getProjectsByIds(ids);
+/** Inputs for completion classification, with archived review evidence omitted. */
+export async function getProjectSummariesByIds(ids) {
+  return (await selectBackend()).getProjectSummariesByIds(ids);
 }
 
 /** The record exactly as stored, with no dependency or catalog presentation (a pacing recut hashes it). */

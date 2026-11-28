@@ -14,10 +14,13 @@ import {
   MUSIC_VIDEO_CHECKIN_MODES,
 } from '../musicVideoAutomation.js';
 import {
+  CREDITS_OUTRO_BG_IMAGE_PATTERN,
   CREDITS_OUTRO_COLOR_PATTERN,
   CREDITS_OUTRO_FONT_IDS,
   CREDITS_OUTRO_LAYOUTS,
   CREDITS_OUTRO_LIMITS,
+  CREDITS_OUTRO_SOCIAL_PLATFORMS,
+  CREDITS_OUTRO_STYLES,
 } from '../musicVideoCreditsOutro.js';
 import { festivalPacketSchema } from '../musicVideoFestivalPacket.js';
 import { MUSIC_VIDEO_CAMERA_FRAME_ASPECTS } from '../musicVideoFilmLook.js';
@@ -513,6 +516,7 @@ const musicVideoCreditsOutroSchema = z.object({
   enabled: z.boolean().optional(),
   durationSec: z.number().min(CREDITS_OUTRO_LIMITS.durationMin).max(CREDITS_OUTRO_LIMITS.durationMax).optional(),
   layout: z.enum(CREDITS_OUTRO_LAYOUTS).optional(),
+  style: z.enum(CREDITS_OUTRO_STYLES).optional(),
   title: z.string().max(CREDITS_OUTRO_LIMITS.textMax).optional(),
   artist: z.string().max(CREDITS_OUTRO_LIMITS.textMax).optional(),
   quoteTitle: z.boolean().optional(),
@@ -522,10 +526,16 @@ const musicVideoCreditsOutroSchema = z.object({
   textColor: z.string().regex(CREDITS_OUTRO_COLOR_PATTERN).optional(),
   labelColor: z.string().regex(CREDITS_OUTRO_COLOR_PATTERN).optional(),
   backgroundColor: z.string().regex(CREDITS_OUTRO_COLOR_PATTERN).optional(),
+  accentColor: z.string().regex(CREDITS_OUTRO_COLOR_PATTERN).optional(),
+  backgroundImageId: z.string().regex(CREDITS_OUTRO_BG_IMAGE_PATTERN).nullable().optional(),
   lines: z.array(z.object({
     role: z.string().max(CREDITS_OUTRO_LIMITS.textMax).optional(),
     name: z.string().max(CREDITS_OUTRO_LIMITS.blockTextMax).optional(),
   }).strict()).max(CREDITS_OUTRO_LIMITS.linesMax).optional(),
+  socials: z.array(z.object({
+    platform: z.enum(CREDITS_OUTRO_SOCIAL_PLATFORMS),
+    handle: z.string().max(CREDITS_OUTRO_LIMITS.handleMax),
+  }).strict()).max(CREDITS_OUTRO_LIMITS.socialsMax).optional(),
   footer: z.string().max(CREDITS_OUTRO_LIMITS.textMax).optional(),
 }).strict();
 

@@ -641,13 +641,30 @@ describe('codex provider — image harvest', () => {
       await mkdir(sessionsDir, { recursive: true });
       await writeFile(join(sessionsDir, `rollout-2026-06-22T00-19-45-${sessionId}.jsonl`), `${lines.join('\n')}\n`);
     };
-    const finishSession = async (sessionId, prompt = JOB_PROMPT) => {
-      const job = await codex.generateImage({ prompt });
+    const closeSession = (sessionId) => {
       const { child } = spawnCalls[0];
       child.stderr.emit('data', Buffer.from(`session id: ${sessionId}\n`));
       child.exitCode = 0;
       child.emit('close', 0, null);
-      return job;
+    };
+    const expectSessionRender = async (sessionId) => {
+      // These logs are already on disk. Give their filesystem reads the normal
+      // harvest budget under CI load and keep the short expiry for negative cases.
+      codex._internals.setHarvestTimeoutForTests();
+      const job = await codex.generateImage({ prompt: JOB_PROMPT });
+      const terminal = [];
+      const recordTerminal = type => event => {
+        if (event.generationId === job.jobId) terminal.push({ type, ...event });
+      };
+      imageGenEvents.on('completed', recordTerminal('completed'));
+      imageGenEvents.on('failed', recordTerminal('failed'));
+      closeSession(sessionId);
+
+      await vi.waitFor(() => {
+        expect(terminal[0], 'No terminal image harvest event after the Codex session closed').toBeDefined();
+      }, { timeout: 10_000 });
+      expect(terminal, terminal[0].error).toEqual([expect.objectContaining({ type: 'completed' })]);
+      expect(await readFile(join(FAKE_IMAGES_DIR, job.filename))).toEqual(png('real render'));
     };
 
     it('saves the real render when an unrelated call produced a newer file', async () => {
@@ -662,13 +679,7 @@ describe('codex provider — image harvest', () => {
         imageItem({ revisedPrompt: `${JOB_PROMPT}, cinematic`, savedPath: join(codexDir, 'exec-real.png') }),
         imageItem({ revisedPrompt: STRAY_PROMPT, savedPath: join(codexDir, 'exec-stray.png') }),
       ]);
-      const completed = vi.fn();
-      imageGenEvents.on('completed', completed);
-
-      const job = await finishSession(sessionId);
-
-      await vi.waitFor(() => expect(completed).toHaveBeenCalledTimes(1));
-      expect(await readFile(join(FAKE_IMAGES_DIR, job.filename))).toEqual(png('real render'));
+      await expectSessionRender(sessionId);
     });
 
     it('picks the real render from images kept only in the session log', async () => {
@@ -677,13 +688,7 @@ describe('codex provider — image harvest', () => {
         imageItem({ revisedPrompt: JOB_PROMPT, result: png('real render').toString('base64') }),
         imageItem({ revisedPrompt: STRAY_PROMPT, result: png('stray dashboard').toString('base64') }),
       ]);
-      const completed = vi.fn();
-      imageGenEvents.on('completed', completed);
-
-      const job = await finishSession(sessionId);
-
-      await vi.waitFor(() => expect(completed).toHaveBeenCalledTimes(1));
-      expect(await readFile(join(FAKE_IMAGES_DIR, job.filename))).toEqual(png('real render'));
+      await expectSessionRender(sessionId);
     });
 
     it('picks the real render kept only in the log over a lone stray file on disk', async () => {
@@ -695,13 +700,7 @@ describe('codex provider — image harvest', () => {
         imageItem({ revisedPrompt: JOB_PROMPT, result: png('real render').toString('base64') }),
         imageItem({ revisedPrompt: STRAY_PROMPT, savedPath: join(codexDir, 'exec-stray.png') }),
       ]);
-      const completed = vi.fn();
-      imageGenEvents.on('completed', completed);
-
-      const job = await finishSession(sessionId);
-
-      await vi.waitFor(() => expect(completed).toHaveBeenCalledTimes(1));
-      expect(await readFile(join(FAKE_IMAGES_DIR, job.filename))).toEqual(png('real render'));
+      await expectSessionRender(sessionId);
     });
 
     it('fails with a clear reason and saves nothing when no image matches the prompt', async () => {
@@ -713,7 +712,8 @@ describe('codex provider — image harvest', () => {
       const failed = vi.fn();
       imageGenEvents.on('failed', failed);
 
-      const job = await finishSession(sessionId);
+      const job = await codex.generateImage({ prompt: JOB_PROMPT });
+      closeSession(sessionId);
 
       await vi.waitFor(() => expect(failed).toHaveBeenCalledTimes(1));
       expect(failed.mock.calls[0][0].error).toMatch(/made 2 images.*none could be matched to this job's prompt/);
@@ -730,7 +730,8 @@ describe('codex provider — image harvest', () => {
       const failed = vi.fn();
       imageGenEvents.on('failed', failed);
 
-      await finishSession(sessionId);
+      await codex.generateImage({ prompt: JOB_PROMPT });
+      closeSession(sessionId);
 
       await vi.waitFor(() => expect(failed).toHaveBeenCalledTimes(1));
       expect(failed.mock.calls[0][0].error).not.toContain('No image_gen call was observed');

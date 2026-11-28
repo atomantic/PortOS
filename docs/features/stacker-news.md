@@ -32,7 +32,7 @@ accounts its user explicitly adds.
   the deterministic hidden-content checks and Llama Prompt Guard 2 apply here
   exactly as they do to every other ingress, and content over the configured
   input limit is refused rather than truncated and scanned as a prefix. The
-  policy is configurable under **Models > LLMs > Abuse Guard**; the source is
+  policy is configurable under **Models → Abuse Guard**; the source is
   public, so it is not restricted to a loopback classifier. A block persists a
   `policy` row naming the screening code and escalates the item. Screening
   fails closed: with the classifier not installed, and the shipped `required`

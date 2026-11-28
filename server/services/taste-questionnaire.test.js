@@ -1,5 +1,5 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdir, readFile, rm, writeFile } from 'fs/promises';
+import { chmod, mkdir, readFile, rm, stat, writeFile } from 'fs/promises';
 import { basename, join } from 'path';
 import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
 
@@ -499,7 +499,10 @@ describe('AESTHETICS.md metadata write failures (#17643)', () => {
   async function seedTwin(previous) {
     await rm(twinDir(), { recursive: true, force: true });
     await mkdir(twinDir(), { recursive: true });
-    if (previous !== null) await writeFile(aestheticsPath(), previous);
+    if (previous !== null) {
+      await writeFile(aestheticsPath(), previous);
+      if (process.platform !== 'win32') await chmod(aestheticsPath(), 0o644);
+    }
     const { cache, saveMeta } = await import('./digital-twin-meta.js');
     cache.meta.data = null;
     cache.meta.timestamp = 0;
@@ -527,6 +530,10 @@ describe('AESTHETICS.md metadata write failures (#17643)', () => {
   }
 
   async function expectAgreedPublication(previous) {
+    if (process.platform !== 'win32') {
+      expect((await stat(aestheticsPath())).mode & 0o777).toBe(0o600);
+      expect((await stat(profilePath())).mode & 0o777).toBe(0o600);
+    }
     const { loadMeta } = await import('./digital-twin-meta.js');
     const meta = JSON.parse(await readFile(metaPath(), 'utf8'));
     expect(await loadMeta()).toEqual(meta);
@@ -550,7 +557,10 @@ describe('AESTHETICS.md metadata write failures (#17643)', () => {
     await expectMetaFailure(() => taste.submitAnswer('movies', 'movies-core-1', ANSWER));
 
     if (previous === null) await expect(readFile(aestheticsPath())).rejects.toMatchObject({ code: 'ENOENT' });
-    else expect(await readFile(aestheticsPath())).toEqual(previous);
+    else {
+      expect(await readFile(aestheticsPath())).toEqual(previous);
+      if (process.platform !== 'win32') expect((await stat(aestheticsPath())).mode & 0o777).toBe(0o600);
+    }
     expect((await readProfile()).sections.movies.responses.map((response) => response.answer)).toEqual([ANSWER]);
 
     await taste.submitAnswer('movies', 'movies-core-1', ANSWER);

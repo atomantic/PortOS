@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { MESSAGE_COMPOSE_PATTERN_DEFAULTS } from '../../../../server/lib/messageSelectorDefaults.js';
 import { findEnabledByRole } from '../../test/enabledBarrier.js';
 
 const api = vi.hoisted(() => ({
@@ -209,6 +210,61 @@ describe('SyncTab compose selectors', () => {
 
     await waitFor(() => expect(api.updateMessageSelectors).toHaveBeenCalledExactlyOnceWith(provider, updated));
     expect(await controls.findByText('.updated-control')).toBeVisible();
+  });
+});
+
+describe('SyncTab send confirmation patterns', () => {
+  it('saves, reloads and clears both Outlook overrides without treating them as selectors', async () => {
+    let saved = {};
+    api.getMessageSelectors.mockImplementation(async () => ({ outlook: saved }));
+    api.updateMessageSelectors.mockImplementation(async (_provider, selectors) => {
+      saved = selectors;
+      return saved;
+    });
+
+    const openEditor = async () => {
+      const card = within(screen.getByRole('heading', { name: 'outlook' }).closest('.bg-port-card'));
+      const edit = card.getByRole('button', { name: 'Edit selectors' });
+      await waitFor(() => expect(edit).toBeEnabled());
+      fireEvent.click(card.getByText('Browser compose selectors'));
+      fireEvent.click(edit);
+      const ack = card.getByRole('textbox', { name: 'Send acknowledgement pattern' });
+      const refusal = card.getByRole('textbox', { name: 'Send refusal pattern' });
+      expect(ack).toHaveAccessibleDescription(`Default ${MESSAGE_COMPOSE_PATTERN_DEFAULTS.sendAckPattern}`);
+      expect(refusal).toHaveAccessibleDescription(`Default ${MESSAGE_COMPOSE_PATTERN_DEFAULTS.sendRefusalPattern}`);
+      expect(card.queryByRole('textbox', { name: 'sendAckPattern' })).toBeNull();
+      return { card, ack, refusal };
+    };
+
+    const first = renderTab();
+    const { card, ack, refusal } = await openEditor();
+    expect(ack).toHaveValue('');
+    expect(refusal).toHaveValue('');
+
+    fireEvent.change(ack, { target: { value: '(unclosed' } });
+    fireEvent.click(card.getByRole('button', { name: 'Save' }));
+    expect(toast.error).toHaveBeenCalledWith('Send acknowledgement pattern must be a valid regular expression.');
+    expect(api.updateMessageSelectors).not.toHaveBeenCalled();
+
+    const overrides = { sendAckPattern: '^Nachricht gesendet$', sendRefusalPattern: '^Nachricht nicht gesendet$' };
+    fireEvent.change(ack, { target: { value: overrides.sendAckPattern } });
+    fireEvent.change(refusal, { target: { value: overrides.sendRefusalPattern } });
+    fireEvent.click(card.getByRole('button', { name: 'Save' }));
+    expect(await card.findByText(overrides.sendRefusalPattern)).toBeVisible();
+    expect(api.updateMessageSelectors).toHaveBeenCalledExactlyOnceWith('outlook', overrides);
+    first.unmount();
+
+    renderTab();
+    const reloaded = await openEditor();
+    expect(reloaded.ack).toHaveValue(overrides.sendAckPattern);
+    expect(reloaded.refusal).toHaveValue(overrides.sendRefusalPattern);
+    fireEvent.change(reloaded.ack, { target: { value: '' } });
+    fireEvent.change(reloaded.refusal, { target: { value: '  ' } });
+    fireEvent.click(reloaded.card.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(api.updateMessageSelectors).toHaveBeenLastCalledWith('outlook', {}));
+    await waitFor(() => expect(reloaded.card.queryByRole('button', { name: 'Save' })).toBeNull());
+    expect(reloaded.card.queryByText(overrides.sendAckPattern)).toBeNull();
+    expect(reloaded.card.queryByText(overrides.sendRefusalPattern)).toBeNull();
   });
 });
 

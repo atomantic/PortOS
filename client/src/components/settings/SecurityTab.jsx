@@ -194,10 +194,12 @@ export function SecurityTab() {
             </h2>
             <p className="text-sm text-gray-400 mt-1">
               PortOS can execute commands and access files on this computer.
-              Without a password, any reachable LAN or Tailscale device, including
-              a compromised peer, may use its APIs to control this host. Set a strong,
-              unique password to reduce that risk. Keep PortOS private: a password
-              does not make public tunnels, gateways, or port forwarding safe.
+              Without a password, host control stays restricted to loopback on this
+              machine, while ordinary reads remain open to reachable LAN or Tailscale
+              devices and remote operator sign-in is unavailable. Set a strong,
+              unique password to gate all API and data access and sign in remotely.
+              Keep PortOS private: a password does not make public tunnels, gateways,
+              or port forwarding safe.
             </p>
           </div>
         </div>
@@ -208,6 +210,13 @@ export function SecurityTab() {
         <h3 className="text-md font-semibold text-white flex items-center gap-2">
           <Lock className="w-4 h-4" /> {enabled ? 'Change password' : 'Set a password'}
         </h3>
+        {!enabled && (
+          <p className="text-xs text-gray-400">
+            First-time setup requires a loopback URL on the PortOS host (for example{' '}
+            <code className="text-gray-300">http://localhost:5555</code> or{' '}
+            <code className="text-gray-300">http://localhost:5553</code> with HTTPS).
+          </p>
+        )}
         {enabled && (
           <FormField label="Current password" labelClassName="block text-sm text-gray-300 mb-1">
             <input

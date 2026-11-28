@@ -64,17 +64,17 @@ export default function PeerAuthEditor({ peer, onRefresh }) {
           className="bg-port-bg border border-port-border rounded px-2 py-0.5 text-xs text-white focus:outline-hidden focus:border-port-accent flex-1 min-w-[120px]"
           autoFocus
         />
-        <button onClick={save} disabled={saving || !password} aria-label="Save credentials" className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 text-port-success hover:text-port-success/80 disabled:opacity-50"><Check size={14} /></button>
-        <button onClick={() => setEditing(false)} aria-label="Cancel" className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 text-gray-500 hover:text-white"><X size={14} /></button>
+        <button type="button" onClick={save} disabled={saving || !password} aria-label="Save credentials" className="inline-flex items-center justify-center rounded border border-port-success/40 bg-port-bg/60 p-1 pointer-coarse:min-h-11 pointer-coarse:min-w-11 text-port-success hover:bg-port-bg hover:border-port-success/70 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-port-accent disabled:opacity-50 transition-colors"><Check size={14} /></button>
+        <button type="button" onClick={() => setEditing(false)} aria-label="Cancel" className="inline-flex items-center justify-center rounded border border-port-border bg-port-bg/60 p-1 pointer-coarse:min-h-11 pointer-coarse:min-w-11 text-gray-400 hover:text-white hover:bg-port-bg focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-port-accent transition-colors"><X size={14} /></button>
         {hasAuth && (
-          <button onClick={clear} disabled={saving} className="text-[10px] text-gray-500 hover:text-port-error underline disabled:opacity-50 pointer-coarse:min-h-11 pointer-coarse:px-2 pointer-coarse:inline-flex pointer-coarse:items-center">remove</button>
+          <button type="button" onClick={clear} disabled={saving} className="inline-flex items-center rounded border border-port-error/40 bg-port-bg/60 px-2 py-0.5 text-[11px] text-port-error hover:bg-port-error/10 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-port-accent disabled:opacity-50 pointer-coarse:min-h-11 pointer-coarse:px-2 pointer-coarse:inline-flex pointer-coarse:items-center transition-colors">remove</button>
         )}
       </div>
     );
   }
 
   return (
-    <div className="mt-0.5 flex items-center gap-1.5 flex-wrap">
+    <div className="mt-1 flex items-center gap-1.5 flex-wrap">
       {hasAuth ? (
         <Pill tone="success" size="xs" bordered={false} icon={Lock} title="Outbound requests to this peer send an HTTP Basic credential">
           credential set{peer.auth?.username ? ` · ${peer.auth.username}` : ''}
@@ -85,8 +85,9 @@ export default function PeerAuthEditor({ peer, onRefresh }) {
         </Pill>
       ) : null}
       <button
+        type="button"
         onClick={startEdit}
-        className={`text-[10px] underline pointer-coarse:min-h-11 pointer-coarse:px-2 pointer-coarse:inline-flex pointer-coarse:items-center ${peer.authRequired && !hasAuth ? 'text-port-warning hover:text-port-warning/80' : 'text-gray-500 hover:text-white'}`}
+        className={`inline-flex items-center rounded border px-2 py-0.5 text-[11px] focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-port-accent pointer-coarse:min-h-11 pointer-coarse:px-2 pointer-coarse:inline-flex pointer-coarse:items-center transition-colors ${peer.authRequired && !hasAuth ? 'border-port-warning/50 bg-port-warning/10 text-port-warning hover:bg-port-warning/20' : 'border-port-border bg-port-bg/60 text-gray-300 hover:text-white hover:border-port-accent/50 hover:bg-port-bg'}`}
         title="Set an HTTP Basic username/password for a peer behind an auth proxy"
       >
         {hasAuth ? 'edit credential' : 'set credential'}

@@ -976,7 +976,9 @@ describe('POST /api/database/sync endpoint safety', () => {
     'pins %s export and import to distinct endpoints with configured credentials',
     async (mode, port, targetPort) => {
       POOL_CONFIG.port = port;
-      const mkdir = vi.spyOn(await import('fs'), 'mkdirSync').mockImplementation(() => undefined);
+      const fsMod = await import('fs');
+      const mkdir = vi.spyOn(fsMod, 'mkdirSync').mockImplementation(() => undefined);
+      const chmod = vi.spyOn(fsMod, 'chmodSync').mockImplementation(() => undefined);
       createReadStream.mockImplementationOnce(() => Readable.from([Buffer.from('SELECT 1;\n')]));
       execFile.mockImplementation((_cmd, args, _opts, callback) => {
         callback(null, args.includes('status') ? `Current mode: ${mode}` : '1', '');
@@ -999,9 +1001,148 @@ describe('POST /api/database/sync endpoint safety', () => {
         expect(execFile.mock.calls.filter(([, args]) => args.includes('export'))).toHaveLength(0);
       } finally {
         mkdir.mockRestore();
+        chmod.mockRestore();
       }
     }
   );
+
+  it('provisions the native role via stdin \\getenv without leaking pgPassword into argv or error logs and removes the temporary sync dump', async () => {
+    POOL_CONFIG.port = 5561;
+    const fsMod = await import('fs');
+    const mkdir = vi.spyOn(fsMod, 'mkdirSync').mockImplementation(() => undefined);
+    const chmod = vi.spyOn(fsMod, 'chmodSync').mockImplementation(() => undefined);
+    const rm = vi.spyOn(fsMod, 'rmSync').mockImplementation(() => undefined);
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    createReadStream.mockImplementationOnce(() => Readable.from([Buffer.from('SELECT 1;\n')]));
+
+    const stdinByCall = [];
+    execFile.mockImplementation((cmd, args, opts, callback) => {
+      let capturedInput = '';
+      const child = {
+        pid: 0,
+        stdin: {
+          end(chunk) {
+            capturedInput += String(chunk ?? '');
+            stdinByCall.push({ cmd, args, env: opts?.env, input: capturedInput });
+          },
+        },
+      };
+      if (args.includes('status')) {
+        callback(null, 'Current mode: docker', '');
+      } else if (cmd === 'psql' && args.includes('-tA')) {
+        // Role does not exist yet — triggers CREATE ROLE via stdin + \getenv.
+        callback(null, '', '');
+      } else if (cmd === 'psql' && args.includes('ON_ERROR_STOP=1')) {
+        // Simulate a failure whose stderr echoes the password to verify log redaction.
+        const err = Object.assign(new Error('role failed: example_password'), { code: 1 });
+        callback(err, '', 'ERROR: invalid password example_password');
+      } else {
+        callback(null, '1', '');
+      }
+      return child;
+    });
+    const child = new EventEmitter();
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    child.stdin = new PassThrough();
+    child.stdin.resume();
+    child.stdin.on('finish', () => child.emit('close', 0));
+    spawn.mockReturnValue(child);
+
+    try {
+      const res = await request(makeApp()).post('/api/database/sync').send({});
+      expect(res.status).toBe(200);
+      // Password must never appear in any child argv.
+      for (const [, args] of execFile.mock.calls) {
+        expect(args.join(' ')).not.toContain('example_password');
+      }
+      for (const [, args] of spawn.mock.calls) {
+        expect(args.join(' ')).not.toContain('example_password');
+      }
+      // Role creation uses psql stdin + \getenv with PORTOS_BOOTSTRAP_PASSWORD in env only.
+      const createCall = stdinByCall.find((c) => c.input.includes('CREATE ROLE'));
+      expect(createCall).toBeDefined();
+      expect(createCall.input).toContain('\\getenv role PORTOS_BOOTSTRAP_ROLE');
+      expect(createCall.input).toContain('\\getenv pw PORTOS_BOOTSTRAP_PASSWORD');
+      expect(createCall.env).toMatchObject({
+        PORTOS_BOOTSTRAP_ROLE: 'example_role',
+        PORTOS_BOOTSTRAP_PASSWORD: 'example_password',
+      });
+      // Failure logs must redact pgPassword.
+      expect(consoleError).toHaveBeenCalled();
+      for (const call of consoleError.mock.calls) {
+        expect(call.join(' ')).not.toContain('example_password');
+      }
+      // Temporary sync dump is cleaned up after sync.
+      expect(rm).toHaveBeenCalledWith(expect.stringMatching(/portos-docker-backup-\d+\.sql$/), { force: true });
+    } finally {
+      mkdir.mockRestore();
+      chmod.mockRestore();
+      rm.mockRestore();
+      consoleError.mockRestore();
+    }
+  });
+
+  it('restricts export dump permissions, scrubs home paths, and removes partial dumps on failure', async () => {
+    const fsMod = await import('fs');
+    const { homedir } = await import('os');
+    const mkdir = vi.spyOn(fsMod, 'mkdirSync').mockImplementation(() => undefined);
+    const chmod = vi.spyOn(fsMod, 'chmodSync').mockImplementation(() => undefined);
+    const rm = vi.spyOn(fsMod, 'rmSync').mockImplementation(() => undefined);
+
+    try {
+      // Explicit backend export sets 0o700 dir / 0o600 dump file.
+      mockExecFile([
+        { exitCode: 0, stdout: '' },
+        { exitCode: 0, stdout: '170004\n' },
+        { exitCode: 0, stdout: '' },
+      ]);
+      const okRes = await request(makeApp()).post('/api/database/export').send({ backend: 'native' });
+      expect(okRes.status).toBe(200);
+      expect(mkdir).toHaveBeenCalledWith(expect.stringMatching(/db-dumps$/), { recursive: true, mode: 0o700 });
+      if (process.platform !== 'win32') {
+        expect(chmod).toHaveBeenCalledWith(expect.stringMatching(/db-dumps$/), 0o700);
+        expect(chmod).toHaveBeenCalledWith(expect.stringMatching(/portos-native-backup-\d+\.sql$/), 0o600);
+      }
+
+      // Default db.sh export scrubs the running user's home directory from dumpFile and output.
+      const home = homedir();
+      if (home && home !== '/' && home !== '\\') {
+        const fakeDump = `${home}/PortOS/data/db-dumps/portos-20261128.sql`;
+        mockExecFile([{ exitCode: 0, stdout: `Exporting...\n${fakeDump}\n` }]);
+        const scrubbedRes = await request(makeApp()).post('/api/database/export').send({});
+        expect(scrubbedRes.status).toBe(200);
+        expect(scrubbedRes.body.dumpFile).toBe('~/PortOS/data/db-dumps/portos-20261128.sql');
+        expect(scrubbedRes.body.output).not.toContain(home);
+      }
+
+      // Failed pg_dump cleans up any partial dump file.
+      rm.mockClear();
+      mockExecFile([
+        { exitCode: 0, stdout: '' },
+        { exitCode: 0, stdout: '170004\n' },
+        { exitCode: 1, stderr: 'pg_dump: connection failed' },
+      ]);
+      const failRes = await request(makeApp()).post('/api/database/export').send({ backend: 'native' });
+      expect(failRes.status).toBe(500);
+      expect(rm).toHaveBeenCalledWith(expect.stringMatching(/portos-native-backup-\d+\.sql$/), { force: true });
+
+      // Refuses export if dump directory permissions cannot be restricted on POSIX.
+      if (process.platform !== 'win32') {
+        execFile.mockClear();
+        chmod.mockImplementationOnce(() => { throw new Error('EPERM'); });
+        mockExecFile([{ exitCode: 0, stdout: '' }]);
+        const permFailRes = await request(makeApp()).post('/api/database/export').send({ backend: 'native' });
+        expect(permFailRes.status).toBe(500);
+        expect(permFailRes.body.error).toMatch(/dump directory permissions/i);
+        expect(execFile.mock.calls.filter(([cmd]) => cmd === 'pg_dump')).toHaveLength(0);
+      }
+    } finally {
+      mkdir.mockRestore();
+      chmod.mockRestore();
+      rm.mockRestore();
+    }
+  });
 
   it('rejects competing mutations while sync is pending and releases after failure', async () => {
     let finishProbe;

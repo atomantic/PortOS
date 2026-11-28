@@ -34,6 +34,8 @@ import { PATHS, isTopLevelEntryName } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { clamp } from '../../lib/vectorMath.js';
 import { fitFades } from '../../lib/videoTimelineFades.js';
+import { IMAGE_ASSET_KINDS, AUDIO_ASSET_KINDS, MAX_SEGMENTS, MAX_OVERLAYS, MAX_AUDIO_TRACKS, MAX_FADE_SEC, MAX_STILL_SEC, MAX_VOLUME } from '../../lib/videoTimelineConstraints.js';
+export { IMAGE_ASSET_KINDS, AUDIO_ASSET_KINDS, MAX_SEGMENTS, MAX_OVERLAYS, MAX_AUDIO_TRACKS, MAX_FADE_SEC, MAX_STILL_SEC, MAX_VOLUME } from '../../lib/videoTimelineConstraints.js';
 
 export { fitFades } from '../../lib/videoTimelineFades.js';
 
@@ -47,17 +49,6 @@ export const ASSET_ROOTS = {
   audio: PATHS.audio,
   music: PATHS.music,
 };
-
-export const IMAGE_ASSET_KINDS = ['images', 'video-thumbnails'];
-export const AUDIO_ASSET_KINDS = ['audio', 'music'];
-
-export const MAX_SEGMENTS = 200;
-export const MAX_OVERLAYS = 50;
-export const MAX_AUDIO_TRACKS = 20;
-
-export const MAX_FADE_SEC = 30;
-export const MAX_STILL_SEC = 600;
-export const MAX_VOLUME = 4;
 
 const bad = (message, context) => new ServerError(message, { status: 400, code: 'VALIDATION_ERROR', context });
 

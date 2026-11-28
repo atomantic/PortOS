@@ -13,28 +13,14 @@
  *   POST   /api/feeds/items/read-all     — mark all items as read (query: feedId)
  */
 
+import { addFeedSchema, itemsQuerySchema, readAllQuerySchema } from '../lib/feedsValidation.js';
 import { Router } from 'express';
-import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import * as feedsService from '../services/feeds.js';
 import { parsePagination } from '../lib/queryValidation.js';
 
 const router = Router();
-
-const addFeedSchema = z.object({
-  url: z.string().url()
-});
-
-const feedIdQuery = { feedId: z.string().min(1).max(200).optional() };
-const itemsQuerySchema = z.object({
-  ...feedIdQuery,
-  unreadOnly: z.enum(['true', 'false']).optional(),
-  // parsePagination clamps these; the schema only refuses non-scalar values.
-  limit: z.string().max(20).optional(),
-  offset: z.string().max(20).optional(),
-});
-const readAllQuerySchema = z.object(feedIdQuery);
 
 // GET /api/feeds — list all feeds with unread counts
 router.get('/', asyncHandler(async (req, res) => {

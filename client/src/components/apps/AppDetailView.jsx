@@ -1,3 +1,4 @@
+import { openExternalUrl } from '../../utils/openExternalUrl.js';
 import { Suspense, useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Link, useParams, useNavigate, useSearchParams } from 'react-router';
 import {
@@ -465,7 +466,7 @@ function AppDetail() {
                 launchButtons.push(
                   <button
                     key="https"
-                    onClick={() => window.open(https, '_blank')}
+                    onClick={() => openExternalUrl(https)}
                     className="px-2 py-1 bg-port-accent/20 text-port-accent enabled:hover:bg-port-accent/30 transition-colors flex items-center gap-1"
                   >
                     <ExternalLink size={14} />
@@ -477,7 +478,7 @@ function AppDetail() {
                 launchButtons.push(
                   <button
                     key="http"
-                    onClick={() => window.open(http, '_blank')}
+                    onClick={() => openExternalUrl(http)}
                     className={`px-2 py-1 transition-colors flex items-center gap-1 ${
                       httpIsSecondary
                         ? 'bg-port-border/30 text-gray-300 enabled:hover:bg-port-border/50'
@@ -493,7 +494,7 @@ function AppDetail() {
                 launchButtons.push(
                   <button
                     key="dev"
-                    onClick={() => window.open(dev, '_blank')}
+                    onClick={() => openExternalUrl(dev)}
                     className="px-2 py-1 bg-port-warning/20 text-port-warning enabled:hover:bg-port-warning/30 transition-colors flex items-center gap-1"
                   >
                     <ExternalLink size={14} />

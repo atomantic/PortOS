@@ -193,7 +193,7 @@ async function assertMetaWritable() {
 export async function saveMeta(meta) {
   await ensureSoulDir();
   await assertMetaWritable();
-  await atomicWrite(META_FILE, meta);
+  await atomicWrite(META_FILE, meta, { mode: 0o600, dirMode: 0o700 });
   cache.meta.data = meta;
   cache.meta.timestamp = Date.now();
   digitalTwinEvents.emit('meta:changed', meta);

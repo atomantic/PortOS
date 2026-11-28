@@ -72,6 +72,18 @@ describe('MediaHostsChip', () => {
     expect(screen.getByRole('group', { name: 'Confirm Unnamed host (inst-a) as primary' })).toBeTruthy();
   });
 
+  it('sets aria-controls only while the holder panel is mounted', () => {
+    render(<MediaHostsChip entry={entry([holder('inst-self', 'This machine', { self: true }), holder('inst-a', 'Studio Mac')])} />);
+    const toggle = screen.getByRole('button', { name: /2 hosts/ });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(toggle).not.toHaveAttribute('aria-controls');
+
+    fireEvent.click(toggle);
+    const panel = screen.getByRole('region', { name: 'Machines holding this render' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(toggle).toHaveAttribute('aria-controls', panel.id);
+  });
+
   it('reports a copy its holder kept as a failure', async () => {
     api.makeMediaPrimary.mockResolvedValue({ primaryInstanceId: 'inst-self', released: [], pending: [], kept: [{ instanceId: 'inst-a', name: 'Studio Mac', reason: 'media delete is turned off there' }] });
     render(<MediaHostsChip entry={entry([holder('inst-self', 'This machine', { self: true }), holder('inst-a', 'Studio Mac')])} />);

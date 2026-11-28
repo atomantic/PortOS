@@ -45,9 +45,11 @@ async function repair(directory, store, uid) {
   }
 }
 
+export async function repairPrivateStores({ rootDir, platform = process.platform, uid = process.getuid?.() }, storeTree) {
+  if (platform === 'win32' || uid === undefined) return;
+  await repair(join(rootDir, 'data'), storeTree, uid);
+}
+
 export default {
-  async up({ rootDir, platform = process.platform, uid = process.getuid?.() }) {
-    if (platform === 'win32' || uid === undefined) return;
-    await repair(join(rootDir, 'data'), stores, uid);
-  },
+  up: context => repairPrivateStores(context, stores),
 };

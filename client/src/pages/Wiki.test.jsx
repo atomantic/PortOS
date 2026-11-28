@@ -29,6 +29,12 @@ describe('Wiki TABS ↔ nav manifest', () => {
       'overview:Overview', 'browse:Browse', 'search:Search', 'graph:Graph', 'log:Log',
     ]);
   });
+
+  it('uses compact icon-only tab labels below sm so all five sections fit on phones', async () => {
+    renderWiki('/wiki/overview');
+    const overviewTab = await screen.findByRole('tab', { name: 'Overview' });
+    expect(overviewTab.className).toContain('max-sm:min-w-[44px]');
+  });
 });
 
 function LocationProbe() {

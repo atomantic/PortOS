@@ -3,9 +3,9 @@
  * exercise sessions. AI analysis + Creative Director handoff land in Phase 2/3.
  */
 
+import { promoteSchema } from '../lib/writersRoomValidation.js';
 import { Router } from 'express';
 import { writersRoomExercisesQuerySchema } from '../lib/queryValidation.js';
-import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import {
@@ -78,10 +78,12 @@ router.delete('/folders/:id', asyncHandler(async (req, res) => {
 
 // No paging query preserves the legacy response for older callers.
 router.get('/works', asyncHandler(async (req, res) => {
-  if (req.query.limit === undefined && req.query.offset === undefined && req.query.cursor === undefined) {
+  const query = req.query;
+  const page = validateRequest(writersRoomWorksQuerySchema, query);
+  if (query.limit === undefined && query.offset === undefined && query.cursor === undefined) {
     return res.json(await listWorks());
   }
-  res.json(await listWorksPage(validateRequest(writersRoomWorksQuerySchema, req.query)));
+  res.json(await listWorksPage(page));
 }));
 
 router.post('/works', asyncHandler(async (req, res) => {
@@ -104,8 +106,6 @@ router.delete('/works/:id', asyncHandler(async (req, res) => {
 }));
 
 // ---------- pipeline bridge (item 6 of the WR↔Pipeline DRY unification) ----------
-
-const promoteSchema = z.object({ force: z.boolean().optional() });
 
 router.post('/works/:id/promote-to-pipeline', asyncHandler(async (req, res) => {
   const body = validateRequest(promoteSchema, req.body ?? {});

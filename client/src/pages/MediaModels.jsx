@@ -1,3 +1,4 @@
+import { Link } from 'react-router';
 /**
  * Media Models — manage the model catalog + clean up cached weights.
  *
@@ -583,7 +584,7 @@ export default function MediaModels() {
         <label htmlFor="model-support-request" className="block text-xs text-gray-400">Model or method, source links, and desired capabilities</label>
         <textarea id="model-support-request" value={supportRequest} disabled={requestingSupport} onChange={e => setSupportRequest(e.target.value)} maxLength={4000} rows={3} className="w-full bg-port-bg border border-port-border rounded p-2 text-white" />
         <button type="submit" disabled={requestingSupport || supportRequest.trim().length < 3} className="px-4 py-2 text-sm bg-port-accent/20 text-port-accent rounded disabled:opacity-50">{requestingSupport ? 'Queuing…' : 'Investigate and open PR'}</button>
-        {supportTask && <p role="status" className="text-sm text-port-success">{supportTask.duplicate ? 'Existing request found' : 'Request queued'}: {supportTask.id}. <a href="/cos/tasks" className="underline">View CoS tasks</a></p>}
+        {supportTask && <p role="status" className="text-sm text-port-success">{supportTask.duplicate ? 'Existing request found' : 'Request queued'}: {supportTask.id}. <Link to="/cos/tasks" className="underline">View CoS tasks</Link></p>}
       </form>
 
       {data.hubDir && (

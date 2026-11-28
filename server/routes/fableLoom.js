@@ -12,6 +12,7 @@ import { Router } from 'express';
 import { startEpisodeShotRun, getEpisodeShotRun, cancelEpisodeShotRun } from '../services/fableLoom/shotRuns.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
+import { isPaginationRequested, paginateArray } from '../lib/queryValidation.js';
 import {
   shotRunStartSchema,
   shotApplySchema,
@@ -116,8 +117,9 @@ const router = Router();
 // detail page's "Branching narratives" card). A blank value means "no filter",
 // so a caller can build the query from a possibly-unset id.
 router.get('/', asyncHandler(async (req, res) => {
-  const { seriesId } = validateRequest(loomListQuerySchema, req.query);
-  res.json(await listLoomSummaries({ seriesId: seriesId?.trim() || undefined }));
+  const query = validateRequest(loomListQuerySchema, req.query);
+  const records = await listLoomSummaries({ seriesId: query.seriesId?.trim() || undefined });
+  res.json(isPaginationRequested(query) ? paginateArray(records, query, { maxLimit: 500 }) : records);
 }));
 
 // Linked universe/series refs are validated by the service (createLoom /
@@ -436,7 +438,10 @@ router.post('/:id/episodes/:episodeId/sessions/preflight', asyncHandler(async (r
 
 router.post('/:id/episodes/:episodeId/sessions/host', asyncHandler(async (req, res) => {
   const input = validateRequest(hostedSessionCreateSchema, req.body);
-  res.status(201).json(await createHostedSession(req.params.id, req.params.episodeId, input));
+  const options = req.portosAuthContext?.sessionId
+    ? { ...input, ownerSessionId: req.portosAuthContext.sessionId }
+    : input;
+  res.status(201).json(await createHostedSession(req.params.id, req.params.episodeId, options));
 }));
 
 router.get('/sessions/:sessionId', asyncHandler(async (req, res) => {

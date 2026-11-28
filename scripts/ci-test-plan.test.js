@@ -830,7 +830,7 @@ describe('path-gated single-purpose jobs', () => {
     // The Docker containment live suite (#12844) is planner-gated the same way.
     expect(jobs['docker-containment-live']).toContain('if: fromJSON(needs.impact.outputs.plan).docker_containment_live\n');
     expect(jobs['docker-containment-live']).toContain("PORTOS_DOCKER_CONTAINMENT_LIVE: '1'");
-    expect(jobs['docker-containment-live']).toContain(`vitest run ${DOCKER_CONTAINMENT_LIVE_ENTRIES[0].replace('server/', '')}`);
+    expect(jobs['docker-containment-live']).toContain(`vitest run --configLoader native ${DOCKER_CONTAINMENT_LIVE_ENTRIES[0].replace('server/', '')}`);
     expect(jobs.gate).toMatch(/needs: \[[^\]]*\bdocker-containment-live\b/);
     expect(jobs.gate).toContain('CI_GATE_RESULT_DOCKER_CONTAINMENT_LIVE: ${{ needs.docker-containment-live.result }}');
   });
@@ -900,6 +900,7 @@ describe('path-gated single-purpose jobs', () => {
       'server/lib/windowsAgentProcess.js', 'server/lib/windowsAgentProcess.darwin.test.js', 'server/lib/darwinAgentSupervisor.py',
       'server/vitest.config.js', 'server/package-lock.json', 'server/.npmrc',
       'scripts/trusted-rebuilds.js', '.github/workflows/ci.yml', '.github/actions/setup-server/action.yml',
+      '.github/actions/server-vitest-cache/action.yml',
     ]) expect(buildCiTestPlan([file]).macosNative, file).toBe(true);
     for (const file of [
       'server/lib/windowsAgentSupervisor.ps1', 'server/lib/linuxAgentSupervisor.py', 'server/lib/bufferedSpawn.js',

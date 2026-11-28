@@ -1,9 +1,16 @@
-import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
-import { MemoryRouter, useLocation } from 'react-router';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
+import Brain from '../../../pages/Brain';
+
+vi.mock('../../../services/socket', async () => {
+  const { EventEmitter } = await import('node:events');
+  return { default: new EventEmitter() };
+});
+vi.mock('../../../services/apiBrain.js', () => ({
+  getBrainSummary: vi.fn().mockResolvedValue({ counts: {}, needsReview: 0 }),
+  getBrainSettings: vi.fn().mockResolvedValue({}),
+}));
 
 // The two views are covered by their own suites; this one proves the Ideas tab
 // mounts BOTH of them and that the active view is addressable from the URL.
@@ -51,12 +58,16 @@ describe('IdeasTab', () => {
     expect(screen.getByTestId('memory-tab')).toBeTruthy();
   });
 
-  // Regression guard: the panel shipped once with no caller at all, which left
-  // the whole IdeaLoom experience unreachable in the running app.
-  it('is the component the Brain page renders for its ideas tab', () => {
-    const clientSrc = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
-    const brainPage = readFileSync(join(clientSrc, 'pages', 'Brain.jsx'), 'utf8');
-    expect(brainPage).toContain("import('../components/brain/tabs/IdeasTab')");
-    expect(brainPage).toMatch(/case 'ideas':[\s\S]{0,120}<IdeasTab\b/);
+  it('renders the ideas view when Brain opens /brain/ideas', async () => {
+    render(
+      <MemoryRouter initialEntries={['/brain/ideas']}>
+        <Routes>
+          <Route path="/brain/:tab" element={<Brain />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole('tab', { name: 'IdeaLoom lists' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Ideas', selected: true })).toBeInTheDocument();
   });
 });

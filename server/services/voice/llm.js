@@ -12,6 +12,8 @@ import { managedOllamaBaseUrl } from '../../lib/ollamaContext.js';
 import { normalizeOpenAiBaseUrl } from '../../lib/localProviderRuntime.js';
 import { isConversationalGemma } from '../../lib/voiceModelCatalog.js';
 import { assertSecretEndpoint } from '../../lib/aiToolkit/endpointGuard.js';
+import { probeVoiceLlmResidency } from './llmResidency.js';
+import { emitToOperators } from '../socketIo.js';
 
 // Legacy env-based LM Studio default. Returns the OpenAI-compatible API base
 // INCLUDING the version path, so callers append `/models` / `/chat/completions`.
@@ -79,6 +81,10 @@ export const authHeaders = (apiKey) => (apiKey ? { Authorization: `Bearer ${apiK
 // a total request-plus-stream budget, rather than an idle-chunk timeout.
 export const VOICE_LLM_TIMEOUT_MS = 30_000;
 export const VOICE_LLM_TIMEOUT_MESSAGE = 'Voice LLM request timed out';
+// A cold local model spends most of the normal budget reading weights from disk,
+// so a turn that found its model not resident gets this total budget instead.
+export const VOICE_LLM_COLD_LOAD_TIMEOUT_MS = 120_000;
+const RESIDENCY_PROBE_CAP_MS = 400;
 
 // Approximate parameter count from LM Studio model id so 'auto' avoids a 70B
 // when smaller, faster models are available. Returns Infinity for non-matches
@@ -319,6 +325,42 @@ export const extractInlineToolCalls = (text) => {
 };
 
 /**
+ * Residency of the model a voice turn on `provider`/`model` would use, with
+ * `auto` resolved the way a tool-calling turn resolves it.
+ */
+export const readVoiceLlmResidency = async ({ provider, model } = {}) => {
+  const endpoint = await resolveLlmEndpoint(provider);
+  const resolved = await resolveModel(model, { ...endpoint, requireTools: true });
+  const providerId = provider || DEFAULT_VOICE_BACKEND;
+  const residency = await probeVoiceLlmResidency({ providerId, apiBase: endpoint.apiBase, apiKey: endpoint.apiKey, model: resolved });
+  if (residency.state === 'unloaded' && warmingVoiceLlms.has(warmingKey(providerId, resolved))) return { ...residency, state: 'loading' };
+  return residency;
+};
+
+// Models a warm-up request is loading right now. Ollama and LM Studio list a
+// model only once it is resident, so without this the badge would read "not
+// loaded" for the whole load. Each change tells open views to re-read.
+const warmingVoiceLlms = new Map();
+const warmingKey = (provider, model) => `${provider || DEFAULT_VOICE_BACKEND}|${model}`;
+const RESIDENCY_CHANGED_EVENT = 'voice:llm:residency:changed';
+
+/** Report `model` as loading until the returned release runs. */
+export const markVoiceLlmWarming = (provider, model) => {
+  const key = warmingKey(provider, model);
+  warmingVoiceLlms.set(key, (warmingVoiceLlms.get(key) || 0) + 1);
+  emitToOperators(RESIDENCY_CHANGED_EVENT);
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    const left = (warmingVoiceLlms.get(key) || 1) - 1;
+    if (left > 0) warmingVoiceLlms.set(key, left);
+    else warmingVoiceLlms.delete(key);
+    emitToOperators(RESIDENCY_CHANGED_EVENT);
+  };
+};
+
+/**
  * Stream an LM Studio chat completion. Text deltas are forwarded via onDelta
  * for TTS; tool_call fragments are buffered per-index and returned at the end
  * so the pipeline can execute them and loop.
@@ -329,8 +371,9 @@ export const extractInlineToolCalls = (text) => {
  * @param {string} [opts.model='auto']
  * @param {AbortSignal} [opts.signal]
  * @param {(delta: string) => void} [opts.onDelta]
+ * @param {({ model: string }) => void} [opts.onModelLoading]  called before the request when the model is not resident
  * @param {Array<object>} [opts.tools]  OpenAI-format tool specs (optional)
- * @returns {Promise<{ text: string, toolCalls: Array<object>, model: string|null, ttfbMs: number|null, totalMs: number, finishReason: string|null }>}
+ * @returns {Promise<{ text: string, toolCalls: Array<object>, model: string|null, ttfbMs: number|null, totalMs: number, resolveMs: number, finishReason: string|null }>}
  */
 export const streamChat = async (messages, opts = {}) => {
   const resolveStart = Date.now();
@@ -348,7 +391,7 @@ export const streamChat = async (messages, opts = {}) => {
   // When the resolved model has a reasoning mode, try every known disable
   // switch — different model families honor different ones and unknown fields
   // are silently ignored by LM Studio:
-  //   - Qwen3:    `/no_think` directive appended to last system message
+  //   - Qwen3:    `/no_think` directive appended to the first system message
   //   - Granite:  `chat_template_kwargs: { thinking: false }`
   //   - vLLM:     `chat_template_kwargs: { enable_thinking: false }`
   //   - generic:  `extra_body.thinking = false`, `reasoning_effort = "minimal"`
@@ -356,13 +399,19 @@ export const streamChat = async (messages, opts = {}) => {
   // o1) emit `<think>` unconditionally. The deprioritization in resolveModel
   // is the durable fix; this is best-effort speedup for the rare case where
   // a reasoning model is the only tool-capable option.
-  // Ollama exposes Inkling's opt-out as a model-defined compatibility effort.
-  // Apply it only to interactive Voice; other callers keep their own effort.
-  const ollamaInkling = (opts.provider || DEFAULT_VOICE_BACKEND) === 'ollama'
-    && /(?:^|[/:])inkling-2-mini(?:$|[-:/.])/i.test(model);
-  const legacyReasoning = !ollamaInkling && isReasoningModel(model);
-  const sentMessages = legacyReasoning ? messages.map((m, i, arr) => {
-    if (m.role !== 'system' || i !== arr.findLastIndex((x) => x.role === 'system')) return m;
+  // Ollama turns thinking on by default for hybrid models (Qwen3.x, Inkling,
+  // ...), and its OpenAI surface maps `reasoning_effort: 'none'` to think=false.
+  // Measured on qwen3.6:35b: a short reply took 1.6-2.6 s with thinking and
+  // 0.27 s without. Models that cannot think ignore it, so send it on every
+  // interactive Voice request to Ollama; other callers keep their own effort.
+  const ollamaVoice = (opts.provider || DEFAULT_VOICE_BACKEND) === 'ollama';
+  const legacyReasoning = !ollamaVoice && isReasoningModel(model);
+  // The directive rides on the first system message (the persona), not the last:
+  // Voice puts per-turn system blocks after the history, so the last one moves
+  // from turn to turn and a directive there would change the cached prefix.
+  const firstSystem = messages.findIndex((x) => x.role === 'system');
+  const sentMessages = legacyReasoning ? messages.map((m, i) => {
+    if (i !== firstSystem) return m;
     const directive = (m.content || '').includes('/no_think') ? '' : '\n/no_think';
     return { ...m, content: (m.content || '') + directive };
   }) : messages;
@@ -375,7 +424,7 @@ export const streamChat = async (messages, opts = {}) => {
     // The provider owns default output limits; the Voice prompt requests brevity.
     ...(opts.maxTokens != null ? { max_tokens: opts.maxTokens } : {}),
   };
-  if (ollamaInkling) body.reasoning_effort = 'none';
+  if (ollamaVoice) body.reasoning_effort = 'none';
   // Trelis recommends the assistant template with thinking disabled for spoken turns.
   if (isConversationalGemma(model)) body.chat_template_kwargs = { enable_thinking: false };
   if (legacyReasoning) {
@@ -406,7 +455,7 @@ export const streamChat = async (messages, opts = {}) => {
     if (opts.signal.aborted) onExternalAbort();
     else opts.signal.addEventListener('abort', onExternalAbort, { once: true });
   }
-  const timeoutId = setTimeout(() => {
+  const onDeadline = () => {
     timedOut = true;
     try {
       opts.onTimeout?.();
@@ -414,7 +463,28 @@ export const streamChat = async (messages, opts = {}) => {
       console.error(`🤖 voice.llm.timeout_hook failed: ${err.message}`);
     }
     requestController.abort();
-  }, VOICE_LLM_TIMEOUT_MS);
+  };
+  // Asked before the request goes out: once it is in flight the runtime may
+  // already list the model as resident. Local probes answer in milliseconds,
+  // and the cap keeps a slow one from delaying the turn.
+  let coldModel = false;
+  if (opts.onModelLoading) {
+    const residency = await Promise.race([
+      probeVoiceLlmResidency({ providerId: opts.provider || DEFAULT_VOICE_BACKEND, apiBase, apiKey, model })
+        .catch((err) => { console.log(`🤖 ${tag}voice.llm.residency_probe skipped: ${err.message}`); return null; }),
+      new Promise((resolve) => { setTimeout(resolve, RESIDENCY_PROBE_CAP_MS, null).unref?.(); }),
+    ]);
+    coldModel = residency?.state === 'unloaded' || residency?.state === 'loading';
+    if (coldModel) {
+      console.log(`🤖 ${tag}voice.llm.cold_load model=${model} state=${residency.state}`);
+      try {
+        opts.onModelLoading({ model });
+      } catch (err) {
+        console.error(`🤖 voice.llm.loading_hook failed: ${err.message}`);
+      }
+    }
+  }
+  const timeoutId = setTimeout(onDeadline, coldModel ? VOICE_LLM_COLD_LOAD_TIMEOUT_MS : VOICE_LLM_TIMEOUT_MS);
 
   const requestPromise = (async () => {
     const reqStart = Date.now();
@@ -585,6 +655,7 @@ export const streamChat = async (messages, opts = {}) => {
         model,
         ttfbMs,
         totalMs: Date.now() - started,
+        resolveMs,
         finishReason,
       };
     }

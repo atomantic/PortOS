@@ -197,8 +197,8 @@ async function loadActivities() {
 }
 
 async function saveActivities(data) {
-  await ensureDir(MEATSPACE_DIR);
-  await atomicWrite(ACTIVITIES_FILE, data);
+  await ensureDir(MEATSPACE_DIR, { mode: 0o700 });
+  await atomicWrite(ACTIVITIES_FILE, data, { mode: 0o600, dirMode: 0o700 });
   invalidateMeatspace(['calendar']);
 }
 
@@ -233,8 +233,8 @@ async function loadEvents() {
 }
 
 async function saveEvents(data) {
-  await ensureDir(MEATSPACE_DIR);
-  await atomicWrite(EVENTS_FILE, data);
+  await ensureDir(MEATSPACE_DIR, { mode: 0o700 });
+  await atomicWrite(EVENTS_FILE, data, { mode: 0o600, dirMode: 0o700 });
   invalidateMeatspace(['calendar']);
 }
 

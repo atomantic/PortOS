@@ -17,6 +17,9 @@ import { HIGGSFIELD_DEFAULT_VIDEO_MODEL, getHiggsfieldVideoModel } from '../../l
 import { GOOGLE_DEFAULT_VIDEO_MODEL, getGoogleVideoModel } from '../../lib/googleVideoModels.js';
 import { RUNWAY_SPECIAL_VIDEO_MODES, getRunwaySpecialVideoModel } from '../../../../server/lib/runwaySpecialVideoModels.js';
 
+// Hosted video lanes that only support text/image modes (plus Runway's special modes).
+export const HOSTED_VIDEO_BACKENDS = new Set(['grok', 'fal', 'reactor', 'runway', 'gemini', 'higgsfield', 'google']);
+
 // The queue discriminator a hosted job is restored under, and the semantic
 // video mode it rendered in (only text and image-to-video exist there).
 const imageOrText = (p) => (p.videoMode === 'image' ? 'image' : 'text');

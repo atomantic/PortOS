@@ -314,32 +314,8 @@ export async function repointWorkMediaCollections(fromIds, toId) {
   return works.length;
 }
 
-function summarizeWork(manifest) {
-  const activeDraft = (manifest.drafts || []).find((d) => d.id === manifest.activeDraftVersionId);
-  return {
-    id: manifest.id,
-    folderId: manifest.folderId,
-    title: manifest.title,
-    kind: manifest.kind,
-    status: manifest.status,
-    activeDraftVersionId: manifest.activeDraftVersionId,
-    wordCount: activeDraft?.wordCount ?? 0,
-    draftCount: (manifest.drafts || []).length,
-    pipelineSeriesId: manifest.pipelineSeriesId || null,
-    pipelineIssueId: manifest.pipelineIssueId || null,
-    createdAt: manifest.createdAt,
-    updatedAt: manifest.updatedAt,
-  };
-}
-
 export async function listWorks() {
-  // The store returns full manifests (rebuilt with drafts[] on the PG backend),
-  // dropping any work with a corrupted manifest on the file backend so one bad
-  // work doesn't 500 the whole library.
-  const manifests = await store().listWorks();
-  return manifests
-    .filter(Boolean)
-    .map(summarizeWork)
+  return (await store().listWorkSummaries())
     .sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
 }
 
@@ -371,7 +347,7 @@ export async function listWorksPage(query = {}) {
     workSnapshots.set(snapshot.id, snapshot);
   }
   const ids = snapshot.ids.slice(position, position + limit);
-  const items = (await store().readWorksPage(ids)).map(summarizeWork);
+  const items = await store().listWorkSummaries(ids);
   const next = position + ids.length;
   return { items, total: snapshot.ids.length, limit, offset: position,
     nextCursor: next < snapshot.ids.length ? `${snapshot.id}.${next}` : null };

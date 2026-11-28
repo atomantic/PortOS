@@ -302,28 +302,41 @@ export async function evaluateOnPage(page, expression, { timeout = CDP_EVALUATE_
 
   return new Promise((resolve) => {
     const ws = new WebSocket(wsUrl);
-    const timer = setTimeout(() => { ws.close(); resolve(null); }, timeout);
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try { ws.close(); } catch {}
+      resolve(value);
+    };
+    const timer = setTimeout(() => finish(null), timeout);
 
     ws.on('open', () => {
-      ws.send(JSON.stringify({
-        id: 1,
-        method: 'Runtime.evaluate',
-        params: { expression, returnByValue: true, awaitPromise: true }
-      }));
+      try {
+        ws.send(JSON.stringify({
+          id: 1,
+          method: 'Runtime.evaluate',
+          params: { expression, returnByValue: true, awaitPromise: true }
+        }), (err) => {
+          if (err) finish(null);
+        });
+      } catch {
+        finish(null);
+      }
     });
 
     ws.on('message', (data) => {
       const msg = safeJSONParse(data.toString(), null, { context: 'cdp-ws' });
       if (!msg || msg.id !== 1) return;
-      clearTimeout(timer);
-      ws.close();
-      if (msg.error || msg.result?.exceptionDetails) return resolve(null);
+      if (msg.error || msg.result?.exceptionDetails) return finish(null);
       // A vault password the model-blind fill typed into this browser must not
       // echo back through a later DOM read (#17397).
-      resolve(scrubEphemeralSecretsDeep(msg.result?.result?.value ?? null));
+      finish(scrubEphemeralSecretsDeep(msg.result?.result?.value ?? null));
     });
 
-    ws.on('error', () => { clearTimeout(timer); ws.close(); resolve(null); });
+    ws.on('error', () => finish(null));
+    ws.on('close', () => finish(null));
   });
 }
 
@@ -360,19 +373,47 @@ export async function openCdpSession(webSocketDebuggerUrl, { commandTimeoutMs = 
     if (msg.method) for (const fn of listeners.get(msg.method) ?? []) fn(msg.params ?? {});
   });
   ws.on('close', () => { closed = true; failPending(new Error('CDP session closed')); });
+  ws.on('error', () => { closed = true; failPending(new Error('CDP session failed')); });
   await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => { ws.terminate(); reject(new Error('CDP session open timed out')); }, commandTimeoutMs);
-    ws.once('open', () => { clearTimeout(timer); resolve(); });
-    ws.on('error', () => { clearTimeout(timer); reject(new Error('CDP session failed')); });
+    let settled = false;
+    const settle = (fn, arg) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      ws.off('open', onOpen);
+      ws.off('error', onError);
+      ws.off('close', onClose);
+      fn(arg);
+    };
+    const onOpen = () => settle(resolve);
+    const onError = () => settle(reject, new Error('CDP session failed'));
+    const onClose = () => settle(reject, new Error('CDP session closed'));
+    const timer = setTimeout(() => { ws.terminate(); settle(reject, new Error('CDP session open timed out')); }, commandTimeoutMs);
+    ws.once('open', onOpen);
+    ws.once('error', onError);
+    ws.once('close', onClose);
   });
   return {
     send(method, params = {}) {
       if (closed) return Promise.reject(new Error('CDP session closed'));
       const id = nextId++;
       return new Promise((resolve, reject) => {
-        const timer = setTimeout(() => { pending.delete(id); reject(new Error(`CDP ${method} timed out`)); }, commandTimeoutMs);
+        const failSend = (error) => {
+          const entry = pending.get(id);
+          if (!entry) return;
+          pending.delete(id);
+          clearTimeout(entry.timer);
+          reject(error);
+        };
+        const timer = setTimeout(() => failSend(new Error(`CDP ${method} timed out`)), commandTimeoutMs);
         pending.set(id, { method, resolve, reject, timer });
-        ws.send(JSON.stringify({ id, method, params }));
+        try {
+          ws.send(JSON.stringify({ id, method, params }), (err) => {
+            if (err) failSend(new Error(`CDP ${method} send failed`));
+          });
+        } catch {
+          failSend(new Error(`CDP ${method} send failed`));
+        }
       });
     },
     on(method, fn) {
@@ -491,7 +532,7 @@ const describeHopDelivery = (hop) => `no remoteIPAddress; fromServiceWorker=${ho
  * Pure + exported so the SSRF-pin decision is unit-testable without a live
  * browser. Returns `{ hops: [{ requestId, url, remoteIPAddress, status,
  * fromServiceWorker, fromDiskCache, fromPrefetchCache,
- * serviceWorkerResponseSource }], finalUrl, mainRequestIds: string[],
+ * serviceWorkerResponseSource }], finalUrl, responseStatus, mainRequestIds: string[],
  * pendingMainRequestIds: string[], pendingMainRequestUrls: string[] }` (the
  * URLs are positional to the pending ids, so a refusal can name the destination
  * without re-parsing the stream). The delivery flags ride along so the gate
@@ -533,6 +574,7 @@ export function pickMainFrameHops(messages, topFrameId = null) {
   const mainRequestUrls = new Map();
   const hops = [];
   let finalUrl = null;
+  let responseStatus = null;
   for (const msg of messages) {
     const p = msg?.params;
     if (!p) continue;
@@ -549,6 +591,7 @@ export function pickMainFrameHops(messages, topFrameId = null) {
         respondedIds.add(p.requestId);
         hops.push(toHop(p.response, p.requestId));
         finalUrl = p.response.url || finalUrl;
+        responseStatus = p.response.status ?? null;
       }
     } else if (msg.method === 'Network.loadingFailed' && mainRequestIds.has(p.requestId)) {
       // ONLY a navigation Chrome CANCELED clears the pending gate. A cancel is
@@ -569,6 +612,7 @@ export function pickMainFrameHops(messages, topFrameId = null) {
   return {
     hops,
     finalUrl,
+    responseStatus,
     mainRequestIds: [...mainRequestIds],
     pendingMainRequestIds,
     pendingMainRequestUrls: pendingMainRequestIds.map((id) => mainRequestUrls.get(id) || '(url unknown)'),
@@ -705,6 +749,32 @@ export function ssrfPinRefusalReason(messages, verifyRemoteIp, _url, topFrameId 
   return null;
 }
 
+async function withDisposableBrowserTarget(read, commandTimeoutMs) {
+  const version = await getCdpVersion();
+  const browser = await openCdpSession(version?.webSocketDebuggerUrl, { commandTimeoutMs });
+  let browserContextId;
+  try {
+    ({ browserContextId } = await browser.send('Target.createBrowserContext', { disposeOnDetach: true }));
+    if (!browserContextId) throw new Error('CDP did not return a disposable browser context');
+    const { targetId } = await browser.send('Target.createTarget', {
+      url: 'about:blank', browserContextId, hidden: true, background: true,
+    });
+    if (!targetId) throw new Error('CDP did not create a disposable page target');
+    const target = (await listCdpPages({ strict: true })).find(page => page.id === targetId);
+    if (!target?.webSocketDebuggerUrl) throw new Error('CDP did not return a disposable page target');
+    return await read(target);
+  } finally {
+    try {
+      if (browserContextId) await browser.send('Target.disposeBrowserContext', { browserContextId });
+    } catch {
+      // Chrome also disposes this context when its owning session detaches.
+      console.warn('⚠️ CDP could not explicitly dispose the temporary browser context');
+    } finally {
+      browser.close();
+    }
+  }
+}
+
 /**
  * Navigate to a URL in a fresh tab and verify — against Chrome's OWN reported
  * connection IP — that EVERY main-frame hop connected to an allowed address:
@@ -741,6 +811,8 @@ export function ssrfPinRefusalReason(messages, verifyRemoteIp, _url, topFrameId 
  * deliverable (a browser handoff, `POST /api/browser/navigate`) — gets a tab
  * back to close on its own schedule. Pass `closeAfterRead: false` to read AND
  * keep the tab; passing it explicitly decides teardown either way.
+ * `disposableContext` uses an off-the-record context without profile history or
+ * existing sign-ins. It always disposes the entire context before returning.
  *
  * Because of that, `id` / `webSocketDebuggerUrl` in the return value name a
  * CLOSED tab whenever this function performed the read. They are still returned
@@ -749,19 +821,26 @@ export function ssrfPinRefusalReason(messages, verifyRemoteIp, _url, topFrameId 
  *
  * The caller does NOT sleep — the settle wait happens HERE, so the DOM has had
  * `settleMs` to render (and every navigation in that window is pinned) by the
- * time this resolves. Returns `{ id, url, title, webSocketDebuggerUrl, evalResult }`.
+ * time this resolves. A DOM read also returns the final document's `responseStatus`.
  */
 export async function navigateToUrlPinned(url, {
   verifyRemoteIp,
+  dispatchRequest,
   settleMs = 0,
   navigateTimeoutMs = NAVIGATE_TIMEOUT_MS,
   evaluateExpression = null,
   evaluateTimeoutMs = CDP_EVALUATE_TIMEOUT_MS,
   closeAfterRead = Boolean(evaluateExpression),
+  disposableContext = false,
 } = {}) {
   if (typeof verifyRemoteIp !== 'function') {
     throw new Error('navigateToUrlPinned requires a verifyRemoteIp(ip) predicate');
   }
+
+  const read = target => readPinnedTarget(target, url, {
+    verifyRemoteIp, dispatchRequest, settleMs, navigateTimeoutMs, evaluateExpression, evaluateTimeoutMs,
+  });
+  if (disposableContext) return withDisposableBrowserTarget(read, navigateTimeoutMs);
 
   // Open a BLANK tab first so Network listeners attach BEFORE the target URL is
   // fetched — `/json/new?<url>` would navigate immediately and we'd miss the
@@ -777,6 +856,20 @@ export async function navigateToUrlPinned(url, {
     throw new Error('CDP open-blank returned a malformed response');
   }
 
+  let keepTab = false;
+  try {
+    const page = await read(target);
+    keepTab = !closeAfterRead;
+    return page;
+  } finally {
+    if (keepTab) browserEvents.emit('pages:changed');
+    else await closeCdpPage(target.id);
+  }
+}
+
+async function readPinnedTarget(target, url, {
+  verifyRemoteIp, dispatchRequest, settleMs, navigateTimeoutMs, evaluateExpression, evaluateTimeoutMs,
+}) {
   const READ_ID = 3;
   const { default: WebSocket } = await import('ws');
   const messages = [];
@@ -817,17 +910,32 @@ export async function navigateToUrlPinned(url, {
       }
       phase = 'read';
       evalTimer = setTimeout(() => finish({ ok: false, reason: 'DOM read timed out' }), evaluateTimeoutMs);
-      ws.send(JSON.stringify({
-        id: READ_ID,
-        method: 'Runtime.evaluate',
-        params: { expression: evaluateExpression, returnByValue: true, awaitPromise: true },
-      }));
+      try {
+        ws.send(JSON.stringify({
+          id: READ_ID,
+          method: 'Runtime.evaluate',
+          params: { expression: evaluateExpression, returnByValue: true, awaitPromise: true },
+        }), (err) => {
+          if (err) finish({ ok: false, reason: 'CDP websocket error during DOM read' });
+        });
+      } catch {
+        finish({ ok: false, reason: 'CDP websocket error during DOM read' });
+      }
     };
 
-    ws.on('open', () => {
-      ws.send(JSON.stringify({ id: 1, method: 'Network.enable' }));
-      PIN_SETUP_COMMANDS.forEach((cmd, i) => ws.send(JSON.stringify({ id: PIN_SETUP_ID_BASE + i, ...cmd })));
-      ws.send(JSON.stringify({ id: 2, method: 'Page.navigate', params: { url } }));
+    ws.on('open', async () => {
+      try {
+        ws.send(JSON.stringify({ id: 1, method: 'Network.enable' }));
+        PIN_SETUP_COMMANDS.forEach((cmd, i) => ws.send(JSON.stringify({ id: PIN_SETUP_ID_BASE + i, ...cmd })));
+        const navigate = () => {
+          if (!settled) ws.send(JSON.stringify({ id: 2, method: 'Page.navigate', params: { url } }));
+        };
+        // The URL stays local until the caller authorizes the handoff after blank-tab setup.
+        if (dispatchRequest) await dispatchRequest(navigate);
+        else navigate();
+      } catch (error) {
+        finish({ ok: false, error });
+      }
     });
     ws.on('message', (data) => {
       const msg = safeJSONParse(data.toString(), null, { context: 'cdp-pin' });
@@ -854,8 +962,8 @@ export async function navigateToUrlPinned(url, {
         const bad = ssrfPinRefusalReason(messages, verifyRemoteIp, url, topFrameId);
         if (bad) return finish({ ok: false, reason: bad });
         const evalResult = (msg.error || msg.result?.exceptionDetails) ? null : scrubEphemeralSecretsDeep(msg.result?.result?.value ?? null);
-        const { finalUrl } = pickMainFrameHops(messages, topFrameId);
-        return finish({ ok: true, finalUrl, evalResult });
+        const { finalUrl, responseStatus } = pickMainFrameHops(messages, topFrameId);
+        return finish({ ok: true, finalUrl, responseStatus, evalResult });
       }
       if (!msg.method) return;
       messages.push(msg);
@@ -868,17 +976,13 @@ export async function navigateToUrlPinned(url, {
       }
     });
     ws.on('error', () => finish({ ok: false, reason: 'CDP websocket error during navigation' }));
+    ws.on('close', () => finish({ ok: false, reason: 'CDP websocket closed during navigation' }));
   });
 
   if (!result.ok) {
-    await closeCdpPage(target.id);
+    if (result.error) throw result.error;
     throw new Error(`refusing to ingest: ${result.reason}`);
   }
-
-  // The read (if any) already happened on this session, so the tab has served
-  // its purpose — tear it down here rather than trusting every call site to.
-  if (closeAfterRead) await closeCdpPage(target.id);
-  else browserEvents.emit('pages:changed');
 
   return {
     id: target.id,
@@ -886,6 +990,7 @@ export async function navigateToUrlPinned(url, {
     title: '',
     webSocketDebuggerUrl: target.webSocketDebuggerUrl,
     evalResult: result.evalResult,
+    ...(evaluateExpression ? { responseStatus: result.responseStatus } : {}),
   };
 }
 

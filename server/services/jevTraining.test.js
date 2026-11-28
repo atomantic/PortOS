@@ -20,11 +20,8 @@ vi.mock('../lib/paths.js', async (original) => makePathsProxy(await original(), 
 
 afterAll(() => cleanupTempDataRoots());
 
-const execFile = vi.fn();
-vi.mock('../lib/childProcess.js', () => ({
-  execFile: (command, args, options, callback) => execFile(command, args, options, callback),
-  spawn: vi.fn(),
-}));
+const bufferedSpawn = vi.fn();
+vi.mock('../lib/bufferedSpawn.js', async (original) => ({ ...await original(), bufferedSpawn }));
 
 const getJevStatus = vi.fn();
 const jevVenvSpawnTarget = vi.fn();
@@ -48,7 +45,7 @@ vi.mock('./forgeAuth.js', () => ({ resolveForgeForRepo }));
 const tryReadFile = vi.fn();
 vi.mock('../lib/fileUtils.js', async (importOriginal) => ({ ...(await importOriginal()), tryReadFile }));
 
-const { trainScopeAdherenceHead, isJevTrainingRunning } = await import('./jevTraining.js');
+const { cancelJevTraining, trainScopeAdherenceHead, isJevTrainingRunning } = await import('./jevTraining.js');
 
 const METRICS = { trained: 0.71, stockZeroShot: 0.58, majorityClass: 0.52, goldSize: 40, trainSize: 120 };
 const HEAD = { decisionId: 'scope-adherence', architecture: 'linear', metrics: METRICS };
@@ -77,10 +74,10 @@ function happyPath() {
     sources: { 'merged-pr': 90, 'closed-unmerged-pr': 0, 'closed-not-planned-issue': 70, 'parked-issue': 0 },
     shadow: { observed: 12, compared: 4, agreementRate: 0.75 },
   });
-  execFile.mockImplementation((_command, _args, _options, callback) => callback(null, {
+  bufferedSpawn.mockResolvedValue({
     stdout: `encoded 1/2\n${JSON.stringify({ ok: true, metrics: METRICS, finalLoss: 0.3, device: 'cpu' })}\n`,
     stderr: '',
-  }));
+  });
   tryReadFile.mockResolvedValue(JSON.stringify(HEAD));
   saveCandidateJevHead.mockResolvedValue({ ok: true, head: HEAD });
 }
@@ -105,7 +102,7 @@ describe('trainScopeAdherenceHead', () => {
   // credential, nor a network-capable Hugging Face mode.
   it('gives the trainer the hardened offline environment, never the forge token', async () => {
     await trainScopeAdherenceHead();
-    const [command, args, options] = execFile.mock.calls[0];
+    const [command, args, options] = bufferedSpawn.mock.calls[0];
     expect(command).toBe('/venv/bin/python3');
     expect(args[0]).toMatch(/train_jev_head\.py$/);
     // The options come from `jevVenvSpawnTarget` — the SAME value the sidecar
@@ -114,7 +111,7 @@ describe('trainScopeAdherenceHead', () => {
     expect(options.env.GH_TOKEN).toBeUndefined();
     expect(options.env.GITHUB_TOKEN).toBeUndefined();
     expect(options.env.HF_HUB_OFFLINE).toBe('1');
-    expect(jevVenvSpawnTarget).toHaveBeenCalledWith(expect.objectContaining({ timeout: expect.any(Number) }));
+    expect(options).toMatchObject({ timeoutMs: 3_600_000, processGroup: true });
     // Which encoder it is fit on is passed explicitly, so the head can record
     // the revision its loader will later refuse a mismatch against.
     expect(args).toContain('--revision');
@@ -149,10 +146,10 @@ describe('trainScopeAdherenceHead', () => {
     // before that point would throw inside the test and leave the in-flight
     // promise pending forever, wedging every case after this one.
     const spawned = new Promise((reached) => {
-      execFile.mockImplementation((_command, _args, _options, callback) => {
-        release = () => callback(null, { stdout: JSON.stringify({ ok: true, metrics: METRICS }), stderr: '' });
+      bufferedSpawn.mockImplementation(() => new Promise((resolve) => {
+        release = () => resolve({ stdout: JSON.stringify({ ok: true, metrics: METRICS }) });
         reached();
-      });
+      }));
     });
     const states = [];
     const changed = () => states.push(isJevTrainingRunning());
@@ -163,20 +160,53 @@ describe('trainScopeAdherenceHead', () => {
     expect(isJevTrainingRunning()).toBe(true);
     release();
     await Promise.all([first, second]);
-    expect(execFile).toHaveBeenCalledTimes(1);
+    expect(bufferedSpawn).toHaveBeenCalledTimes(1);
     expect(isJevTrainingRunning()).toBe(false);
     jevEvents.off('heads', changed);
     expect(states).toEqual([true, false]);
   });
 
   it('reports the trainer\'s own code rather than collapsing every failure into one', async () => {
-    execFile.mockImplementation((_command, _args, _options, callback) => {
-      const error = new Error('exit 1');
-      error.stdout = `${JSON.stringify({ ok: false, code: 'jev-corpus-split-overlap' })}\n`;
-      callback(error);
-    });
+    bufferedSpawn.mockResolvedValue({ success: false, stdout: JSON.stringify({ ok: false, code: 'jev-corpus-split-overlap' }) });
     expect(await trainScopeAdherenceHead()).toEqual({ ok: false, code: 'jev-corpus-split-overlap' });
     expect(saveCandidateJevHead).not.toHaveBeenCalled();
+  });
+
+  it('aborts the trainer, keeps its slot until teardown, and preserves the candidate', async () => {
+    const { promise: spawned, resolve: markSpawned } = Promise.withResolvers();
+    const { promise: stopped, resolve: confirmStopped } = Promise.withResolvers();
+    bufferedSpawn.mockImplementationOnce((_command, _args, { signal }) => {
+      markSpawned(signal);
+      return stopped;
+    });
+
+    expect(cancelJevTraining()).toEqual({ cancelled: false });
+    const run = trainScopeAdherenceHead();
+    const signal = await spawned;
+    expect(cancelJevTraining()).toEqual({ cancelled: true });
+    expect(signal.aborted).toBe(true);
+    expect(isJevTrainingRunning()).toBe(true);
+    expect(trainScopeAdherenceHead()).toBe(run);
+    confirmStopped({ stdout: JSON.stringify({ ok: true, metrics: METRICS }) });
+
+    await expect(run).resolves.toEqual({ ok: false, cancelled: true, code: 'jev-head-training-cancelled' });
+    expect(saveCandidateJevHead).not.toHaveBeenCalled();
+    expect(isJevTrainingRunning()).toBe(false);
+    await expect(trainScopeAdherenceHead()).resolves.toMatchObject({ ok: true });
+  });
+
+  it('forwards cancellation to corpus preparation and skips the trainer', async () => {
+    const { promise: preparing, resolve: markPreparing } = Promise.withResolvers();
+    buildScopeAdherenceCorpus.mockImplementationOnce(({ signal }) => new Promise((resolve) => {
+      signal.addEventListener('abort', () => resolve({ ok: false }), { once: true });
+      markPreparing();
+    }));
+
+    const run = trainScopeAdherenceHead();
+    await preparing;
+    expect(cancelJevTraining()).toEqual({ cancelled: true });
+    await expect(run).resolves.toMatchObject({ cancelled: true });
+    expect(bufferedSpawn).not.toHaveBeenCalled();
   });
 
   it('refuses to train before the scorer install is finished', async () => {
@@ -188,6 +218,6 @@ describe('trainScopeAdherenceHead', () => {
   it('forwards a corpus refusal untouched instead of training on it', async () => {
     buildScopeAdherenceCorpus.mockResolvedValue({ ok: false, code: 'jev-corpus-split-overlap' });
     expect(await trainScopeAdherenceHead()).toEqual({ ok: false, code: 'jev-corpus-split-overlap' });
-    expect(execFile).not.toHaveBeenCalled();
+    expect(bufferedSpawn).not.toHaveBeenCalled();
   });
 });

@@ -71,7 +71,7 @@ export async function synthesizeQwen3(text, opts = {}, signal) {
   const args = [
     QWEN3_TTS_RUNNER_SCRIPT,
     '--mode', mode,
-    '--text', text,
+    '--stdin-json',
     '--rate', String(rate),
     '--seed', String(seed),
     '--model-id', modelId,
@@ -79,19 +79,19 @@ export async function synthesizeQwen3(text, opts = {}, signal) {
     '--output-wav', tempOut,
   ];
 
-  if (opts.instructions) {
-    args.push('--instructions', opts.instructions);
-  }
   if (opts.referenceAudio) {
     args.push('--reference-audio', opts.referenceAudio);
-  }
-  if (opts.referenceTranscript) {
-    args.push('--reference-transcript', opts.referenceTranscript);
   }
   if (opts.checkpointPath) {
     args.push('--checkpoint-path', opts.checkpointPath);
   }
 
+  // Keep synthesis text and prompts out of operating-system process listings.
+  const input = JSON.stringify({
+    text,
+    instructions: opts.instructions || undefined,
+    reference_transcript: opts.referenceTranscript || undefined,
+  });
   const t0 = performance.now();
 
   try {
@@ -99,12 +99,13 @@ export async function synthesizeQwen3(text, opts = {}, signal) {
       const child = spawn(python, args, safeChildProcessOptions({ timeout: 5 * 60 * 1000, signal }));
       let out = '';
       let err = '';
+      let inputFailed = false;
 
       child.stdout.on('data', (d) => { out = (out + d.toString()).slice(-8192); });
       child.stderr.on('data', (d) => { err = (err + d.toString()).slice(-8192); });
 
       child.on('close', (code) => {
-        if (code === 0) resolve({ stdout: out, stderr: err });
+        if (code === 0 && !inputFailed) resolve({ stdout: out, stderr: err });
         else {
           let failure;
           try { failure = JSON.parse(err.trim().split(/\r?\n/).at(-1)); } catch { /* Process failure without structured output. */ }
@@ -116,6 +117,10 @@ export async function synthesizeQwen3(text, opts = {}, signal) {
         }
       });
       child.on('error', reject);
+      // A runner that exits early can close the pipe before the write finishes.
+      // Let the close handler read any structured failure already in stderr.
+      child.stdin.on('error', () => { inputFailed = true; });
+      child.stdin.end(input);
     });
 
     let result;

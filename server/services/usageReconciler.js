@@ -47,7 +47,14 @@ import { readdir, stat } from 'fs/promises';
 import { createInterface } from 'node:readline';
 import { atomicWrite, PATHS, readJSONFile, tryReadFile } from '../lib/fileUtils.js';
 import { estimateTokens, estimateTokensFromChars } from '../lib/contextBudget.js';
-import { isFreeModelId, resolveModelRates, SPEED_LEDGER_FIELDS } from '../lib/modelPricing.js';
+import { isFreeModelId, resolveModelRates } from '../lib/modelPricing.js';
+import {
+  LONG_USAGE_FIELDS,
+  mergeCodexBoundary,
+  SPEED_LEDGER_FIELDS,
+  TOKEN_FIELDS,
+  TOKEN_TIER_FIELDS,
+} from '../lib/usageFields.js';
 import {
   UNKNOWN_MODEL,
   claudeProjectSlug,
@@ -378,10 +385,6 @@ export const agyEstimatedBuckets = (parsed) => ({
   source: parsed.measured ? 'measured' : 'estimate',
 });
 
-const TOKEN_FIELDS = ['messages', 'tokensIn', 'tokensOut', 'cacheReadTokens', 'cacheWriteTokens'];
-
-const LONG_USAGE_FIELDS = ['longTokensIn', 'longTokensOut', 'longCacheReadTokens', 'longCacheWriteTokens'];
-
 function addBuckets(target, source) {
   for (const field of TOKEN_FIELDS) target[field] = (target[field] || 0) + (source[field] || 0);
   // Copied only when the source has some, so a Codex high-water object that
@@ -406,15 +409,6 @@ function longUsageFrom(bucket) {
 
 function speedUsageFrom(bucket) {
   return subsetFrom(bucket, SPEED_LEDGER_FIELDS);
-}
-
-function mergeCodexBoundary(existing, value) {
-  const merged = maxBuckets(existing, value);
-  for (const field of SPEED_LEDGER_FIELDS) {
-    const amount = Math.max(existing?.[field] || 0, value?.[field] || 0);
-    if (amount) merged[field] = amount;
-  }
-  return merged;
 }
 
 function hasSpeed(bucket) {
@@ -1031,9 +1025,8 @@ export function reportedRunUsage(run) {
   const reported = run?.reportedUsage;
   if (!reported || typeof reported !== 'object' || Array.isArray(reported)) return null;
   const fields = {};
-  for (const key of [...TOKEN_FIELDS, ...LONG_USAGE_FIELDS]) {
-    // One record is one message; a stamp cannot claim otherwise.
-    if (key === 'messages') continue;
+  // `TOKEN_TIER_FIELDS` excludes `messages`: one record is one message, so a stamp cannot claim otherwise.
+  for (const key of TOKEN_TIER_FIELDS) {
     const value = reported[key];
     if (typeof value === 'number' && Number.isFinite(value) && value >= 0) fields[key] = value;
   }

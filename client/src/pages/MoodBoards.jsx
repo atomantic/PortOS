@@ -98,7 +98,7 @@ function MoodBoardCard({ board, onDelete, isConfirming, onConfirmDelete, onCance
 
         {/* Smaller thumbnails row beneath the main cover */}
         {subThumbnails.length > 0 ? (
-          <div className="grid grid-cols-4 sm:grid-cols-4 gap-1 p-1.5 bg-port-card/80 border-t border-port-border/40">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-1 p-1.5 bg-port-card/80 border-t border-port-border/40">
             {subThumbnails.map((thumb, idx) => {
               const isLast = idx === subThumbnails.length - 1;
               const showOverflow = isLast && remainingVisualsCount > 0;

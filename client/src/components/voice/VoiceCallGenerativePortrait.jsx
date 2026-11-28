@@ -1,10 +1,35 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import portraitUrl from './call-portrait.webp';
+import MediaImage from '../MediaImage';
+import ConnectingPortrait from './ConnectingPortrait';
+import { avatarImageSrc } from './useAvatarLibrary';
 import { bindVoiceOutputVisualizer } from '../../services/voiceClient';
-import { streamVoiceAvatar } from '../../services/apiVoiceAvatar';
-import { useAvatarRuntime } from './useAvatarRuntime';
+import { streamVoiceAvatar, streamVoiceAvatarIdle } from '../../services/apiVoiceAvatar';
 
-function animateWav(canvas, wav, onStop) {
+const IDLE_STAGES = new Set(['idle', 'listening', 'thinking']);
+const FRAME_INTERVAL_MS = 40; // 25 fps
+const MAX_IDLE_QUEUE = 20;
+// Recent idle frames replayed while the LLM is thinking, so the worker stays off the GPU.
+const MAX_HELD_FRAMES = 50; // 2 s at 25 fps
+
+// Forward then backward without repeating either end, so the loop has no visible jump.
+const pingPong = (frames) => [...frames, ...frames.slice(1, -1).reverse()];
+
+// A model load reads as thinking on the portrait; only the status chip tells them apart.
+const normalizeIdleStage = (stage) => (stage === 'loading' ? 'thinking' : IDLE_STAGES.has(stage) ? stage : 'idle');
+
+function decodeAndPaint(canvas, jpeg, isStillValid, onPainted) {
+  const image = new Image();
+  image.src = 'data:image/jpeg;base64,' + jpeg;
+  return image.decode().then(() => {
+    if (!isStillValid()) return;
+    canvas.getContext('2d')?.drawImage(image, 0, 0, 512, 512);
+    canvas.style.visibility = 'visible';
+    onPainted?.();
+  }).catch(() => {});
+}
+
+function animateWav(canvas, wav, { stopForReducedMotion, keepFrameOnStop, onPainted, onStop, onUnavailable }) {
   const abort = new AbortController();
   const frames = new Map();
   const { promise: ready, resolve: primed } = Promise.withResolvers();
@@ -19,23 +44,28 @@ function animateWav(canvas, wav, onStop) {
       latest = index;
       primed();
     }
-  } }).catch(() => {}).finally(primed);
+  } }).catch(() => {}).finally(() => {
+    if (!ended && latest < 0) onUnavailable();
+    primed();
+  });
 
   const draw = (clock) => {
+    if (stopForReducedMotion()) return;
     const target = Math.floor(clock() * 25);
     const index = Math.min(target, latest);
-    if (target - drawn > 5) canvas.style.visibility = 'hidden';
+    if (target - drawn > 5 && !keepFrameOnStop()) canvas.style.visibility = 'hidden';
     if (!loading && index > drawn && target - index <= 3 && frames.has(index)) {
-      const image = new Image();
       loading = true;
-      image.src = 'data:image/jpeg;base64,' + frames.get(index);
-      image.decode().then(() => {
-        if (ended || Math.floor(clock() * 25) - index > 5) return;
-        canvas.getContext('2d')?.drawImage(image, 0, 0, 512, 512);
-        canvas.style.visibility = 'visible';
-        drawn = index;
-        for (const key of frames.keys()) if (key <= index) frames.delete(key);
-      }).catch(() => {}).finally(() => { loading = false; });
+      decodeAndPaint(
+        canvas,
+        frames.get(index),
+        () => !ended && !stopForReducedMotion() && Math.floor(clock() * 25) - index <= 5,
+        () => {
+          drawn = index;
+          onPainted?.();
+          for (const key of frames.keys()) if (key <= index) frames.delete(key);
+        },
+      ).finally(() => { loading = false; });
     }
     frame = requestAnimationFrame(() => draw(clock));
   };
@@ -49,37 +79,238 @@ function animateWav(canvas, wav, onStop) {
       abort.abort();
       primed();
       cancelAnimationFrame(frame);
-      canvas.style.visibility = 'hidden';
+      if (!keepFrameOnStop()) canvas.style.visibility = 'hidden';
       onStop();
     },
   };
 }
 
-export default function VoiceCallGenerativePortrait() {
+export default function VoiceCallGenerativePortrait({ running, connecting = false, fill = false, stage = 'idle', avatarFilename = null }) {
   const canvas = useRef(null);
-  const { data } = useAvatarRuntime();
-  const running = data?.phase === 'running';
+  const idleStage = normalizeIdleStage(stage);
+  const idleStageRef = useRef(idleStage);
+  const lastStartedStageRef = useRef(idleStage);
+  idleStageRef.current = idleStage;
+  const [unavailable, setUnavailable] = useState(false);
+
+  // Drive continuous real AvatarForcing neural frames whenever the model is
+  // running (idle, listening, and speaking) on the same 512x512 canvas. Thinking
+  // replays recent idle frames so the worker never renders while the LLM does.
+  // Speech immediately preempts idle and resumes continuous idle seamlessly
+  // afterward with zero snap back to the static placeholder image.
   useEffect(() => {
-    if (!running) return undefined;
-    const motion = window.matchMedia('(prefers-reduced-motion: reduce)');
-    let animation;
+    const target = canvas.current;
+    if (!running || !target) {
+      setUnavailable(false);
+      if (target) target.style.visibility = 'hidden';
+      return undefined;
+    }
+
+    const motion = window.matchMedia?.('(prefers-reduced-motion: reduce)');
+    let disposed = false;
+    let speechAnimation;
+    let idleAbort;
+    let idleRetryTimer;
+    let idleRaf = 0;
+    let idleLoading = false;
+    let lastIdleDrawAt = 0;
+    let hasPaintedFrame = false;
+    let holdingIdle = false;
+    const idleQueue = [];
+    const heldFrames = [];
+
+    const stopIdlePlayback = () => {
+      if (idleRaf) {
+        cancelAnimationFrame(idleRaf);
+        idleRaf = 0;
+      }
+      idleQueue.length = 0;
+      idleLoading = false;
+      holdingIdle = false;
+    };
+
+    const stopIdleStream = () => {
+      clearTimeout(idleRetryTimer);
+      idleRetryTimer = undefined;
+      if (idleAbort) {
+        idleAbort.abort();
+        idleAbort = undefined;
+      }
+      stopIdlePlayback();
+    };
+
+    // Paint and decode callbacks can observe the preference before its change event.
+    const stopForReducedMotion = () => {
+      if (!motion?.matches) return false;
+      stopIdleStream();
+      speechAnimation?.stop();
+      hasPaintedFrame = false;
+      target.style.visibility = 'hidden';
+      return true;
+    };
+
+    const paintIdleTick = (now) => {
+      if (disposed || speechAnimation || stopForReducedMotion() || document.hidden) {
+        idleRaf = 0;
+        return;
+      }
+      const canLoop = holdingIdle && heldFrames.length > 1;
+      if (canLoop && idleQueue.length === 0) idleQueue.push(...pingPong(heldFrames));
+      if (!idleLoading && idleQueue.length > 0 && now - lastIdleDrawAt >= FRAME_INTERVAL_MS - 4) {
+        const jpeg = idleQueue.shift();
+        const replayed = holdingIdle;
+        idleLoading = true;
+        lastIdleDrawAt = now;
+        decodeAndPaint(
+          target,
+          jpeg,
+          () => !disposed && !speechAnimation && !stopForReducedMotion(),
+          () => {
+            hasPaintedFrame = true;
+            if (replayed) return;
+            heldFrames.push(jpeg);
+            if (heldFrames.length > MAX_HELD_FRAMES) heldFrames.shift();
+          },
+        ).finally(() => { idleLoading = false; });
+      }
+      if (idleAbort || idleQueue.length > 0 || canLoop) {
+        idleRaf = requestAnimationFrame(paintIdleTick);
+      } else {
+        idleRaf = 0;
+      }
+    };
+
+    // While the LLM is thinking, the worker would compete with it for the GPU and slow
+    // the reply, so cancel neural idle and loop the frames already on hand instead.
+    const holdIdleLoop = () => {
+      holdingIdle = true;
+      if (!idleRaf && heldFrames.length > 1) idleRaf = requestAnimationFrame(paintIdleTick);
+    };
+
+    const startIdleStream = () => {
+      if (disposed || speechAnimation || stopForReducedMotion() || document.hidden) return;
+      stopIdleStream();
+      if (idleStageRef.current === 'thinking') {
+        holdIdleLoop();
+        return;
+      }
+      const abort = new AbortController();
+      idleAbort = abort;
+      let receivedAny = false;
+      if (!idleRaf) idleRaf = requestAnimationFrame(paintIdleTick);
+
+      streamVoiceAvatarIdle({
+        stage: idleStageRef.current,
+        signal: abort.signal,
+        onFrame: ({ jpeg }) => {
+          if (abort.signal.aborted || typeof jpeg !== 'string') return;
+          receivedAny = true;
+          setUnavailable(false);
+          if (idleQueue.length >= MAX_IDLE_QUEUE) idleQueue.shift();
+          idleQueue.push(jpeg);
+          if (!idleRaf) idleRaf = requestAnimationFrame(paintIdleTick);
+        },
+      }).then(() => {
+        if (disposed || abort.signal.aborted || speechAnimation || motion?.matches || document.hidden) return;
+        idleAbort = undefined;
+        // Wait for queued frames to play out before chaining the next idle chunk
+        // so short/fast chunks never spin in a tight fetch loop.
+        const nextDelayMs = receivedAny
+          ? Math.max(350, idleQueue.length * FRAME_INTERVAL_MS)
+          : 1200;
+        idleRetryTimer = setTimeout(startIdleStream, nextDelayMs);
+      }).catch(() => {
+        if (disposed || abort.signal.aborted || speechAnimation || motion?.matches || document.hidden) return;
+        idleAbort = undefined;
+        idleRetryTimer = setTimeout(startIdleStream, 2000);
+      });
+    };
+
+    const canKeepCanvas = () => !disposed && !motion?.matches && hasPaintedFrame;
+
     const detach = bindVoiceOutputVisualizer(wav => {
-      if (motion.matches) return undefined;
-      animation?.stop();
-      animation = animateWav(canvas.current, wav, () => { animation = undefined; });
-      return animation;
+      setUnavailable(false);
+      if (stopForReducedMotion()) return undefined;
+      speechAnimation?.stop();
+      stopIdleStream();
+      const anim = animateWav(target, wav, {
+        stopForReducedMotion,
+        keepFrameOnStop: canKeepCanvas,
+        onPainted: () => { hasPaintedFrame = true; },
+        onStop: () => {
+          if (speechAnimation === anim) speechAnimation = undefined;
+          if (!disposed && !motion?.matches && !document.hidden) {
+            startIdleStream();
+          }
+        },
+        onUnavailable: () => {
+          setUnavailable(true);
+        },
+      });
+      speechAnimation = anim;
+      return anim;
     });
-    const reduce = () => { if (motion.matches) animation?.stop(); };
-    motion.addEventListener('change', reduce);
+
+    const onMotionChange = () => {
+      if (!stopForReducedMotion() && !speechAnimation && !document.hidden) {
+        startIdleStream();
+      }
+    };
+
+    const onVisibilityChange = () => {
+      if (document.hidden) {
+        stopIdleStream();
+      } else if (!speechAnimation && !motion?.matches) {
+        startIdleStream();
+      }
+    };
+
+    const onStageChange = () => {
+      if (!speechAnimation && !motion?.matches && !document.hidden) {
+        startIdleStream();
+      }
+    };
+
+    target._restartIdleStage = onStageChange;
+    lastStartedStageRef.current = idleStageRef.current;
+    motion?.addEventListener?.('change', onMotionChange);
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    if (!motion?.matches && !document.hidden) {
+      startIdleStream();
+    } else {
+      target.style.visibility = 'hidden';
+    }
+
     return () => {
+      disposed = true;
+      delete target._restartIdleStage;
       detach();
-      motion.removeEventListener('change', reduce);
-      animation?.stop();
+      motion?.removeEventListener?.('change', onMotionChange);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      stopIdleStream();
+      speechAnimation?.stop();
+      target.style.visibility = 'hidden';
     };
   }, [running]);
 
-  return <div className="relative aspect-square w-[min(64vw,15rem)] max-w-full overflow-hidden rounded-lg bg-port-card shadow-lg">
-    <img src={portraitUrl} alt="Radio operator portrait" className="block size-full object-cover" />
-    <canvas ref={canvas} role="presentation" width={512} height={512} style={{ visibility: 'hidden' }} className="pointer-events-none absolute inset-0 size-full" />
+  // Restart continuous idle with updated posture/guidance only when stage
+  // actually transitions between idle, listening, and thinking.
+  useEffect(() => {
+    if (!running || lastStartedStageRef.current === idleStage) return;
+    lastStartedStageRef.current = idleStage;
+    canvas.current?._restartIdleStage?.();
+  }, [running, idleStage]);
+
+  return <div className={fill ? 'w-full max-w-full' : 'w-[min(64vw,15rem)] max-w-full'}>
+    <div className={`relative aspect-square overflow-hidden bg-port-card ${fill ? 'w-full' : 'rounded-lg shadow-lg'}`}>
+      {avatarFilename
+        ? <MediaImage src={avatarImageSrc(avatarFilename)} fallbackSrc={portraitUrl} alt="Channel avatar portrait" className="block size-full object-cover" />
+        : <img src={portraitUrl} alt="Radio operator portrait" className="block size-full object-cover" />}
+      <canvas ref={canvas} role="presentation" width={512} height={512} style={{ visibility: 'hidden' }} className="pointer-events-none absolute inset-0 size-full motion-reduce:invisible!" />
+      {connecting && <ConnectingPortrait src={avatarFilename ? avatarImageSrc(avatarFilename) : portraitUrl} />}
+    </div>
+    {running && unavailable && <p role="status" className="px-2 pt-1.5 pb-1 text-center font-mono text-[11px] text-port-text-muted">
+      No avatar frames arrived. Voice audio still works.
+    </p>}
   </div>;
 }

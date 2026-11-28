@@ -52,29 +52,29 @@ function SnapshotSyncBadge({ label, icon: Icon, cursorChecksum, remoteChecksum, 
   const behind = cursorChecksum && remoteChecksum && cursorChecksum !== remoteChecksum;
 
   return (
-    <div className="flex items-center gap-1.5 text-xs">
-      <Icon size={12} className="text-gray-500" />
-      <span className="text-gray-500">{label}:</span>
+    <div className="flex items-center gap-1.5 text-xs min-w-0">
+      <Icon size={12} className="text-gray-500 shrink-0" />
+      <span className="text-gray-500 truncate" title={label}>{label}:</span>
       {syncing ? (
-        <>
-          <RefreshCw size={11} className="text-port-accent animate-spin" />
+        <span className="inline-flex items-center gap-1 shrink-0 whitespace-nowrap">
+          <RefreshCw size={11} className="text-port-accent animate-spin shrink-0" />
           <span className="text-port-accent">syncing…</span>
-        </>
+        </span>
       ) : synced ? (
-        <>
-          <CheckCircle2 size={11} className="text-port-success" />
+        <span className="inline-flex items-center gap-1 shrink-0 whitespace-nowrap">
+          <CheckCircle2 size={11} className="text-port-success shrink-0" />
           <span className="text-port-success">synced</span>
-        </>
+        </span>
       ) : behind ? (
-        <>
-          <AlertCircle size={11} className="text-port-warning" />
+        <span className="inline-flex items-center gap-1 shrink-0 whitespace-nowrap">
+          <AlertCircle size={11} className="text-port-warning shrink-0" />
           <span className="text-port-warning">behind</span>
-        </>
+        </span>
       ) : (
-        <>
-          <Clock size={11} className="text-gray-500" />
+        <span className="inline-flex items-center gap-1 shrink-0 whitespace-nowrap">
+          <Clock size={11} className="text-gray-500 shrink-0" />
           <span className="text-gray-400">pending</span>
-        </>
+        </span>
       )}
     </div>
   );

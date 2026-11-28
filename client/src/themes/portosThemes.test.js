@@ -208,6 +208,26 @@ describe('shared ten-theme color contract', () => {
   );
 });
 
+describe('themed input placeholder contrast', () => {
+  const entries = Object.values(THEMES);
+  const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'index.css'), 'utf8');
+
+  it('uses the full muted ink token for themed placeholders', () => {
+    expect(css).toMatch(/input::placeholder,[\s\S]*?textarea::placeholder\s*\{\s*color:\s*rgb\(var\(--port-text-muted\)\);/);
+  });
+
+  it.each(entries.map((theme) => [theme.id, theme]))(
+    '%s: keeps placeholder text readable on its input surface',
+    (_id, theme) => {
+      const ratio = contrastRatio(
+        parseRgb(theme.colors['--port-text-muted']),
+        inputSurface(theme),
+      );
+      expect(ratio).toBeGreaterThanOrEqual(AA_SMALL_TEXT);
+    },
+  );
+});
+
 describe('content cards read as raised surfaces in every theme', () => {
   const entries = Object.values(THEMES);
 

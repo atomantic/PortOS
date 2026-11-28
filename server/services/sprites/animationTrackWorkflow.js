@@ -100,11 +100,11 @@ const setFinalError = (row) => new ServerError(
 );
 
 const loadSelection = (trackId, recordId) =>
-  readJSONFile(join(spriteDir(recordId), selectionRelPath(trackId, recordId)), null);
+  readJSONFile(join(spriteDir(recordId), selectionRelPath(trackId, recordId)), null, { strict: true });
 const loadSet = (trackId, recordId) =>
-  readJSONFile(join(spriteDir(recordId), trackSetRelPath(trackId, recordId)), null);
+  readJSONFile(join(spriteDir(recordId), trackSetRelPath(trackId, recordId)), null, { strict: true });
 const loadRun = (recordId, runId) =>
-  readJSONFile(join(spriteDir(recordId), runRelPath(runId), RUN_RECORD_NAME), null);
+  readJSONFile(join(spriteDir(recordId), runRelPath(runId), RUN_RECORD_NAME), null, { strict: true });
 
 const seedSelection = (row, recordId) => ({
   schemaVersion: 1,
@@ -185,10 +185,8 @@ export async function getTrackState(trackId, recordId) {
  * second reader spelling those filenames is exactly the drift the generic
  * workflow collapsed.
  *
- * Deliberately tolerant of a record whose directory is unreadable: `loadSelection`
- * and `loadSet` answer `null` for anything absent, so a record with no assets
- * simply doesn't carry the track. It never invents a false positive that would
- * block a legitimate delete.
+ * Missing artifacts can be skipped. An unreadable selection or set aborts
+ * the scan because it could contain approvals the mutation would orphan.
  */
 export async function recordsCarryingTrack(trackId) {
   const records = await listRecords();
@@ -639,13 +637,13 @@ async function invalidateTrackDirectionImpl(
   const [finalizedSet, loaded] = await Promise.all([loadSet(row.id, recordId), loadSelection(row.id, recordId)]);
   const approved = loaded?.directions?.[direction] || finalizedSet?.directions?.[direction];
   if (approved?.status !== 'approved') return false;
+  const run = approved.runId ? await loadRun(recordId, approved.runId) : null;
   const selection = loaded || { ...seedSelection(row, recordId), directions: { ...(finalizedSet?.directions || {}) } };
   if (finalizedSet) await rmGuarded(join(spriteDir(recordId), trackSetRelPath(row.id, recordId)), { force: true });
   delete selection.directions[direction];
   selection.status = 'in-progress';
   await ensureDir(join(spriteDir(recordId), row.id));
   await atomicWrite(join(spriteDir(recordId), selectionRelPath(row.id, recordId)), selection);
-  const run = approved.runId ? await loadRun(recordId, approved.runId) : null;
   if (run?.track === row.id) {
     await saveRun(recordId, {
       ...run,

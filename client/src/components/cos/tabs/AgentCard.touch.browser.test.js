@@ -10,6 +10,12 @@ import { resolveTestChrome } from '../../../../../scripts/lib/testChrome.js';
 
 const chrome = resolveTestChrome();
 const root = fileURLToPath(new URL('../../../../', import.meta.url));
+const fixturePath = 'agent-card-touch-test';
+
+async function loadAgentCards(page, origin) {
+  await page.goto(`${origin}${fixturePath}`, { waitUntil: 'domcontentloaded' });
+  await page.getByRole('button', { name: 'Show' }).first().waitFor({ state: 'attached' });
+}
 
 describe.skipIf(!chrome)('AgentCard touch targets in Chromium', () => {
   let fixture;
@@ -18,6 +24,8 @@ describe.skipIf(!chrome)('AgentCard touch targets in Chromium', () => {
     fixture = await startBrowserFixture({
       name: 'agent-card-touch-13925', createServer, chromium,
       launchOptions: { executablePath: chrome, args: ['--mute-audio'] },
+      // Compile Vite's cold module graph within the fixture's bounded setup.
+      warmup: loadAgentCards,
       viteConfig: temp => ({
         configFile: false, root, cacheDir: join(temp, 'vite-cache'),
         optimizeDeps: { entries: ['src/components/cos/tabs/AgentCard.jsx'], include: ['react', 'react-dom/client', 'react-router', 'lucide-react'] },
@@ -53,9 +61,9 @@ describe.skipIf(!chrome)('AgentCard touch targets in Chromium', () => {
                   React.createElement(AgentCard,{agent:{...base,id:'completed-agent',status:'completed',completedAt:now},completed:true,onResume:action('resume')}))));`;
           },
           configureServer(vite) {
-            vite.middlewares.use('/agent-card-touch-test', async (_req, res) => {
+            vite.middlewares.use(`/${fixturePath}`, async (_req, res) => {
               res.setHeader('Content-Type', 'text/html');
-              res.end(await vite.transformIndexHtml('/agent-card-touch-test', '<html><head><meta name="viewport" content="width=device-width,initial-scale=1"></head><body><div id="root"></div><script type="module" src="/agent-card-touch-fixture.jsx"></script></body></html>'));
+              res.end(await vite.transformIndexHtml(`/${fixturePath}`, '<html><head><meta name="viewport" content="width=device-width,initial-scale=1"></head><body><div id="root"></div><script type="module" src="/agent-card-touch-fixture.jsx"></script></body></html>'));
             });
           },
         }],
@@ -71,8 +79,7 @@ describe.skipIf(!chrome)('AgentCard touch targets in Chromium', () => {
     const page = await context.newPage();
     page.setDefaultTimeout(5000);
     try {
-      await page.goto(`${fixture.origin}agent-card-touch-test`, { waitUntil: 'domcontentloaded' });
-      await page.getByRole('button', { name: 'Show' }).first().waitFor({ state: 'attached' });
+      await loadAgentCards(page, fixture.origin);
       const session = await context.newCDPSession(page);
       await session.send('Emulation.setEmulatedMedia', { features: [{ name: 'hover', value: 'none' }, { name: 'pointer', value: 'coarse' }] });
       const expected = ['Show', "Relaunch this agent's task on a different provider or model", 'Pause agent and preserve worktree', 'Force kill agent (SIGKILL)', "Resume this agent's task on its preserved worktree", "Create new task from this agent's context"];

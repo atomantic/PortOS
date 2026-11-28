@@ -6,6 +6,7 @@
 
 import { Router } from 'express';
 import * as brainService from '../services/brain.js';
+import * as brainStorage from '../services/brainStorage.js';
 import { recordUserAction } from '../services/userActions.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
@@ -54,8 +55,8 @@ router.post('/capture', asyncHandler(async (req, res) => {
 router.get('/inbox', asyncHandler(async (req, res) => {
   const data = validateRequest(inboxQuerySchema, req.query);
   const [result, counts] = await Promise.all([
-    brainService.getInboxLog(data),
-    brainService.getInboxLogCounts(),
+    brainStorage.getInboxLog(data),
+    brainStorage.getInboxLogCounts(),
   ]);
   const entries = Array.isArray(result) ? result : (result?.entries || result?.items || []);
   const total = result?.total ?? entries.length;
@@ -74,7 +75,7 @@ router.get('/inbox', asyncHandler(async (req, res) => {
  * Get a single inbox log entry
  */
 router.get('/inbox/:id', asyncHandler(async (req, res) => {
-  const entry = await brainService.getInboxLogById(req.params.id);
+  const entry = await brainStorage.getInboxLogById(req.params.id);
   if (!entry) {
     throw new ServerError('Inbox entry not found', { status: 404, code: 'NOT_FOUND' });
   }

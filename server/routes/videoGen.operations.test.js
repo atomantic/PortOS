@@ -10,13 +10,14 @@ import {
   app,
   installVideoRouteHooks,
 } from './videoGen.test.fixture.js';
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { request } from '../lib/testHelper.js';
 import { stat } from 'fs/promises';
 import { invalidateSetupCheck } from '../services/imageGen/setup.js';
 import * as videoGenService from '../services/videoGen/local.js';
 import * as mediaRemoteDelete from '../services/mediaRemoteDelete.js';
 import * as upscaleJobService from '../services/videoGen/upscaleJob.js';
+import { enqueueTopazUpscale } from '../services/videoGen/topazJob.js';
 import * as realesrganJobService from '../services/videoGen/realesrganUpscaleJob.js';
 import * as realesrganRuntimeService from '../services/videoGen/realesrganRuntime.js';
 import * as stitchJobService from '../services/videoGen/stitchJob.js';
@@ -25,6 +26,11 @@ import { trimHistoryItem } from '../services/videoGen/trim.js';
 import * as mediaJobQueue from '../services/mediaJobQueue/index.js';
 import { getProject as getMusicVideoProject } from '../services/musicVideo/projects.js';
 import { listIcLoraRemixModes, IC_LORA_MODES, icLoraWeightKey } from '../lib/icLoraWeights.js';
+
+vi.mock('../services/videoGen/topazJob.js', async original => ({
+  ...await original(),
+  enqueueTopazUpscale: vi.fn(),
+}));
 
 describe('videoGen routes', () => {
   installVideoRouteHooks();
@@ -1255,8 +1261,23 @@ describe('videoGen routes', () => {
       const r = await request(app).post(`/api/video-gen/upscale/${validHistoryId}`).send({ method: 'ltx' });
       expect(r.status).toBe(200);
       expect(r.body).toEqual({ ok: true, job: { jobId: 'job-1', position: 2, status: 'queued' } });
-      expect(upscaleJobService.enqueueLtxUpscale).toHaveBeenCalledWith(validHistoryId);
+      expect(upscaleJobService.enqueueLtxUpscale).toHaveBeenCalledWith(validHistoryId, { musicVideoProjectId: undefined, sceneId: undefined });
       expect(videoGenService.upscaleHistoryItem).not.toHaveBeenCalled();
+    });
+
+    it.each(['ltx', 'topaz'])('forwards a project-only %s upscale to its queue', async method => {
+      const musicVideoProjectId = 'mv-example';
+      const token = 'cccccccc-cccc-4ccc-8ccc-ccccccccccc3';
+      const job = { jobId: 'queued', status: 'queued' };
+      const enqueue = method === 'ltx' ? upscaleJobService.enqueueLtxUpscale : enqueueTopazUpscale;
+      enqueue.mockResolvedValueOnce(job);
+      const response = method === 'ltx'
+        ? await request(app).post(`/api/video-gen/upscale/${validHistoryId}`).send({ method, musicVideoProjectId })
+        : await request(app).post(`/api/video-gen/upscale/${validHistoryId}/topaz`).send({ token, musicVideoProjectId });
+      expect(response.status).toBe(200);
+      expect(response.body.job).toEqual(job);
+      const options = { musicVideoProjectId, sceneId: undefined };
+      expect(enqueue).toHaveBeenCalledWith(...(method === 'ltx' ? [validHistoryId, options] : [validHistoryId, token, options]));
     });
 
     it('rejects an unknown method with a 400 and never reaches the service', async () => {

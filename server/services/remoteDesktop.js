@@ -38,8 +38,22 @@ export const createRemoteDesktopBroker = ({
   connectedSessionTtlMs = CONNECTED_SESSION_TTL_MS,
 } = {}) => {
   const sessions = new Map();
-  // Live bridges per token so revokeAll can end connections the session map no longer gates.
-  const liveBridges = new Map();
+  // Live bridges with their ownerSessionId so revokeAll/revokeByOwnerSessions can
+  // end active connections independently of the sessions map.
+  const liveBridges = new Set();
+  // Pending createSession calls awaiting the loopback VNC probe; prevents a revoked session from minting after probe resolves.
+  const pendingCreations = new Set();
+  // Recently revoked operator session IDs (128-bit random, never reused); catches
+  // revocations that fired between authGate admission and createSession entry.
+  const revokedOwnerSessions = new Set();
+  const MAX_REVOKED_OWNER_SESSIONS = 1024;
+  const recordRevokedOwner = (id) => {
+    if (!id) return;
+    revokedOwnerSessions.add(id);
+    if (revokedOwnerSessions.size > MAX_REVOKED_OWNER_SESSIONS) {
+      revokedOwnerSessions.delete(revokedOwnerSessions.values().next().value);
+    }
+  };
   const mountedServers = new WeakMap();
 
   const deleteExpiredSessions = () => {
@@ -58,21 +72,39 @@ export const createRemoteDesktopBroker = ({
     port,
   });
 
-  const createSession = async () => {
-    if (!await probe()) {
+  const createSession = async ({ ownerSessionId = null } = {}) => {
+    if (ownerSessionId && revokedOwnerSessions.has(ownerSessionId)) {
       throw codedError(
-        `No VNC server is reachable on loopback port ${port}. Run npm run setup:remote-desktop on the PortOS machine.`,
-        'VNC_NOT_CONFIGURED',
+        'PortOS session was revoked before preparing remote desktop access.',
+        'REMOTE_DESKTOP_SESSION_REVOKED',
       );
     }
-    deleteExpiredSessions();
-    const token = randomBytes(TOKEN_BYTES).toString('base64url');
-    const expiresAt = now() + SESSION_TTL_MS;
-    sessions.set(token, { activated: false, connected: false, expiresAt });
-    return {
-      viewerPath: `/remote-desktop?token=${encodeURIComponent(token)}`,
-      expiresAt: new Date(expiresAt).toISOString(),
-    };
+    const pending = { ownerSessionId, revoked: false };
+    pendingCreations.add(pending);
+    try {
+      if (!await probe()) {
+        throw codedError(
+          `No VNC server is reachable on loopback port ${port}. Run npm run setup:remote-desktop on the PortOS machine.`,
+          'VNC_NOT_CONFIGURED',
+        );
+      }
+      if (pending.revoked) {
+        throw codedError(
+          'PortOS session was revoked while preparing remote desktop access.',
+          'REMOTE_DESKTOP_SESSION_REVOKED',
+        );
+      }
+      deleteExpiredSessions();
+      const token = randomBytes(TOKEN_BYTES).toString('base64url');
+      const expiresAt = now() + SESSION_TTL_MS;
+      sessions.set(token, { activated: false, connected: false, expiresAt, ownerSessionId });
+      return {
+        viewerPath: `/remote-desktop?token=${encodeURIComponent(token)}`,
+        expiresAt: new Date(expiresAt).toISOString(),
+      };
+    } finally {
+      pendingCreations.delete(pending);
+    }
   };
 
   const readSession = (token) => {
@@ -146,7 +178,7 @@ export const createRemoteDesktopBroker = ({
       }
       try {
         wss.handleUpgrade(request, socket, head, (webSocket) => {
-          wss.emit('connection', webSocket, request, token, session.expiresAt);
+          wss.emit('connection', webSocket, request, token, session.expiresAt, session.ownerSessionId);
         });
       } catch {
         releaseSession(token);
@@ -155,13 +187,12 @@ export const createRemoteDesktopBroker = ({
     };
     httpServer.on('upgrade', onUpgrade);
 
-    wss.on('connection', (webSocket, _request, token, expiresAt) => {
+    wss.on('connection', (webSocket, _request, token, expiresAt, ownerSessionId) => {
       const vncSocket = connect({ host, port });
       const webSocketStream = createWebSocketStream(webSocket, { encoding: null });
       let cleanedUp = false;
-      let bridges = liveBridges.get(token);
-      if (!bridges) liveBridges.set(token, bridges = new Set());
-      bridges.add(webSocket);
+      const bridge = { webSocket, ownerSessionId };
+      liveBridges.add(bridge);
       const expiryTimer = setTimeout(() => {
         webSocket.close(1000, 'Remote desktop session expired');
       }, Math.max(1, expiresAt - now()));
@@ -170,8 +201,7 @@ export const createRemoteDesktopBroker = ({
         if (cleanedUp) return;
         cleanedUp = true;
         clearTimeout(expiryTimer);
-        bridges.delete(webSocket);
-        if (bridges.size === 0 && liveBridges.get(token) === bridges) liveBridges.delete(token);
+        liveBridges.delete(bridge);
         releaseSession(token);
         vncSocket.destroy();
         webSocketStream.destroy();
@@ -202,13 +232,35 @@ export const createRemoteDesktopBroker = ({
   // revocation: drop all tokens, then close bridges (close runs cleanup, which
   // destroys the VNC socket).
   const revokeAll = (reason = 'Remote desktop access revoked') => {
+    for (const pending of pendingCreations) pending.revoked = true;
     sessions.clear();
-    for (const bridges of [...liveBridges.values()]) {
-      for (const webSocket of [...bridges]) webSocket.close(1008, reason);
-    }
+    for (const { webSocket } of [...liveBridges]) webSocket.close(1008, reason);
   };
 
-  return { createSession, hasSession, mountWebSocket, revokeAll, status };
+  // Targeted revocation: drop tokens and close live VNC bridges minted by the
+  // revoked PortOS operator session IDs without disrupting other sessions.
+  // Live bridges retain ownerSessionId so they close even if the token map entry
+  // was already dropped.
+  const revokeByOwnerSessions = (sessionIds, reason = 'Remote desktop access revoked') => {
+    const revoked = new Set(sessionIds);
+    if (!revoked.size) return 0;
+    for (const id of revoked) recordRevokedOwner(id);
+    for (const pending of pendingCreations) {
+      if (pending.ownerSessionId && revoked.has(pending.ownerSessionId)) pending.revoked = true;
+    }
+    let count = 0;
+    for (const [token, session] of [...sessions.entries()]) {
+      if (!session.ownerSessionId || !revoked.has(session.ownerSessionId)) continue;
+      sessions.delete(token);
+      count += 1;
+    }
+    for (const { webSocket, ownerSessionId } of [...liveBridges]) {
+      if (ownerSessionId && revoked.has(ownerSessionId)) webSocket.close(1008, reason);
+    }
+    return count;
+  };
+
+  return { createSession, hasSession, mountWebSocket, revokeAll, revokeByOwnerSessions, status };
 };
 
 export const remoteDesktopBroker = createRemoteDesktopBroker();

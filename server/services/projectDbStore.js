@@ -15,13 +15,23 @@ import { toPgJson } from '../lib/pgJson.js';
 // Every write rewrites the whole JSONB document, so a record this large makes each edit slow (#16210).
 const LARGE_PROJECT_RECORD_BYTES = 5 * 1024 * 1024;
 const MB = 1024 * 1024;
+const JSON_FIELD = /^[a-zA-Z][a-zA-Z0-9_]*$/;
 
 export function createProjectDbStore({ table, kind, idPrefix, logEmoji, logLabel, logic, pageHeaderFields = [], largeRecordBytes = LARGE_PROJECT_RECORD_BYTES }) {
   if (!/^[a-z][a-z0-9_]*$/.test(table)) throw new Error(`Invalid project table: ${table}`);
   const extraHeaderColumns = pageHeaderFields.map((field) => {
-    if (!/^[a-zA-Z][a-zA-Z0-9_]*$/.test(field)) throw new Error(`Invalid project page header field: ${field}`);
+    if (!JSON_FIELD.test(field)) throw new Error(`Invalid project page header field: ${field}`);
     return `, data->'${field}' AS "${field}"`;
   }).join('');
+  let summaryData = 'data';
+  if (logic.summaryReadOmissions) {
+    const { field, keys } = logic.summaryReadOmissions;
+    if (![field, ...keys].every(key => JSON_FIELD.test(key))) throw new Error('Invalid project summary field');
+    // Replace the nested object once, and preserve older rows with a missing or non-object value.
+    summaryData = `CASE WHEN jsonb_typeof(data->'${field}') = 'object'
+      THEN jsonb_set(data, '{${field}}', (data->'${field}') - ARRAY[${keys.map(key => `'${key}'`).join(', ')}]::text[])
+      ELSE data END AS data`;
+  }
   const sync = makeSyncKind(kind);
   // Highest whole MB already logged per record, so a large record logs once per MB it grows, not on every edit.
   const loggedLargeMb = new Map();
@@ -79,11 +89,14 @@ export function createProjectDbStore({ table, kind, idPrefix, logEmoji, logLabel
     return prepared;
   }
 
-  async function listProjects({ includeDeleted = false } = {}) {
+  async function readProjects({ includeDeleted = false } = {}, dataColumn = 'data') {
     const where = includeDeleted ? '' : ' WHERE deleted = FALSE';
-    const result = await query(`SELECT id, data FROM ${table}${where} ORDER BY created_at ASC`);
+    const result = await query(`SELECT id, ${dataColumn} FROM ${table}${where} ORDER BY created_at ASC`);
     return result.rows.map(rowToProject);
   }
+
+  const listProjects = (options) => readProjects(options);
+  const listProjectSummaries = (options) => readProjects(options, summaryData);
 
   async function readProjectPage({ where, limit, offset, compare, filter, filterNeedsExtraHeaders }) {
     if (!compare && !filter) {
@@ -102,10 +115,10 @@ export function createProjectDbStore({ table, kind, idPrefix, logEmoji, logLabel
     return { ids: headers.slice(offset, offset + limit).map(({ id }) => id), total: headers.length };
   }
 
-  async function listProjectPage({ includeDeleted = false, limit = 50, offset = 0, compare, filter, filterNeedsExtraHeaders = true } = {}) {
+  async function listProjectPage({ includeDeleted = false, limit = 50, offset = 0, compare, filter, filterNeedsExtraHeaders = true, summary = false } = {}) {
     const where = includeDeleted ? '' : ' WHERE deleted = FALSE';
     const { ids, total } = await readProjectPage({ where, limit, offset, compare, filter, filterNeedsExtraHeaders });
-    const projects = new Map((await getProjectsByIds(ids, { includeDeleted })).map(project => [project.id, project]));
+    const projects = new Map((await readProjectsByIds(ids, { includeDeleted }, summary ? summaryData : 'data')).map(project => [project.id, project]));
     return { items: ids.map(id => projects.get(id)).filter(Boolean), total, limit, offset };
   }
 
@@ -116,16 +129,19 @@ export function createProjectDbStore({ table, kind, idPrefix, logEmoji, logLabel
     return includeDeleted || !project.deleted ? project : null;
   }
 
-  async function getProjectsByIds(ids, { includeDeleted = false } = {}) {
+  async function readProjectsByIds(ids, { includeDeleted = false } = {}, dataColumn = 'data') {
     const wanted = [...new Set((ids || []).filter(Boolean))];
     if (wanted.length === 0) return [];
     const live = includeDeleted ? '' : ' AND deleted = FALSE';
     const result = await query(
-      `SELECT id, data FROM ${table} WHERE id = ANY($1)${live} ORDER BY created_at ASC`,
+      `SELECT id, ${dataColumn} FROM ${table} WHERE id = ANY($1)${live} ORDER BY created_at ASC`,
       [wanted],
     );
     return result.rows.map(rowToProject);
   }
+
+  const getProjectsByIds = (ids, options) => readProjectsByIds(ids, options);
+  const getProjectSummariesByIds = (ids, options) => readProjectsByIds(ids, options, summaryData);
 
   async function listProjectIds({ includeDeleted = false } = {}) {
     const where = includeDeleted ? '' : ' WHERE deleted = FALSE';
@@ -226,9 +242,11 @@ export function createProjectDbStore({ table, kind, idPrefix, logEmoji, logLabel
     rowToProject,
     persist,
     listProjects,
+    listProjectSummaries,
     listProjectPage,
     getProject,
     getProjectsByIds,
+    getProjectSummariesByIds,
     listProjectIds,
     listProjectNames,
     createProject,

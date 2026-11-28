@@ -112,7 +112,7 @@ globalSetup: [${JSON.stringify(new URL('../vitestTempRootSetup.js', import.meta.
       const passed = {};
       for (const profile of ['smoke', 'fidelity', 'full']) {
         const output = join(temp, `${profile}.json`);
-        const run = spawnSync(process.execPath, [cli, 'run', '--config', config, '--configLoader=runner',
+        const run = spawnSync(process.execPath, [cli, 'run', '--config', config, '--configLoader=native',
           ...browserTestProfileArgs(profile), '--reporter=json', `--outputFile=${output}`], {
           cwd: temp, encoding: 'utf8', timeout: 20000,
           env,

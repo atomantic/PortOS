@@ -8,20 +8,23 @@ import json
 import re
 import sys
 import threading
+import time
 from pathlib import Path
 from queue import SimpleQueue
 
 import numpy as np
 from PIL import Image
 
-from motion import FRAMES_PER_SECOND, SAMPLE_RATE
-from render import frames, prepare, read_wave
+from motion import FRAMES_PER_SECOND, IDLE_STAGE_PARAMS, SAMPLE_RATE
+from render import frames, idle_frames, prepare, prepare_silence, read_wave, with_portrait
 
 # More than enough for a short mono TTS sentence; refuse over-sized messages
 # without reading an unbounded line into memory.
 MAX_MESSAGE = 4 * 1024 * 1024
 REQUEST_ID = re.compile(r"[A-Za-z0-9_-]{1,64}\Z")
 MAX_AUDIO_SECONDS = 16
+MAX_IDLE_BLOCKS = 150
+IDLE_LEAD_SECONDS = 0.35
 
 
 class PipeProtocol:
@@ -64,13 +67,24 @@ class PipeProtocol:
                 except (ValueError, TypeError):
                     self.send("error", message="Invalid request")
                     continue
-                if item.get("type") == "cancel":
+                kind = item.get("type")
+                if kind == "cancel":
                     with self.lock:
                         if self.active is not None and self.active[0] == request:
                             self.active[1].set()
                     continue
-                if item.get("type") != "speak" or not isinstance(item.get("wav"), str):
-                    self.send("error", id=request, message="Expected a speak or cancel request")
+                if kind == "speak" and isinstance(item.get("wav"), str):
+                    payload = item["wav"]
+                elif kind == "portrait" and (item.get("jpeg") is None or isinstance(item.get("jpeg"), str)):
+                    payload = item.get("jpeg")
+                elif kind == "idle":
+                    stage = item.get("stage", "idle")
+                    if not isinstance(stage, str) or stage not in IDLE_STAGE_PARAMS:
+                        self.send("error", id=request, message="Invalid idle stage")
+                        continue
+                    payload = stage
+                else:
+                    self.send("error", id=request, message="Expected a speak, idle, portrait, or cancel request")
                     continue
                 with self.lock:
                     busy = self.active is not None
@@ -80,7 +94,7 @@ class PipeProtocol:
                 if busy:
                     self.send("error", id=request, message="Avatar renderer is busy")
                 else:
-                    self.pending.put((request, stopped, item["wav"]))
+                    self.pending.put((kind, request, stopped, payload))
         finally:
             with self.lock:
                 self.closed = True
@@ -95,19 +109,76 @@ def encode_jpeg(frame):
     return base64.b64encode(output.getvalue()).decode("ascii")
 
 
-def output_request(protocol, request, stopped, data, prepared, args):
+def swap_portrait(protocol, request, payload, worker_state, args):
+    """Animate a new face: None restores the launch portrait. Always completes as done, even
+    if a cancel raced it, because the swap itself is not interruptible."""
     try:
-        wav = read_wave(io.BytesIO(base64.b64decode(data, validate=True)), MAX_AUDIO_SECONDS)
+        source = args.portrait if payload is None else io.BytesIO(base64.b64decode(payload, validate=True))
+        worker_state["prepared"] = with_portrait(worker_state["prepared"], source, args)
+        # Rolling motion history belongs to the previous face.
+        worker_state["context"] = None
+        protocol.finish(request, False)
+    except (ValueError, RuntimeError, OSError) as error:
+        print(f"Avatar portrait failed: {error}", file=sys.stderr, flush=True)
+        with protocol.lock:
+            protocol.active = None
+        protocol.send("error", id=request, message="Avatar portrait could not be loaded")
+
+
+def output_request(protocol, kind, request, stopped, payload, silence_window, worker_state, args):
+    def save_context(context):
+        worker_state["context"] = context
+
+    if kind == "portrait":
+        swap_portrait(protocol, request, payload, worker_state, args)
+        return
+    prepared = worker_state["prepared"]
+    try:
         seq = 0
-        for group in frames(prepared, wav, args, stopped.is_set):
-            for frame in group:
+        seed = worker_state["seed"]
+        worker_state["seed"] = (seed + 137) % 2_147_483_647
+        if kind == "idle":
+            started = time.monotonic()
+            groups = idle_frames(
+                prepared,
+                silence_window,
+                args,
+                stage=payload,
+                seed=seed,
+                cancelled=stopped.is_set,
+                state=worker_state["context"],
+                on_state=save_context,
+                max_blocks=MAX_IDLE_BLOCKS,
+            )
+            for group in groups:
+                for frame in group:
+                    if stopped.is_set():
+                        break
+                    jpg = encode_jpeg(frame)
+                    if stopped.is_set():
+                        break
+                    protocol.send("frame", id=request, index=seq, timeMs=seq * 1000 // FRAMES_PER_SECOND, jpeg=jpg)
+                    seq += 1
                 if stopped.is_set():
                     break
-                jpg = encode_jpeg(frame)
-                if stopped.is_set():
-                    break
-                protocol.send("frame", id=request, index=seq, timeMs=seq * 1000 // FRAMES_PER_SECOND, jpeg=jpg)
-                seq += 1
+                # Pace continuous ambient generation to ~real-time with a small
+                # lookahead buffer so GPU stays cool and preemption wakes up immediately.
+                ahead = (started + (seq / FRAMES_PER_SECOND) - IDLE_LEAD_SECONDS) - time.monotonic()
+                if ahead > 0.01:
+                    stopped.wait(ahead)
+        else:
+            args.seed = seed
+            wav = read_wave(io.BytesIO(base64.b64decode(payload, validate=True)), MAX_AUDIO_SECONDS)
+            for group in frames(prepared, wav, args, stopped.is_set,
+                                state=worker_state["context"], on_state=save_context):
+                for frame in group:
+                    if stopped.is_set():
+                        break
+                    jpg = encode_jpeg(frame)
+                    if stopped.is_set():
+                        break
+                    protocol.send("frame", id=request, index=seq, timeMs=seq * 1000 // FRAMES_PER_SECOND, jpeg=jpg)
+                    seq += 1
         protocol.finish(request, stopped.is_set())
     except (ValueError, RuntimeError, OSError) as error:
         print(f"Avatar request failed: {error}", file=sys.stderr, flush=True)
@@ -126,16 +197,18 @@ def main():
     protocol = PipeProtocol(sys.stdin.buffer, sys.stdout)
     with contextlib.redirect_stdout(sys.stderr):
         prepared = prepare(args)
+        silence_window = prepare_silence(prepared, args)
+        worker_state = {"context": None, "seed": args.seed, "prepared": prepared}
         # Warm the graphics and speech graphs with synthetic silence before
-        # advertising the worker as ready.
+        # advertising the worker as ready, seeding the initial rolling history.
         warmup = np.zeros(SAMPLE_RATE * 2, dtype=np.float32)
-        for _ in frames(prepared, warmup, args):
+        for _ in frames(prepared, warmup, args, on_state=lambda ctx: worker_state.__setitem__("context", ctx)):
             pass
         protocol.send("ready", fps=FRAMES_PER_SECOND, limitSeconds=MAX_AUDIO_SECONDS)
         reader = threading.Thread(target=protocol.read, daemon=True)
         reader.start()
         while request := protocol.pending.get():
-            output_request(protocol, *request, prepared, args)
+            output_request(protocol, *request, silence_window, worker_state, args)
         reader.join()
 
 

@@ -2,14 +2,15 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // #15308: live Gmail sync records each message's RFC-822 Message-ID (the key the
 // Takeout importer uses) and backfills it onto messages cached before it existed.
-const gmail = vi.hoisted(() => ({ listed: [], details: new Map(), metadata: new Map(), metadataCalls: [] }));
+const gmail = vi.hoisted(() => ({ listed: [], details: new Map(), metadata: new Map(), metadataCalls: [], sendMessage: vi.fn() }));
 
 vi.mock('./googleAuth.js', () => ({
-  getAuthenticatedClient: async () => ({}),
+  getAuthenticatedClient: async () => ({ getAccessToken: async () => ({}) }),
   GOOGLE_API_TIMEOUT_MS: 30_000,
 }));
 vi.mock('./gmailApi.js', () => ({
   createGmailApi: () => ({
+    sendMessage: gmail.sendMessage,
     listSendAs: async () => ({ sendAs: [] }),
     listMessages: async () => ({ messages: gmail.listed }),
     getMessage: async (id, { format }) => {
@@ -22,7 +23,7 @@ vi.mock('./gmailApi.js', () => ({
   }),
 }));
 
-import { syncGmail, RFC_MESSAGE_ID_BACKFILL_MAX } from './messageGmailSync.js';
+import { sendGmail, syncGmail, RFC_MESSAGE_ID_BACKFILL_MAX } from './messageGmailSync.js';
 
 const headers = (messageId) => [
   { name: 'From', value: 'Friend <friend@example.com>' },
@@ -70,6 +71,21 @@ describe('syncGmail Message-ID identity (#15308)', () => {
     expect(byApiId.get('deleted').rfcMessageId).toBe('');
     expect(byApiId.get('flaky')).not.toHaveProperty('rfcMessageId');
     expect(byApiId.get('known').rfcMessageId).toBe('known@example.com');
+  });
+
+  it('sends an opt-out attempt Message-ID and preserves its direct reply header and receipt time', async () => {
+    const account = { id: 'acct', type: 'gmail', syncConfig: { ingestSent: false } };
+    gmail.sendMessage.mockResolvedValue({ id: 'sent' });
+    expect(await sendGmail(account, { generatedBy: 'privacy-optout', sendAttemptId: 'example-attempt', to: ['broker@example.com'] }))
+      .toEqual({ success: true });
+    const wire = Buffer.from(gmail.sendMessage.mock.calls[0][0].raw, 'base64url').toString();
+    const messageId = wire.match(/^Message-ID: ([^\r\n]+)/m)?.[1];
+    expect(messageId).toBe('<portos-optout-example-attempt@requests.invalid>');
+    gmail.listed = [{ id: 'reply', threadId: 'thread' }];
+    gmail.details.set('reply', { id: 'reply', labelIds: ['INBOX'], internalDate: '1720000000000',
+      payload: { headers: [{ name: 'In-Reply-To', value: messageId }] } });
+    const result = await syncGmail(account, { messages: [] }, null, { mode: 'unread' });
+    expect(result.messages).toMatchObject([{ inReplyTo: messageId, date: new Date(1720000000000).toISOString() }]);
   });
 
   it('bounds the backfill per sync', async () => {

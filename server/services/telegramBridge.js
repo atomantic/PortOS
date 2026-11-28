@@ -50,8 +50,13 @@ async function loadBotToken() {
 async function loadChatId() {
   const content = await tryReadFile(ACCESS_FILE);
   if (!content) return null;
-  const access = JSON.parse(content);
-  return access.allowFrom?.[0] || null;
+  try {
+    const access = JSON.parse(content);
+    return access?.allowFrom?.[0] || null;
+  } catch (err) {
+    console.error(`📱 TG Bridge: invalid JSON in access.json — ${err.message}`);
+    return null;
+  }
 }
 
 /**
@@ -81,8 +86,8 @@ async function apiCall(method, params) {
     return null;
   }
 
-  if (!data.ok) {
-    console.error(`📱 TG Bridge: API error on ${method} — ${data.description}`);
+  if (!data || typeof data !== 'object' || !data.ok) {
+    console.error(`📱 TG Bridge: API error on ${method} — ${data?.description || `HTTP ${res.status}`}`);
     return null;
   }
   return data.result;

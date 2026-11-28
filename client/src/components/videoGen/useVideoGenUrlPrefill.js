@@ -10,6 +10,7 @@ import { useEffect } from 'react';
 import toast from '../ui/Toast';
 import { trackAudioUrl } from '../../services/apiTracks.js';
 import { isVideoLoraFamily, loraFamilyOf, videoLoraFamily } from '../../lib/runnerFamilies';
+import { appendTriggerWords } from '../../lib/loraTriggers';
 import { normalizeVideoTiling } from '../../lib/videoTilingOptions';
 
 /** The handoff values the field state seeds its initial values from. */
@@ -196,7 +197,7 @@ export function useVideoGenUrlPrefill({
         scale: typeof match.recommendedScale === 'number' ? match.recommendedScale : 1.0,
       }]);
       if (match.triggerWords?.length) {
-        setPrompt((p) => { const add = match.triggerWords.join(', '); return p && p.trim() ? `${p}, ${add}` : add; });
+        setPrompt((p) => appendTriggerWords(p, match.triggerWords));
       }
     }
     setSearchParams((prev) => { const next = new URLSearchParams(prev); next.delete('lora'); return next; }, { replace: true });

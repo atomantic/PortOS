@@ -1,11 +1,18 @@
+import { renderOptionsSchema, imageTo3dCreateModelSchema, installQuerySchema } from '../lib/imageTo3dValidation.js';
 import { Router, raw } from 'express';
 import { createReadStream } from 'node:fs';
-import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { streamAttachment } from '../lib/streamAttachment.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import { BOUNDED_PAGE_DEFAULT_LIMIT, boundedPaginationQuerySchema, isPaginationRequested, pageEnvelope } from '../lib/queryValidation.js';
-import { getTarget, listTargets, detectHostCapabilities, unavailableReason, unavailableReasonLabel, IMAGE_TO_3D_TARGET_IDS, renderOptionSupportFor } from '../services/imageTo3d/targets.js';
+import {
+  getTarget,
+  listTargets,
+  detectHostCapabilities,
+  unavailableReason,
+  unavailableReasonLabel,
+  renderOptionSupportFor,
+} from '../services/imageTo3d/targets.js';
 import { getTargetAdapter } from '../services/imageTo3d/adapters.js';
 import {
   listModels,
@@ -20,46 +27,12 @@ import {
   saveModelUsdz,
   USDZ_MAX_BYTES,
 } from '../services/imageTo3d/models.js';
-import {
-  RENDER_STEPS_MIN, RENDER_STEPS_MAX, RENDER_SEED_MAX, DETAIL_TIERS, ALPHA_MODES,
-  SUBJECT_SCALE_MIN_EXCLUSIVE, SUBJECT_SCALE_MAX,
-} from '../services/imageTo3d/renderOptions.js';
 import { createInstallLogger } from '../lib/installLogger.js';
 import { onClientDisconnect, openSseStream } from '../lib/sseDownload.js';
+import { IMAGE_TO_3D_TARGET_IDS } from '../services/imageTo3d/targets.js';
 
 const router = Router();
-
-const galleryFilenameSchema = z.string().trim().min(1).max(256)
-  .regex(/^[^/\\]+\.(png|jpe?g|webp)$/i, 'filename must be a gallery image basename');
-
-// PER-RUN sampler knobs, shared by create and re-generate. Nothing persists
-// between runs: absent steps → the pipeline default, absent seed → a fresh
-// random roll for that run, absent keyBackground → no keying (the pipeline's own
-// learned matte runs instead), absent subjectScale → the source's own framing.
-const renderOptionsSchema = z.object({
-  steps: z.number().int().min(RENDER_STEPS_MIN).max(RENDER_STEPS_MAX).optional(),
-  seed: z.number().int().min(0).max(RENDER_SEED_MAX).optional(),
-  keyBackground: z.boolean().optional(),
-  // Abstract tier, not a lane's raw pipeline value — the target maps it (see
-  // renderOptions.js). Enums come from there so the route can't accept a tier the
-  // normalizer would silently discard.
-  detail: z.enum([...DETAIL_TIERS]).optional(),
-  alphaMode: z.enum([...ALPHA_MODES]).optional(),
-  normalMap: z.boolean().optional(),
-  // Open at zero, closed at one — `1` is the identity (no reframing) and the
-  // default; bounds come from renderOptions.js so the route can't accept a value
-  // the normalizer would silently discard.
-  subjectScale: z.number()
-    .gt(SUBJECT_SCALE_MIN_EXCLUSIVE)
-    .max(SUBJECT_SCALE_MAX)
-    .optional(),
-});
-
-const createModelSchema = z.object({
-  name: z.string().trim().min(1).max(120),
-  filename: galleryFilenameSchema,
-  target: z.enum([...IMAGE_TO_3D_TARGET_IDS]).optional(),
-}).extend(renderOptionsSchema.shape);
+const createModelSchema = imageTo3dCreateModelSchema(IMAGE_TO_3D_TARGET_IDS);
 
 // Target ids with an install currently running — a rapid double-click would
 // otherwise race two clone/setup processes against the same install dir.
@@ -112,8 +85,6 @@ const sendTargetInstallStatus = async (targetId, res) => {
   const target = listTargets(capabilities).find((candidate) => candidate.id === targetId) || getTarget(targetId);
   res.json({ capabilities, target: await annotateTargetStatus(target) });
 };
-
-const installQuerySchema = z.object({ repair: z.enum(['0', '1']).optional() });
 
 /**
  * SSE-driven target install/repair, shared by every registered target. The

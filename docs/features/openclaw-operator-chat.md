@@ -10,3 +10,5 @@ OpenClaw Operator Chat connects the PortOS conversation UI to a local or private
 Key environment settings include `OPENCLAW_ENABLED`, `OPENCLAW_BASE_URL`, `OPENCLAW_AUTH_TOKEN`, `OPENCLAW_AUTH_HEADER` (default `Authorization`), `OPENCLAW_AUTH_SCHEME` (default `Bearer`), `OPENCLAW_DEFAULT_SESSION`, `OPENCLAW_DEFAULT_AGENT_ID` (default `main`), `OPENCLAW_TIMEOUT_MS` and `OPENCLAW_LABEL`.
 
 **Unconfigured** means the adapter needs local settings. **Unavailable** means the adapter is configured but its probe failed. Check the runtime URL, private network access, and token before retrying. Disabling the feature hides the UI and refuses runtime requests on this install.
+
+To send a message and collect the complete reply in a single HTTP response, use `POST /api/openclaw/sessions/:id/messages` in the API Explorer.

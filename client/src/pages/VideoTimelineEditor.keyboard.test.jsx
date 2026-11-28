@@ -1,6 +1,7 @@
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { awaitPageLoaded } from '../test/pageLoadBarrier';
 import { stubSequentialLayout, pressKey, dndAnnouncement } from '../test/dndKeyboardDrag';
 
@@ -70,11 +71,7 @@ const renderEditor = async () => {
   await awaitPageLoaded('Loading timeline project');
 };
 
-// The block is the drag handle, so it is reached through its own remove
-// button's accessible name — the only text that names a specific segment.
-const blockFor = async (assetFile) => (await screen
-  .findByRole('button', { name: `Remove ${assetFile} from timeline` }))
-  .closest('[aria-roledescription="sortable"]');
+const blockFor = (assetFile) => screen.findByRole('button', { name: `${assetFile} still · 3.00s` });
 
 describe('VideoTimelineEditor keyboard clip reordering (#7243)', () => {
   it('reorders segments with Space, arrows and Space', async () => {
@@ -91,6 +88,7 @@ describe('VideoTimelineEditor keyboard clip reordering (#7243)', () => {
     await pressKey('Space');
 
     expect(dndAnnouncement()).toMatch(/Dropped clip in position 2 of 2/);
+    expect(first).toHaveFocus();
     await waitFor(() => expect(api.saved.length).toBeGreaterThan(0));
     expect(api.saved.at(-1).segments.map((s) => s.assetFile)).toEqual(['second.png', 'first.png']);
   });
@@ -109,14 +107,12 @@ describe('VideoTimelineEditor keyboard clip reordering (#7243)', () => {
   });
 
   it('still selects the block on Enter, which the drag must not swallow', async () => {
-    // Enter is deliberately NOT a dnd-kit start/end code on this surface, so
-    // the block's own select handler keeps it — that is what lets one element
-    // be both the drag handle and the click-to-select target.
+    const user = userEvent.setup();
     await renderEditor();
     const second = await blockFor('second.png');
     second.focus();
 
-    await pressKey('Enter', second);
+    await user.keyboard('{Enter}');
 
     expect(dndAnnouncement()).not.toMatch(/Picked up/);
     // The inspector only renders a Hold field once a still segment is selected.

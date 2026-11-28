@@ -59,6 +59,7 @@ const { asyncNoop, noop, steps, providerCalls, collectionStore } = vi.hoisted(()
       stopTailcatForwards: vi.fn(asyncNoop),
       stopModelHost: vi.fn(asyncNoop),
       stopJevSidecar: vi.fn(),
+      stopAvatarForShutdown: vi.fn(),
       drainJevSidecarStops: vi.fn(asyncNoop),
       stopMediaCapture: vi.fn(),
       drainMediaCaptureStops: vi.fn(asyncNoop),
@@ -166,6 +167,7 @@ vi.mock('./settings.js', () => ({ getSettings: async () => ({}), flushSettingsLe
 vi.mock('./jev.js', () => ({
   stopJevSidecar: steps.stopJevSidecar, drainJevSidecarStops: steps.drainJevSidecarStops,
 }));
+vi.mock('./voice/avatarRuntime.js', () => ({ stopAvatarForShutdown: steps.stopAvatarForShutdown }));
 vi.mock('./mediaService.js', () => ({
   default: { stopAll: steps.stopMediaCapture, drainCaptureStops: steps.drainMediaCaptureStops },
 }));
@@ -211,7 +213,8 @@ vi.mock('./idealoomAutoSync.js', () => ({ flushAutoSync: steps.flushIdeaLoom }))
 vi.mock('./meatspace/meatspacePostDrillCache.js', () => ({ initDrillCache: asyncNoop }));
 vi.mock('./meatspace/meatspacePostReminder.js', () => ({ registerPostReminderSchedule: asyncNoop }));
 vi.mock('./autobiographyReminder.js', () => ({ registerAutobiographyReminderSchedule: asyncNoop }));
-vi.mock('./brain.js', () => ({ recoverInterruptedRepoClones: steps.recoverClones, recoverStuckClassifications: asyncNoop }));
+vi.mock('./brainLinks.js', () => ({ recoverInterruptedRepoClones: steps.recoverClones }));
+vi.mock('./brain.js', () => ({ recoverStuckClassifications: asyncNoop }));
 vi.mock('./writersRoom/analysisSnapshots.js', () => ({ recoverStuckAnalyses: asyncNoop }));
 vi.mock('./pipeline/recovery.js', () => ({
   recoverStuckGeneratingStages: asyncNoop, recoverStuckAutoRuns: asyncNoop, recoverStuckAutopilots: asyncNoop,
@@ -657,6 +660,7 @@ describe('signal-driven shutdown', () => {
 
     await Promise.all([sidecar.entered, capture.entered]);
     expect(steps.stopJevSidecar).toHaveBeenCalledBefore(io.close);
+    expect(steps.stopAvatarForShutdown).toHaveBeenCalledBefore(io.close);
     expect(steps.stopMediaCapture).toHaveBeenCalledBefore(httpServer.closeAllConnections);
     expect(steps.closeDb).toHaveBeenCalledOnce();
     expect(exit).not.toHaveBeenCalled();

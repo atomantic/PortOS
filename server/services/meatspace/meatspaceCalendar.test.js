@@ -1,5 +1,5 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdir, readFile, rm, writeFile } from 'fs/promises';
+import { chmod, mkdir, readFile, rm, stat, writeFile } from 'fs/promises';
 import { join } from 'path';
 import express from 'express';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
@@ -49,6 +49,27 @@ describe('Life Calendar defaults vs deliberately emptied lists', () => {
     expect(await getActivities()).toEqual([]);
     await addActivity({ name: 'Mine', cadence: 'day', frequency: 1, icon: 'coffee' });
     expect(await getActivities()).toHaveLength(1);
+  });
+});
+
+describe('calendar store permissions', () => {
+  it.skipIf(process.platform === 'win32').each([
+    ['activities', { name: 'Walks', cadence: 'day', frequency: 1 }],
+    ['life-events', { name: 'Anniversary', type: 'custom', recurrence: 'yearly', month: 0, day: 2, enabled: true }],
+  ])('creates and rewrites %s with owner-only permissions', async (store, body) => {
+    const file = join(PATHS.meatspace, `${store}.json`);
+    const app = makeApp();
+    const save = () => request(app).post(`/api/meatspace/${store}`).send(body);
+
+    expect((await save()).status).toBe(200);
+    expect((await stat(PATHS.meatspace)).mode & 0o777).toBe(0o700);
+    expect((await stat(file)).mode & 0o777).toBe(0o600);
+
+    await chmod(PATHS.meatspace, 0o755);
+    await chmod(file, 0o644);
+    expect((await save()).status).toBe(200);
+    expect((await stat(PATHS.meatspace)).mode & 0o777).toBe(0o700);
+    expect((await stat(file)).mode & 0o777).toBe(0o600);
   });
 });
 

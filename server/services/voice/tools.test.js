@@ -3,8 +3,11 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 // Stub every external side-effect before importing tools.js so the unit test
 // exercises pure validation/dispatch logic without hitting the filesystem.
 vi.mock('../brain.js', () => ({
-  captureThought: vi.fn(async () => ({ inboxLog: { id: 'inbox-1' }, message: 'ok' })),
-  getInboxLog: vi.fn(async () => []),
+  captureThought: vi.fn(async () => ({ inboxLog: { id: 'inbox-1' }, message: 'ok' }))
+}));
+vi.mock('../brainStorage.js', async (importOriginal) => ({
+  ...await importOriginal(),
+  getInboxLog: vi.fn(async () => [])
 }));
 vi.mock('../auth.js', async (importOriginal) => ({
   ...(await importOriginal()),
@@ -1746,13 +1749,21 @@ describe('timer_set', () => {
     expect(r.ok).toBe(false);
     expect(r.summary).toMatch(/capped at 24 hours/);
   });
-  it('delegates a valid timer to the persistent scheduler', async () => {
+  it('passes the label to the scheduler and keeps it out of the timer log', async () => {
     scheduleTimerMock.mockClear();
-    const r = await dispatchTool('timer_set', { minutes: 10, label: 'call mom' }, authorizedOperator);
-    expect(r.ok).toBe(true);
-    expect(r.durationMs).toBe(600000);
-    expect(r.summary).toMatch(/Timer set for 10 minutes/);
-    expect(scheduleTimerMock).toHaveBeenCalledWith({ totalMs: 600000, label: 'call mom' });
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const label = 'Example reminder';
+    try {
+      const r = await dispatchTool('timer_set', { minutes: 10, label }, authorizedOperator);
+      expect(r.ok).toBe(true);
+      expect(r.durationMs).toBe(600000);
+      expect(r.summary).toMatch(/Timer set for 10 minutes/);
+      expect(scheduleTimerMock).toHaveBeenCalledWith({ totalMs: 600000, label });
+      expect(log).toHaveBeenCalledWith('⏰ Timer set for 10 minutes (label chars=16)');
+      expect(log.mock.calls.flat().join('\n')).not.toContain(label);
+    } finally {
+      log.mockRestore();
+    }
   });
 });
 

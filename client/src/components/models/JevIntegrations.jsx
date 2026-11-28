@@ -1,3 +1,4 @@
+import { Link } from 'react-router';
 import { useState } from 'react';
 import { getJevPolicy, updateJevPolicy } from '../../services/apiLocalLlm.js';
 import { updateInstanceFeature } from '../../services/apiSystem.js';
@@ -77,8 +78,8 @@ export default function JevIntegrations({ registry, status }) {
         </div>
       </fieldset>
       <p className="text-xs text-gray-400">Scope adherence runs when you click Check scope on an issue or PR: retrieve up to three relevant PRD.md / GOALS.md clauses, then score each change against a clause. It does not block completion. Stacker News uses Jev only to escalate; an allowed / low-risk answer still requires the existing analysis.</p>
-      <p className="text-xs text-gray-400">Agent-completion goal fidelity uses a separate chat-model reviewer, with forge verification for merge objectives. Jev does not grade those completions. <a href="/models/code-reviewers" className="text-port-accent underline">Manage completion reviews</a></p>
-      <a href="/models/llms/abuse" className="text-xs text-port-accent underline">Advanced source policies and margin overrides</a>
+      <p className="text-xs text-gray-400">Agent-completion goal fidelity uses a separate chat-model reviewer, with forge verification for merge objectives. Jev does not grade those completions. <Link to="/models/code-reviewers" className="text-port-accent underline">Manage completion reviews</Link></p>
+      <Link to="/models/llms/abuse" className="text-xs text-port-accent underline">Advanced source policies and margin overrides</Link>
       <details className="text-xs text-gray-300 border border-port-border rounded p-3">
         <summary className="cursor-pointer text-port-accent">Questions, answer options, and decision formula</summary>
         <p className="my-3">Each option receives an entailment probability. Winner = highest entailment; margin = winner minus runner-up. Accept only when margin ≥ max(decision floor, winning option floor, source override); otherwise abstain. Agreement with chat measures consistency, not correctness. Scope adherence has no chat comparison.</p>

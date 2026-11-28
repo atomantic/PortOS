@@ -17,6 +17,7 @@ import {
   repoRelativeFromCrashPath,
   parseShard,
   requiresSourceFiles,
+  shouldPublishTestMemo,
   shouldWarmTestChrome,
   spawnNpm,
   toRunnerPath,
@@ -66,6 +67,20 @@ describe('parseShard', () => {
     expect(parseShard('1/1')).toBeNull();
     expect(parseShard('2/3')).toEqual({ index: 2, count: 3 });
     expect(() => parseShard('2')).toThrow(/<index>\/<count>/);
+  });
+});
+
+describe('shouldPublishTestMemo', () => {
+  it('publishes only when a green trusted run actually changed or seeded the memo store', () => {
+    const base = { memoDir: '/tmp/memo', readOnlyMemo: false, status: 0, written: 0, pruned: { removedEntries: 0, removedRecords: 0 }, factsStats: { hits: 100, misses: 4 } };
+    expect(shouldPublishTestMemo(base)).toBe(false);
+    expect(shouldPublishTestMemo({ ...base, written: 1 })).toBe(true);
+    expect(shouldPublishTestMemo({ ...base, pruned: { removedEntries: 1, removedRecords: 0 } })).toBe(true);
+    expect(shouldPublishTestMemo({ ...base, pruned: { removedEntries: 0, removedRecords: 2 } })).toBe(true);
+    expect(shouldPublishTestMemo({ ...base, factsStats: { hits: 0, misses: 12 } })).toBe(true);
+    expect(shouldPublishTestMemo({ ...base, written: 1, readOnlyMemo: true })).toBe(false);
+    expect(shouldPublishTestMemo({ ...base, written: 1, status: 1 })).toBe(false);
+    expect(shouldPublishTestMemo({ ...base, written: 1, memoDir: null })).toBe(false);
   });
 });
 
@@ -160,6 +175,26 @@ it.skipIf(process.platform === 'win32')('hands the browser plan to the supervise
     rmSync(fixture, { recursive: true, force: true });
   }
 }, 150_000);
+
+it.skipIf(process.platform === 'win32')('runs the fake npm CommonJS payload from a checkout-local Vitest temp root', () => {
+  const checkout = mkdtempSync(join(import.meta.dirname, '.fake-npm-esm-'));
+  const fixture = join(checkout, 'temp');
+  const selectionPath = join(fixture, 'selection.json');
+  mkdirSync(fixture);
+  try {
+    writeFileSync(join(checkout, 'package.json'), JSON.stringify({ type: 'module' }));
+    writeFileSync(selectionPath, JSON.stringify({ include: ['scripts/example.test.js'], exclude: [] }));
+    installFakeNpm(fixture, REPORTING_NPM);
+    const result = spawnSync(join(fixture, 'npm'), ['run', 'test:ci', '--', '--reporter=json'], {
+      cwd: checkout, encoding: 'utf8', env: { ...process.env, PORTOS_CI_TEST_SELECTION: selectionPath },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({ args: ['run', 'test:ci', '--', '--reporter=json'],
+      selection: { include: ['scripts/example.test.js'], exclude: [] } });
+  } finally {
+    rmSync(checkout, { recursive: true, force: true });
+  }
+});
 
 it('runs the db scope through the server workspace\'s test:db:ci script with the same selection file', () => {
   const fixture = mkdtempSync(join(tmpdir(), 'portos-db-scope-'));
@@ -894,7 +929,7 @@ describe('ci.yml shard wiring', () => {
       expect(body, id).toContain('CI_SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}');
       // Shards race to save one immutable cache entry; without the shard in
       // the key the winner's 1/n of the transform artifacts is all that persists.
-      expect(body, id).toMatch(/key: vitest-\w+-\$\{\{ runner\.os \}\}-\$\{\{ hashFiles\([^)]*\) \}\}-\$\{\{ matrix\.shard \}\}of\$\{\{ strategy\.job-total \}\}/);
+      expect(body, id).toMatch(/key: vitest-\w+-\$\{\{ runner\.os \}\}-\$\{\{ hashFiles\([^)]*\) \}\}-\$\{\{ hashFiles\([^)]*\) \}\}-\$\{\{ matrix\.shard \}\}of\$\{\{ strategy\.job-total \}\}/);
     }
   });
 
@@ -903,11 +938,11 @@ describe('ci.yml shard wiring', () => {
     const steps = body.split(/^ {6}- name: /m).slice(1);
     const names = steps.map(step => step.split('\n')[0]);
     expect(names).toEqual([
-      'Restore the test memo', 'Check remaining DB tests', 'Provision test database (portos_test)',
+      'Restore the test memo', 'Check remaining DB tests', 'Restore server Vitest transforms', 'Provision test database (portos_test)',
       'Install PostgreSQL client and audio verification tools', 'Restore a real pg_dump into a scratch database',
       'Run DB-backed tests (portos_test)', 'Save the test memo',
     ]);
-    const [memo, plan, provision, tools, restore, run, save] = steps;
+    const [memo, plan, cache, provision, tools, restore, run, save] = steps;
     expect(memo).toContain('uses: ./.github/actions/test-memo');
     expect(memo).toContain('partition: db');
     expect(CI_JOBS.database).toMatch(/key: test-memo-[^\n]*-db-\$\{\{ github\.run_id \}\}/);
@@ -922,10 +957,13 @@ describe('ci.yml shard wiring', () => {
     }
     const liveRestore = 'fromJSON(needs.impact.outputs.plan).db_live_restore';
     const dbGate = `if: fromJSON(steps.db-plan.outputs.remaining) > 0 || ${liveRestore}\n`;
-    for (const step of [provision, tools, run]) expect(step).toContain(dbGate);
+    const cacheAction = 'uses: ./.github/actions/server-vitest-cache';
+    expect(cache).toContain(cacheAction);
+    expect(body.indexOf(cacheAction)).toBe(body.lastIndexOf(cacheAction));
+    for (const step of [cache, provision, tools, run]) expect(step).toContain(dbGate);
     expect(restore).toContain(`if: ${liveRestore}\n`);
     expect(save).toContain('key: ${{ steps.test-memo.outputs.key }}');
-    expect(body).toContain("steps.db-tests.outcome == 'success' && github.event_name != 'pull_request'");
+    expect(body).toContain("steps.db-tests.outcome == 'success' && steps.db-tests.outputs.memo-written == 'true' && github.event_name != 'pull_request'");
   });
 
   it('runs the planner-selected browser suites on their own job with prerequisites required (#10312)', () => {
@@ -951,19 +989,21 @@ describe('ci.yml shard wiring', () => {
     const planIndex = body.indexOf('- name: Check remaining browser suites');
     const toolsIndex = body.indexOf('- name: Install audio verification tools');
     const recheckIndex = body.indexOf('- name: Recheck browser suites after audio setup');
+    const cacheIndex = body.indexOf('uses: ./.github/actions/server-vitest-cache');
     const clientIndex = body.indexOf('uses: ./.github/actions/setup-client');
     expect(memoIndex).toBeGreaterThan(0);
     expect(memoIndex).toBeLessThan(planIndex);
     expect(planIndex).toBeLessThan(toolsIndex);
     expect(toolsIndex).toBeLessThan(recheckIndex);
-    expect(recheckIndex).toBeLessThan(clientIndex);
+    expect(recheckIndex).toBeLessThan(cacheIndex);
+    expect(cacheIndex).toBeLessThan(clientIndex);
     expect(clientIndex).toBeLessThan(start);
     const planStep = body.slice(planIndex, toolsIndex);
     expect(planStep).toContain('id: browser-plan');
     expect(planStep).toContain('run: node scripts/run-ci-tests.js server --check-remaining');
     expect(planStep).toContain("PORTOS_CI_BEFORE_AUDIO_SETUP: '1'");
     expect(body.slice(toolsIndex, recheckIndex)).toContain('if: fromJSON(steps.browser-plan.outputs.remaining) > 0');
-    const recheckStep = body.slice(recheckIndex, clientIndex);
+    const recheckStep = body.slice(recheckIndex, cacheIndex);
     expect(recheckStep).toContain("if: steps.browser-plan.outputs.recheck == 'true'");
     expect(recheckStep).toContain('run: node scripts/run-ci-tests.js server --check-remaining');
     expect(step).toContain('PORTOS_CI_PREPLANNED_RUN: ${{ runner.temp }}/portos-browser-run.json');
@@ -975,7 +1015,9 @@ describe('ci.yml shard wiring', () => {
       expect(recheckStep).toContain(envLine);
     }
     const gate = 'if: fromJSON(steps.browser-recheck.outputs.remaining || steps.browser-plan.outputs.remaining) > 0';
-    expect(body.slice(clientIndex, start)).toContain(gate);
+    for (const jobStep of [body.slice(cacheIndex, clientIndex), body.slice(clientIndex, start)]) {
+      expect(jobStep.split('\n')[1].trim()).toBe(gate);
+    }
     expect(step).toContain(gate);
   });
 

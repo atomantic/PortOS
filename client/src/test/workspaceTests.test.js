@@ -15,7 +15,7 @@ const REPO_ROOT = join(import.meta.dirname, '..', '..', '..');
 it('collects the same files as `vitest list` for client', () => {
   // Through node, not the .bin shim: the shim is a shell script (.cmd on Windows) execFileSync cannot start there.
   const listed = execFileSync(process.execPath, [join(REPO_ROOT, 'client', 'node_modules', 'vitest', 'vitest.mjs'),
-    'list', '--filesOnly', '--configLoader', 'runner'], {
+    'list', '--filesOnly', '--configLoader', 'native'], {
       cwd: join(REPO_ROOT, 'client'), encoding: 'utf8', maxBuffer: 16 * 1024 * 1024,
       env: { ...process.env, PORTOS_CI_TEST_SELECTION: '' },
     })

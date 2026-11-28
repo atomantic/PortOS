@@ -7,19 +7,14 @@
  * its ready-to-paste text instead of a chat message they'll lose.
  */
 
+import { listQuerySchema } from '../lib/humanActionsValidation.js';
 import { Router } from 'express';
-import { z } from 'zod';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import { humanActionPlanSchema } from '../lib/humanActions.js';
 import { listHumanActions, scheduleHumanActionPlan } from '../services/humanActions.js';
 
 const router = Router();
-
-const listQuerySchema = z.object({
-  planKey: z.string().trim().min(1).max(40).optional(),
-  includeDone: z.enum(['true', 'false']).optional(),
-}).strict();
 
 router.get('/', asyncHandler(async (req, res) => {
   const { planKey, includeDone } = validateRequest(listQuerySchema, req.query);

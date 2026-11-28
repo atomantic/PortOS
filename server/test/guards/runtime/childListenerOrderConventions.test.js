@@ -181,7 +181,7 @@ function scanTree() {
     const src = readText(join(SERVER_ROOT, file));
     readMs += performance.now() - readStart;
     // Any binding the lexer can recognize necessarily contains this token.
-    if (!src.includes('spawn')) continue;
+    if (!/spawn(?:Detached)?(?![\w$])/.test(src)) continue;
     candidates += 1;
     const lexStart = performance.now();
     const views = blankLiterals(src, { includeCommentOnly: true });

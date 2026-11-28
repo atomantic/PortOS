@@ -41,6 +41,7 @@ import { mergeTombstones, normalizeTombstones, recordTombstone, isTombstoned } f
 import { canonicalSnapshotChecksum } from '../lib/snapshotChecksum.js';
 import { roundCents } from '../lib/subscriptionSavings.js';
 import { isFreeProvider } from '../lib/modelPricing.js';
+import { USAGE_COUNT_FIELDS } from '../lib/usageFields.js';
 import { familyForProvider, familyLabel, PROVIDER_FAMILY_IDS } from '../lib/provider/providerFamilies.js';
 import { sanitizeQuotaCards } from '../lib/fleetQuotas.js';
 import { resolveEffectiveCategories } from '../lib/instanceSyncCategories.js';
@@ -86,16 +87,10 @@ const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
 const str = (v, max) => (isNonBlankStr(v) ? v.slice(0, max) : null);
 
 // The media units, long-context subsets and speed subsets are priced at read
-// time (usage.js countFields), so a peer's digest has to carry them or its
-// Grok/Antigravity images, video seconds, 200k-context premium and Fast
-// premium vanish from the fleet report. Older peers ignore unknown keys.
-const COUNT_FIELDS = [
-  'sessions', 'messages', 'tokens', 'tokensIn', 'tokensOut', 'cacheReadTokens', 'cacheWriteTokens',
-  'longTokensIn', 'longTokensOut', 'longCacheReadTokens', 'longCacheWriteTokens',
-  'fastTokensIn', 'fastTokensOut', 'fastCacheReadTokens', 'fastCacheWriteTokens',
-  'ultrafastTokensIn', 'ultrafastTokensOut', 'ultrafastCacheReadTokens', 'ultrafastCacheWriteTokens',
-  'images', 'videoSeconds', 'inputImages'
-];
+// time (usageReport.js countFields / usageFields.js USAGE_COUNT_FIELDS), so a
+// peer's digest has to carry them or its Grok/Antigravity images, video seconds,
+// 200k-context premium and Fast premium vanish from the fleet report. Older peers ignore unknown keys.
+const COUNT_FIELDS = Object.freeze(['sessions', 'tokens', ...USAGE_COUNT_FIELDS]);
 
 function takeCounts(source, target) {
   for (const field of COUNT_FIELDS) {
@@ -1199,7 +1194,11 @@ export async function getFleetClaudeCodeModels({ from = null, to = null, apiBill
  * their readings into these meters would be a wrong number, not a fuller one.
  */
 export async function getFleetQuotaEntries({ excludeInstanceIds = [], includeEmpty = false } = {}) {
-  const { peers } = await entriesWithSelf();
+  // Only the saved peer slots are needed here. Rebuilding our digest can
+  // write its version and is unrelated to reading published peer quotas.
+  const [store, { instanceId: selfId }] = await Promise.all([readStore(), readSelfIdentity()]);
+  const peers = Object.values(store.instances).filter((entry) =>
+    isPlainObject(entry) && isPlainObject(entry.usage) && entry.instanceId !== selfId);
   const excluded = new Set(Array.isArray(excludeInstanceIds) ? excludeInstanceIds : []);
   const { participating, optedOut } = includeEmpty ? await usageParticipation() : { participating: [], optedOut: new Set() };
   const entries = peers
@@ -1241,6 +1240,9 @@ export async function forgetInstanceUsage(instanceId) {
 // Files whose fingerprint invalidates the category's checksum cache. The
 // instances file is in the set because the manifest is keyed by this instance's
 // ID — a re-identified machine must re-checksum even when no counter moved.
-export const USAGE_CHECKSUM_PATHS = [USAGE_FILE, PEER_USAGE_FILE, PROVIDER_QUOTAS_FILE, TRANSCRIPT_USAGE_FILE, PROVIDERS_FILE, IMAGE_RECEIPTS_DIR, dataPath('instances.json')];
+export const USAGE_CHECKSUM_PATHS = [USAGE_FILE, PEER_USAGE_FILE, PROVIDER_QUOTAS_FILE, TRANSCRIPT_USAGE_FILE, PROVIDERS_FILE, dataPath('instances.json')];
+// Receipts are published once and never edited (one per render, thousands of
+// them), the same directory stat the image projection itself is keyed on.
+export const USAGE_CHECKSUM_DIR_STATS = [IMAGE_RECEIPTS_DIR];
 
 export { PEER_USAGE_FILE };

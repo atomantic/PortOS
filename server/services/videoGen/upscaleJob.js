@@ -1,5 +1,3 @@
-import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
-import { FINISHED_OUTPUT_ADMISSION_MS } from '../../lib/backupPublicationWait.js';
 /**
  * Generative video upscale — the media-job lifecycle (#6511).
  *
@@ -25,20 +23,14 @@ import { existsSync } from 'fs';
 import { randomUUID, randomInt } from 'crypto';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { PATHS, unlinkGuarded } from '../../lib/fileUtils.js';
+import { PATHS } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
-import { maintenance } from '../../lib/maintenanceAdmission.js';
-import {
-  safeUnder, generateThumbnail, probeVideoStreamInfo, probeVideoDuration,
-} from '../../lib/ffmpeg.js';
 import { createLineReader } from '../../lib/streamLines.js';
 import { spawnDetached } from '../../lib/detachedSpawn.js';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
 import { safeChildProcessEnv } from '../../lib/processEnv.js';
 import { PYTHON_NOISE_RE } from '../../lib/sseUtils.js';
-import { omitDerivedRenderFields, renderTimingFields } from '../../lib/renderTiming.js';
 import { resolveIcLoraWeightByKey } from '../../lib/icLoraWeights.js';
-import { isHardwareCompatible, hardwareUnavailableReason } from '../../lib/systemCapabilities.js';
 import { hfChildEnv } from '../hfToken.js';
 import { enqueueJob } from '../mediaJobQueue/index.js';
 import { videoGenEvents } from './events.js';
@@ -46,14 +38,18 @@ import {
   RUNTIME_LINE_PREFIX, parseRuntimeFingerprintLine, formatRuntimeFingerprint,
   LORA_STRATEGY_LINE_PREFIX, parseLoraStrategyLine,
 } from './generateVideoHelpers.js';
-import { getHistoryItem, loadHistory, mutateVideoHistory } from './history.js';
+import { getHistoryItem } from './history.js';
+import {
+  publishUpscaledVideo, removeOwnedUpscaleFile, resolveQueuedUpscaleSource, resolveUpscaleMusicVideo,
+} from './upscaleJobHelpers.js';
 import { buildArgs } from './renderArgs.js';
 import { runtimeIsCacheOnly, runtimeNeedsProcessGroupKill } from './runtimes.js';
 import { padSourceForUpscale, finalizeUpscaleOutput } from './upscaleFfmpeg.js';
 import { planUpscaleHistoryItem } from './upscaleVideo.js';
+import { ltxUpscaleAdapterBlocker, upscalePlanBlocker } from './upscalePlanBlocker.js';
 import {
   LTX_UPSCALE_JOB_KIND, LTX_UPSCALE_WEIGHT_KEY, UPSCALE_SCALE,
-  ltxAlignmentBlocker, ltxAlignmentIsNoop,
+  ltxAlignmentIsNoop,
 } from './upscalePlan.js';
 
 const MAX_SEED = 2 ** 32 - 1;
@@ -85,81 +81,24 @@ const upscaledPrompt = (prompt) => (prompt ? `${prompt} (2×)` : '(upscaled 2×)
  * grid cannot take without losing duration — so a refusal is an immediate
  * 4xx/501 rather than a job that fails minutes later.
  */
-export async function enqueueLtxUpscale(historyId, { musicVideo } = {}) {
+export async function enqueueLtxUpscale(historyId, attribution = {}) {
   const plan = await planUpscaleHistoryItem(historyId, { method: 'ltx' });
-  if (plan.alreadyUpscaled) {
-    throw new ServerError('Cannot upscale an already-upscaled video', { status: 400, code: 'ALREADY_UPSCALED' });
-  }
-  if (!plan.runtime.supported || !plan.runtime.installed) {
-    throw new ServerError(
-      `Generative upscale is not available on this install: ${plan.runtime.reason}`,
-      { status: 501, code: 'UNSUPPORTED_RUNTIME' },
-    );
-  }
-  // The host gate (#6537), BEFORE the cache checks below: a machine that cannot
-  // run the pack must not be told to download 72 GB of it. `generateVideo.js`
-  // already refuses a plain render here; an upscale renders ABOVE a plain
-  // render's peak, so anything it refuses this must refuse too — same helper on
-  // the same annotation, so the two gates cannot drift. `isHardwareCompatible`
-  // refuses only an explicit `unavailable` verdict, so a requirement this host
-  // could not MEASURE stays allowed rather than becoming a refusal invented from
-  // a missing number, and a plan from an older server (no annotation at all)
-  // queues exactly what it queues today.
-  //
-  // Deliberately NOT the `MODEL_HARDWARE_UNAVAILABLE`/400 those render sites
-  // raise: there, the user CHOSE an incompatible model, so the request is at
-  // fault. The upscale's checkpoint is pinned and not part of the request
-  // (#6511), so nothing the caller sent is wrong — the host simply cannot carry
-  // the method, which is what `UNSUPPORTED_RUNTIME`/501 already means here.
-  if (!isHardwareCompatible(plan.baseModel?.hardwareCompatibility)) {
-    throw new ServerError(
-      `Generative upscale is not available on this install: ${
-        hardwareUnavailableReason(plan.baseModel?.name || 'The LTX-2.5 pack', plan.baseModel?.hardwareCompatibility)}`,
-      { status: 501, code: 'UNSUPPORTED_RUNTIME' },
-    );
-  }
-  // Cache-only resolve (#6508): a `requiresPreDownload` weight never falls back
-  // to a repo id, so an un-cached adapter is a refusal here rather than a
-  // silent multi-hundred-MB pull inside the render.
+  const blocker = upscalePlanBlocker(plan);
+  if (blocker) throw new ServerError(blocker.message, { status: blocker.status, code: blocker.code });
+  // Resolve the adapter path cache-only after planning in case the weight was removed.
   const adapter = await resolveIcLoraWeightByKey(LTX_UPSCALE_WEIGHT_KEY);
   if (!adapter?.path) {
-    throw new ServerError(
-      `${plan.adapter.label} is not downloaded — download it from the model panel before upscaling.`,
-      { status: 400, code: 'IC_LORA_WEIGHT_UNRESOLVED' },
-    );
+    const missing = ltxUpscaleAdapterBlocker(plan.adapter);
+    throw new ServerError(missing.message, { status: missing.status, code: missing.code });
   }
-  // The runner is never allowed to resolve its own checkpoint: every LTX loader
-  // falls back to `snapshot_download` for a path it cannot stat, which for this
-  // pack is an unannounced ~68 GB pull inside a render. Resolved here, cache-only,
-  // so a missing pack is a refusal before the GPU is committed.
-  if (!plan.baseModel?.cached || !plan.baseModel.path) {
-    throw new ServerError(
-      plan.baseModel?.reason || 'The LTX-2.5 model pack for this backend is not downloaded.',
-      { status: 400, code: 'UPSCALE_BASE_MODEL_UNRESOLVED' },
-    );
-  }
-  const blocker = ltxAlignmentBlocker(plan.alignment);
-  if (blocker) {
-    throw new ServerError(blocker, { status: 400, code: 'UPSCALE_SOURCE_UNALIGNABLE' });
-  }
-  // The frame rate is not part of the spatial grid, but the plan cannot be
-  // APPLIED without it: it sets the duration of the padded tail and is a
-  // required runner argument. An unmeasured rate is the same refusal.
-  if (!(Number(plan.source.fps) > 0)) {
-    throw new ServerError(
-      'The source frame rate could not be measured, so the padded tail and the render frame rate cannot be set.',
-      { status: 400, code: 'UPSCALE_SOURCE_UNALIGNABLE' },
-    );
-  }
-  // Read back for the two fields the plan projection deliberately omits (it is
-  // a geometry/capability disclosure, not a row dump).
+  // The plan exposes geometry and capability, while the row carries filename and attribution.
   const item = await getHistoryItem(plan.id);
   if (!item) throw new ServerError('Video not found', { status: 404, code: 'NOT_FOUND' });
   return enqueueJob({
     kind: LTX_UPSCALE_JOB_KIND,
     params: {
       historyId: plan.id,
-      ...(musicVideo ? { musicVideo } : {}),
+      ...resolveUpscaleMusicVideo(item, attribution),
       // The FILENAME, not an absolute path: job params are persisted and
       // replayed, and `runVideoUpscale` re-resolves them through `safeUnder`
       // so a hand-edited media-jobs.json cannot point the render (or the
@@ -320,7 +259,7 @@ const runUpscaleChild = async ({ jobId, bin, args, runtime, entry }) => {
  */
 export async function runVideoUpscale({
   jobId, historyId, sourceFilename, runtime, adapterPath, adapterKey, baseModelPath,
-  icMinReferences, icMaxReferences, seed, source, alignment, target,
+  icMinReferences, icMaxReferences, seed, source, alignment, target, musicVideo,
 }) {
   const entry = { canceled: false, proc: null, abort: new AbortController() };
   activeUpscales.set(jobId, entry);
@@ -328,39 +267,11 @@ export async function runVideoUpscale({
   // Every path this run might create, so a failure at ANY step removes all of
   // them. The source clip is never in this list.
   const scratch = [];
-  let deliverablePath = null;
-  let thumbnailPath = null;
+  let unpublishedPath = null;
   let result = null;
   let failureReason;
-  const removeOwnedFile = async path => {
-    if (!path) return;
-    await unlinkGuarded(path).catch(error => {
-      if (error.code === 'ENOENT') return;
-      maintenance.markCurrentUnsettled();
-      maintenance.markResourceUnsettled('media', jobId);
-      console.error(`❌ Video upscale cleanup failed [${jobId.slice(0, 8)}]: ${error.message}`);
-    });
-  };
   try {
-    // Re-read the row rather than trusting the enqueue-time snapshot: a queued
-    // job can wait behind a long render, and the user may have deleted or
-    // already upscaled the source in the meantime.
-    const history = await loadHistory();
-    const item = history.find((h) => h.id === historyId);
-    if (!item) throw new ServerError('Video not found', { status: 404, code: 'NOT_FOUND' });
-    if (item.upscaledFrom) {
-      throw new ServerError('Cannot upscale an already-upscaled video', { status: 400, code: 'ALREADY_UPSCALED' });
-    }
-    // Re-resolve the queued filename through safeUnder rather than trusting the
-    // persisted string: media-jobs.json is replayed on boot and hand-editable,
-    // and this path is handed to both the render and the audio re-mux.
-    if (item.filename !== sourceFilename) {
-      throw new ServerError('The source clip was replaced while this upscale was queued.', { status: 409, code: 'UPSCALE_SOURCE_CHANGED' });
-    }
-    const sourcePath = safeUnder(PATHS.videos, sourceFilename);
-    if (!sourcePath || !existsSync(sourcePath)) {
-      throw new ServerError('Video file not found on disk', { status: 404, code: 'NOT_FOUND' });
-    }
+    const { item, sourcePath } = await resolveQueuedUpscaleSource(historyId, sourceFilename);
 
     videoGenEvents.emit('started', {
       generationId: jobId,
@@ -429,7 +340,8 @@ export async function runVideoUpscale({
     // track yields a silent deliverable, not a failure.
     const newId = randomUUID();
     const newFilename = `${newId}.mp4`;
-    deliverablePath = join(PATHS.videos, newFilename);
+    const deliverablePath = join(PATHS.videos, newFilename);
+    unpublishedPath = deliverablePath;
     const finalized = await finalizeUpscaleOutput(renderPath, deliverablePath, {
       width: source.width * UPSCALE_SCALE,
       height: source.height * UPSCALE_SCALE,
@@ -441,80 +353,41 @@ export async function runVideoUpscale({
       throw new ServerError(`Failed to finish the upscaled clip: ${finalized.reason}`, { status: 500, code: 'UPSCALE_MUX_FAILED' });
     }
 
-    await withBackupAssetPublication(async () => {
-      try {
-        if (entry.canceled) throw new ServerError('Upscale canceled', { status: 499, code: 'UPSCALE_CANCELED' });
-        // Provenance is MEASURED off the deliverable, not assumed from the plan —
-        // a generative render is the one upscale method whose output can legally
-        // differ from 2× the source, so a recorded guess would be a lie.
-        const [measured, duration] = await Promise.all([
-          probeVideoStreamInfo(deliverablePath),
-          probeVideoDuration(deliverablePath),
-        ]);
-        const thumbnail = await generateThumbnail(deliverablePath, newId);
-        // Tracked so a failure between here and the history write cannot leave a
-        // poster for a clip that does not exist.
-        thumbnailPath = thumbnail ? safeUnder(PATHS.videoThumbnails, thumbnail) : null;
-        const newEntry = {
-          ...omitDerivedRenderFields(item),
-          id: newId,
-          filename: newFilename,
-          thumbnail,
-          createdAt: new Date().toISOString(),
-          width: measured.width ?? source.width * UPSCALE_SCALE,
-          height: measured.height ?? source.height * UPSCALE_SCALE,
-          fps: measured.fps ?? source.fps,
-          numFrames: measured.frameCount ?? source.frameCount,
-          duration,
-          seed,
-          upscaledFrom: item.id,
-          upscaleMethod: 'ltx',
-          upscaleRuntime: runtime,
-          upscaleAdapter: adapterKey,
-          // Measured by the runner off the weight it fused (the rule it enforced),
-          // and — in the same shape a plain render's row carries — the exact
-          // ltx/mlx/torch + chip + OS stack this clip rendered on. Both are absent
-          // sentinels when the runner did not report them, never a guessed value.
-          ...(rendered.referenceDownscale !== null ? { upscaleReferenceDownscale: rendered.referenceDownscale } : {}),
-          ...(rendered.runtime ? { runtime: rendered.runtime } : {}),
-          ...(rendered.loraStrategy ? { loraStrategyApplied: rendered.loraStrategy } : {}),
-          // What the grid actually required of this source, kept beside the result
-          // so a reader can tell a padded render from a conforming one.
-          upscaleAlignment: {
-            padWidth: alignment.padWidth,
-            padHeight: alignment.padHeight,
-            padFrames: alignment.padFrames,
-            trimFrames: alignment.trimFrames,
-          },
-          prompt: upscaledPrompt(item.prompt),
-          hidden: false,
-          ...renderTimingFields(renderStartedAtMs),
-        };
-        await mutateVideoHistory((h) => { h.unshift(newEntry); return h; });
-        result = newEntry;
-        console.log(`✅ Upscaled [${newId.slice(0, 8)}]: ${newFilename} (${newEntry.width}×${newEntry.height}, ${Math.round((newEntry.renderMs ?? 0) / 1000)}s)`);
-      } catch (error) {
-        if (!result) for (const path of [deliverablePath, join(PATHS.videoThumbnails, `${newId}.jpg`)]) await removeOwnedFile(path);
-        throw error;
-      }
-    }, {
-      timeoutMs: FINISHED_OUTPUT_ADMISSION_MS,
-      onWait: () => {
-        console.log(`⏸️ Video upscale [${jobId.slice(0, 8)}] waiting for the backup to finish before saving`);
-        videoGenEvents.emit('activity', { generationId: jobId });
-      },
+    unpublishedPath = null;
+    result = await publishUpscaledVideo({
+      jobId, newId, newFilename, deliverablePath, item, musicVideo, renderStartedAtMs,
+      isCanceled: () => entry.canceled,
+      buildFields: measured => ({
+        width: measured.width ?? source.width * UPSCALE_SCALE,
+        height: measured.height ?? source.height * UPSCALE_SCALE,
+        fps: measured.fps ?? source.fps,
+        numFrames: measured.frameCount ?? source.frameCount,
+        seed,
+        upscaleMethod: 'ltx',
+        upscaleRuntime: runtime,
+        upscaleAdapter: adapterKey,
+        // Runner-reported provenance stays absent when the runner did not report it.
+        ...(rendered.referenceDownscale !== null ? { upscaleReferenceDownscale: rendered.referenceDownscale } : {}),
+        ...(rendered.runtime ? { runtime: rendered.runtime } : {}),
+        ...(rendered.loraStrategy ? { loraStrategyApplied: rendered.loraStrategy } : {}),
+        upscaleAlignment: {
+          padWidth: alignment.padWidth,
+          padHeight: alignment.padHeight,
+          padFrames: alignment.padFrames,
+          trimFrames: alignment.trimFrames,
+        },
+        prompt: upscaledPrompt(item.prompt),
+      }),
+      formatSuccessLog: row => `✅ Upscaled [${newId.slice(0, 8)}]: ${newFilename} (${row.width}×${row.height}, ${Math.round((row.renderMs ?? 0) / 1000)}s)`,
     });
   } catch (err) {
-    // The history row is written LAST, so nothing here can orphan one — only a
-    // partial file can exist, and it is removed before the failure is reported.
-    for (const path of result ? [] : [deliverablePath, thumbnailPath]) {
-      await removeOwnedFile(path);
-    }
+    await removeOwnedUpscaleFile(jobId, unpublishedPath);
     const reason = entry.canceled ? 'Canceled while running' : (err.message || 'Upscale failed');
-    console.error(`❌ Video upscale ${entry.canceled ? 'canceled' : 'failed'} [${jobId.slice(0, 8)}]: ${reason}`);
+    if (entry.canceled) console.log(`🛑 Video upscale canceled [${jobId.slice(0, 8)}]`);
+    else console.error(`❌ Video upscale failed [${jobId.slice(0, 8)}]: ${reason}`);
     failureReason = reason;
   } finally {
-    for (const path of scratch) await removeOwnedFile(path);
+    for (const path of scratch) await removeOwnedUpscaleFile(jobId, path);
     activeUpscales.delete(jobId);
   }
   if (failureReason) videoGenEvents.emit('failed', { generationId: jobId, error: failureReason });

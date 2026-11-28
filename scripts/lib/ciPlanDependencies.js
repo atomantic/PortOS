@@ -9,10 +9,9 @@ const uniqueSorted = (values) => [...new Set(values)].sort();
 
 export const DEPENDENCY_MANIFEST_RE = /^(?:package|server\/package|client\/package)(?:-lock)?\.json$/;
 
-// Workspaces the windows-server job installs (`npm ci --prefix <dir>`). Only
-// their manifests and .npmrc can change what that job runs, so a dependency or
-// npm-config change elsewhere keeps the Windows baseline. ci-test-plan.test.js
-// pins this list to the job's install steps in ci.yml.
+// Workspaces whose dependency changes can select the Windows native job.
+// The client config smoke runs only when Windows is already selected and the
+// plan also builds the client.
 export const WINDOWS_INSTALLED_WORKSPACES = ['server'];
 export const windowsInstalls = (path) => WINDOWS_INSTALLED_WORKSPACES.some((dir) => path.startsWith(`${dir}/`));
 

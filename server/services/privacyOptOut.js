@@ -50,14 +50,15 @@ import {
   listBrokers, getBroker, listBrokerCases, transitionCase,
 } from './privacyBrokers.js';
 import { listScanEligibleValues } from './privacyVault.js';
-import { buildSearchVectors, probeBroker } from './privacyScan.js';
+import { buildSearchVectors, probeBroker, onBrokerFetchFailure } from './privacyScan.js';
 import { parseCityState } from '../lib/cityState.js';
-import { createDraft, approveDraft } from './messageDrafts.js';
+import { optOutMessageId } from '../lib/emailMessageId.js';
+import { createDraft, approveDraft, listDrafts } from './messageDrafts.js';
 import { pickEmailSenderAccount, sendViaForAccountType } from '../lib/messageTransport.js';
 import { listAccounts } from './messageAccounts.js';
 import { getMessages } from './messageSync.js';
 import { getSettings } from './settings.js';
-import { resolveSubjectId, assertSubjectConsent } from './privacySubjects.js';
+import { resolveSubjectId, assertSubjectConsent, withSubjectConsent, dispatchWithSubjectConsent } from './privacySubjects.js';
 
 // ─── Disclosure guardrail (pure) ────────────────────────────────────────────
 
@@ -282,7 +283,7 @@ function hostMatchesDomain(host, domain) {
 export function scoreVerificationEmail(message, broker) {
   const domains = brokerDomains(broker);
   const subject = String(message?.subject || '');
-  const body = String(message?.body || message?.snippet || '');
+  const body = String(message?.bodyText || message?.body || message?.snippet || '');
   const lower = `${subject}\n${body}`.toLowerCase();
   const matchesBroker = (raw) => {
     const host = parseHttpHost(raw);
@@ -337,8 +338,8 @@ export async function webFormLane(broker, kase, { disclosedFields, now = new Dat
  * EMAIL lane. Renders the rights-request template, LOCKS the recipient to the
  * broker's declared address, and creates a `draft` in the messages queue.
  * `autoApprove` (settings toggle) only marks the draft approved; it is NEVER
- * sent from here: the user sends it from Comms. Transitions the case
- * `optout_in_progress → submitted` (the request is prepared, not yet sent).
+ * sent from here: the user sends it from Comms. The case stays in progress
+ * until the verification pass sees a successful send.
  * Deps injectable.
  */
 export async function emailLane(broker, kase, {
@@ -357,25 +358,25 @@ export async function emailLane(broker, kase, {
       nextAction: 'Connect a Gmail or Outlook account to send opt-out emails' };
   }
   const { subject, body, templateName } = await renderOptOutEmail({ broker, payload, disclosedFields, listingUrls, now });
-  const draft = await draftCreator({
-    accountId: account.id,
-    to: [to], // recipient LOCKED to the broker's declared address
-    subject,
-    body,
-    generatedBy: 'privacy-optout',
-    privacyMeta: { subjectId: kase.subjectId, vaultRecordIds, caseId: kase.id },
-    sendVia: sendViaForAccountType(account.type), // the account's real transport, not an assumed Gmail API
-  });
+  return withSubjectConsent(kase.subjectId, { scope: 'broker_optout', action: 'prepare opt-out email' }, async (owner) => {
+    const draft = await draftCreator({
+      accountId: account.id,
+      to: [to], // recipient LOCKED to the broker's declared address
+      subject,
+      body,
+      generatedBy: 'privacy-optout',
+      privacyMeta: { subjectId: owner.id, vaultRecordIds, caseId: kase.id },
+      sendVia: sendViaForAccountType(account.type), // the account's real transport, not an assumed Gmail API
+    });
 
-  await transitionCase(kase.id, 'optout_in_progress', { channel: 'email', disclosedFields, evidence: { lane: 'email', to, template: templateName, draftId: draft.id, disclosed: disclosedFields }, now });
-
-  if (autoApprove) await draftApprover(draft.id);
-  const submitted = await transitionCase(kase.id, 'submitted', {
-    channel: 'email',
-    evidence: { lane: 'email', to, template: templateName, draftId: draft.id, autoApproved: autoApprove, disclosed: disclosedFields },
-    now,
+    if (autoApprove) await draftApprover(draft.id);
+    const prepared = await transitionCase(kase.id, 'optout_in_progress', {
+      channel: 'email', disclosedFields,
+      evidence: { lane: 'email', to, template: templateName, draftId: draft.id, autoApproved: autoApprove, disclosed: disclosedFields },
+      now,
+    });
+    return { caseId: kase.id, lane: 'email', outcome: 'optout_in_progress', draftId: draft.id, autoApproved: autoApprove, case: prepared };
   });
-  return { caseId: kase.id, lane: 'email', outcome: 'submitted', draftId: draft.id, autoApproved: autoApprove, case: submitted };
 }
 
 // ─── Planner (pure) ─────────────────────────────────────────────────────────
@@ -385,7 +386,7 @@ export async function emailLane(broker, kase, {
 // re-worked too.
 const SUBMITTABLE = new Set(['found', 'indirect_exposure', 'reappeared']);
 // States whose verification the pass polls forward.
-const VERIFY_POLL = new Set(['submitted', 'verification_pending', 'awaiting_processing']);
+const VERIFY_POLL = new Set(['optout_in_progress', 'submitted', 'verification_pending', 'awaiting_processing']);
 
 /**
  * Order the actionable cases: cluster PARENTS first (one suppression covers the
@@ -412,6 +413,58 @@ export function planOptOutActions(casesWithBroker = []) {
 
 export const DEFAULT_MAX_VERIFICATION_RECHECKS = 3;
 
+function deliveredOptOutAttempt(kase, draft) {
+  if (draft?.status !== 'sent' || draft.generatedBy !== 'privacy-optout' || !draft.accountId
+    || draft.privacyMeta?.caseId !== kase.id || draft.privacyMeta?.subjectId !== kase.subjectId) return null;
+  // Recipients remain editable in Comms. A reply to a redirected draft is not broker evidence.
+  if (!kase.evidence.to || draft.to?.length !== 1 || draft.to[0] !== kase.evidence.to || draft.cc?.length) return null;
+  const attempt = draft.sendAttempts?.find(a => a.id === draft.sendAttemptId && a.outcome === 'sent');
+  return attempt?.id && Number.isFinite(Date.parse(attempt.finishedAt)) ? attempt : null;
+}
+
+// A delivered browser draft can be marked submitted. Only the Gmail API transport
+// writes the per-attempt Message-ID that lets a direct reply identify its request.
+async function advanceEmailCases(cases, { draftsProvider, messagesProvider, now }) {
+  const candidates = cases.filter(c => ['optout_in_progress', 'submitted'].includes(c.state)
+    && c.channel === 'email' && c.evidence?.draftId);
+  const advanced = [];
+  if (!candidates.length) return advanced;
+  const drafts = new Map((await draftsProvider({ status: 'sent' })).map(d => [d.id, d]));
+  const mailboxes = new Map();
+  for (const c of candidates) {
+    const draft = drafts.get(c.evidence.draftId);
+    const attempt = deliveredOptOutAttempt(c, draft);
+    if (!attempt) continue;
+    if (c.state === 'optout_in_progress') {
+      const result = await transitionCase(c.id, 'submitted', { expectedDraftId: draft.id, expectedState: c.state, now });
+      if (result.skipped) continue;
+    }
+    if (draft.sendVia !== 'api') continue;
+    const broker = await getBroker(c.brokerId);
+    if (!broker) continue;
+    if (!mailboxes.has(draft.accountId)) {
+      const inbox = await messagesProvider({ accountId: draft.accountId, limit: 200 });
+      mailboxes.set(draft.accountId, inbox.messages);
+    }
+    const requestId = optOutMessageId(attempt.id);
+    const sentAt = Date.parse(attempt.finishedAt);
+    for (const m of mailboxes.get(draft.accountId)) {
+      if (m.accountId !== draft.accountId || m.inReplyTo !== requestId || !(Date.parse(m.date) >= sentAt)
+        || !Array.isArray(m.labels) || !m.labels.includes('INBOX') || m.labels.includes('SENT') || m.labels.includes('DRAFT')) continue;
+      const score = scoreVerificationEmail(m, broker);
+      if (!score.isConfirmation) continue;
+      const result = await transitionCase(c.id, 'verification_pending', {
+        expectedDraftId: draft.id, expectedState: 'submitted', now,
+        evidence: { ...c.evidence, verification: { messageId: m.id, score: score.score },
+          ...(score.verificationUrl ? { verification_url: score.verificationUrl } : {}) },
+      });
+      if (!result.skipped) advanced.push({ caseId: c.id, brokerId: c.brokerId });
+      break;
+    }
+  }
+  return advanced;
+}
+
 /**
  * Poll the synced inbox for a broker confirmation for each `submitted` case and
  * advance it to `verification_pending` (anti-phishing gated). Then a verifying
@@ -424,39 +477,21 @@ export const DEFAULT_MAX_VERIFICATION_RECHECKS = 3;
  * Deps injectable (no network in tests).
  */
 export async function runVerificationPass({
-  now = new Date(), messagesProvider = getMessages, removalProbe = probeBroker, probeDeps = {},
+  now = new Date(), messagesProvider = getMessages, draftsProvider = listDrafts, removalProbe = probeBroker, probeDeps = {},
   subjectId, maxVerificationRechecks = DEFAULT_MAX_VERIFICATION_RECHECKS,
 } = {}) {
   // CONSENT GATE — the verification pass re-probes brokers for the subject as
   // part of the removal workflow, so it is gated on `broker_optout` exactly
   // like the submission pass.
   const resolvedSubjectId = resolveSubjectId(subjectId);
-  await assertSubjectConsent(resolvedSubjectId, { scope: 'broker_optout', action: 'opt-out verification pass' });
+  const purpose = { scope: 'broker_optout', action: 'opt-out verification pass' };
+  await assertSubjectConsent(resolvedSubjectId, purpose);
   const cases = await listBrokerCases({ subjectId: resolvedSubjectId });
-  const advanced = [];
+  const advanced = await advanceEmailCases(cases, { draftsProvider, messagesProvider, now });
   const confirmed = [];
   const unfulfilled = [];
   const reappeared = [];
-  // 1. submitted → verification_pending when a trusted confirmation email exists.
-  const submitted = cases.filter((c) => c.state === 'submitted');
-  if (submitted.length) {
-    const inbox = await messagesProvider({ limit: 200 }).catch(() => ({ messages: [] }));
-    const messages = inbox?.messages || [];
-    for (const c of submitted) {
-      const broker = await getBroker(c.brokerId);
-      if (!broker) continue;
-      const hit = messages.map((m) => ({ m, s: scoreVerificationEmail(m, broker) })).find(({ s }) => s.isConfirmation);
-      if (hit) {
-        await transitionCase(c.id, 'verification_pending', {
-          channel: c.channel || undefined,
-          evidence: { ...(c.evidence || {}), verification: { messageId: hit.m.id, score: hit.s.score }, ...(hit.s.verificationUrl ? { verification_url: hit.s.verificationUrl } : {}) },
-          now,
-        });
-        advanced.push({ caseId: c.id, brokerId: c.brokerId });
-      }
-    }
-  }
-  // 2. Verify pending removals and monitor settled removals once their recheck is due.
+  // Verify pending removals and monitor settled removals once their recheck is due.
   const toVerify = (await listBrokerCases({ subjectId: resolvedSubjectId })).filter((c) =>
     c.state === 'verification_pending' || c.state === 'awaiting_processing' ||
     (c.state === 'confirmed_removed' && (!c.nextRecheckAt || new Date(c.nextRecheckAt).getTime() <= now.getTime())));
@@ -469,39 +504,41 @@ export async function runVerificationPass({
       // READ-ONLY probe (no ledger write) — a raw scan verdict is gated out of
       // opt-out-owned states, so probeBroker classifies the CURRENT listing
       // without touching the case. `not_found` is the ONLY path to confirmed.
-      const probed = await removalProbe(broker, vectors, probeDeps).catch(() => null);
-      if (probed && !probed.skipped) {
-        if (probed.verdict === 'not_found') {
-          await transitionCase(c.id, 'confirmed_removed', { viaRescan: true, evidence: { ...(c.evidence || {}), verifiedRemovedAt: now.toISOString() }, now });
-          confirmed.push({ caseId: c.id, brokerId: c.brokerId });
-        } else if (c.state === 'confirmed_removed') {
-          // A blocked/unknown result is inconclusive; only exposure reopens a case.
-          if (probed.verdict === 'found' || probed.verdict === 'indirect_exposure') {
-            await transitionCase(c.id, 'reappeared', {
-              viaRescan: true, found: probed.found, reason: null,
-              evidence: { ...(c.evidence || {}), ...(probed.evidence || {}), verificationRechecks: 0 },
-              now,
-            });
-            reappeared.push({ caseId: c.id, brokerId: c.brokerId });
-          }
-        } else {
-          // Still listed (verdict === 'found' or similar). Track recheck count.
-          const currentRechecks = c.evidence?.verificationRechecks ?? c.evidence?.recheckCount ?? 0;
-          const rechecks = currentRechecks + 1;
-          if (rechecks >= maxVerificationRechecks) {
-            await transitionCase(c.id, 'human_task_queued', {
-              reason: 'optout_unfulfilled',
-              evidence: { ...(c.evidence || {}), verificationRechecks: rechecks, unfulfilledAt: now.toISOString() },
-              now,
-            });
-            unfulfilled.push({ caseId: c.id, brokerId: c.brokerId });
-          } else {
-            await transitionCase(c.id, 'awaiting_processing', {
-              evidence: { ...(c.evidence || {}), verificationRechecks: rechecks },
-              now,
-            });
-          }
-        }
+      const probed = await dispatchWithSubjectConsent(resolvedSubjectId, purpose, () =>
+        removalProbe(broker, vectors, { ...probeDeps, subjectId: resolvedSubjectId, verifyingRemoval: true }).catch(onBrokerFetchFailure));
+      if (!probed || probed.skipped) continue;
+      if (probed.verdict === 'not_found') {
+        await transitionCase(c.id, 'confirmed_removed', { viaRescan: true, evidence: { ...(c.evidence || {}), verifiedRemovedAt: now.toISOString() }, now });
+        confirmed.push({ caseId: c.id, brokerId: c.brokerId });
+        continue;
+      }
+      // The recheck limit counts observed exposure. Blocked or unknown probes
+      // preserve the entire case, including its evidence and next recheck date.
+      if (probed.verdict !== 'found' && probed.verdict !== 'indirect_exposure') continue;
+      if (c.state === 'confirmed_removed') {
+        const result = await transitionCase(c.id, 'reappeared', {
+          subjectId: resolvedSubjectId, scanSources: vectors.sources,
+          viaRescan: true, found: probed.found, reason: null,
+          evidence: { ...(c.evidence || {}), ...(probed.evidence || {}), verificationRechecks: 0 },
+          now,
+        });
+        if (!result.skipped) reappeared.push({ caseId: c.id, brokerId: c.brokerId });
+        continue;
+      }
+      const currentRechecks = c.evidence?.verificationRechecks ?? c.evidence?.recheckCount ?? 0;
+      const rechecks = currentRechecks + 1;
+      if (rechecks >= maxVerificationRechecks) {
+        await transitionCase(c.id, 'human_task_queued', {
+          reason: 'optout_unfulfilled',
+          evidence: { ...(c.evidence || {}), verificationRechecks: rechecks, unfulfilledAt: now.toISOString() },
+          now,
+        });
+        unfulfilled.push({ caseId: c.id, brokerId: c.brokerId });
+      } else {
+        await transitionCase(c.id, 'awaiting_processing', {
+          evidence: { ...(c.evidence || {}), verificationRechecks: rechecks },
+          now,
+        });
       }
     }
   }

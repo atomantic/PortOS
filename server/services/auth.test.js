@@ -263,6 +263,23 @@ describe('auth service', () => {
     expect(await auth.revokeSessionById('not-a-real-id')).toBe(false);
   });
 
+  it('keeps a failed targeted revocation retryable and emits only after persistence', async () => {
+    const auth = await import('./auth.js');
+    const session = await auth.createSession({ label: 'agent' });
+    const onRevoke = vi.fn();
+    auth.authEvents.on('sessions:revoked', onRevoke);
+
+    authTestHooks.sessionWriteGate = async () => { throw new Error('fixture write failed'); };
+    await expect(auth.revokeSessionsByLabel('agent')).rejects.toThrow('fixture write failed');
+    expect(onRevoke).not.toHaveBeenCalled();
+    expect(await auth.verifySession(session.token)).toBe(true);
+
+    authTestHooks.sessionWriteGate = null;
+    expect(await auth.revokeSessionsByLabel('agent')).toBe(1);
+    expect(onRevoke).toHaveBeenCalledExactlyOnceWith([session.id]);
+    expect(await auth.verifySession(session.token)).toBe(false);
+  });
+
   it('carries a missing label/id on an older record forward without invalidating it', async () => {
     const auth = await import('./auth.js');
     await auth.setPassword({ newPassword: 'correct-horse' });
@@ -280,6 +297,12 @@ describe('auth service', () => {
     expect(await fresh.verifySession(token)).toBe(true);
     const sessions = await fresh.listSessions();
     expect(sessions.find((s) => s.expiresAt === raw.tokens[0].expiresAt)).toMatchObject({ label: null });
+    const { sessionId } = await fresh.verifyRequestSessionIdentity({ headers: { authorization: `Bearer ${token}` } });
+
+    // A stale writer can rewrite the legacy record without the generated ID.
+    writeFileSync(sessionsPath, JSON.stringify(raw, null, 2));
+    expect(await fresh.revokeSessionById(sessionId)).toBe(true);
+    expect(await fresh.verifySession(token)).toBe(false);
   });
 
   it('extracts the token from a cookie header and Authorization: Bearer', async () => {

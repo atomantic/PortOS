@@ -568,6 +568,10 @@ describe('peekCodexModelCatalog', () => {
     // The last-known-good list survives, and the error says it is not authoritative.
     expect(peekCodexModelCatalog().models).toEqual([]);
     expect(peekCodexModelCatalog().error.message).toMatch(/catalog unavailable/);
+    expect(peekCodexModelCatalog({ includeDiagnostics: false })).toMatchObject({
+      models: [],
+      error: { code: peekCodexModelCatalog().error.code, message: 'Codex model catalog check failed.' },
+    });
   });
 });
 

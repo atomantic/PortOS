@@ -3,6 +3,7 @@ import { AlertTriangle, CheckCircle2, CircleAlert, Info, Layers, Loader2, Play, 
 import { useAsyncAction } from '../../hooks/useAsyncAction';
 import { useFableLoomRun } from '../../hooks/useFableLoomRun';
 import useListResource from '../../hooks/useListResource';
+import ListLoadError from '../ui/ListLoadError';
 import {
   cancelLoomEpisodeProductionBatch,
   getLoomEpisodeProductionBatchStatus,
@@ -142,7 +143,7 @@ export default function LoomProductionPanel({ loom, episode, onSelectNode, onLoo
     fetchPlan(mode);
   }, [planInputKey]);
 
-  const { run: activeBatchRun, applyRun: setActiveBatchRun } = useFableLoomRun({
+  const { run: activeBatchRun, applyRun: setActiveBatchRun, readState, readError, retry } = useFableLoomRun({
     loomId: loom.id,
     episodeId: episode.id,
     event: 'fableloom:production:run',
@@ -200,7 +201,8 @@ export default function LoomProductionPanel({ loom, episode, onSelectNode, onLoo
   ].filter((item, index, items) => items.findIndex((candidate) => (
     candidate.message === item.message && candidate.nodeId === item.nodeId
   )) === index);
-  const canStart = readinessBlockers.length === 0
+  const canStart = readState === 'ready'
+    && readinessBlockers.length === 0
     && (mode !== 'exact_inputs' || !plan?.exactInputIssues?.length)
     && planKey === planInputKey
     && !planning
@@ -208,6 +210,10 @@ export default function LoomProductionPanel({ loom, episode, onSelectNode, onLoo
 
   return (
     <div className="space-y-6">
+      {readError && <ListLoadError what="production batch status" error={readError} onRetry={retry} retrying={readState === 'loading'} />}
+      {readState === 'loading' && !readError && !activeBatchRun && (
+        <p role="status" className="text-xs text-port-text-muted">Checking production batch status…</p>
+      )}
       {/* 1. Production Mode & Plan Summary */}
       <div>
         <div className="flex items-center justify-between mb-2">
@@ -296,6 +302,11 @@ export default function LoomProductionPanel({ loom, episode, onSelectNode, onLoo
               scopedAssets={scopedAssets}
               onSelectNode={onSelectNode}
             />
+          </div>
+        )}
+
+        {(plan || activeBatchRun) && (
+          <div className="mt-3 space-y-3">
             <ProductionBatchControls
               assetScope={assetScope}
               savingRenderFormat={savingRenderFormat}
@@ -309,7 +320,6 @@ export default function LoomProductionPanel({ loom, episode, onSelectNode, onLoo
               canStart={canStart}
             />
             <LoomAssetProvenanceList activeBatchRun={activeBatchRun} />
-
           </div>
         )}
       </div>

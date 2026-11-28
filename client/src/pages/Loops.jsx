@@ -1,3 +1,5 @@
+import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
+import useConfirmDelete from '../hooks/useConfirmDelete';
 import PageHeader from '../components/PageHeader';
 import PageLayout from '../components/PageLayout';
 import { useState, useEffect, useRef, useCallback, useId } from 'react';
@@ -21,7 +23,6 @@ import { timeAgo } from '../components/feature-agents/constants';
 import { formatCount, formatDurationMs } from '../utils/formatters';
 import BrailleSpinner from '../components/BrailleSpinner';
 import { useSocketResource } from '../hooks/useSocketResource';
-import { clickableProps, onActivateKeyDown } from '../lib/a11yKeyboard.js';
 import EmptyState from '../components/EmptyState';
 import ListLoadError from '../components/ui/ListLoadError';
 import ProviderModelSelector from '../components/ProviderModelSelector';
@@ -190,6 +191,7 @@ function CreateLoopForm({ providers, onCreated, promptRef }) {
 }
 
 function LoopCard({ loop, onAction, expandedId, onToggle }) {
+  const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
   const outputRef = useRef(null);
   const [liveOutput, setLiveOutput] = useState([]);
   const expanded = expandedId === loop.id;
@@ -239,12 +241,14 @@ function LoopCard({ loop, onAction, expandedId, onToggle }) {
 
   return (
     <div className="bg-port-card border border-port-border rounded-lg overflow-hidden">
-      <div
-        className="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-port-bg/50"
-        onClick={() => onToggle(loop.id)}
-        {...clickableProps(() => onToggle(loop.id))}
-        onKeyDown={onActivateKeyDown(() => onToggle(loop.id))}
-      >
+      <div className="relative isolate flex flex-wrap items-center gap-3 px-4 py-3 hover:bg-port-bg/50">
+        <button
+          type="button"
+          className="absolute inset-0 z-0 h-full w-full rounded focus-visible:-outline-offset-2!"
+          onClick={() => onToggle(loop.id)}
+          aria-expanded={expanded}
+          aria-label={loop.name}
+        />
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
             <span className="text-sm font-medium text-gray-200 truncate">{loop.name}</span>
@@ -258,24 +262,33 @@ function LoopCard({ loop, onAction, expandedId, onToggle }) {
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="relative z-10 flex flex-wrap items-center gap-2 pointer-events-none [&_button]:pointer-events-auto">
           {loop.isRunning ? (
             <>
-              <button onClick={e => { e.stopPropagation(); onAction('trigger', loop.id); }} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 rounded hover:bg-port-border text-gray-400 hover:text-port-accent" title="Run now" aria-label="Run now">
+              <button type="button" onClick={() => onAction('trigger', loop.id)} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 rounded hover:bg-port-border text-gray-400 hover:text-port-accent" title="Run now" aria-label="Run now">
                 <Zap size={14} />
               </button>
-              <button onClick={e => { e.stopPropagation(); onAction('stop', loop.id); }} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 rounded hover:bg-port-border text-gray-400 hover:text-port-warning" title="Stop" aria-label="Stop">
+              <button type="button" onClick={() => onAction('stop', loop.id)} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 rounded hover:bg-port-border text-gray-400 hover:text-port-warning" title="Stop" aria-label="Stop">
                 <Square size={14} />
               </button>
             </>
           ) : (
-            <button onClick={e => { e.stopPropagation(); onAction('resume', loop.id); }} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 rounded hover:bg-port-border text-gray-400 hover:text-port-success" title="Resume" aria-label="Resume">
+            <button type="button" onClick={() => onAction('resume', loop.id)} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 rounded hover:bg-port-border text-gray-400 hover:text-port-success" title="Resume" aria-label="Resume">
               <Play size={14} />
             </button>
           )}
-          <button onClick={e => { e.stopPropagation(); onAction('delete', loop.id); }} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 rounded hover:bg-port-border text-gray-400 hover:text-port-error" title="Delete" aria-label="Delete">
-            <Trash2 size={14} />
-          </button>
+          {isConfirming(loop.id) ? (
+            <ConfirmButtonPair
+              prompt="Delete loop?"
+              onConfirm={() => confirmDelete(() => onAction('delete', loop.id))}
+              onCancel={cancelDelete}
+              className="flex-wrap"
+            />
+          ) : (
+            <button type="button" onClick={() => requestDelete(loop.id)} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 rounded hover:bg-port-border text-gray-400 hover:text-port-error" title="Delete" aria-label="Delete">
+              <Trash2 size={14} />
+            </button>
+          )}
           {expanded ? <ChevronDown size={14} className="text-gray-500" /> : <ChevronRight size={14} className="text-gray-500" />}
         </div>
       </div>

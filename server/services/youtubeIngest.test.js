@@ -22,7 +22,7 @@ const testDoubles = vi.hoisted(() => ({
 // parsing contracts moved to `lib/youtubeIngestFormat.test.js`, which needs
 // none of this.
 vi.mock('./apps.js', () => ({ getAppById: vi.fn(), PORTOS_APP_ID: 'portos-default' }));
-vi.mock('./brain.js', () => ({ createLinkFromUrl: vi.fn() }));
+vi.mock('./brainLinks.js', () => ({ createLinkFromUrl: vi.fn() }));
 vi.mock('./brainStorage.js', () => ({ getLinkById: vi.fn(), getLinkByUrl: vi.fn() }));
 vi.mock('./brainJournal.js', () => ({ getSettings: vi.fn(async () => ({ obsidianVaultId: null })) }));
 vi.mock('./cos/cosTaskStore.js', () => ({ addTask: vi.fn() }));
@@ -201,7 +201,7 @@ describe('YouTube ingest audio handoff', () => {
     const { getLinkById, getLinkByUrl } = await import('./brainStorage.js');
     getLinkById.mockResolvedValue(null);
     getLinkByUrl.mockResolvedValue(null);
-    const { createLinkFromUrl } = await import('./brain.js');
+    const { createLinkFromUrl } = await import('./brainLinks.js');
     createLinkFromUrl.mockResolvedValue({ id: 'test-link' });
     const { recordEvents } = await import('./humanActivity.js');
     recordEvents.mockResolvedValue(undefined);

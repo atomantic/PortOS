@@ -192,7 +192,7 @@ export const CURATED_INTERVENTIONS = [
 ];
 
 async function loadData() {
-  await ensureDir(DATA_DIR);
+  await ensureDir(DATA_DIR, { mode: 0o700 });
   const data = await readJSONFile(EPIGENETIC_FILE, {
     interventions: {},
     lastUpdated: null
@@ -206,9 +206,8 @@ async function loadData() {
 }
 
 async function saveData(data) {
-  await ensureDir(DATA_DIR);
   data.lastUpdated = new Date().toISOString();
-  await atomicWrite(EPIGENETIC_FILE, data);
+  await atomicWrite(EPIGENETIC_FILE, data, { mode: 0o600, dirMode: 0o700 });
 }
 
 /**

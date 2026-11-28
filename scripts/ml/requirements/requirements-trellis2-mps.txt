@@ -1,9 +1,10 @@
 # TRELLIS.2 Metal runtime and build closure: CPython 3.13, macOS 26+ arm64.
 # Sources are listed separately in trellis2-mps-profile.json.
+# accelerate is omitted: generate.py / trellis2 inference never imports it or uses device_map.
 torch==2.15.0
 torchvision==0.29.2
 transformers==5.22.2
-accelerate==1.15.0
+click==8.5.1
 huggingface-hub==2.4.0
 safetensors==0.8.0
 pillow==13.0.0
@@ -12,9 +13,9 @@ trimesh==5.2.0
 scipy==1.15.3
 tqdm==4.70.1
 easydict==1.13
+# Required by the configured BRIA RMBG-2.0 background-removal model.
 kornia==0.9.0
 timm==1.0.31
-imageio==2.37.3
 opencv-python-headless==5.0.0.93
 xatlas==0.0.11
 fast-simplification==0.2.0
@@ -26,21 +27,3 @@ setuptools==84.2.1
 wheel==0.48.0
 pybind11==3.1.0
 ninja==1.13.2
-# Network/cache compatibility pins, including AnyIO's Python 3.13 typing helper.
-anyio==4.16.0
-fsspec==2026.9.0
-idna==3.20
-typing-extensions==4.16.0
-
-# CLI/text helper compatibility pins for the coordinated Hub 2 runtime.
-click==8.5.1
-markupsafe==3.0.4
-pygments==2.21.0
-regex==2026.11.7
-
-# Coordinated model transport and tokenizer pins.
-tokenizers==0.23.3
-typer==0.28.0
-hf-xet==1.6.0
-networkx==3.7
-glcontext==3.1.0

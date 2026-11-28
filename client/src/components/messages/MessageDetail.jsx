@@ -137,7 +137,13 @@ export default function MessageDetail({ message, accounts, onBack }) {
   const [refreshedThread, setRefreshedThread] = useState([]);
   const [displayedMessage, setDisplayedMessage] = useState(message);
   const [actioning, setActioning] = useState(null);
-  const [useVoice, setUseVoice] = useState(false);
+  const [savedVoiceMode, setSavedVoiceMode] = useState(false);
+  const [voiceOverride, setVoiceOverride] = useState(undefined);
+  const useVoice = voiceOverride ?? savedVoiceMode;
+
+  useEffect(() => {
+    setVoiceOverride(undefined);
+  }, [message.accountId, message.id]);
 
   // Sync displayedMessage when the message prop changes (e.g., selecting a different message)
   useEffect(() => {
@@ -147,7 +153,7 @@ export default function MessageDetail({ message, accounts, onBack }) {
   // Load voice mode default from settings
   useEffect(() => {
     getSettings()
-      .then(s => setUseVoice(s?.messages?.voiceMode ?? false))
+      .then(s => setSavedVoiceMode(s?.messages?.voiceMode ?? false))
       .catch(err => console.warn(`⚠️ Failed to load voice mode setting: ${err.message}`));
   }, []);
 
@@ -177,10 +183,24 @@ export default function MessageDetail({ message, accounts, onBack }) {
   const threadStateRef = useRef(threadState);
   useEffect(() => { threadStateRef.current = threadState; }, [threadState]);
   const refreshGeneration = useRef(0);
+  const messageGeneration = useRef(0);
+  const generatingRef = useRef(false);
+  const actioningRef = useRef(false);
   useEffect(() => {
     setRefreshing(false);
     setRefreshedThread([]);
-    return () => { refreshGeneration.current += 1; };
+    setShowReply(false);
+    setReplyBody('');
+    setReplyEmail('');
+    setGeneratedDraftId(null);
+    setGenerating(false);
+    setActioning(null);
+    generatingRef.current = false;
+    actioningRef.current = false;
+    return () => {
+      refreshGeneration.current += 1;
+      messageGeneration.current += 1;
+    };
   }, [message.id, accountId, threadId]);
 
   const handleRefresh = async () => {
@@ -208,6 +228,9 @@ export default function MessageDetail({ message, accounts, onBack }) {
 
   const handleGenerateReply = async () => {
     if (!account) return toast.error('No account available');
+    if (generatingRef.current) return;
+    const generation = messageGeneration.current;
+    generatingRef.current = true;
     setGenerating(true);
     const draft = await generateMessageDraft({
       accountId: account.id,
@@ -215,8 +238,10 @@ export default function MessageDetail({ message, accounts, onBack }) {
       threadId: displayedMessage.threadId,
       context: `Replying to: "${displayedMessage.subject}" from ${displayedMessage.from?.name || displayedMessage.from?.email}`,
       instructions: '',
-      useVoice: useVoice ?? undefined
+      ...(voiceOverride === undefined ? {} : { useVoice: voiceOverride })
     }).catch(() => null);
+    if (generation !== messageGeneration.current) return;
+    generatingRef.current = false;
     setGenerating(false);
     if (draft) {
       setReplyBody(draft.body);
@@ -253,15 +278,21 @@ export default function MessageDetail({ message, accounts, onBack }) {
   });
 
   const handleAction = (action) => {
-    if (!displayedMessage.accountId) return;
+    if (!displayedMessage.accountId || actioningRef.current) return;
+    const generation = messageGeneration.current;
+    actioningRef.current = true;
     setActioning(action);
     executeMessageAction(displayedMessage.accountId, displayedMessage.id, action)
       .then(() => {
         toast.success(`Message ${action}d`);
-        onBack();
+        if (generation === messageGeneration.current) onBack();
       })
       .catch(() => toast.error(`Failed to ${action} message`))
-      .finally(() => setActioning(null));
+      .finally(() => {
+        if (generation !== messageGeneration.current) return;
+        actioningRef.current = false;
+        setActioning(null);
+      });
   };
 
   // Show thread or single message
@@ -283,7 +314,7 @@ export default function MessageDetail({ message, accounts, onBack }) {
         </div>
         <div className="flex flex-wrap items-center justify-end gap-1">
           <button onClick={() => setShowReply(!showReply)} aria-label="Reply" className="p-1.5 min-w-[44px] min-h-[44px] inline-flex items-center justify-center text-port-accent hover:bg-port-accent/10 rounded transition-colors" title="Reply"><Reply size={14} /></button>
-          <button onClick={() => setUseVoice(v => !v)} aria-label={useVoice ? 'Conversational tone ON — private identity documents stay separate' : 'Conversational tone OFF — replies use professional tone'} className={`p-1.5 min-w-[44px] min-h-[44px] inline-flex items-center justify-center rounded transition-colors ${useVoice ? 'text-port-accent-2 bg-port-accent-2/10' : 'text-gray-500 hover:text-gray-300'}`} title={useVoice ? 'Conversational tone ON — private identity documents stay separate' : 'Conversational tone OFF — replies use professional tone'}><User size={14} /></button>
+          <button onClick={() => setVoiceOverride(!useVoice)} aria-label={useVoice ? 'Conversational tone ON — private identity documents stay separate' : 'Conversational tone OFF — replies use professional tone'} className={`p-1.5 min-w-[44px] min-h-[44px] inline-flex items-center justify-center rounded transition-colors ${useVoice ? 'text-port-accent-2 bg-port-accent-2/10' : 'text-gray-500 hover:text-gray-300'}`} title={useVoice ? 'Conversational tone ON — private identity documents stay separate' : 'Conversational tone OFF — replies use professional tone'}><User size={14} /></button>
           <button onClick={handleGenerateReply} disabled={generating} aria-label="AI Reply" className="p-1.5 min-w-[44px] min-h-[44px] inline-flex items-center justify-center text-port-accent-2 hover:bg-port-accent-2/10 rounded transition-colors disabled:opacity-50" title="AI Reply"><Sparkles size={14} className={generating ? 'animate-pulse' : ''} /></button>
           {supportsBodyRefresh && (
             <button onClick={handleRefresh} disabled={refreshing} aria-label="Refresh" className="p-1.5 min-w-[44px] min-h-[44px] inline-flex items-center justify-center text-port-accent hover:bg-port-accent/10 rounded transition-colors disabled:opacity-50" title="Refresh"><RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} /></button>

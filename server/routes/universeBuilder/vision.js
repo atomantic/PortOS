@@ -9,20 +9,19 @@
  */
 
 import { Router } from 'express';
-import { z } from 'zod';
 import { asyncHandler } from '../../lib/errorHandler.js';
 import { validateRequest } from '../../lib/validateRequest.js';
-import { BIBLE_LIMITS } from '../../lib/storyBible.js';
-import * as canonSvc from '../../services/universeCanon.js';
-import { describeEntityFromImages, correctEntityFromImage, VISION_KINDS, VISION_MAX_IMAGES } from '../../services/universeVisionDescribe.js';
-import { expandEntityFromImages, VISION_EXPAND_MAX_IMAGES } from '../../services/universeVisionExpand.js';
 import {
-  mapServiceError,
-  imageSourceSchema,
   lockParamsSchema,
-  resolveImageSources,
-  resolveGalleryImageOrThrow,
-} from './shared.js';
+  describeFromImagesSchema,
+  expandFromImagesSchema,
+  correctFromImageSchema,
+  applyImageCorrectionSchema,
+} from '../../lib/universeBuilderValidation.js';
+import * as canonSvc from '../../services/universeCanon.js';
+import { describeEntityFromImages, correctEntityFromImage } from '../../services/universeVisionDescribe.js';
+import { expandEntityFromImages } from '../../services/universeVisionExpand.js';
+import { mapServiceError, resolveImageSources, resolveGalleryImageOrThrow } from './shared.js';
 
 const router = Router();
 
@@ -32,14 +31,6 @@ const router = Router();
 // field to write the result into. Images come from upload OR the gallery (see
 // resolveImageSources). Keep ahead of `/:id` so "describe-from-images" isn't
 // parsed as a universe id.
-const describeFromImagesSchema = z.object({
-  kind: z.enum(VISION_KINDS),
-  name: z.string().trim().max(BIBLE_LIMITS.NAME_MAX).optional(),
-  context: z.string().trim().max(2000).optional(),
-  images: z.array(imageSourceSchema).min(1).max(VISION_MAX_IMAGES),
-  providerId: z.string().trim().max(80).optional(),
-  model: z.string().trim().max(200).optional(),
-});
 router.post('/describe-from-images', asyncHandler(async (req, res) => {
   const body = validateRequest(describeFromImagesSchema, req.body ?? {});
   const screenshots = resolveImageSources(body.images);
@@ -53,13 +44,6 @@ router.post('/describe-from-images', asyncHandler(async (req, res) => {
 // proposed `{ field: value }` map; the client applies the kept/edited values
 // via the normal entry-PATCH path. No-clobber, characters-only, locked
 // characters return `{ locked: true }` with no LLM call.
-const expandFromImagesSchema = z.object({
-  name: z.string().trim().max(BIBLE_LIMITS.NAME_MAX).optional(),
-  context: z.string().trim().max(2000).optional(),
-  images: z.array(imageSourceSchema).min(1).max(VISION_EXPAND_MAX_IMAGES),
-  providerId: z.string().trim().max(80).optional(),
-  model: z.string().trim().max(200).optional(),
-});
 router.post('/:id/characters/:entryId/expand-from-images', asyncHandler(async (req, res) => {
   const body = validateRequest(expandFromImagesSchema, req.body ?? {});
   const screenshots = resolveImageSources(body.images);
@@ -82,13 +66,6 @@ router.post('/:id/characters/:entryId/expand-from-images', asyncHandler(async (r
 // overwrites existing text where the image contradicts it. Review-only:
 // returns the proposed text for the client to show alongside the current
 // value; `apply-image-correction` (below) persists it.
-const correctFromImageSchema = z.object({
-  image: z.string().trim().min(1).max(300),
-  name: z.string().trim().max(BIBLE_LIMITS.NAME_MAX).optional(),
-  context: z.string().trim().max(2000).optional(),
-  providerId: z.string().trim().max(80).optional(),
-  model: z.string().trim().max(200).optional(),
-});
 router.post('/:id/canon/:kind/:entryId/correct-from-image', asyncHandler(async (req, res) => {
   const { kind } = validateRequest(lockParamsSchema, req.params);
   const body = validateRequest(correctFromImageSchema, req.body ?? {});
@@ -110,14 +87,6 @@ router.post('/:id/canon/:kind/:entryId/correct-from-image', asyncHandler(async (
 // descriptor field with the reviewed text AND pins the analyzed image as the
 // entry's `primaryImageRef` — assigning it as that noun's style/reference
 // image so subsequent renders (client-side i2i seeding) use it.
-// Cap at the largest per-kind descriptor limit (canonSvc.DESC_LIMIT) rather
-// than the unrelated NOTES_MAX — applyCanonImageCorrection silently trims to
-// the per-kind limit before persisting, so a looser schema cap here would let
-// a request pass validation only to have its tail silently dropped on write.
-const applyImageCorrectionSchema = z.object({
-  description: z.string().trim().min(1).max(Math.max(...Object.values(canonSvc.DESC_LIMIT))),
-  imageFilename: z.string().trim().min(1).max(300),
-});
 router.post('/:id/canon/:kind/:entryId/apply-image-correction', asyncHandler(async (req, res) => {
   const { kind } = validateRequest(lockParamsSchema, req.params);
   const body = validateRequest(applyImageCorrectionSchema, req.body ?? {});

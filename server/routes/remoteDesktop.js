@@ -3,7 +3,10 @@ import { asyncHandler, createServiceErrorMapper, ServerError } from '../lib/erro
 import { remoteDesktopBroker } from '../services/remoteDesktop.js';
 
 const router = express.Router();
-const mapServiceError = createServiceErrorMapper({ VNC_NOT_CONFIGURED: 409 });
+const mapServiceError = createServiceErrorMapper({
+  VNC_NOT_CONFIGURED: 409,
+  REMOTE_DESKTOP_SESSION_REVOKED: 401,
+});
 
 router.get('/status', asyncHandler(async (req, res) => {
   const brokerStatus = await remoteDesktopBroker.status();
@@ -25,8 +28,9 @@ router.post('/sessions', asyncHandler(async (req, res) => {
       severity: 'warning',
     });
   }
-  const session = await remoteDesktopBroker.createSession()
-    .catch((err) => { throw mapServiceError(err); });
+  const session = await remoteDesktopBroker.createSession(
+    req.portosAuthContext?.sessionId ? { ownerSessionId: req.portosAuthContext.sessionId } : undefined,
+  ).catch((err) => { throw mapServiceError(err); });
   res.status(201).json(session);
 }));
 

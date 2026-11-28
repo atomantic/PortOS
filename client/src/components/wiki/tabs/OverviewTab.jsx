@@ -120,9 +120,14 @@ export default function OverviewTab({ vaultId, stats, notes, allNotes, onRefresh
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Recent activity */}
         <div className="bg-port-card border border-port-border rounded-lg">
-          <div className="px-4 py-3 border-b border-port-border flex items-center justify-between">
+          <div className="px-4 py-2 border-b border-port-border flex items-center justify-between gap-2">
             <h2 className="text-sm font-medium text-white">Recent Activity</h2>
-            <button onClick={onRefresh} aria-label="Refresh" className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 text-gray-500 hover:text-white">
+            <button
+              type="button"
+              onClick={onRefresh}
+              aria-label="Refresh"
+              className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center rounded border border-port-border bg-port-bg/50 text-gray-400 hover:text-white hover:border-port-accent/50 transition-colors"
+            >
               <RefreshCw size={14} />
             </button>
           </div>
@@ -148,12 +153,18 @@ export default function OverviewTab({ vaultId, stats, notes, allNotes, onRefresh
 
         {/* Lint report / health */}
         <div className="bg-port-card border border-port-border rounded-lg">
-          <div className="px-4 py-3 border-b border-port-border flex items-center justify-between">
-            <h3 className="text-sm font-medium text-white">Health Report</h3>
+          <div className="px-4 py-3 border-b border-port-border flex flex-wrap items-center justify-between gap-2">
+            <h2 className="text-sm font-medium text-white">Health Report</h2>
             {lintReport && (
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2">
                 <span className="text-xs text-gray-500">Updated {timeAgo(lintReport.modifiedAt)}</span>
-                <button onClick={() => openNote(LINT_REPORT_PATH)} className="text-xs text-port-accent hover:underline">Open full report</button>
+                <button
+                  type="button"
+                  onClick={() => openNote(LINT_REPORT_PATH)}
+                  className="px-2.5 py-1 rounded border border-port-border bg-port-bg/50 text-xs font-medium text-port-accent hover:border-port-accent/50 hover:text-white transition-colors"
+                >
+                  Open full report
+                </button>
               </div>
             )}
           </div>
@@ -165,11 +176,17 @@ export default function OverviewTab({ vaultId, stats, notes, allNotes, onRefresh
             ) : lintError ? (
               <div className="text-center py-6">
                 <p className="text-sm text-gray-500">Couldn't load the health report</p>
-                <button onClick={loadLintReport} className="text-xs text-port-accent hover:underline mt-2">Retry</button>
+                <button
+                  type="button"
+                  onClick={loadLintReport}
+                  className="mt-2 px-3 py-1.5 rounded border border-port-border bg-port-bg/50 text-xs font-medium text-port-accent hover:border-port-accent/50 hover:text-white transition-colors"
+                >
+                  Retry
+                </button>
               </div>
             ) : lintReport ? (
               <div className="text-sm text-gray-300 max-h-64 overflow-auto">
-                {lintReport.body?.trim() ? <MarkdownOutput content={lintReport.body} baseLevel={4} /> : <p className="text-gray-500">Report empty</p>}
+                {lintReport.body?.trim() ? <MarkdownOutput content={lintReport.body} baseLevel={3} /> : <p className="text-gray-500">Report empty</p>}
               </div>
             ) : (
               <div className="text-center py-6">
@@ -184,7 +201,7 @@ export default function OverviewTab({ vaultId, stats, notes, allNotes, onRefresh
 
       {/* Quick actions */}
       <div className="bg-port-card border border-port-border rounded-lg p-4">
-        <h3 className="text-sm font-medium text-white mb-3">How to Use</h3>
+        <h2 className="text-sm font-medium text-white mb-3">How to Use</h2>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm text-gray-400">
           <div>
             <span className="text-port-accent font-medium">Ingest:</span> Drop markdown files into <code className="text-gray-300">raw/</code> in Obsidian, then ask Claude to ingest them

@@ -219,6 +219,25 @@ describe('speakProactive', () => {
     expect(payload.source).toBe('cos');
   });
 
+  it('keeps speech content out of delivery and length-refusal logs', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { io } = makeIo();
+    const text = 'Private reminder';
+    try {
+      expect(await speakProactive({ io, text })).toMatchObject({ ok: true });
+      expect(await speakProactive({ io, text: text.repeat(MAX_PROACTIVE_TEXT_LEN) })).toMatchObject({
+        ok: false, reason: 'too-long',
+      });
+      expect(log).toHaveBeenCalledWith('🔔 voice: proactive sent (normal, chars=16, 12ms synth)');
+      expect(log).toHaveBeenCalledWith(expect.stringContaining('proactive too-long'));
+      expect([...log.mock.calls, ...warn.mock.calls].flat().join('\n')).not.toContain(text);
+    } finally {
+      log.mockRestore();
+      warn.mockRestore();
+    }
+  });
+
   it('returns no-recipient when no socket is eligible for speech', async () => {
     const io = { emit: vi.fn(), sockets: { sockets: new Map() } };
     const result = await speakProactive({ io, text: 'Example reminder' });
@@ -282,7 +301,8 @@ describe('speakProactive', () => {
       const { io } = makeIo();
       const r = await speakProactive({ io, text: 'late night ping' });
       expect(r.reason).toBe('quiet-hours');
-      expect(log.mock.calls.flat().join('\n')).toContain('quiet-hours');
+      expect(log).toHaveBeenCalledWith('🔕 voice: proactive suppressed (quiet-hours, chars=15)');
+      expect(log.mock.calls.flat().join('\n')).not.toContain('late night ping');
     } finally {
       log.mockRestore();
     }

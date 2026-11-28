@@ -21,7 +21,7 @@ PortOS runs on your own computer and you open it from your phone, tablet, or lap
 | 🎬 **Create** | Write stories, build universes, make images, video, music, music videos, 3D, and games. |
 | 🤖 **Chief of Staff** | Hands work to coding agents, runs schedules, learns which model does what best. |
 | 🪞 **Identity** | A digital twin: genome, taste, writing style, goals, and a private vault. |
-| 💬 **Comms & Calendar** | One inbox for your messages, with drafts, plus calendar sync and a lifetime view. |
+| 💬 **Comms & Calendar** | Inbox for connected Gmail, Outlook, and Teams accounts, with review-before-send email drafts. Browse iMessage in Comms → iMessage, inspect Signal sync in Comms → Signal, and view imported activity in the Activity Timeline and Tribe. Calendar sync and a lifetime view. See the [Product Surface Map](./docs/features/product-surfaces.md#6-communications-voice-social--spatial-ui). |
 | 💪 **Health & POST** | Blood work, body metrics, and daily brain-training drills. |
 | 🛠️ **Dev Tools** | Your apps and their processes, a web shell, GitHub, usage and cost tracking. |
 | 🧪 **Models** | Install, run, and compare local LLMs and media models side by side. |
@@ -110,7 +110,7 @@ npm run setup   # dependencies, database, local tooling, managed browser
 npm start       # builds the client and starts PortOS under PM2
 ```
 
-Open `http://localhost:5555`. **Settings → Setup** walks you through the rest: an AI provider, Tailscale, and HTTPS (`npm run setup:cert`), after which PortOS is at `https://<machine>.<tailnet>.ts.net:5555` on every device.
+Run `npm run setup:guide` and open the URL it prints. Without a certificate, this is `http://localhost:5555`; setup can provision HTTPS automatically when Tailscale is ready. **Settings → Setup** walks you through the rest: an AI provider, Tailscale, and HTTPS (`npm run setup:cert`), after which PortOS is at `https://<machine>.<tailnet>.ts.net:5555` on your tailnet devices.
 
 For hot reload while developing, run `npm run dev` (UI on `:5554`). The [Setup Guide](./docs/SETUP.md) covers native PostgreSQL, HTTPS without Tailscale, and starting on boot.
 
@@ -151,7 +151,7 @@ PortOS/
 ├── autofixer/           # Crash detection and repair worker
 ├── data/                # Your runtime data (not committed)
 ├── data.reference/      # Seed files for new installs and migrations
-├── docs/                # Guides, ADRs, design plans, screenshots
+├── docs/                # Guides, ADRs, screenshots
 ├── lib/slashdo/         # Submodule providing /do:* agent commands
 ├── scripts/             # Setup, migration, and maintenance scripts
 └── ecosystem.config.cjs # PM2 apps + the canonical PORTS map

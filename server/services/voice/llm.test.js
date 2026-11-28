@@ -4,12 +4,17 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 // without warming the AI toolkit.
 vi.mock('../provider/providers.js', () => ({ getProviderById: vi.fn() }));
 import { getProviderById } from '../provider/providers.js';
+vi.mock('./llmResidency.js', () => ({ probeVoiceLlmResidency: vi.fn() }));
+import { probeVoiceLlmResidency } from './llmResidency.js';
+vi.mock('../socketIo.js', () => ({ emitToOperators: vi.fn() }));
+import { emitToOperators } from '../socketIo.js';
 import { CONVERSATIONAL_GEMMA } from '../../lib/voiceModelCatalog.js';
 
 import {
   extractInlineToolCalls, isToolCapable, isReasoningModel,
   TOOL_CAPABLE_PATTERNS, REASONING_PATTERNS, resolveLlmEndpoint,
-  streamChat, VOICE_LLM_TIMEOUT_MS, VOICE_LLM_TIMEOUT_MESSAGE,
+  streamChat, VOICE_LLM_TIMEOUT_MS, VOICE_LLM_TIMEOUT_MESSAGE, VOICE_LLM_COLD_LOAD_TIMEOUT_MS,
+  readVoiceLlmResidency, markVoiceLlmWarming,
 } from './llm.js';
 
 describe('extractInlineToolCalls', () => {
@@ -328,8 +333,11 @@ describe('streamChat request lifecycle', () => {
     vi.unstubAllGlobals();
   });
 
-  it.each([undefined, 240])('sets Ollama Inkling thinking off and preserves only an explicit maxTokens (%s)', async maxTokens => {
-    const model = 'inkling-2-mini:26b-a5b-nvfp4';
+  it.each([
+    ['inkling-2-mini:26b-a5b-nvfp4', undefined],
+    ['inkling-2-mini:26b-a5b-nvfp4', 240],
+    ['qwen3.6:35b', undefined],
+  ])('sets Ollama thinking off for %s and preserves only an explicit maxTokens (%s)', async (model, maxTokens) => {
     const messages = [{ role: 'system', content: 'Keep replies short.' }];
     const tools = [{ type: 'function', function: { name: 'read_clock' } }];
     getProviderById.mockResolvedValue({ ...provider, id: 'ollama', defaultModel: model });
@@ -389,6 +397,25 @@ describe('streamChat request lifecycle', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it('pins /no_think to the persona so per-turn system blocks never change the cached prefix', async () => {
+    const model = 'qwen3-7b-thinking';
+    fetchMock.mockImplementation(async (url) => (url.endsWith('/models')
+      ? Response.json({ data: [{ id: model }] })
+      : new Response('data: [DONE]\n\n')));
+    const persona = { role: 'system', content: 'Keep replies short.' };
+    const history = [{ role: 'user', content: 'hi' }, { role: 'assistant', content: 'hello' }];
+    const sent = async (messages) => {
+      await streamChat(messages, { provider: 'test-provider', model });
+      return JSON.parse(fetchMock.mock.lastCall[1].body).messages;
+    };
+
+    const plain = await sent([persona, ...history, { role: 'user', content: 'what time is it' }]);
+    const withUi = await sent([persona, ...history, { role: 'system', content: 'Current UI state: Tasks' }, { role: 'user', content: 'click new task' }]);
+    expect(plain[0].content).toBe('Keep replies short.\n/no_think');
+    expect(withUi.slice(0, 3)).toEqual(plain.slice(0, 3));
+    expect(withUi[3].content).toBe('Current UI state: Tasks');
+  });
+
   it('lets other providers choose their output budget without sending the Ollama-only effort', async () => {
     installFetch(() => Promise.resolve(new Response('data: [DONE]\n\n')));
     await streamChat([], { provider: 'test-provider', model: 'test-model' });
@@ -410,6 +437,34 @@ describe('streamChat request lifecycle', () => {
     expect(onTimeout).toHaveBeenCalledTimes(1);
     expect(chatSignal.aborted).toBe(true);
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('announces a cold model before the request and gives the load the longer budget', async () => {
+    probeVoiceLlmResidency.mockResolvedValue({ state: 'unloaded', runtime: 'ollama', model: 'test-model' });
+    const order = [];
+    installFetch(({ signal }) => {
+      order.push('request');
+      return pendingUntilAbort(signal);
+    });
+    const onModelLoading = vi.fn(() => order.push('loading'));
+
+    const result = streamChat([], { provider: 'test-provider', model: 'test-model', onModelLoading });
+    const rejection = expect(result).rejects.toThrow(VOICE_LLM_TIMEOUT_MESSAGE);
+    await vi.advanceTimersByTimeAsync(VOICE_LLM_TIMEOUT_MS);
+    expect(chatSignal.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(VOICE_LLM_COLD_LOAD_TIMEOUT_MS - VOICE_LLM_TIMEOUT_MS);
+
+    await rejection;
+    expect(onModelLoading).toHaveBeenCalledWith({ model: 'test-model' });
+    expect(order).toEqual(['loading', 'request']);
+  });
+
+  it('stays quiet and keeps the normal budget for a resident model', async () => {
+    probeVoiceLlmResidency.mockResolvedValue({ state: 'loaded', runtime: 'ollama', model: 'test-model' });
+    installFetch(() => Promise.resolve(new Response('data: [DONE]\n\n')));
+    const onModelLoading = vi.fn();
+    await streamChat([], { provider: 'test-provider', model: 'test-model', onModelLoading });
+    expect(onModelLoading).not.toHaveBeenCalled();
   });
 
   it('aborts a provider stream that stops yielding SSE data', async () => {
@@ -545,5 +600,40 @@ describe('streamChat request lifecycle', () => {
     await expect(result).rejects.toMatchObject({ name: 'AbortError' });
     expect(chatSignal.aborted).toBe(true);
     await vi.advanceTimersByTimeAsync(VOICE_LLM_TIMEOUT_MS);
+  });
+});
+
+describe('readVoiceLlmResidency while a warm-up loads the model', () => {
+  beforeEach(() => {
+    getProviderById.mockReset();
+    getProviderById.mockResolvedValue({ id: 'ollama', type: 'api', endpoint: 'http://localhost:11434/v1', apiKey: '' });
+    probeVoiceLlmResidency.mockReset();
+    probeVoiceLlmResidency.mockResolvedValue({ state: 'unloaded', runtime: 'ollama', model: 'model-a' });
+    emitToOperators.mockClear();
+    // resolveModel lists the provider's models; without this a real Ollama on the test machine answers, and the
+    // pinned 'model-a' resolves to one of its installed models instead.
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('offline')));
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('reports loading until the warm-up releases, and tells open views each time', async () => {
+    const release = markVoiceLlmWarming('ollama', 'model-a');
+    expect(emitToOperators).toHaveBeenCalledWith('voice:llm:residency:changed');
+    expect(await readVoiceLlmResidency({ provider: 'ollama', model: 'model-a' })).toMatchObject({ state: 'loading' });
+    expect(await readVoiceLlmResidency({ provider: 'ollama', model: 'model-b' })).toMatchObject({ state: 'unloaded' });
+
+    release();
+    release();
+    expect(emitToOperators).toHaveBeenCalledTimes(2);
+    expect(await readVoiceLlmResidency({ provider: 'ollama', model: 'model-a' })).toMatchObject({ state: 'unloaded' });
+  });
+
+  it('keeps a resident or offline answer from the runtime', async () => {
+    const release = markVoiceLlmWarming('ollama', 'model-a');
+    probeVoiceLlmResidency.mockResolvedValueOnce({ state: 'loaded', runtime: 'ollama', model: 'model-a' });
+    expect(await readVoiceLlmResidency({ provider: 'ollama', model: 'model-a' })).toMatchObject({ state: 'loaded' });
+    probeVoiceLlmResidency.mockResolvedValueOnce({ state: 'offline', runtime: 'ollama', model: 'model-a' });
+    expect(await readVoiceLlmResidency({ provider: 'ollama', model: 'model-a' })).toMatchObject({ state: 'offline' });
+    release();
   });
 });

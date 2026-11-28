@@ -21,7 +21,7 @@ together when changing the CUDA index or shared inputs.
 | `minimax-h3-cuda` | `INSTALL_MINIMAX_H3_CUDA` | torch torchvision | torchao |
 | `minimax-music3-cuda` | `INSTALL_MINIMAX_MUSIC3` | torch | |
 | `muscriptor-cuda` | `INSTALL_MUSCRIPTOR` | torch | |
-| `wan22-cuda` | `INSTALL_WAN22_CUDA` | torch torchvision | |
+| `wan22-cuda` | `INSTALL_WAN22_CUDA` | torch | |
 
 ACE-Step builds its pinned source after dependency sync. Keep Linux TorchAO
 on the CUDA index for H3 and ACE-Step 1.5 and Windows TorchAO on PyPI.
@@ -71,6 +71,42 @@ profile enabled. Use its exact import probes and `uv pip check --python
 <interpreter>` (`Scripts/python.exe` on Windows). Check CUDA availability on
 NVIDIA. Compare both package sets and record redacted OS, GPU, driver,
 CUDA, Python, Torch, lock and probe results. Keep render evidence separate.
+
+## MuScriptor
+
+Split the direct inputs at the `muscriptor==` line. Generate the inference
+lock with the rest of the inputs, using the CUDA recipe above for both
+targets. For Apple Silicon, create a scratch `pyproject.toml` with the inference
+dependencies, `requires-python = ">=3.11"`, and this platform restriction:
+
+```toml
+[tool.uv]
+environments = ["sys_platform == 'darwin' and platform_machine == 'arm64'"]
+```
+
+Run the same compile options from that scratch project with `--universal`
+instead of `--python-platform`, and omit `--no-config` so uv reads the
+project's platform restriction. Seed each inference output with its
+previous lock to retain compatible pins.
+
+Compile the MuScriptor wheel separately using the same uv and cutoff:
+
+```bash
+sed -n '/^muscriptor==/p' "$input" | "$UV" --no-config pip compile - \
+  --no-deps --python-version 3.11 --generate-hashes --only-binary :all: \
+  --no-header --no-annotate --index-url https://pypi.org/simple \
+  --exclude-newer "$CUTOFF" -o "$wheel_lock"
+```
+
+Apply the Apple Silicon marker to the wheel pin for that target. Merge
+the complete pin and hash blocks in package-name order, retain the lock
+headers and CUDA index directives, and audit all resulting pins with OSV.
+The `--no-deps` wheel split excludes the upstream web server and CLI.
+Their dependency declarations remain in the wheel metadata, so validate
+with `scripts/ml/transcribe_muscriptor.py --check-runtime` and
+`from muscriptor import TranscriptionModel; import soundfile, beat_this, mido`
+in a fresh environment. Run a small audio-to-MIDI transcription when
+licensed weights are available.
 
 ## LTX-2.5 CUDA
 
@@ -142,7 +178,11 @@ baker to run, with no KDTree fallback.
 
 Use [the installer](../scripts/setup-pixal3d-mps.sh) with the locked wheel
 and source inputs. It rebuilds native extensions and checks imports and MPS.
-Render from the private checkout with `generate_mps.py --device mps
+Install seeds `autotune_cache.json` in the runtime root from the bundled tuning
+data. Repair retains that file. For direct renders, set
+`FLEX_GEMM_AUTOTUNE_CACHE_PATH` to the absolute path of that cache, as PortOS
+does for render launches. Render from the private source snapshot with
+`generate_mps.py --device mps
 --pipeline-type 1024_cascade --steps 4 --seed 7` and check the output with
 [`verify-pixal3d-mps.py`](../scripts/ml/verify-pixal3d-mps.py).
 

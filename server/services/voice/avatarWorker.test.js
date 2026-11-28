@@ -63,3 +63,131 @@ it('fails incomplete playback if the worker exits instead of holding a render op
   await expect(render).rejects.toThrow('stopped before it finished');
   expect(close).toHaveBeenCalledWith(false);
 });
+
+it('streams continuous idle frames and preempts idle immediately when speech arrives', async () => {
+  const { worker, messages, send } = workerFixture();
+  try {
+    await worker.warmed;
+    const onIdleFrame = vi.fn();
+    const idle = worker.renderIdle({ stage: 'listening', onFrame: onIdleFrame, signal: new AbortController().signal });
+    expect(messages[0]).toMatchObject({ type: 'idle', stage: 'listening' });
+    const idleId = messages[0].id;
+    send({ type: 'frame', id: idleId, index: 0, timeMs: 0, jpeg: 'idle0' });
+    expect(onIdleFrame).toHaveBeenCalledExactlyOnceWith({ index: 0, timeMs: 0, jpeg: 'idle0' });
+
+    // Speech immediately cancels idle, waits for its cancelled ack, and starts speak.
+    const onSpeakFrame = vi.fn();
+    const speak = worker.render(Buffer.from('speech'), { onFrame: onSpeakFrame, signal: new AbortController().signal });
+    expect(messages[1]).toEqual({ type: 'cancel', id: idleId });
+    send({ type: 'frame', id: idleId, index: 1, timeMs: 40, jpeg: 'late-idle' });
+    send({ type: 'cancelled', id: idleId });
+    await idle;
+    await vi.waitFor(() => expect(messages[2]?.type).toBe('speak'));
+    const speakId = messages[2].id;
+
+    // An idle request arriving while speech is active backs off without disturbing speech.
+    const onIgnoredIdle = vi.fn();
+    await worker.renderIdle({ stage: 'idle', onFrame: onIgnoredIdle, signal: new AbortController().signal });
+    expect(onIgnoredIdle).not.toHaveBeenCalled();
+
+    send({ type: 'frame', id: speakId, index: 0, timeMs: 0, jpeg: 'speech0' });
+    send({ type: 'done', id: speakId });
+    await speak;
+    expect(onIdleFrame).toHaveBeenCalledTimes(1);
+    expect(onSpeakFrame).toHaveBeenCalledExactlyOnceWith({ index: 0, timeMs: 0, jpeg: 'speech0' });
+  } finally {
+    worker.stop();
+  }
+});
+
+it('swaps the animated portrait before a render only when the channel face changes', async () => {
+  const { worker, messages, send } = workerFixture();
+  try {
+    await worker.warmed;
+    const jpeg = Buffer.from('face-jpeg');
+    const load = vi.fn(async () => jpeg);
+    const portrait = { key: 'face.png', load };
+    const idle = worker.renderIdle({ stage: 'idle', onFrame: vi.fn(), signal: new AbortController().signal, portrait });
+    await vi.waitFor(() => expect(messages[0]).toMatchObject({ type: 'portrait', jpeg: jpeg.toString('base64') }));
+    send({ type: 'done', id: messages[0].id });
+    await vi.waitFor(() => expect(messages[1]).toMatchObject({ type: 'idle', stage: 'idle' }));
+    expect(worker.portraitKey).toBe('face.png');
+    send({ type: 'done', id: messages[1].id });
+    await idle;
+
+    // Same face: no reload, the speech request goes straight out.
+    const speak = worker.render(Buffer.from('speech'), { onFrame: vi.fn(), signal: new AbortController().signal, portrait });
+    expect(messages[2].type).toBe('speak');
+    send({ type: 'done', id: messages[2].id });
+    await speak;
+    expect(load).toHaveBeenCalledTimes(1);
+
+    // The default face restores the launch portrait without loading anything.
+    const back = worker.renderIdle({ stage: 'idle', onFrame: vi.fn(), signal: new AbortController().signal, portrait: { key: 'default' } });
+    await vi.waitFor(() => expect(messages[3]).toMatchObject({ type: 'portrait', jpeg: null }));
+    send({ type: 'done', id: messages[3].id });
+    await vi.waitFor(() => expect(messages[4]?.type).toBe('idle'));
+    send({ type: 'done', id: messages[4].id });
+    await back;
+    expect(worker.portraitKey).toBe('default');
+  } finally {
+    worker.stop();
+  }
+});
+
+it('keeps animating the current face when the model refuses a portrait', async () => {
+  const { worker, messages, send } = workerFixture();
+  try {
+    await worker.warmed;
+    const portrait = { key: 'broken.png', load: vi.fn(async () => Buffer.from('not-a-face')) };
+    const onFrame = vi.fn();
+    const speak = worker.render(Buffer.from('speech'), { onFrame, signal: new AbortController().signal, portrait });
+    await vi.waitFor(() => expect(messages[0]?.type).toBe('portrait'));
+    send({ type: 'error', id: messages[0].id });
+    await vi.waitFor(() => expect(messages[1]?.type).toBe('speak'));
+    send({ type: 'frame', id: messages[1].id, index: 0, timeMs: 0, jpeg: 'speech0' });
+    send({ type: 'done', id: messages[1].id });
+    await speak;
+    expect(onFrame).toHaveBeenCalledOnce();
+    expect(worker.portraitKey).toBe('default');
+
+    // A refused face is not retried on every request.
+    const again = worker.render(Buffer.from('speech'), { onFrame: vi.fn(), signal: new AbortController().signal, portrait });
+    expect(messages[2].type).toBe('speak');
+    send({ type: 'done', id: messages[2].id });
+    await again;
+    expect(portrait.load).toHaveBeenCalledOnce();
+  } finally {
+    worker.stop();
+  }
+});
+
+it('does not start a speak render or kill the worker when aborted during a portrait swap', async () => {
+  const { worker, child, messages, send } = workerFixture();
+  try {
+    await worker.warmed;
+    const controller = new AbortController();
+    const portrait = { key: 'face.png', load: vi.fn(async () => Buffer.from('face-jpeg')) };
+    const speak = worker.render(Buffer.from('speech'), { onFrame: vi.fn(), signal: controller.signal, portrait });
+    await vi.waitFor(() => expect(messages[0]?.type).toBe('portrait'));
+
+    // Client disconnects while the non-interruptible portrait swap is running.
+    controller.abort();
+    expect(messages).toHaveLength(1);
+    expect(child.kill).not.toHaveBeenCalled();
+
+    // When the swap completes, the aborted speak must NOT be sent to the worker.
+    send({ type: 'done', id: messages[0].id });
+    await speak;
+    expect(messages).toHaveLength(1);
+    expect(worker.portraitKey).toBe('face.png');
+
+    // A subsequent live speak uses the already-loaded portrait without waiting on a phantom render.
+    const next = worker.render(Buffer.from('live'), { onFrame: vi.fn(), signal: new AbortController().signal, portrait });
+    expect(messages[1]?.type).toBe('speak');
+    send({ type: 'done', id: messages[1].id });
+    await next;
+  } finally {
+    worker.stop();
+  }
+});

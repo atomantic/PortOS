@@ -15,6 +15,7 @@ import { useEffect, useRef, useState } from 'react';
 import toast from '../../ui/Toast';
 import socket from '../../../services/socket';
 import { musicVideoAspect } from '../../../../../server/lib/musicVideo/musicVideoAspect.js';
+import { defaultVerticalFrameOptions } from '../../../../../server/lib/musicVideo/musicVideoVerticalFrame.js';
 import {
   getMusicVideoProject,
   buildMusicVideoDcp, musicVideoDcpEventsUrl, cancelMusicVideoDcp,
@@ -52,6 +53,11 @@ export default function useMusicVideoPublishKit({ project, replaceProject } = {}
   const canCrop = !!renderHistoryId && musicVideoAspect(project) === '16:9';
   const [cropDraft, setCrop] = useState(null);
   const crop = cropDraft?.projectId === projectId ? cropDraft : null;
+  const [verticalState, setVerticalState] = useState(null);
+  const activeVertical = verticalState?.projectId === projectId ? verticalState : null;
+  const verticalMode = activeVertical?.mode || (crop ? 'crop' : 'auto');
+  const verticalSpan = activeVertical?.span || (verticalMode === 'framed' ? 'full' : 'hook');
+  const verticalFrame = activeVertical?.frame || defaultVerticalFrameOptions(project);
   let cropBlockedReason = null;
   if (crop) {
     if (crop.error) cropBlockedReason = crop.error;
@@ -89,10 +95,11 @@ export default function useMusicVideoPublishKit({ project, replaceProject } = {}
   };
 
   const job = useSseJobSlot({
-    startRequest: ({ crop: draft, loudnessPreset }) => buildMusicVideoPublishKit(projectId, {
+    startRequest: ({ crop: draft, loudnessPreset, vertical }) => buildMusicVideoPublishKit(projectId, {
       silent: true,
       ...(loudnessPreset === undefined ? {} : { loudnessPreset }),
       ...(draft ? { crop: { ...draft.preview, position: draft.position } } : {}),
+      ...(vertical ? { vertical } : {}),
     }),
     eventsUrl: musicVideoPublishKitEventsUrl,
     cancelRequest: cancelMusicVideoPublishKit,
@@ -232,6 +239,36 @@ export default function useMusicVideoPublishKit({ project, replaceProject } = {}
     return captureMusicVideoPublishFrame(projectId, atSec).then(apply).catch(() => null).finally(() => setCapturingFrame(false));
   };
 
+  const setVerticalMode = (mode) => {
+    if (mode === 'crop') {
+      setVerticalState((cur) => ({ projectId, mode: 'crop', span: cur?.projectId === projectId ? cur.span : 'hook', frame: cur?.projectId === projectId ? cur.frame : defaultVerticalFrameOptions(project) }));
+      return loadCropPreview(0.5);
+    }
+    setCrop(null);
+    if (mode === 'framed') {
+      setVerticalState((cur) => ({ projectId, mode: 'framed', span: cur?.projectId === projectId && cur.mode === 'framed' ? cur.span : 'full', frame: cur?.projectId === projectId && cur.frame ? cur.frame : defaultVerticalFrameOptions(project) }));
+      return undefined;
+    }
+    setVerticalState(null);
+    return undefined;
+  };
+  const setVerticalSpan = (span) => {
+    setVerticalState((cur) => ({
+      projectId,
+      mode: cur?.projectId === projectId ? cur.mode : verticalMode,
+      span,
+      frame: cur?.projectId === projectId && cur.frame ? cur.frame : defaultVerticalFrameOptions(project),
+    }));
+  };
+  const updateVerticalFrame = (patch) => {
+    setVerticalState((cur) => ({
+      projectId,
+      mode: cur?.projectId === projectId ? cur.mode : 'framed',
+      span: cur?.projectId === projectId ? cur.span : 'full',
+      frame: { ...(cur?.projectId === projectId && cur.frame ? cur.frame : defaultVerticalFrameOptions(project)), ...patch },
+    }));
+  };
+
   return {
     captureFrame,
     capturingFrame,
@@ -241,11 +278,23 @@ export default function useMusicVideoPublishKit({ project, replaceProject } = {}
     canCrop,
     crop,
     cropBlockedReason,
-    setCropMode: (enabled) => enabled ? loadCropPreview(0.5) : setCrop(null),
+    verticalMode,
+    verticalSpan,
+    verticalFrame,
+    setVerticalMode,
+    setVerticalSpan,
+    updateVerticalFrame,
+    setCropMode: (enabled) => setVerticalMode(enabled ? 'crop' : 'auto'),
     refreshCropPreview: () => loadCropPreview(crop?.position ?? 0.5),
     setCropPosition: (position) => setCrop(current => current?.preview && current.preview === crop?.preview ? { ...current, position } : current),
     setCropMediaState: (preview, error) => setCrop(current => current?.preview === preview ? { ...current, ready: !error, error } : current),
-    build: ({ loudnessPreset } = {}) => { if (!cropBlockedReason) job.start({ crop, loudnessPreset }, projectId); },
+    build: ({ loudnessPreset } = {}) => {
+      if (cropBlockedReason) return;
+      const vertical = verticalMode === 'framed'
+        ? { mode: 'framed', span: verticalSpan, ...verticalFrame }
+        : verticalSpan === 'full' ? { mode: verticalMode, span: 'full' } : undefined;
+      job.start({ crop, loudnessPreset, vertical }, projectId);
+    },
     cancelBuild: job.cancel,
     drafting,
     saving,

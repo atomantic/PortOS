@@ -210,7 +210,8 @@ describe('pulling a peer offering', () => {
       .mockResolvedValueOnce({ outcome: 'inherited', foundation: {}, reasons: [], findings: [] });
     vi.mocked(peerFetch).mockResolvedValue(offering([candidate('tampered', 'a'), candidate('sound', 'b')]));
 
-    expect(await syncEidoverseFoundationsFromPeer(PEER)).toMatchObject({ inherited: 1, refused: 1 });
+    expect(await syncEidoverseFoundationsFromPeer(PEER)).toMatchObject({ inherited: 1, refused: 1, complete: true });
+    expect(await syncEidoverseFoundationsFromPeer(PEER)).toEqual({ inherited: 0, skipped: 'unchanged' });
   });
 
   it('skips a sender whose schemaVersion is ahead rather than storing a shape it cannot read', async () => {
@@ -281,13 +282,29 @@ describe('pulling a peer offering', () => {
     expect(applyEidoverseFoundationTombstones).toHaveBeenCalledWith([], expect.anything());
   });
 
-  it('counts a failed retraction as zero removed and still inherits, so the next sweep retries', async () => {
-    vi.mocked(applyEidoverseFoundationTombstones).mockRejectedValue(new Error('ledger busy'));
+  it('retries a failed retraction on the next sweep even when the hash was cached', async () => {
     vi.mocked(peerFetch).mockResolvedValue(offering([candidate('tide-beacon')], {
       tombstones: [{ fingerprint: fingerprint('c'), deletedAt: '2026-03-04T00:00:00.000Z' }],
     }));
+    await syncEidoverseFoundationsFromPeer(PEER);
+    for (let i = 1; i < FORCE_REVALIDATE_EVERY; i += 1) {
+      expect(await syncEidoverseFoundationsFromPeer(PEER)).toEqual({ inherited: 0, skipped: 'unchanged' });
+    }
+    vi.mocked(applyEidoverseFoundationTombstones)
+      .mockRejectedValueOnce(new Error('ledger busy'))
+      .mockResolvedValueOnce({ removed: 1 });
 
-    expect(await syncEidoverseFoundationsFromPeer(PEER)).toMatchObject({ inherited: 1, removed: 0 });
+    expect(await syncEidoverseFoundationsFromPeer(PEER)).toMatchObject({ inherited: 1, removed: 0, complete: false });
+    expect(await syncEidoverseFoundationsFromPeer(PEER)).toMatchObject({ removed: 1, complete: true });
+    expect(await syncEidoverseFoundationsFromPeer(PEER)).toEqual({ inherited: 0, skipped: 'unchanged' });
+  });
+
+  it('retries a failed inheritance on the next sweep', async () => {
+    vi.mocked(peerFetch).mockResolvedValue(offering([candidate('tide-beacon')]));
+    vi.mocked(recordEidoverseFoundationInheritance).mockRejectedValueOnce(new Error('ledger busy'));
+
+    expect(await syncEidoverseFoundationsFromPeer(PEER)).toMatchObject({ inherited: 0, refused: 0, complete: false });
+    expect(await syncEidoverseFoundationsFromPeer(PEER)).toMatchObject({ inherited: 1, complete: true });
   });
 
   it('rejects a malformed wrapper before any candidate reaches the gate', async () => {

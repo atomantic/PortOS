@@ -25,6 +25,7 @@ import {
   musicVideoTakeSelectSchema,
   musicVideoUpgradeSchema,
   musicVideoVaryWipesSchema,
+  musicVideoColorMatchBasisSchema,
 } from '../lib/musicVideo/routeValidation/scenes.js';
 import { renderShotDownload } from '../services/musicVideo/shotDownload.js';
 import { Router } from 'express';
@@ -33,7 +34,6 @@ import { shotImageTreatmentAspect, shotTreatmentImages } from '../lib/musicVideo
 import { resolveGalleryImage } from '../lib/pathSafety.js';
 import { readFile } from 'node:fs/promises';
 import { getStoredProjectRecord } from '../services/musicVideo/projects.js';
-import { z } from 'zod';
 import { requireProductionReviewer } from '../services/musicVideo/productionReviewService.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
@@ -49,7 +49,7 @@ const router = Router();
 // --- Draft excerpt render (#8986) ---
 // This temporary export does not create a project excerpt or video history entry.
 router.post('/:id/scenes/:sceneId/download', asyncHandler(async (req, res, next) => {
-  const { basis } = validateRequest(z.object({ basis: z.string().max(100000) }), req.body);
+  const { basis } = validateRequest(musicVideoColorMatchBasisSchema, req.body);
   const controller = new AbortController();
   res.on('close', () => { if (!res.writableFinished) controller.abort(); });
   const result = await renderShotDownload(req.params.id, req.params.sceneId, controller.signal, basis);

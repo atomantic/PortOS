@@ -103,6 +103,22 @@ it('starts paused and enforces observed scope, action sequence, epoch and expira
   expect(host.action).toHaveBeenCalledTimes(1); clock += 30001;
   expect((await request(app).post(`${path}/observations`).set('Authorization', authHeader()).send(scope(visit))).status).toBe(403);
 });
+it('owner revocation through the admin route closes the visit and invalidates the credential', async () => {
+  const visitor = '/api/managed-visitors/v1';
+  const admitted = await request(app).post(`${visitor}/admissions`).set('Authorization', authHeader()).send(admission);
+  expect(admitted.status).toBe(200);
+
+  shared.enabled = true;
+  const revoked = await request(app).delete(`/api/managed-visitor-admin/${appId}/credential`)
+    .set('Authorization', 'Bearer owner-session');
+  expect(revoked.status).toBe(200);
+  expect(revoked.body).toEqual({ revoked: true });
+  expect(host.leave).toHaveBeenCalledExactlyOnceWith('host-0', expect.objectContaining({ appId, individualId }));
+
+  const capabilities = await request(app).get(`${visitor}/capabilities`).set('Authorization', authHeader());
+  expect(capabilities.status).toBe(401);
+});
+
 it('rotation closes visits and rejects late admission authority issued for a revoked credential', async () => {
   const auth = await shared.broker.authenticate(credentials.credential), visit = await shared.broker.admit(auth, admission);
   await shared.broker.provision(appId, credentialInput);

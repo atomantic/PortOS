@@ -46,6 +46,53 @@ function renderMessage(message, accounts = [{ id: 'acct-1', name: 'Personal', ty
   );
 }
 
+describe('MessageDetail AI Reply tone', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.generateMessageDraft.mockResolvedValue(undefined);
+  });
+
+  it('defers to the saved server tone during and after a failed settings read', async () => {
+    const settings = Promise.withResolvers();
+    api.getSettings.mockReturnValueOnce(settings.promise);
+    renderMessage(baseMessage);
+
+    const reply = screen.getByRole('button', { name: 'AI Reply' });
+    await userEvent.click(reply);
+    expect(api.generateMessageDraft.mock.calls[0][0]).not.toHaveProperty('useVoice');
+
+    await act(async () => settings.reject(new Error('Settings unavailable')));
+    await userEvent.click(reply);
+    expect(api.generateMessageDraft.mock.calls[1][0]).not.toHaveProperty('useVoice');
+  });
+
+  it.each([true, false])('keeps an explicit %s choice when settings arrive late', async (choice) => {
+    const settings = Promise.withResolvers();
+    api.getSettings.mockReturnValueOnce(settings.promise);
+    renderMessage(baseMessage);
+
+    await userEvent.click(screen.getByRole('button', { name: /Conversational tone OFF/ }));
+    if (!choice) await userEvent.click(screen.getByRole('button', { name: /Conversational tone ON/ }));
+    await act(async () => settings.resolve({ messages: { voiceMode: !choice } }));
+
+    expect(screen.getByRole('button', { name: new RegExp(`Conversational tone ${choice ? 'ON' : 'OFF'}`) })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'AI Reply' }));
+    expect(api.generateMessageDraft).toHaveBeenCalledWith(expect.objectContaining({ useVoice: choice }));
+  });
+
+  it('uses the saved display default and clears the override for a different message', async () => {
+    api.getSettings.mockResolvedValueOnce({ messages: { voiceMode: true } });
+    const { rerender } = renderMessage(baseMessage);
+    await userEvent.click(await screen.findByRole('button', { name: /Conversational tone ON/ }));
+    expect(screen.getByRole('button', { name: /Conversational tone OFF/ })).toBeInTheDocument();
+
+    rerender(<MessageDetail message={{ ...baseMessage, id: 'msg-2' }} accounts={[{ id: 'acct-1' }]} onBack={() => {}} />);
+    expect(screen.getByRole('button', { name: /Conversational tone ON/ })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'AI Reply' }));
+    expect(api.generateMessageDraft.mock.calls[0][0]).not.toHaveProperty('useVoice');
+  });
+});
+
 describe('MessageDetail Teams reply recipients', () => {
   const accounts = [{ id: 'acct-1', type: 'teams' }];
 
@@ -315,5 +362,53 @@ describe('MessageDetail refresh ordering', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Refresh' }));
     expect(await screen.findByText('Fresh second')).toBeInTheDocument();
     expect(api.getMessageThread).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('MessageDetail async action and AI reply lifetime guards', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.getMessageThread.mockResolvedValue({ messages: [] });
+  });
+
+  it('does not call onBack when an archive action resolves after unmount', async () => {
+    const pending = Promise.withResolvers();
+    api.executeMessageAction.mockReturnValueOnce(pending.promise);
+    const onBack = vi.fn();
+    const { unmount } = render(
+      <MessageDetail
+        message={baseMessage}
+        accounts={[{ id: 'acct-1', name: 'Personal', type: 'outlook' }]}
+        onBack={onBack}
+      />,
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'Archive' }));
+    expect(api.executeMessageAction).toHaveBeenCalledTimes(1);
+    unmount();
+    await act(async () => pending.resolve({ success: true }));
+    expect(onBack).not.toHaveBeenCalled();
+  });
+
+  it('drops a late AI reply and resets reply composer state when switching messages', async () => {
+    const pending = Promise.withResolvers();
+    api.generateMessageDraft.mockReturnValueOnce(pending.promise);
+    const accounts = [{ id: 'acct-1', name: 'Personal', type: 'outlook' }];
+    const { rerender } = renderMessage(baseMessage, accounts);
+
+    await userEvent.click(screen.getByRole('button', { name: 'AI Reply' }));
+    expect(api.generateMessageDraft).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <MessageDetail
+        message={{ ...baseMessage, id: 'msg-2', subject: 'Second message' }}
+        accounts={accounts}
+        onBack={() => {}}
+      />,
+    );
+    expect(screen.getByRole('button', { name: 'AI Reply' })).toBeEnabled();
+
+    await act(async () => pending.resolve({ id: 'draft-from-msg-1', body: 'Stale reply for msg 1' }));
+    expect(screen.queryByRole('textbox', { name: 'Reply message body' })).not.toBeInTheDocument();
+    expect(toast.success).not.toHaveBeenCalled();
   });
 });

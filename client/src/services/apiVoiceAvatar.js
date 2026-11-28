@@ -1,4 +1,4 @@
-// Manage the local Voice Call avatar and receive timestamped frames for assistant audio.
+// Manage the local Voice Call avatar and receive timestamped frames for assistant audio and continuous presence.
 import { request, throwApiError } from './apiCore';
 
 export const fetchVoiceAvatar = options => request('/voice/avatar/status', { signal: options?.signal, silent: true, hostControlOptional: true });
@@ -6,10 +6,7 @@ export const changeVoiceAvatar = (action, acceptTerms) => request('/voice/avatar
   method: 'POST', body: JSON.stringify({ action, ...(acceptTerms ? { acceptTerms: true } : {}) }), silent: true,
 });
 
-export async function streamVoiceAvatar(wav, { signal, onFrame }) {
-  const response = await fetch('/api/voice/avatar/frames', {
-    method: 'POST', headers: { 'Content-Type': 'audio/wav' }, body: wav, signal,
-  });
+async function readAvatarFrameStream(response, onFrame) {
   if (!response.ok) await throwApiError(response);
   if (!response.body) return;
   const reader = response.body.getReader();
@@ -22,9 +19,9 @@ export async function streamVoiceAvatar(wav, { signal, onFrame }) {
       pending += decoder.decode(value, { stream: true });
       let end;
       while ((end = pending.indexOf('\n')) >= 0) {
-        const frame = JSON.parse(pending.slice(0, end));
+        const line = pending.slice(0, end);
         pending = pending.slice(end + 1);
-        onFrame(frame);
+        if (line) onFrame(JSON.parse(line));
       }
       if (pending.length > 256_000) throw new Error('Invalid avatar frame stream');
     }
@@ -33,3 +30,36 @@ export async function streamVoiceAvatar(wav, { signal, onFrame }) {
     reader.releaseLock();
   }
 }
+
+export async function streamVoiceAvatar(wav, { signal, onFrame }) {
+  const response = await fetch('/api/voice/avatar/frames', {
+    method: 'POST', headers: { 'Content-Type': 'audio/wav' }, body: wav, signal,
+  });
+  await readAvatarFrameStream(response, onFrame);
+}
+
+export async function streamVoiceAvatarIdle({ stage = 'idle', signal, onFrame }) {
+  const response = await fetch('/api/voice/avatar/idle', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ stage }),
+    signal,
+  });
+  await readAvatarFrameStream(response, onFrame);
+}
+
+// The shared Avatars collection plus this install's transceiver channel assignments.
+export const fetchAvatarLibrary = options => request('/voice/avatar/library', { signal: options?.signal, silent: true });
+export const addAvatarToLibrary = (filename, options = {}) => request('/voice/avatar/library', {
+  method: 'POST', body: JSON.stringify({ filename }), ...options,
+});
+export const removeAvatarFromLibrary = (filename, options = {}) => request(`/voice/avatar/library/${encodeURIComponent(filename)}`, {
+  method: 'DELETE', ...options,
+});
+export const saveAvatarChannels = (patch, options = {}) => request('/voice/avatar/channels', {
+  method: 'PUT', body: JSON.stringify(patch), ...options,
+});
+// One channel's label, avatar or agent overrides; the server merges it into the stored channels.
+export const patchAvatarChannel = (index, patch, options = {}) => request(`/voice/avatar/channels/${index}`, {
+  method: 'PATCH', body: JSON.stringify(patch), ...options,
+});

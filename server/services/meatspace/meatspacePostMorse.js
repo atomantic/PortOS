@@ -71,8 +71,8 @@ async function loadMorseProgress() {
 }
 
 async function saveMorseProgress(data) {
-  await ensureDir(MEATSPACE_DIR);
-  await atomicWrite(MORSE_FILE, data);
+  await ensureDir(MEATSPACE_DIR, { mode: 0o700 });
+  await atomicWrite(MORSE_FILE, data, { mode: 0o600, dirMode: 0o700 });
 }
 
 // Serialize every read-modify-write against the single shared progress file so

@@ -158,7 +158,7 @@ export default function SyncCategoriesPanel({ peer, onRefresh }) {
               ? 'Categories are locked on while full mirror is enabled. Turn it off to choose categories individually.'
               : <>Enabling a category syncs it both ways — we ask {peer.name || 'the peer'} to sync the same back automatically.</>}
           </p>
-          <div className="flex items-center justify-end gap-2 mb-1.5">
+          <div className="flex flex-wrap items-center justify-end gap-1.5 mb-1.5">
             {/* Available whenever we know the peer's identity — NOT gated on
                 enabledCount. The worst stale case is disabling the LAST category
                 while the peer is offline: the peer keeps its now-stale enabled
@@ -167,8 +167,9 @@ export default function SyncCategoriesPanel({ peer, onRefresh }) {
                 when it's needed. */}
             {peer.instanceId && (
               <button
+                type="button"
                 onClick={makeMutual}
-                className="flex items-center gap-1 mr-auto text-[10px] pointer-coarse:min-h-11 text-gray-500 hover:text-port-accent transition-colors"
+                className="inline-flex items-center gap-1 mr-auto rounded border border-port-border bg-port-bg/60 px-2 py-0.5 text-[10px] pointer-coarse:min-h-11 pointer-coarse:px-2.5 text-gray-400 hover:text-port-accent hover:border-port-accent/50 hover:bg-port-bg focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-port-accent transition-colors"
                 title="Push the current categories to this peer so it syncs them back (use if it was offline during a change)"
               >
                 <ArrowLeftRight size={10} />
@@ -179,14 +180,16 @@ export default function SyncCategoriesPanel({ peer, onRefresh }) {
             {!fullSync && (
               <>
                 <button
+                  type="button"
                   onClick={() => toggleAll(true)}
-                  className="text-[10px] pointer-coarse:min-h-11 text-port-accent hover:text-port-accent/80 transition-colors"
+                  className="inline-flex items-center rounded border border-port-accent/40 bg-port-accent/10 px-2 py-0.5 text-[10px] pointer-coarse:min-h-11 pointer-coarse:px-2.5 text-port-accent hover:bg-port-accent/20 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-port-accent transition-colors"
                 >
                   Enable all
                 </button>
                 <button
+                  type="button"
                   onClick={() => toggleAll(false)}
-                  className="text-[10px] pointer-coarse:min-h-11 text-gray-500 hover:text-gray-400 transition-colors"
+                  className="inline-flex items-center rounded border border-port-border bg-port-bg/60 px-2 py-0.5 text-[10px] pointer-coarse:min-h-11 pointer-coarse:px-2.5 text-gray-400 hover:text-white hover:bg-port-bg focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-port-accent transition-colors"
                 >
                   Disable all
                 </button>

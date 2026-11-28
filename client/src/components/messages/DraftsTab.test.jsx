@@ -4,6 +4,7 @@ import DraftsTab from './DraftsTab.jsx';
 import { buildIndex } from '../../services/domIndex.js';
 
 vi.mock('../../services/apiMessages.js', () => ({
+  getMessageDetail: vi.fn(),
   getMessageDrafts: vi.fn(),
   sendMessageDraft: vi.fn(),
   reconcileMessageDraft: vi.fn(),
@@ -27,6 +28,7 @@ const socketMock = vi.hoisted(() => {
 vi.mock('../../services/socket', () => ({ default: socketMock.socket }));
 
 import {
+  getMessageDetail,
   getMessageDrafts,
   sendMessageDraft,
   reconcileMessageDraft,
@@ -169,6 +171,22 @@ describe('DraftsTab interrupted delivery', () => {
     expect(getMessageDrafts).toHaveBeenCalledTimes(1);
   });
 
+  it('records nondelivery of an erased draft without offering to edit, approve or resend it', async () => {
+    const erased = {
+      ...unknown, privacyErased: true, subject: '', body: '',
+      sendAttempts: [{ id: unknown.sendAttemptId, startedAt: '2026-01-01T12:00:00Z' }]
+    };
+    getMessageDrafts.mockResolvedValue([erased]);
+    reconcileMessageDraft.mockResolvedValueOnce({ ...erased, status: 'erased' });
+    render(<DraftsTab accounts={[]} />);
+    expect(await screen.findByText(/Either choice records the outcome and keeps the draft closed/)).toBeInTheDocument();
+    expect(screen.getByText(/Send attempt started/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm not sent' }));
+    expect(await screen.findByText('erased')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^(Edit|Approve|Send)$/ })).not.toBeInTheDocument();
+  });
+
   it('keeps uncertainty visible on conflict and makes confirmed delivery terminal', async () => {
     getMessageDrafts.mockResolvedValue([unknown]);
     reconcileMessageDraft.mockRejectedValueOnce(new Error('Draft state conflict'));
@@ -301,6 +319,136 @@ describe('DraftsTab editing and review', () => {
     expect(screen.getByRole('button', { name: 'Approve' })).toBeInTheDocument();
   });
 
+  it.each([
+    ['gmail', 'api', 'approved', 'Original\r\n conversation', {}],
+    ['outlook', 'playwright', 'failed', 'Original conversation', { status: 'draft' }],
+  ])('restores a %s reply subject from its own account and allows ordinary approval', async (type, sendVia, status, originalSubject, resetStatus) => {
+    const draft = {
+      id: 'd1', accountId: 'account-2', replyToMessageId: 'original', status, sendVia,
+      subject: 'Legacy replacement', body: 'Stored body', to: ['one@example.com'], cc: [],
+    };
+    const restored = { ...draft, subject: 'Original conversation', status: 'draft' };
+    getMessageDrafts.mockResolvedValueOnce([draft]);
+    getMessageDetail.mockResolvedValueOnce({ id: 'original', accountId: 'account-2', subject: originalSubject });
+    updateMessageDraft.mockResolvedValueOnce(restored);
+    updateMessageDraft.mockResolvedValueOnce({ ...restored, body: 'Unsaved body' });
+    approveMessageDraft.mockResolvedValueOnce({ ...restored, body: 'Unsaved body', status: 'approved' });
+    render(<DraftsTab accounts={[
+      { id: 'account-1', name: 'Other account', type },
+      { id: 'account-2', name: 'Draft account', type },
+    ]} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    expect(getMessageDetail).not.toHaveBeenCalled();
+    const subject = screen.getByRole('textbox', { name: 'Subject' });
+    const body = screen.getByRole('textbox', { name: 'Body' });
+    expect(subject).toHaveAttribute('readonly');
+    expect(subject).toHaveAccessibleDescription('The mail provider keeps the conversation subject.');
+    expect(subject).toHaveValue('Legacy replacement');
+    fireEvent.change(body, { target: { value: 'Unsaved body' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Restore original subject' }));
+    expect(getMessageDetail).toHaveBeenCalledWith('account-2', 'original', { silent: true });
+    await waitFor(() => expect(subject).toHaveValue('Original conversation'));
+    expect(updateMessageDraft).toHaveBeenCalledWith('d1', { subject: 'Original conversation', ...resetStatus });
+    expect(body).toHaveValue('Unsaved body');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save draft' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Approve' }));
+    expect(updateMessageDraft).toHaveBeenLastCalledWith('d1', {
+      to: draft.to, ...(type === 'gmail' && { cc: [] }), body: 'Unsaved body',
+    });
+    expect(approveMessageDraft).toHaveBeenCalledWith('d1');
+    expect(await screen.findByRole('button', { name: 'Send' })).toBeEnabled();
+  });
+
+  it('preserves the draft on a failed original lookup and allows restoring an empty subject on retry', async () => {
+    const draft = {
+      id: 'd1', accountId: 'account-1', replyToMessageId: 'original', status: 'approved', sendVia: 'api',
+      subject: 'Legacy replacement', body: 'Stored body',
+    };
+    getMessageDrafts.mockResolvedValueOnce([draft]);
+    getMessageDetail.mockRejectedValueOnce(new Error('Example read failure'));
+    getMessageDetail.mockResolvedValueOnce({ id: 'original', accountId: 'account-1', subject: '' });
+    updateMessageDraft.mockResolvedValueOnce({ ...draft, subject: '', status: 'draft' });
+    render(<DraftsTab accounts={[{ id: 'account-1', name: 'Draft account', type: 'gmail' }]} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    const restore = screen.getByRole('button', { name: 'Restore original subject' });
+    fireEvent.click(restore);
+    expect(restore).toBeDisabled();
+    await waitFor(() => expect(restore).toBeEnabled());
+    const subject = screen.getByRole('textbox', { name: 'Subject' });
+    expect(subject).toHaveValue(draft.subject);
+    expect(updateMessageDraft).not.toHaveBeenCalled();
+    fireEvent.click(restore);
+    await waitFor(() => expect(subject).toHaveValue(''));
+    expect(updateMessageDraft).toHaveBeenCalledWith('d1', { subject: '' });
+  });
+
+  it.each([
+    ['gmail', 'api', 'original', 'new@example.com, , other@example.com ', ['new@example.com', 'other@example.com']],
+    ['outlook', 'playwright', null, '', []],
+  ])('shows every recipient and saves Cc changes on %s drafts', async (type, sendVia, replyToMessageId, input, cc) => {
+    const draft = {
+      id: 'd1', accountId: 'acc1', status: 'approved', sendVia, replyToMessageId,
+      subject: 'Example mail', body: 'Example message', to: ['one@example.com', 'two@example.com'],
+      cc: ['old@example.com', 'second@example.com'],
+    };
+    getMessageDrafts.mockResolvedValueOnce([draft]);
+    updateMessageDraft.mockResolvedValueOnce({ ...draft, cc, status: 'draft' });
+    render(<DraftsTab accounts={[{ id: 'acc1', type, name: 'Account', canSend: true }]} />);
+
+    expect(await screen.findByRole('button', { name: 'Send' })).toBeEnabled();
+    expect(screen.getByText('To: one@example.com, two@example.com')).toBeVisible();
+    expect(screen.getByText('Cc: old@example.com, second@example.com')).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    const ccField = screen.getByRole('textbox', { name: 'Cc' });
+    expect(ccField).toHaveValue('old@example.com, second@example.com');
+    fireEvent.change(ccField, { target: { value: input } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save draft' }));
+
+    expect(await screen.findByRole('button', { name: 'Approve' })).toBeEnabled();
+    expect(updateMessageDraft).toHaveBeenCalledWith('d1', {
+      to: draft.to, cc, ...(!replyToMessageId && { subject: draft.subject }), body: draft.body,
+    });
+    expect(screen.queryByRole('button', { name: 'Send' })).not.toBeInTheDocument();
+    if (cc.length) {
+      expect(screen.getByText(`Cc: ${cc.join(', ')}`)).toBeVisible();
+    } else {
+      expect(screen.queryByText(/^Cc:/)).not.toBeInTheDocument();
+    }
+  });
+
+  it.each([
+    ['teams', 'playwright', null, true],
+    ['outlook', 'playwright', 'original', true],
+    ['outlook', 'playwright', null, false],
+    ['gmail', 'review', null, true],
+  ])('keeps stored Cc visible and omits its edit for %s %s (reply=%s, canSend=%s)', async (type, sendVia, replyToMessageId, canSend) => {
+    const draft = {
+      id: 'd1', accountId: 'acc1', status: 'draft', sendVia, replyToMessageId,
+      subject: 'Example message', body: 'Old body', to: ['one@example.com'], cc: ['copy@example.com'],
+    };
+    getMessageDrafts.mockResolvedValueOnce([draft]);
+    updateMessageDraft.mockResolvedValueOnce({ ...draft, body: 'Updated body' });
+    render(<DraftsTab accounts={[{ id: 'acc1', type, name: 'Account', canSend }]} />);
+
+    expect(await screen.findByText('Cc: copy@example.com')).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    expect(screen.getByText('Cc: copy@example.com')).toBeVisible();
+    expect(screen.queryByRole('textbox', { name: 'Cc' })).not.toBeInTheDocument();
+    if (type === 'teams') expect(screen.queryByRole('textbox', { name: 'Subject' })).not.toBeInTheDocument();
+    fireEvent.change(screen.getByRole('textbox', { name: 'Body' }), { target: { value: 'Updated body' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save draft' }));
+
+    await screen.findByRole('button', { name: 'Edit' });
+    expect(updateMessageDraft).toHaveBeenCalledWith('d1', {
+      to: draft.to, ...(type !== 'teams' && !replyToMessageId && { subject: draft.subject }), body: 'Updated body',
+    });
+    expect(screen.getByText('Updated body')).toBeVisible();
+    expect(screen.getByText('Cc: copy@example.com')).toBeVisible();
+  });
+
   it('expands a clamped sendable body and leaves copy-only drafts fully visible', async () => {
     const longBody = 'Line one\nLine two\nLine three\nLine four that was hidden';
     getMessageDrafts.mockResolvedValue([
@@ -375,5 +523,43 @@ describe('DraftsTab live refresh', () => {
     await act(async () => { socketMock.handlers.get('messages:changed').forEach((fn) => fn()); });
     await waitFor(() => expect(getMessageDrafts).toHaveBeenCalledTimes(2));
     expect(screen.getByText('First')).toBeInTheDocument();
+  });
+
+  it('ignores a stale out-of-order fetch response after a newer live refresh resolves', async () => {
+    const first = Promise.withResolvers();
+    const second = Promise.withResolvers();
+    getMessageDrafts
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
+
+    render(<DraftsTab accounts={[]} />);
+    await waitFor(() => expect(getMessageDrafts).toHaveBeenCalledTimes(1));
+
+    await act(async () => { socketMock.handlers.get('messages:draft:sent').forEach((fn) => fn()); });
+    await waitFor(() => expect(getMessageDrafts).toHaveBeenCalledTimes(2));
+
+    await act(async () => second.resolve([{ id: 'd1', status: 'sent', subject: 'Sent draft' }]));
+    expect(screen.getByText('sent')).toBeInTheDocument();
+
+    await act(async () => first.resolve([{ id: 'd1', status: 'approved', subject: 'Stale draft' }]));
+    expect(screen.getByText('sent')).toBeInTheDocument();
+    expect(screen.queryByText('Stale draft')).not.toBeInTheDocument();
+  });
+
+  it('prevents duplicate approve requests while approval is in flight', async () => {
+    const pending = Promise.withResolvers();
+    const draft = { id: 'd1', status: 'draft', sendVia: 'api', subject: 'Pending approve', body: 'Hello' };
+    getMessageDrafts.mockResolvedValueOnce([draft]);
+    approveMessageDraft.mockReturnValueOnce(pending.promise);
+
+    render(<DraftsTab accounts={[]} />);
+    const approveBtn = await screen.findByRole('button', { name: 'Approve' });
+    fireEvent.click(approveBtn);
+    fireEvent.click(approveBtn);
+    expect(approveMessageDraft).toHaveBeenCalledTimes(1);
+    expect(approveBtn).toBeDisabled();
+
+    await act(async () => pending.resolve({ ...draft, status: 'approved' }));
+    expect(await screen.findByText('approved')).toBeInTheDocument();
   });
 });

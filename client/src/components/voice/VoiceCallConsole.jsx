@@ -1,111 +1,291 @@
-import { useState } from 'react';
-import { AudioLines, Mic, MicOff, PhoneOff, Play, ScanFace, Send, Square } from 'lucide-react';
-import VoiceCallPortrait from './VoiceCallPortrait';
-import VoiceCallGenerativePortrait from './VoiceCallGenerativePortrait';
-import { useAvatarMode } from './useAvatarMode';
+import { useEffect, useState } from 'react';
+import { AudioLines, Brain, ChevronDown, ChevronUp, Radio, ScanFace, Timer, Trash2, Video } from 'lucide-react';
+import { voiceModelDisplayName } from '../../../../server/lib/voiceModelCatalog.js';
+import AvatarChannelsPanel from './AvatarChannelsPanel';
+import AvatarRuntimeSettings from './AvatarRuntimeSettings';
+import RealtimeCallPanel from './RealtimeCallPanel';
+import SatPhoneHandset from './SatPhoneHandset';
+import VoiceImageChips from './VoiceImageChips';
+import ChannelBrainPicker from './ChannelBrainPicker';
+import { useAvatarRuntime } from './useAvatarRuntime';
+import { activeChannelOf, channelLlm, useAvatarLibrary } from './useAvatarLibrary';
 import { safeReadStorage, safeWriteStorage } from '../../lib/safeStorage';
+import useVoiceLlmResidency from '../../hooks/useVoiceLlmResidency';
+import { voiceLlmResidencyBadge } from './voiceLlmResidencyBadge';
+import { mergeTimingLines, useVoiceTimingLog } from './useVoiceTimingLog';
+import { formatClockTime } from '../../utils/formatters';
 
-const DISPLAY_KEY = 'portos.voice.callDisplay';
-const control = 'inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-port-border bg-port-bg px-3 py-2 text-sm font-semibold hover:border-port-accent disabled:opacity-50';
-const STATUS = {
-  idle: 'Standby',
-  listening: 'Listening',
-  handsfree: 'Mic open',
-  capturing: 'Listening',
-  thinking: 'Thinking',
-  speaking: 'Speaking',
-};
 
-function TransmissionLog({ history, scrollRef }) {
+const TAB_KEY = 'portos.voice.callTab';
+const TABS = ['video', 'brain', 'avatars', 'realtime'];
+
+/**
+ * Station settings as compact disclosure chips instead of stacked cards,
+ * so the handset and log stay above the fold on a phone. Each chip carries its
+ * live status and opens one panel at a time; tapping the open chip folds it.
+ */
+function StationTabs({ runningAvatar, llmProvider, llmModel, llmResidency, onLlmSaved, agentDefaults, avatarData, avatarError, onUpdateAvatarData, onRefetchAvatar }) {
+  const [tab, setTab] = useState(() => {
+    const saved = safeReadStorage(TAB_KEY);
+    return saved === 'none' ? null : TABS.includes(saved) ? saved : 'video';
+  });
+  const [realtimeMounted, setRealtimeMounted] = useState(() => tab === 'realtime');
+  const { data: library } = useAvatarLibrary();
+  const choose = (next) => {
+    const value = tab === next ? null : next;
+    if (value === 'realtime') setRealtimeMounted(true);
+    safeWriteStorage(TAB_KEY, value || 'none');
+    setTab(value);
+  };
+  const videoStatus = runningAvatar ? 'Live' : 'Still portrait';
+  const channel = activeChannelOf(library);
+  const avatarsStatus = channel ? `CH${channel.index + 1} on air` : 'Channels';
+  const brain = channelLlm(channel, llmProvider, llmModel);
+  const brainModel = brain.model !== 'auto' ? voiceModelDisplayName(brain.model) : `${brain.provider} (auto)`;
+  const residencyBadge = voiceLlmResidencyBadge(llmResidency);
+  const brainStatus = residencyBadge ? `${brainModel} · ${residencyBadge.short}` : brainModel;
+  const tabs = [
+    { id: 'video', label: 'Video feed', status: videoStatus, Icon: Video, led: runningAvatar ? 'bg-port-accent shadow-[0_0_6px_rgb(var(--port-accent))]' : 'bg-port-success' },
+    { id: 'brain', label: 'Voice brain', status: brainStatus, Icon: Brain, led: residencyBadge?.led },
+    { id: 'avatars', label: 'Channels', status: avatarsStatus, Icon: ScanFace },
+    { id: 'realtime', label: 'Realtime voice', status: 'Speech to speech', Icon: AudioLines },
+  ];
+
   return (
-    <section className="min-w-0 rounded-xl border border-port-border bg-port-bg px-4 py-3">
-      <h2 className="font-mono text-xs font-semibold uppercase tracking-widest text-port-text-muted">Transmission log</h2>
-      <div ref={scrollRef} className="mt-2 max-h-52 overflow-y-auto">
-        <div role="log" aria-label="Transmission log" className="space-y-2 break-words text-sm">
-          {history.length === 0 && <p className="text-port-text-muted">Your conversation will appear here.</p>}
-          {history.map((turn, i) => (
-            <p key={i}><span className="mr-2 font-mono text-xs uppercase text-port-text-muted">{turn.role === 'user' ? 'You' : 'Agent'}</span>{turn.text}</p>
-          ))}
-        </div>
+    <div className="flex min-w-0 flex-col gap-2">
+      <div role="group" aria-label="Station settings" className="grid grid-cols-[repeat(auto-fit,minmax(8.5rem,1fr))] gap-2">
+        {tabs.map(({ id, label, status, Icon, led }) => (
+          <button
+            key={id}
+            type="button"
+            aria-expanded={tab === id}
+            aria-controls={tab === id ? `station-panel-${id}` : undefined}
+            onClick={() => choose(id)}
+            className={`flex min-h-11 min-w-0 items-center gap-2 rounded-xl border px-2.5 py-1.5 text-left transition-colors ${
+              tab === id ? 'border-port-accent bg-port-accent/10' : 'border-port-border bg-port-card hover:border-port-accent'
+            }`}
+          >
+            <Icon size={14} aria-hidden="true" className="shrink-0 text-port-accent" />
+            <span className="min-w-0 flex-1">
+              <span className="block font-mono text-[10px] uppercase tracking-[0.14em] text-port-text-muted">{label}</span>
+              <span className="flex items-center gap-1.5 font-mono text-xs font-semibold text-port-text">
+                {led && <span aria-hidden="true" className={`h-1.5 w-1.5 shrink-0 rounded-full ${led}`} />}
+                <span className="truncate" title={status}>{status}</span>
+              </span>
+            </span>
+            {tab === id ? <ChevronUp size={14} aria-hidden="true" className="shrink-0 text-port-text-muted" /> : <ChevronDown size={14} aria-hidden="true" className="shrink-0 text-port-text-muted" />}
+          </button>
+        ))}
       </div>
-    </section>
+
+      {tab === 'video' && (
+        <div id="station-panel-video">
+          <AvatarRuntimeSettings data={avatarData} error={avatarError} updateData={onUpdateAvatarData} refetch={onRefetchAvatar} compact />
+        </div>
+      )}
+      {tab === 'brain' && (
+        <div id="station-panel-brain">
+          <ChannelBrainPicker compact globalProvider={llmProvider} globalModel={llmModel} residency={llmResidency} onGlobalSaved={onLlmSaved} />
+        </div>
+      )}
+      {tab === 'avatars' && (
+        <div id="station-panel-avatars">
+          <AvatarChannelsPanel agentDefaults={{ ...agentDefaults, provider: llmProvider, model: llmModel }} />
+        </div>
+      )}
+      {realtimeMounted && (
+        <div id="station-panel-realtime" hidden={tab !== 'realtime'}>
+          <RealtimeCallPanel compact />
+        </div>
+      )}
+    </div>
   );
 }
 
 export default function VoiceCallConsole({
   stage, history, scrollRef, interimTranscript, capturing, handsFree, canChangeMicMode,
-  draft, onDraft, onSend, onMic, onMode, onInterrupt, onEnd, onSample, voiceLabel,
+  hotkey, draft, onDraft, onSend, onMic, onMode, onInterrupt, onEnd, onClear,
+  voiceLabel, llmProvider, llmModel, onLlmSaved, agentDefaults, volume = 0.85, muted = false, onVolumeChange, onToggleMute,
+  sfxEnabled = true, onToggleSfx, signalLevel = 0, visionEnabled = false, onToggleVision, images,
 }) {
-  const [avatar, setAvatar] = useState(() => safeReadStorage(DISPLAY_KEY) !== 'audio');
-  const generativeAvatar = useAvatarMode();
-  const Portrait = generativeAvatar ? VoiceCallGenerativePortrait : VoiceCallPortrait;
-  const caption = interimTranscript || history.at(-1)?.text;
-  const openMic = handsFree || !canChangeMicMode;
-  const micText = capturing ? (openMic ? 'Close mic' : 'Send voice') : (openMic ? 'Open mic' : 'Talk');
-  const MicIcon = capturing ? MicOff : Mic;
-
-  const toggleAvatar = () => {
-    safeWriteStorage(DISPLAY_KEY, avatar ? 'audio' : 'avatar');
-    setAvatar(!avatar);
+  const { data, error, updateData, refetch } = useAvatarRuntime(true, { autoStart: true });
+  const runningAvatar = Boolean(!error && data?.supported && data.phase === 'running');
+  // The on-air channel may run its own LLM; the server reads the same channel.
+  const { data: library } = useAvatarLibrary();
+  const onAirLlm = channelLlm(activeChannelOf(library), llmProvider, llmModel);
+  const llmResidency = useVoiceLlmResidency({ provider: onAirLlm.provider, model: onAirLlm.model, stage });
+  const timing = useVoiceTimingLog();
+  const rows = mergeTimingLines(history, timing.enabled ? timing.lines : []);
+  const hasRows = rows.length > 0;
+  // The widget scrolls on new turns; timing lines arrive between them.
+  const timingCount = timing.lines.length;
+  useEffect(() => {
+    if (timingCount && scrollRef?.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+  }, [timingCount, scrollRef]);
+  const clearLog = () => {
+    timing.clear();
+    if (history.length) onClear?.();
   };
 
   return (
-    <section data-voice-widget aria-label="PortOS call console"
-      className="space-y-3 rounded-2xl border border-port-border bg-port-card p-3 text-port-text shadow-xl sm:p-4">
-      <header className="flex flex-wrap items-center justify-between gap-2">
-        <p className="font-mono text-xs font-bold uppercase tracking-widest">PortOS<span className="ml-2 font-normal text-port-text-muted">Transceiver</span></p>
-        <p role="status" className="flex items-center gap-2 rounded-full border border-port-border px-2.5 py-1 font-mono text-xs">
-          <span aria-hidden="true" className={`h-1.5 w-1.5 rounded-full ${stage === 'idle' ? 'bg-port-text-muted' : 'bg-port-success'}`} />
-          {STATUS[stage] || STATUS.idle}
-        </p>
-      </header>
-
-      <div className="relative isolate grid min-h-52 grid-rows-[minmax(9rem,1fr)_auto] overflow-hidden rounded-xl border border-port-border bg-port-bg p-3 sm:min-h-64">
-        <div aria-hidden="true" className="pointer-events-none absolute inset-0 -z-10 bg-[repeating-linear-gradient(transparent_0px,transparent_3px,currentColor_4px)] text-port-accent opacity-[0.08]" />
-        <div className="min-w-0 place-self-center">
-          {avatar ? <Portrait speaking={stage === 'speaking'} /> : <AudioLines aria-hidden="true" size={64} className="text-port-accent" />}
-        </div>
-        <p aria-hidden="true" className="line-clamp-2 min-h-12 break-words rounded-md border-l-2 border-port-accent bg-port-card px-3 py-2 text-sm">
-          {caption || 'Ready when you are.'}
-        </p>
+    <section
+      data-voice-widget
+      aria-label="PortOS call console"
+      className="grid grid-cols-1 gap-5 lg:grid-cols-[minmax(20rem,23.5rem)_minmax(0,1fr)] lg:items-start"
+    >
+      {/* Left column: Hero Video-Enabled Satellite Phone Handset */}
+      <div className="mx-auto w-full max-w-[23.5rem] lg:mx-0">
+        <SatPhoneHandset
+          variant="page"
+          stage={stage}
+          history={history}
+          scrollRef={scrollRef}
+          interimTranscript={interimTranscript}
+          capturing={capturing}
+          handsFree={handsFree}
+          canChangeMicMode={canChangeMicMode}
+          hotkey={hotkey}
+          draft={draft}
+          onDraft={onDraft}
+          onSend={onSend}
+          onMic={onMic}
+          onMode={onMode}
+          onInterrupt={onInterrupt}
+          onEnd={onEnd}
+          onClear={onClear}
+          voiceLabel={voiceLabel}
+          llmProvider={llmProvider}
+          llmModel={llmModel}
+          llmResidency={llmResidency}
+          onLlmSaved={onLlmSaved}
+          avatarData={data}
+          avatarError={error}
+          onUpdateAvatarData={updateData}
+          onRefetchAvatar={refetch}
+          runningAvatar={runningAvatar}
+          volume={volume}
+          muted={muted}
+          onVolumeChange={onVolumeChange}
+          onToggleMute={onToggleMute}
+          sfxEnabled={sfxEnabled}
+          onToggleSfx={onToggleSfx}
+          signalLevel={signalLevel}
+          visionEnabled={visionEnabled}
+          onToggleVision={onToggleVision}
+          images={images}
+        />
       </div>
 
-      <div className="flex flex-wrap items-center gap-2 font-mono text-xs text-port-text-muted">
-        <span className="min-w-0 max-w-full break-words">Voice: {voiceLabel || 'Use saved settings'}</span>
-        <button type="button" onClick={toggleAvatar} aria-pressed={avatar} className={`ml-auto ${control}`}>
-          <ScanFace size={16} aria-hidden="true" /> Avatar <span aria-hidden="true">{avatar ? 'on' : 'off'}</span>
-        </button>
-      </div>
+      {/* Right column: station settings tabs + transmission log */}
+      <div className="flex min-w-0 flex-col gap-4">
+        <StationTabs
+          runningAvatar={runningAvatar}
+          llmProvider={llmProvider}
+          llmModel={llmModel}
+          llmResidency={llmResidency}
+          onLlmSaved={onLlmSaved}
+          agentDefaults={{ ...agentDefaults, voiceLabel }}
+          avatarData={data}
+          avatarError={error}
+          onUpdateAvatarData={updateData}
+          onRefetchAvatar={refetch}
+        />
 
-      <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
-        <button type="button" onClick={onMic} aria-pressed={capturing}
-          className={`${control} border-port-accent/50 text-port-accent`}>
-          <MicIcon size={16} aria-hidden="true" /> {micText}
-        </button>
-        {canChangeMicMode && (
-          <button type="button" className={control} onClick={onMode} aria-pressed={handsFree}>
-            Hands-free
-          </button>
-        )}
-        <button type="button" className={control} onClick={onSample} disabled={stage !== 'idle'}>
-          <Play size={15} aria-hidden="true" /> Play sample
-        </button>
-        {stage === 'speaking' && (
-          <button type="button" className={control} onClick={onInterrupt}>
-            <Square size={14} aria-hidden="true" /> Interrupt
-          </button>
-        )}
-        <button type="button" className={`${control} text-port-error sm:ml-auto`} onClick={onEnd} disabled={stage === 'idle'}>
-          <PhoneOff size={16} aria-hidden="true" /> End
-        </button>
+        {/* Transmission log (the composer lives on the handset) */}
+        <section className="flex min-w-0 flex-col gap-3 rounded-2xl border border-port-border bg-port-card p-3.5 text-port-text sm:p-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2 min-w-0">
+              <Radio size={15} aria-hidden="true" className="shrink-0 text-port-accent" />
+              <h2 className="font-mono text-xs font-semibold uppercase tracking-[0.14em] text-port-text">
+                Transmission log
+              </h2>
+              {history.length > 0 && (
+                <span className="rounded border border-port-border bg-port-bg px-1.5 py-0.5 font-mono text-[10px] text-port-text-muted">
+                  {history.length}
+                </span>
+              )}
+            </div>
+
+            <div className="flex flex-wrap items-center gap-1.5">
+              <button
+                type="button"
+                onClick={timing.toggle}
+                aria-pressed={timing.enabled}
+                title={timing.enabled ? 'Hide stage timings' : 'Show stage timings'}
+                aria-label="Stage timings"
+                className={`satphone-key inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg border px-2.5 ${
+                  timing.enabled ? 'border-port-accent text-port-accent' : 'text-port-text-muted hover:text-port-text'
+                }`}
+              >
+                <Timer size={14} aria-hidden="true" />
+              </button>
+              {hasRows && onClear && (
+                <button
+                  type="button"
+                  onClick={clearLog}
+                  title="Clear transmission log"
+                  aria-label="Clear transmission log"
+                  className="satphone-key inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg border px-2.5 text-port-text-muted hover:text-port-error-text"
+                >
+                  <Trash2 size={14} aria-hidden="true" />
+                </button>
+              )}
+            </div>
+          </div>
+
+          <div
+            ref={scrollRef}
+            className="satphone-log-well min-h-48 max-h-96 overflow-y-auto rounded-xl border p-3.5"
+          >
+            <div
+              role="log"
+              aria-live="polite"
+              aria-label="Transmission log"
+              className="space-y-2.5 break-words font-mono text-xs leading-relaxed sm:text-sm"
+            >
+              {!hasRows && !interimTranscript && (
+                <p className="opacity-65">
+                  Channel quiet. Press the TALK paddle or type on the handset.
+                </p>
+              )}
+              {rows.map(({ turn, timing: line }, i) => (line ? (
+                <p key={i} className="text-[10px] leading-snug text-port-text-muted sm:text-[11px]">
+                  <span className="tabular-nums">{formatClockTime(line.at, { milliseconds: true })}</span>
+                  {' '}
+                  <span className="tabular-nums text-port-accent">{line.ms === null ? '' : `+${line.ms}ms`}</span>
+                  {' '}
+                  <span className="uppercase">{line.source === 'server' ? 'srv' : 'app'}</span>
+                  {' '}
+                  {line.label}
+                </p>
+              ) : (
+                <div key={i} className={turn.role === 'user' ? 'opacity-80' : ''}>
+                  <span
+                    className={`mr-2 inline-block rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider ${
+                      turn.role === 'user'
+                        ? 'bg-port-accent-2/15 text-port-accent-2-text'
+                        : 'bg-port-accent/15 text-port-accent-text'
+                    }`}
+                  >
+                    {turn.role === 'user' ? 'You' : 'Agent'}
+                  </span>
+                  {turn.text}
+                  <VoiceImageChips images={turn.images} className="mt-1" />
+                </div>
+              )))}
+            </div>
+            {interimTranscript && (
+              <p aria-hidden="true" className="mt-2 font-mono text-xs italic opacity-70">
+                <span className="mr-2 rounded bg-port-accent-2/15 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-port-accent-2-text">
+                  You…
+                </span>
+                {interimTranscript}
+              </p>
+            )}
+          </div>
+
+        </section>
       </div>
-      <form className="flex min-w-0 gap-2" onSubmit={(event) => { event.preventDefault(); onSend(); }}>
-        <input type="text" aria-label="Message to the voice assistant" value={draft}
-          onChange={(event) => onDraft(event.target.value)} placeholder="Type a message…"
-          className="min-w-0 flex-1 rounded-lg border border-port-border bg-port-bg px-3 text-sm focus:border-port-accent" />
-        <button type="submit" disabled={!draft.trim()} className={control}><Send size={15} aria-hidden="true" /> Send</button>
-      </form>
-      <TransmissionLog history={history} scrollRef={scrollRef} />
     </section>
   );
 }

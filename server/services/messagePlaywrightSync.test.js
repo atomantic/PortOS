@@ -69,10 +69,10 @@ describe('testSelectors', () => {
     expect(querySelectorAll).toHaveBeenCalledWith(selector);
   });
 
-  it('tests the saved list override without looking for compose controls on the list page', async () => {
+  it('tests the saved list override without looking for compose controls or patterns on the list page', async () => {
     findOrOpenPage.mockResolvedValue(OPEN_PAGE);
     tryReadFile.mockResolvedValue(JSON.stringify({
-      teams: { messageItem: '.chat-row', composeSend: '.send-button', sendAckPattern: 'sent' },
+      teams: { messageItem: '.chat-row', composeSend: '.send-button', sendAckPattern: 'sent', sendRefusalPattern: 'try again' },
     }));
     evaluateOnPage.mockResolvedValue(3);
 
@@ -304,7 +304,7 @@ describe('Outlook configured row extraction', () => {
     mailbox([[record('unrelated')]], { selector: defaultSelector });
     tryReadFile.mockResolvedValue(JSON.stringify({ outlook: { messageRow: '[' } }));
     expect(await testSelectors('outlook')).toMatchObject({ status: 'partial', results: { messageRow: { matches: 0, error: expect.stringContaining('Invalid Outlook') } } });
-    expect(await syncPlaywright(account, { messages: [] })).toMatchObject({ status: 'extraction-failed', messages: [], error: expect.stringContaining('Messages > Sync') });
+    expect(await syncPlaywright(account, { messages: [] })).toMatchObject({ status: 'extraction-failed', messages: [], error: expect.stringContaining('Comms → Sync') });
     expect(await refreshMessageDetail(account, { providerRowId: 'unrelated' })).toMatchObject({ error: 'invalid-selector' });
   });
 
@@ -373,7 +373,7 @@ describe('sendPlaywright', () => {
   it('answers a cached Outlook message by its provider row id and sends to its sender', async () => {
     scriptBrowser({ fill: { ok: true, subjectOk: true, bodyOk: true, to: ['bob@example.com'], cc: [] } });
     const replyTarget = { providerRowId: 'row-1', subject: 'Example', from: { name: 'Bob Example', email: 'bob@example.com' } };
-    const result = await sendPlaywright(outlook, draft({ to: [], replyToMessageId: 'msg-1' }), { replyTarget });
+    const result = await sendPlaywright(outlook, draft({ to: [], replyToMessageId: 'msg-1', subject: 'Re: Example' }), { replyTarget });
     expect(result).toEqual({ success: true, confirmed: true });
     const openScript = evaluateOnPage.mock.calls.find(([, script]) => phaseOf(script) === 'open')[1];
     expect(openScript).toContain('"providerRowId":"row-1"');

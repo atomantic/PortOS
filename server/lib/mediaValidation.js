@@ -266,6 +266,8 @@ export const localLlmMtplxPullSchema = z.object({
 });
 // Removal always names a checkpoint — there is no "remove whatever is cached".
 export const localLlmMtplxRemoveSchema = z.object({ model: mtplxRepoIdSchema });
+// Start llama-server with PortOS (replays the last explicit launch line at boot).
+export const localLlmLlamaAutoStartSchema = z.object({ enabled: z.boolean() }).strict();
 export const localLlmLlamaServerStartSchema = z.object({
   model: z.string().trim().min(1).max(500),
   draftModel: z.string().trim().max(500).optional().nullable(),
@@ -553,3 +555,11 @@ export const mediaAnnotationsQuerySchema = z.object({
 export const mediaCollectionPrimarySchema = z.object({
   instanceId: z.string().trim().min(1).max(128),
 }).strict();
+
+// Validation schemas
+export const startMediaSchema = z.object({
+  videoDeviceId: z.string().optional(),
+  audioDeviceId: z.string().optional(),
+  video: z.boolean().default(true),
+  audio: z.boolean().default(true)
+});

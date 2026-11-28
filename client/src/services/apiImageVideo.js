@@ -202,11 +202,13 @@ export const previewImagePrompt = (body, options = {}) => request('/image-gen/pr
 // response; abort/network rejections propagate so the caller can inspect them.
 export async function checkImageGenSetup({ pythonPath, signal } = {}) {
   const res = await fetch(`/api/image-gen/setup/check?pythonPath=${encodeURIComponent(pythonPath)}`, { signal });
+  if (res.status === 401) await throwApiError(res);
   return res.ok ? res.json() : null;
 }
 
 export async function detectImageGenPython() {
   const res = await fetch('/api/image-gen/setup/python');
+  if (res.status === 401 || res.status === 403) await throwApiError(res);
   return res.ok ? res.json() : null;
 }
 
@@ -216,9 +218,8 @@ export async function createImageGenVenv() {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({}),
   });
-  if (res.ok) return res.json();
-  const json = await res.json().catch(() => ({}));
-  throw new Error(json.error || 'Venv creation failed');
+  if (!res.ok) await throwApiError(res);
+  return res.json();
 }
 
 // Video gen

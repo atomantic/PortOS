@@ -12,7 +12,7 @@ export default function useRuntimeDownloadProgress(eventName, onSettled) {
   useEffect(() => {
     const receive = (frame) => {
       if (!frame) return;
-      if (['complete', 'error', 'cancelled'].includes(frame.event)) {
+      if (['complete', 'error', 'canceled', 'cancelled'].includes(frame.event)) {
         setDownload(null);
         settled.current();
         return;

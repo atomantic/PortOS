@@ -173,7 +173,7 @@ export function buildAgentRegistration({
     jiraInstanceId: task.metadata?.jiraInstanceId || null,
     jiraCreatePR: task.metadata?.jiraCreatePR ?? null,
     configOpenPR: isTruthyMeta(task.metadata?.openPR),
-    // Which memories steered this run's prompt ([{ id, version, relevance }]); empty when none, absent on older records.
+    // Which memories steered this run's prompt ([{ id, version, relevance, preview }]); empty when none, absent on older records.
     injectedMemories,
     // Claim prompts own their external claim/<item> worktree and forge lifecycle even though CoS keeps configOpenPR/
     // configUseWorktree off (no nested worktree); kept distinct so diagnostics don't mistake it for a commit-only handoff.

@@ -73,6 +73,19 @@ const makeApp = () => {
 describe('FableLoom routes', () => {
   beforeEach(() => vi.clearAllMocks());
 
+  it('returns the legacy list or a page when requested', async () => {
+    const records = [{ id: 'first' }, { id: 'second' }, { id: 'third' }];
+    fableLoom.listLoomSummaries.mockResolvedValueOnce(records).mockResolvedValueOnce(records);
+    const list = await request(makeApp()).get('/api/fableloom?seriesId=series-1');
+    expect(list.status).toBe(200);
+    expect(list.body).toEqual(records);
+    const page = await request(makeApp()).get('/api/fableloom?seriesId=series-1&limit=1&offset=1');
+    expect(page.status).toBe(200);
+    expect(page.body).toEqual({ items: [records[1]], total: 3, limit: 1, offset: 1 });
+    expect(fableLoom.listLoomSummaries).toHaveBeenLastCalledWith({ seriesId: 'series-1' });
+    expect((await request(makeApp()).get('/api/fableloom?limit=1&limit=2')).status).toBe(400);
+  });
+
   it('GET /?seriesId= scopes the list to one series', async () => {
     fableLoom.listLoomSummaries.mockResolvedValueOnce([{ id: 'loom-1', seriesId: 'ser-1' }]);
     const response = await request(makeApp()).get('/api/fableloom?seriesId=ser-1');
@@ -517,6 +530,26 @@ describe('FableLoom routes', () => {
         .send({ audioTarget: 'host' });
       expect(res.status).toBe(201);
       expect(fableLoom.createHostedSession).toHaveBeenCalledWith('loom-1', 'ep-1', { audioTarget: 'host' });
+    });
+
+    it('POST host forwards ownerSessionId from authenticated session context', async () => {
+      fableLoom.createHostedSession.mockResolvedValueOnce({ session: { id: 'sess-2' }, token: 'def' });
+      const app = express();
+      app.use(express.json());
+      app.use((req, _res, next) => {
+        req.portosAuthContext = { enabled: true, authenticated: true, method: 'session', sessionId: 'op-sess-1' };
+        next();
+      });
+      app.use('/api/fableloom', routes);
+      app.use(errorMiddleware);
+      const res = await request(app)
+        .post('/api/fableloom/loom-1/episodes/ep-1/sessions/host')
+        .send({ audioTarget: 'host' });
+      expect(res.status).toBe(201);
+      expect(fableLoom.createHostedSession).toHaveBeenCalledWith('loom-1', 'ep-1', {
+        audioTarget: 'host',
+        ownerSessionId: 'op-sess-1',
+      });
     });
 
     it('GET sessions/:sessionId retrieves session or 404s', async () => {

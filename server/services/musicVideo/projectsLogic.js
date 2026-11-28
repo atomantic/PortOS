@@ -29,3 +29,7 @@ export {
   mergeNextScene,
   mergePreviousScene,
 } from './sceneListLogic.js';
+
+// Archived review evidence is only needed by full reads. Keep the current
+// approvals, draft and proof for readiness and list presentation.
+export const summaryReadOmissions = { field: 'productionReview', keys: ['reviewedRevisions', 'approvalHistory'] };

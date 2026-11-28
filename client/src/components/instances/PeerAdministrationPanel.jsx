@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { ChevronDown, ChevronRight, Shield } from 'lucide-react';
 import {
   getPeerAdminSetup,
   savePeerAdminGrant,
@@ -68,12 +69,17 @@ function Controls({ peer }) {
     finally { if (mounted.current) setBusy(false); }
   };
 
-  return <section className="border-t border-port-border pt-3 mt-3 text-sm">
+  return <section className="mt-2 pt-2 border-t border-port-border/50 text-xs">
     <button type="button" aria-expanded={expanded} disabled={busy}
-      className="min-h-[44px] text-port-accent" onClick={() => { setExpanded(value => !value); setConfirmation(null); }}>
-      Peer administration
+      className="flex items-center gap-1.5 w-full text-left group py-1.5 pointer-coarse:min-h-11 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-port-accent rounded"
+      onClick={() => { setExpanded(value => !value); setConfirmation(null); }}>
+      {expanded ? <ChevronDown size={12} className="text-gray-500 shrink-0" /> : <ChevronRight size={12} className="text-gray-500 shrink-0" />}
+      <Shield size={12} className="text-gray-500 shrink-0" />
+      <span className="text-[10px] text-gray-500 uppercase tracking-wider font-medium group-hover:text-gray-400 transition-colors">
+        Peer administration
+      </span>
     </button>
-    {expanded && <div className="space-y-3">
+    {expanded && <div className="mt-2 space-y-3 text-sm">
       <p className="text-gray-400">Planning previews never queue work or interrupt active jobs. Execution requires a separate local permission on the receiving host.</p>
       {error && <p role="alert" className="text-port-error">{error}</p>}
       {setup && <>
@@ -85,12 +91,13 @@ function Controls({ peer }) {
         {!setup.paired && <p className="text-port-warning">Enable and pair this peer locally before granting planning access.</p>}
         {setup.actions.map(row => <div key={row.action} className="flex flex-wrap items-center justify-between gap-2">
           <span>{LABELS[row.action]} — {row.active ? `Planning allowed · expires ${timeUntil(row.grant.expiresAt)}` : 'Denied'}</span>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <button type="button" disabled={busy || !setup.paired}
-              className="min-h-[44px] text-port-accent disabled:opacity-50"
+              className="min-h-[44px] inline-flex items-center rounded border border-port-accent/40 bg-port-accent/10 px-2.5 py-1 text-xs text-port-accent hover:bg-port-accent/20 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-port-accent transition-colors disabled:opacity-50"
               onClick={() => setConfirmation({ action: row.action, allow: true, grantId: row.grant?.id ?? null })}>Review {row.active ? 'renewal' : 'grant'}</button>
             {row.grant?.allowed && <button type="button" disabled={busy}
-              className="min-h-[44px] text-port-warning" onClick={() => setConfirmation({ action: row.action, allow: false, grantId: row.grant?.id ?? null })}>Revoke {LABELS[row.action]}</button>}
+              className="min-h-[44px] inline-flex items-center rounded border border-port-warning/40 bg-port-warning/10 px-2.5 py-1 text-xs text-port-warning hover:bg-port-warning/20 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-port-accent transition-colors"
+              onClick={() => setConfirmation({ action: row.action, allow: false, grantId: row.grant?.id ?? null })}>Revoke {LABELS[row.action]}</button>}
           </div>
         </div>)}
         {confirmation && <div className="rounded border border-port-border p-3 space-y-2">
@@ -101,9 +108,9 @@ function Controls({ peer }) {
         <div className="border-t border-port-border pt-3 space-y-2">
           <p className="font-medium">Preview requirements on the remote peer</p>
           <p className="text-gray-400">The receiving peer needs its own local planning grant for this host. A preview creates a short-lived plan receipt; it starts nothing.</p>
-          <div className="flex flex-wrap gap-3">
+          <div className="flex flex-wrap gap-2">
             {['portos.update', 'portos.restart'].map(action => <button key={action} type="button" disabled={busy || !setup.paired}
-              className="min-h-[44px] text-port-accent disabled:opacity-50" onClick={() => inspect(action)}>Preview {LABELS[action]}</button>)}
+              className="min-h-[44px] inline-flex items-center rounded border border-port-accent/40 bg-port-accent/10 px-2.5 py-1 text-xs text-port-accent hover:bg-port-accent/20 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-port-accent transition-colors disabled:opacity-50" onClick={() => inspect(action)}>Preview {LABELS[action]}</button>)}
           </div>
           <p className="text-xs text-gray-400">Catalog install plans are API-only while the local source, license and destination checks are being integrated.</p>
           {preview && <div role="status" className="rounded bg-port-bg p-3 space-y-1 break-all">
@@ -196,10 +203,10 @@ function ExecutionControls({ peer, setup, onSetup }) {
     <p className="text-gray-400">Execution permission is separate from planning and applies only to the receiving host and paired caller identities above. Each action is denied until explicitly granted here. Active work must drain before maintenance can run.</p>
     {execution.actions.map(row => <div key={row.action} className="flex flex-wrap items-center justify-between gap-2">
       <span>{LABELS[row.action]} — {row.active ? `Execution allowed · expires ${timeUntil(row.grant.expiresAt)}` : 'Execution denied'}</span>
-      <div className="flex gap-2">
-        <button type="button" disabled={busy || !setup.paired} className="min-h-[44px] text-port-accent disabled:opacity-50"
+      <div className="flex flex-wrap gap-2">
+        <button type="button" disabled={busy || !setup.paired} className="min-h-[44px] inline-flex items-center rounded border border-port-accent/40 bg-port-accent/10 px-2.5 py-1 text-xs text-port-accent hover:bg-port-accent/20 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-port-accent transition-colors disabled:opacity-50"
           onClick={() => setConfirmation({ action: row.action, allow: true, grantId: row.grant?.id ?? null })}>Review execution {row.active ? 'renewal' : 'grant'} for {LABELS[row.action]}</button>
-        {row.grant?.allowed && <button type="button" disabled={busy} className="min-h-[44px] text-port-warning"
+        {row.grant?.allowed && <button type="button" disabled={busy} className="min-h-[44px] inline-flex items-center rounded border border-port-warning/40 bg-port-warning/10 px-2.5 py-1 text-xs text-port-warning hover:bg-port-warning/20 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-port-accent transition-colors"
           onClick={() => setConfirmation({ action: row.action, allow: false, grantId: row.grant?.id ?? null })}>Revoke execution for {LABELS[row.action]}</button>}
       </div>
     </div>)}
@@ -211,9 +218,9 @@ function ExecutionControls({ peer, setup, onSetup }) {
     <p className="font-medium">Execute on the remote peer</p>
     <p className="text-gray-400">The remote peer must separately grant this host the selected action. Review a fresh signed preview before submitting work.</p>
     {error && <p role="alert" className="text-port-error">{error}</p>}
-    <div className="flex flex-wrap gap-3">
+    <div className="flex flex-wrap gap-2">
       {['portos.update', 'portos.restart'].map(action => <button key={action} type="button" disabled={busy || !setup.paired || unresolved}
-        className="min-h-[44px] text-port-accent disabled:opacity-50" onClick={() => prepare({ action })}>Prepare {LABELS[action]} execution</button>)}
+        className="min-h-[44px] inline-flex items-center rounded border border-port-accent/40 bg-port-accent/10 px-2.5 py-1 text-xs text-port-accent hover:bg-port-accent/20 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-port-accent transition-colors disabled:opacity-50" onClick={() => prepare({ action })}>Prepare {LABELS[action]} execution</button>)}
     </div>
     <PeerCatalogControls hostInstanceId={setup.hostInstanceId} disabled={busy || !setup.paired || Boolean(unresolved)} onPrepare={prepare} />
     {preflight && <div className="rounded border border-port-border p-3 space-y-2 break-all">
@@ -227,7 +234,7 @@ function ExecutionControls({ peer, setup, onSetup }) {
       <p>Execution status: {request.state}</p><p>Request: {request.requestId}</p>
       {request.code && <p>{request.code}</p>}
       {unresolved && <p className="text-port-warning">Keep this request ID. Check status after reconnecting; an unavailable response does not mean the operation failed. Do not submit the action again.</p>}
-      <button type="button" disabled={busy} className="min-h-[44px] text-port-accent disabled:opacity-50" onClick={checkStatus}>Check execution status</button>
+      <button type="button" disabled={busy} className="min-h-[44px] inline-flex items-center rounded border border-port-accent/40 bg-port-accent/10 px-2.5 py-1 text-xs text-port-accent hover:bg-port-accent/20 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-port-accent transition-colors disabled:opacity-50" onClick={checkStatus}>Check execution status</button>
     </div>}
   </div>;
 }

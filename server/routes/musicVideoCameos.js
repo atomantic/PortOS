@@ -1,5 +1,5 @@
+import { cameoParams, variantParams } from '../lib/musicVideoCameosValidation.js';
 import { Router } from 'express';
-import { z } from 'zod';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import {
@@ -13,7 +13,6 @@ import {
   musicVideoCameoVariantCreateSchema,
   musicVideoCameoVariantUpdateSchema,
 } from '../lib/musicVideo/routeValidation/cameos.js';
-import { MUSIC_VIDEO_CAMEO_ID_PATTERN, MUSIC_VIDEO_CAMEO_VARIANT_ID_PATTERN } from '../lib/musicVideo/musicVideoCameos.js';
 import {
   addCameoReferences, addCameoVariant, createCameos, deleteCameo, deleteCameoVariant, linkCameoShots,
   removeCameoReference, unlinkCameoShots, updateCameo, updateCameoVariant, useShotStillForCameo,
@@ -21,9 +20,6 @@ import {
 
 // Music Video cameo roster (#14821): mounted under /api/music-video ahead of the main router.
 const router = Router();
-
-const cameoParams = z.object({ id: z.string().min(1).max(200), cameoId: z.string().regex(MUSIC_VIDEO_CAMEO_ID_PATTERN) }).strict();
-const variantParams = cameoParams.extend({ variantId: z.string().regex(MUSIC_VIDEO_CAMEO_VARIANT_ID_PATTERN) }).strict();
 
 router.post('/:id/cameos', asyncHandler(async (req, res) => {
   const { cameos } = validateRequest(musicVideoCameoCreateSchema, req.body ?? {});

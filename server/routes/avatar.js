@@ -1,5 +1,5 @@
+import { avatarModelQuerySchema } from '../lib/voiceValidation.js';
 import { Router } from 'express';
-import { z } from 'zod';
 import { validateRequest } from '../lib/validateRequest.js';
 import { createReadStream } from 'fs';
 import { stat } from 'fs/promises';
@@ -60,8 +60,9 @@ async function resolveAvatarPath(variant) {
 
 const isRiggedSpelling = (variant) => typeof variant === 'string' && variant.startsWith(RIGGED_VARIANT_PREFIX);
 
-router.head('/model.glb', async (req, res) => {
-  const path = await resolveAvatarPath(req.query.variant);
+router.head('/model.glb', asyncHandler(async (req, res) => {
+  const { variant } = validateRequest(avatarModelQuerySchema, req.query);
+  const path = await resolveAvatarPath(variant);
   if (!path) return res.status(404).end();
   // Single async stat off the event loop, doubling as the existence check —
   // a missing/removed file (TOCTOU) just resolves null → 404.
@@ -71,9 +72,7 @@ router.head('/model.glb', async (req, res) => {
   res.set('Content-Length', String(s.size));
   res.set('Cache-Control', 'public, max-age=60');
   return res.status(200).end();
-});
-
-const avatarModelQuerySchema = z.object({ variant: z.string().optional() });
+}));
 
 router.get('/model.glb', asyncHandler(async (req, res) => {
   const { variant } = validateRequest(avatarModelQuerySchema, req.query);

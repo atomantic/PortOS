@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import useContainerWidth from '../../hooks/useContainerWidth';
+import useKeyCapture from '../../hooks/useKeyCapture';
+import { noPointerFocusSurfaceProps } from '../../lib/a11yKeyboard';
 import { getUsageRollingCost } from '../../services/apiSystem.js';
 import { formatUsd } from '../../utils/formatters';
 import { safeReadStorage, safeWriteStorage } from '../../lib/safeStorage';
@@ -56,6 +58,7 @@ export default function RollingCostCard({ fleetRevision, onReconcile, reconcilin
   const [pins, setPins] = useState([]);
   // Keyboard cursor (a point index): arrows move it, Enter/Space pins it.
   const [cursor, setCursor] = useState(null);
+  const [announcement, setAnnouncement] = useState('');
   const [plotRef, plotWidth] = useContainerWidth();
 
   useEffect(() => {
@@ -95,18 +98,12 @@ export default function RollingCostCard({ fleetRevision, onReconcile, reconcilin
     });
   }, [points, series, top]);
 
-  if (data === null) {
-    return (
-      <div className="bg-port-card border border-port-border rounded-xl p-3 sm:p-4 text-sm text-gray-500">
-        Couldn&rsquo;t read the rolling API cost.
-      </div>
-    );
-  }
-
   const visiblePins = pins.filter((date) => indexByDate.has(date));
   const focusDate = visiblePins.at(-1) ?? points.at(-1)?.date;
   const focus = points[indexByDate.get(focusDate)];
   const today = points.at(-1);
+  const lastIndex = points.length - 1;
+  const cursorIndex = Math.min(cursor ?? lastIndex, lastIndex);
 
   const togglePin = (event) => {
     const box = plotRef.current?.getBoundingClientRect();
@@ -116,31 +113,58 @@ export default function RollingCostCard({ fleetRevision, onReconcile, reconcilin
       .map((date) => ({ date, gap: Math.abs((xPct(indexByDate.get(date)) / 100) * box.width - px) }))
       .sort((a, b) => a.gap - b.gap)[0];
     if (nearest && nearest.gap <= UNPIN_SLOP_PX) {
-      setPins((prev) => prev.filter((d) => d !== nearest.date));
+      updatePin(nearest.date, true);
       return;
     }
-    pinIndex(Math.round(Math.min(1, Math.max(0, px / box.width)) * (points.length - 1)));
+    const index = Math.round(Math.min(1, Math.max(0, px / box.width)) * lastIndex);
+    updatePin(points[index].date, false);
   };
 
-  function pinIndex(index) {
-    const date = points[index].date;
-    setPins((prev) => (prev.includes(date) && cursor === index
-      ? prev.filter((d) => d !== date)
-      : [...prev.filter((d) => d !== date), date]));
+  function updatePin(date, remove) {
+    setPins((prev) => {
+      const otherPins = prev.filter((pinnedDate) => pinnedDate !== date);
+      return remove ? otherPins : [...otherPins, date];
+    });
   }
 
   const onKeyDown = (event) => {
-    const last = points.length - 1;
-    const at = cursor ?? last;
     if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
       event.preventDefault();
-      setCursor(Math.min(last, Math.max(0, at + (event.key === 'ArrowLeft' ? -1 : 1))));
-    } else if (event.key === 'Enter' || event.key === ' ') {
+      const next = Math.min(lastIndex, Math.max(0, cursorIndex + (event.key === 'ArrowLeft' ? -1 : 1)));
+      const { date, cost } = points[next];
+      setCursor(next);
+      setAnnouncement(`${dayLabel(date)}, ${formatUsd(cost)}, ${pins.includes(date) ? 'pinned' : 'not pinned'}`);
+    } else if (event.key === 'Enter') {
       event.preventDefault();
-      setCursor(at);
-      pinIndex(at);
+      toggleCursorPin(event);
     }
   };
+
+  function toggleCursorPin(event) {
+    if (event.repeat) return;
+    const { date, cost } = points[cursorIndex];
+    const pinned = pins.includes(date);
+    setCursor(cursorIndex);
+    updatePin(date, pinned);
+    setAnnouncement(pinned ? `Unpinned ${dayLabel(date)}` : `Pinned ${dayLabel(date)}, ${formatUsd(cost)}`);
+  }
+
+  useKeyCapture({
+    enabled: points.length >= 2,
+    onKeyDown: (event) => {
+      if (event.target !== plotRef.current || event.key !== ' ') return false;
+      toggleCursorPin(event);
+      return true;
+    },
+  });
+
+  if (data === null) {
+    return (
+      <div className="bg-port-card border border-port-border rounded-xl p-3 sm:p-4 text-sm text-gray-500">
+        Couldn&rsquo;t read the rolling API cost.
+      </div>
+    );
+  }
 
   // Stack labels left to right, centered on their pin unless that would run
   // off an edge; one that would overlap the previous label in its row drops to
@@ -221,10 +245,14 @@ export default function RollingCostCard({ fleetRevision, onReconcile, reconcilin
               className="relative flex-1 h-40 sm:h-48 cursor-crosshair select-none focus:outline-none focus-visible:ring-1 focus-visible:ring-port-accent"
               role="group"
               tabIndex={0}
-              aria-label="Tap a day to pin it; arrow keys and Enter pin from the keyboard"
+              aria-label="Tap a day to pin it; use arrow keys to move and Enter or Space to toggle a pin"
+              {...noPointerFocusSurfaceProps}
               onClick={togglePin}
               onKeyDown={onKeyDown}
-              onBlur={() => setCursor(null)}
+              onBlur={() => {
+                setCursor(null);
+                setAnnouncement('');
+              }}
             >
               <svg
                 viewBox="0 0 100 100"
@@ -239,8 +267,8 @@ export default function RollingCostCard({ fleetRevision, onReconcile, reconcilin
                 {areas.map((d, j) => (
                   <path key={series[j].key} d={d} style={{ fill: colors[j] }} fillOpacity="0.75" stroke={colors[j]} strokeWidth="1" vectorEffect="non-scaling-stroke" />
                 ))}
-                {cursor !== null && points[cursor] && (
-                  <line x1={xPct(cursor)} x2={xPct(cursor)} y1="0" y2="100" className="stroke-port-accent" strokeWidth="1" vectorEffect="non-scaling-stroke" />
+                {cursor !== null && (
+                  <line x1={xPct(cursorIndex)} x2={xPct(cursorIndex)} y1="0" y2="100" className="stroke-port-accent" strokeWidth="1" vectorEffect="non-scaling-stroke" />
                 )}
                 {labels.map((l) => (
                   <line key={l.date} x1={l.x} x2={l.x} y1="0" y2="100" className="stroke-gray-400" strokeWidth="1" vectorEffect="non-scaling-stroke" strokeDasharray="3 3" />
@@ -279,6 +307,8 @@ export default function RollingCostCard({ fleetRevision, onReconcile, reconcilin
           </div>
         </>
       )}
+
+      <div className="sr-only" role="status" aria-atomic="true">{announcement}</div>
 
       {focus && series.length > 0 && (
         <div className="space-y-1">

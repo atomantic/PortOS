@@ -1,14 +1,4 @@
-/**
- * Shared modal footer for a failed install (#5981).
- *
- * `Flux2InstallModal` and `RuntimeInstallModal` each hand-rolled the same
- * "message + Close" error footer, so adding the agent-investigation action to
- * both would have made a third copy of the same row. Both render this instead
- * whenever `useInstallStream` reports an `error`.
- *
- * Returns the footer row's CONTENT (message on the left, actions on the right)
- * so each modal keeps its own footer container and spacing.
- */
+/** Render the runtime installer failure message and its investigation and close actions. */
 
 import QueueInstallInvestigationButton from './QueueInstallInvestigationButton';
 

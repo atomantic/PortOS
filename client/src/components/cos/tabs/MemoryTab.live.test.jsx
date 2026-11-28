@@ -43,8 +43,10 @@ vi.mock('../../ui/InlineConfirmRow', () => ({
 
 import {
   approveMemory,
+  deleteMemory,
   getMemories,
   getMemory,
+  getMemoryVersion,
   getMemoryVersions,
   getMemoryStats,
   getEmbeddingStatus,
@@ -452,4 +454,23 @@ it('reports an unavailable initial list instead of claiming it is empty, then re
   getMemories.mockImplementation(async params => pageOf(params.status ? [] : [activeMemory]));
   fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
   expect(await screen.findByText('Original summary')).toBeInTheDocument();
+});
+
+describe('MemoryTab deep-linked editor', () => {
+  it('archives the linked memory from its editor and returns to the list without it', async () => {
+    getMemories.mockImplementation(async params => pageOf(params.status ? [] : [{ ...activeMemory, version: 1 }]));
+    deleteMemory.mockResolvedValue({ success: true });
+    getMemoryVersion.mockResolvedValue({ ...activeMemory, version: 1 });
+    renderTab('/cos/memory/synthetic-active?version=1');
+
+    const editor = await screen.findByRole('dialog', { name: 'Edit Memory' });
+    await within(editor).findByDisplayValue('Original body');
+    fireEvent.click(within(editor).getByRole('button', { name: 'Archive' }));
+    const question = await within(editor).findByText(/Agents stop receiving it/);
+    fireEvent.click(within(question.parentElement).getByRole('button', { name: 'Archive' }));
+
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Edit Memory' })).not.toBeInTheDocument());
+    expect(deleteMemory).toHaveBeenCalledExactlyOnceWith('synthetic-active', false, { silent: true });
+    expect(screen.queryByText('Original summary')).not.toBeInTheDocument();
+  });
 });

@@ -24,9 +24,8 @@
  */
 
 import { notifyJevChanged } from './jevEvents.js';
-import { promisify } from 'util';
 import { dirname, join } from 'path';
-import { execFile } from '../lib/childProcess.js';
+import { bufferedSpawn } from '../lib/bufferedSpawn.js';
 import { PATHS, safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
 import { findCachedRepoFiles } from '../lib/hfCache.js';
 import { JEV_MODEL, JEV_REQUIRED_FILES } from '../lib/jev.js';
@@ -49,12 +48,10 @@ import { saveCandidateJevHead } from './jevHeads.js';
 const jevLifecycle = () => import('./jev.js');
 const corpusBuilder = () => import('./jevCorpusBuilder.js');
 
-const execFileAsync = promisify(execFile);
 const TRAINER_SCRIPT = join(PATHS.root, 'scripts', 'ml', 'train_jev_head.py');
 // Generous: the dominant cost is one forward pass per (clause, change) pair on
 // a cold cache, which on a CPU-only host is minutes. A warm cache is seconds.
 const TRAIN_TIMEOUT_MS = 60 * 60 * 1000;
-const MAX_TRAINER_OUTPUT = 64 * 1024 * 1024;
 
 const failure = (code, extra = {}) => ({ ok: false, code, ...extra });
 
@@ -62,6 +59,13 @@ let trainingInFlight = null;
 
 /** Whether a training run is currently occupying the machine. */
 export const isJevTrainingRunning = () => trainingInFlight !== null;
+
+export function cancelJevTraining() {
+  const controller = trainingInFlight?.controller;
+  if (!controller) return { cancelled: false };
+  controller.abort();
+  return { cancelled: true };
+}
 
 /**
  * Train a candidate head for `scope-adherence` against one checkout.
@@ -80,25 +84,36 @@ export const isJevTrainingRunning = () => trainingInFlight !== null;
 export function trainScopeAdherenceHead({ repoPath = PATHS.root, architecture = 'linear' } = {}) {
   // Single in-flight run, cleared in `finally` so one failure does not pin
   // every later request to the same rejection.
-  if (trainingInFlight) return trainingInFlight;
-  trainingInFlight = runTraining({ repoPath, architecture })
+  if (trainingInFlight) return trainingInFlight.promise;
+  const controller = new AbortController();
+  const { signal } = controller;
+  const run = { controller };
+  run.promise = runTraining({ repoPath, architecture, run, signal })
+    .catch((error) => {
+      if (!signal.aborted) throw error;
+      return failure('jev-head-training-cancelled', { cancelled: true });
+    })
     .finally(() => { trainingInFlight = null; notifyJevChanged('heads'); });
+  trainingInFlight = run;
   notifyJevChanged('heads');
-  return trainingInFlight;
+  return run.promise;
 }
 
-async function runTraining({ repoPath, architecture }) {
+async function runTraining({ repoPath, architecture, run, signal }) {
   const { getJevStatus, jevVenvSpawnTarget } = await jevLifecycle();
+  signal.throwIfAborted();
   const status = await getJevStatus();
+  signal.throwIfAborted();
   // The trainer loads the same snapshot through the same venv the sidecar
   // uses. An install that has not finished the scorer install cannot train,
   // and saying so is more useful than a Python import error.
   if (!status.ready) return failure('jev-head-runtime-unavailable');
 
   const files = await findCachedRepoFiles(JEV_MODEL.repository, JEV_REQUIRED_FILES, { revision: JEV_MODEL.revision });
+  signal.throwIfAborted();
   if (!files?.[0]) return failure('jev-head-runtime-unavailable');
   const modelDir = dirname(files[0]);
-  const target = jevVenvSpawnTarget({ timeout: TRAIN_TIMEOUT_MS, maxBuffer: MAX_TRAINER_OUTPUT });
+  const target = jevVenvSpawnTarget();
   if (!target) return failure('jev-head-runtime-unavailable');
 
   // The forge token overlay for the corpus reads, and ONLY for those: the
@@ -106,9 +121,11 @@ async function runTraining({ repoPath, architecture }) {
   // Deferred because `forgeAuth.js` reaches the git/forge stack this module has
   // no other use for.
   const { resolveForgeForRepo } = await import('./forgeAuth.js');
+  signal.throwIfAborted();
   const forge = await resolveForgeForRepo(repoPath);
   const { buildScopeAdherenceCorpus } = await corpusBuilder();
-  const corpus = await buildScopeAdherenceCorpus({ repoPath, env: forge?.env || null });
+  const corpus = await buildScopeAdherenceCorpus({ repoPath, env: forge?.env || null, signal });
+  signal.throwIfAborted();
   if (!corpus.ok) return corpus;
 
   const outPath = join(corpus.corpusDir, 'head.json');
@@ -136,8 +153,10 @@ async function runTraining({ repoPath, architecture }) {
   // PYTHONPATH, and `HF_HUB_OFFLINE=1` so a missing file fails rather than
   // downloading. The forge token that built the corpus is deliberately not in
   // scope here.
-  const result = await execFileAsync(target.pythonPath, args, target.options)
-    .catch((error) => ({ failed: true, stdout: error?.stdout || '' }));
+  const result = await bufferedSpawn(target.pythonPath, args, {
+    ...target.options, shell: false, timeoutMs: TRAIN_TIMEOUT_MS, signal, processGroup: true,
+  });
+  signal.throwIfAborted();
 
   // The trainer writes exactly one JSON line to stdout, so the report is the
   // last line whether or not the process exited cleanly — a failing run still
@@ -146,6 +165,7 @@ async function runTraining({ repoPath, architecture }) {
   if (!report?.ok) return failure(report?.code || 'jev-head-training-failed');
 
   const written = await tryReadFile(outPath);
+  signal.throwIfAborted();
   const head = written === null ? null : safeJSONParse(written, null, { allowArray: false, logError: false });
   if (!head) return failure('jev-head-training-failed');
 
@@ -159,6 +179,8 @@ async function runTraining({ repoPath, architecture }) {
     return failure('jev-head-training-failed');
   }
 
+  // Once the candidate write has started, report its actual outcome.
+  run.controller = null;
   const saved = await saveCandidateJevHead(SCOPE_ADHERENCE_DECISION_ID, head);
   if (!saved.ok) return saved;
   return {

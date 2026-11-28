@@ -178,6 +178,7 @@ jobs:
       - uses: ./.github/actions/diff-base
 
       - uses: ./.github/actions/setup-server
+      - uses: ./.github/actions/server-vitest-cache
         with:
           vitest-key-suffix: -${{ matrix.shard }}of${{ strategy.job-total }}
 
@@ -260,7 +261,7 @@ jobs:
       # saves on its own as soon as its tests pass, so a later failure or
       # cancellation elsewhere in the run does not lose its records.
       - name: Save the test memo
-        if: steps.server-tests.outcome == 'success' && github.event_name != 'pull_request'
+        if: steps.server-tests.outcome == 'success' && steps.server-tests.outputs.memo-written == 'true' && github.event_name != 'pull_request'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/portos-test-memo
@@ -306,7 +307,7 @@ jobs:
         with:
           path: |
             client/.cache/vitest
-          key: vitest-client-${{ runner.os }}-${{ hashFiles('client/package-lock.json', 'client/vitest.config.js', 'scripts/vitestCiPool.js') }}-${{ matrix.shard }}of${{ strategy.job-total }}
+          key: vitest-client-${{ runner.os }}-${{ hashFiles('client/package-lock.json') }}-${{ hashFiles('client/vitest.config.js', 'scripts/vitestCiPool.js') }}-${{ matrix.shard }}of${{ strategy.job-total }}
           restore-keys: |
             vitest-client-${{ runner.os }}-${{ hashFiles('client/package-lock.json') }}-
             vitest-client-${{ runner.os }}-
@@ -317,7 +318,7 @@ jobs:
         with:
           path: |
             client/.cache/vitest
-          key: vitest-client-${{ runner.os }}-${{ hashFiles('client/package-lock.json', 'client/vitest.config.js', 'scripts/vitestCiPool.js') }}-${{ matrix.shard }}of${{ strategy.job-total }}
+          key: vitest-client-${{ runner.os }}-${{ hashFiles('client/package-lock.json') }}-${{ hashFiles('client/vitest.config.js', 'scripts/vitestCiPool.js') }}-${{ matrix.shard }}of${{ strategy.job-total }}
           restore-keys: |
             vitest-client-${{ runner.os }}-${{ hashFiles('client/package-lock.json') }}-
             vitest-client-${{ runner.os }}-
@@ -349,7 +350,7 @@ jobs:
         run: node scripts/run-ci-tests.js client
 
       - name: Save the test memo
-        if: steps.client-tests.outcome == 'success' && github.event_name != 'pull_request'
+        if: steps.client-tests.outcome == 'success' && steps.client-tests.outputs.memo-written == 'true' && github.event_name != 'pull_request'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/portos-test-memo
@@ -460,11 +461,12 @@ jobs:
           POSTGRES_DB: portos
         ports:
           - 5432:5432
+        # Probe the final TCP listener, not the socket-only bootstrap server.
         options: >-
-          --health-cmd "pg_isready -U portos"
-          --health-interval 10s
+          --health-cmd "pg_isready -h 127.0.0.1 -U portos"
+          --health-interval 2s
           --health-timeout 5s
-          --health-retries 5
+          --health-retries 25
     env:
       PGHOST: localhost
       PGPORT: 5432
@@ -496,6 +498,10 @@ jobs:
           PORTOS_CI_PREPLANNED_RUN: ${{ runner.temp }}/portos-db-run.json
         run: node scripts/run-ci-tests.js db --check-remaining
 
+      - name: Restore server Vitest transforms
+        uses: ./.github/actions/server-vitest-cache
+        if: fromJSON(steps.db-plan.outputs.remaining) > 0 || fromJSON(needs.impact.outputs.plan).db_live_restore
+
       - name: Provision test database (portos_test)
         if: fromJSON(steps.db-plan.outputs.remaining) > 0 || fromJSON(needs.impact.outputs.plan).db_live_restore
         run: npm run setup:db:test --prefix server
@@ -520,7 +526,7 @@ jobs:
         env:
           PORTOS_DB_RESTORE_LIVE: '1'
           PGMODE: native
-        run: cd server && npx --no-install vitest run services/backupDatabaseDump.restore.live.test.js
+        run: cd server && npx --no-install vitest run --configLoader native services/backupDatabaseDump.restore.live.test.js
 
       # Full mode: the runner subtracts what the memo verified and records the
       # `⏱ db full suite` duration line itself.
@@ -538,7 +544,7 @@ jobs:
         run: node scripts/run-ci-tests.js db
 
       - name: Save the test memo
-        if: steps.db-tests.outcome == 'success' && github.event_name != 'pull_request'
+        if: steps.db-tests.outcome == 'success' && steps.db-tests.outputs.memo-written == 'true' && github.event_name != 'pull_request'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/portos-test-memo
@@ -572,8 +578,6 @@ jobs:
           persist-credentials: false
 
       - uses: ./.github/actions/setup-server
-        with:
-          vitest-key-suffix: -browser-${{ matrix.shard }}of${{ strategy.job-total }}
 
       # Wide smoke restores its own full-run lineage and the lineages of
       # selected suites that move between profiles. Smaller plans merge all.
@@ -640,6 +644,12 @@ jobs:
           PORTOS_TEST_QUIET: 1
           PORTOS_CI_PREPLANNED_RUN: ${{ runner.temp }}/portos-browser-run.json
         run: node scripts/run-ci-tests.js server --check-remaining
+
+      # Transform artifacts are needed only when the final plan runs Vitest.
+      - uses: ./.github/actions/server-vitest-cache
+        if: fromJSON(steps.browser-recheck.outputs.remaining || steps.browser-plan.outputs.remaining) > 0
+        with:
+          vitest-key-suffix: -browser-${{ matrix.shard }}of${{ strategy.job-total }}
 
       # The test runner reads the runner's Chrome tree into the page cache
       # (scripts/ci-warm-test-chrome.sh, #9641) only when a suite will run (#17750).
@@ -735,11 +745,25 @@ jobs:
       - uses: ./.github/actions/diff-base
 
       - uses: ./.github/actions/setup-server
+      - uses: ./.github/actions/server-vitest-cache
         with:
           vitest-key-suffix: -${{ matrix.shard }}of${{ strategy.job-total }}
 
       - name: Check server entry-point syntax
         run: node --check server/index.js
+
+      # The server contracts cover native Vitest launch and DB config discovery.
+      # Exercise the client config imports once when this plan also builds the UI.
+      - uses: ./.github/actions/setup-client
+        if: matrix.shard == 1 && fromJSON(needs.impact.outputs.plan).build
+        with:
+          setup-node: 'false'
+
+      - name: Check client config loading on Windows
+        if: matrix.shard == 1 && fromJSON(needs.impact.outputs.plan).build
+        env:
+          PORTOS_CI_MAX_WORKERS: 2
+        run: npm run test:ci --prefix client -- src/test/viteBuildOutDir.test.js src/test/workspaceTests.test.js
 
       # The platform is part of every memo key, so Windows reads only Windows verdicts.
       - name: Restore the test memo
@@ -781,7 +805,7 @@ jobs:
         run: node scripts/run-ci-tests.js server
 
       - name: Save the test memo
-        if: steps.windows-tests.outcome == 'success' && github.event_name != 'pull_request'
+        if: steps.windows-tests.outcome == 'success' && steps.windows-tests.outputs.memo-written == 'true' && github.event_name != 'pull_request'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/portos-test-memo
@@ -894,7 +918,7 @@ jobs:
         working-directory: server
         env:
           PORTOS_DOCKER_CONTAINMENT_LIVE: '1'
-        run: npx --no-install vitest run services/dockerContainment.live.test.js
+        run: npx --no-install vitest run --configLoader native services/dockerContainment.live.test.js
 
   macos-native:
     name: macOS native release-agent supervision
@@ -913,6 +937,7 @@ jobs:
       # The PTY cases need node-pty's native addon, which only setup-server's
       # trusted rebuild builds.
       - uses: ./.github/actions/setup-server
+      - uses: ./.github/actions/server-vitest-cache
         with:
           vitest-key-suffix: -macos-native
 
@@ -1052,7 +1077,7 @@ jobs:
         working-directory: server
         env:
           PORTOS_SUPERCOLLIDER_LIVE: '1'
-        run: npx --no-install vitest run services/superColliderRender.live.test.js
+        run: npx --no-install vitest run --configLoader native services/superColliderRender.live.test.js
 
       - name: Record the proven platform
         run: |

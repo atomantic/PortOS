@@ -317,6 +317,30 @@ export const imageGenAgySettingsSchema = z.object({
   denoise: z.boolean().optional(),
 });
 
+// Mirrors `buildCurrentConfig` in services/llamaServerLifecycle.js. Lenient on
+// nullables because an unset tuning flag is stored as null ("leave it off").
+const nullableInt = (min, max) => z.number().int().min(min).max(max).nullable().optional();
+const nullableText = (max) => z.string().max(max).nullable().optional();
+const llamaSavedLaunchSchema = z.object({
+  model: z.string().trim().min(1).max(500),
+  draftModel: nullableText(500),
+  projector: nullableText(500),
+  specType: nullableText(100),
+  port: nullableInt(1, 65535),
+  host: nullableText(100),
+  ctxSize: nullableInt(512, 1048576),
+  nGpuLayers: nullableInt(0, 999),
+  alias: nullableText(100),
+  parallel: nullableInt(1, 16),
+  batchSize: nullableInt(1, 8192),
+  ubatchSize: nullableInt(1, 8192),
+  threads: nullableInt(1, 256),
+  flashAttn: z.boolean().nullable().optional(),
+  cacheTypeK: nullableText(20),
+  cacheTypeV: nullableText(20),
+  draftMax: nullableInt(0, 256),
+}).strict();
+
 // Local backend availability is machine-local configuration. Disabled means
 // the user intentionally does not run that backend; it does not remove any
 // installed models or prevent an explicit model-management action.
@@ -332,6 +356,11 @@ export const localLlmSettingsSchema = z.object({
     idleMinutes: z.number().int().min(0).max(1440).optional(),
     keepLoaded: z.boolean().optional(),
     pinned: z.boolean().optional(),
+    // Start the saved launch line when PortOS boots (llamaServerAutoStart.js).
+    autoStart: z.boolean().optional(),
+    // The last explicit start's launch line, which the boot auto-start replays.
+    // Written by the server on each successful start, never by a picker.
+    launch: llamaSavedLaunchSchema.optional(),
   }).strict().optional(),
   mtplx: z.object({
     idleMinutes: z.number().int().min(0).max(1440).optional(),
@@ -344,7 +373,7 @@ export const localLlmSettingsSchema = z.object({
     // something they didn't pick.
     launch: z.object({
       model: z.string().trim().max(300).nullable().optional(),
-      port: z.number().int().min(1).max(65535).optional(),
+      port: z.number().int().min(1).max(65535).nullable().optional(),
     }).strict().optional(),
   }).strict().optional(),
   slotstream: z.object({

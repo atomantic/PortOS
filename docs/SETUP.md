@@ -109,11 +109,22 @@ After PortOS starts:
 
 Certificate provisioning and the PortOS restart are one-click actions in the UI once MagicDNS and the Tailscale admin certificate toggle are ready.
 
+## Start on boot
+
+Once PortOS is running via `npm start` (or `npm run pm2:start`), register the PM2 startup hook and save the active process list so PortOS restarts automatically after a reboot:
+
+```bash
+npm run pm2:startup
+npm run pm2:save
+```
+
+Follow any `sudo` command printed by `pm2:startup` to register the OS service. See [PM2 process management](./PM2.md) for process lifecycle commands.
+
 ## Updates and recovery
 
 `update.sh`, `update.ps1`, and the in-app updater retry the safe certificate provisioning step on every update, report the current network prerequisite in update progress, and print the full walkthrough afterward. An update does not fail merely because Tailscale is absent or an account toggle still needs you.
 
-Updates check the pulled version's Node.js requirement (the same `scripts/checkNodeVersion.js` gate that `npm start` uses) before stopping any app or installing dependencies. If your Node.js is too old, the update stops with the required range and leaves PortOS running; the checkout is already on the new revision, so upgrade Node.js (for example `nvm install` using `.nvmrc`) and re-run the update.
+Updates check the target revision's Node.js requirement before pulling it or installing dependencies. Automatic updates perform this check before stopping apps; manual updates stop apps first and attempt to restart them if the check refuses. A second check after pulling attempts to roll back to the pre-pull revision on refusal. Read the reported checkout and restart status rather than assuming PortOS stayed running. Upgrade Node.js to the range reported by the failed check, then re-run the update; the unchanged or rolled-back checkout's `.nvmrc` may still name the older runtime. If rollback or restart fails, follow the recovery instructions in the update log before restarting.
 
 Useful checks:
 

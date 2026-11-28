@@ -84,7 +84,7 @@ export async function applyEcosystemPortEdits(existing, data) {
     return { persistFailed: true, changedKeys, portCollision: null };
   }
   const result = changedKeys.length > 0
-    ? await writeEcosystemPortEdits(existing.repoPath, [], targetedEdits)
+    ? await writeEcosystemPortEdits(existing.repoPath, targetedEdits)
     : { changed: false, unapplied: [] };
   if (result.changed) {
     console.log(`🔧 Updated ${result.file} ports for ${existing.name}: ${targetedEdits.map(e => `${e.label} ${e.oldPort}→${e.newPort}`).join(', ')} (restart the app to apply)`);

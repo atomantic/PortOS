@@ -52,7 +52,7 @@ vi.mock('./provider/providers.js', async () => ({
   // dispatch gives, so re-implementing it here would test nothing.
   isOllamaBackedProvider: (await import('../lib/aiToolkit/providers.js')).isOllamaBackedProvider,
 }));
-vi.mock('./brain.js', () => ({ loadMeta: mocks.loadMeta, updateMeta: mocks.updateMeta }));
+vi.mock('./brainStorage.js', async (importOriginal) => ({ ...await importOriginal(), loadMeta: mocks.loadMeta, updateMeta: mocks.updateMeta }));
 vi.mock('./universeBuilder.js', () => ({ listUniverses: mocks.listUniverses, updateUniverse: mocks.updateUniverse }));
 vi.mock('./storyBuilder.js', () => ({ listStorySessions: mocks.listStorySessions, updateStorySession: mocks.updateStorySession }));
 vi.mock('./pipeline/series.js', () => ({ listSeries: mocks.listSeries, updateSeries: mocks.updateSeries }));

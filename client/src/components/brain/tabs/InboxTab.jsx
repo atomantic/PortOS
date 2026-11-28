@@ -521,7 +521,7 @@ export default function InboxTab({ onRefresh, settings }) {
       {/* Creative batch action — appears once any captured note is flagged
           creative. Sends them all into the catalog ingest review in one hop. */}
       {creativeEntries.length > 0 && (
-        <div className="@5xl/inbox:col-span-2 flex items-center justify-between gap-3 p-3 bg-port-accent-2/10 border border-port-accent-2/30 rounded-lg">
+        <div className="@5xl/inbox:col-span-2 flex flex-col items-start @sm/inbox:flex-row @sm/inbox:items-center justify-between gap-3 p-3 bg-port-accent-2/10 border border-port-accent-2/30 rounded-lg">
           <span className="text-sm text-port-accent-2 flex items-center gap-2">
             <Sparkles className="w-4 h-4 flex-shrink-0" />
             {creativeEntries.length} creative {creativeEntries.length === 1 ? 'note' : 'notes'} ready to become catalog ingredients

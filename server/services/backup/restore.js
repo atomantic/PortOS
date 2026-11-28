@@ -13,9 +13,9 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { getAIToolkitInstance } from '../../lib/aiToolkitState.js';
 import { isSafeSubdirFilter } from '../../lib/sharedSchemas.js';
 import { reloadSettings, withLiveSettingsRestore } from '../settings.js';
-import { invalidateAllCaches as invalidateBrainCaches } from '../brainStorage.js';
+import { BRAIN_STORE_SCHEMA_VERSION, invalidateAllCaches as invalidateBrainCaches } from '../brainStorage.js';
 import {
-  convertRestoredLegacySplitStores, describeLegacySplitStores, snapshotLegacySplitStores,
+  convertRestoredLegacySplitStores, describeLegacySplitStores, hasUnrestorableScopedInbox, snapshotLegacySplitStores,
 } from '../backupLegacyStores.js';
 import { maintenance } from '../../lib/maintenanceAdmission.js';
 import { resetInstanceIdCache } from '../instanceIdentity.js';
@@ -53,7 +53,7 @@ function describeReconcileFailure(reason) {
   return reason?.code || String(reason);
 }
 
-const restoresMediaScope = (subdirFilter) => !subdirFilter || ['images', 'videos', 'video-thumbnails', 'video-history.json']
+const restoresMediaScope = (subdirFilter) => !subdirFilter || ['images', 'videos', 'video-thumbnails', 'video-history.json', 'media-collections', 'media-collections.json']
   .some(path => subdirFilter === path || subdirFilter.startsWith(`${path}/`));
 
 // A restored gallery image's `restoredAt` stamp is a sidecar write under the
@@ -371,29 +371,49 @@ async function restoreSnapshotAdmitted(destPath, snapshotId, { dryRun, requested
 async function restoreHeldSnapshot({ snapshotDir, currentSource }, snapshotId, { dryRun, subdirFilter, adoptIdentity }) {
   await assertSnapshotRestorable(snapshotDir, snapshotId, currentSource);
   const srcDir = join(snapshotDir, 'data');
+  // Older snapshots stored media collections in one JSON file. The folder
+  // alias remains useful for those snapshots, but the file must be the scope
+  // verified and transferred so conversion 059 receives the restored bytes.
+  let effectiveFilter = subdirFilter;
+  if (subdirFilter === 'media-collections') {
+    const [legacyFile, currentDirectory] = await Promise.all([
+      lstat(join(srcDir, 'media-collections.json')).catch(error => error.code === 'ENOENT' ? null : Promise.reject(error)),
+      lstat(join(srcDir, 'media-collections')).catch(error => error.code === 'ENOENT' ? null : Promise.reject(error)),
+    ]);
+    if (legacyFile?.isFile() && !currentDirectory) effectiveFilter = 'media-collections.json';
+  }
 
   // Run the preflight independently for preview and execution. A preview is an
   // aid to confirmation, not an integrity lease: snapshot bytes may change
   // between requests, especially on removable or network-backed destinations.
-  const credentials = await readSnapshotCredentials(srcDir, subdirFilter);
+  const credentials = await readSnapshotCredentials(srcDir, effectiveFilter);
   // Decide adoption from the same bytes integrity verification and publication
   // use. The identity fence rechecks the live side against those staged bytes.
   const snapshotIdentity = credentials.get(IDENTITY_FILE);
   const identity = await resolveIdentityRestore(snapshotIdentity, adoptIdentity);
   if (!identity.installs) credentials.delete(IDENTITY_FILE);
-  const verification = await verifySnapshotFiles(snapshotDir, srcDir, snapshotId, subdirFilter, { preserveIdentity: !identity.installs, credentials });
+  const verification = await verifySnapshotFiles(snapshotDir, srcDir, snapshotId, effectiveFilter, { preserveIdentity: !identity.installs, credentials });
   // A full restore installs the snapshot's ledger too, so the next boot re-runs
   // whatever it lacks; only a folder restore can leave restored files behind
   // migrations the live ledger already records.
-  const ledgerGap = subdirFilter ? await migrationLedgerGap(srcDir) : undefined;
+  const ledgerGap = effectiveFilter ? await migrationLedgerGap(srcDir) : undefined;
   // Split migrations gate on their output, so neither ledger re-runs them over
   // a restored monolith; restore converts those stores itself (#12626). A full
   // restore installs the snapshot's ledger, so the migrations it lacks before a
   // split are replayed with that split, in order (#12813).
-  const legacyStores = await snapshotLegacySplitStores(srcDir, subdirFilter, {
-    ledger: subdirFilter ? null : await readSnapshotMigrationLedger(srcDir),
+  const legacyStores = await snapshotLegacySplitStores(srcDir, effectiveFilter, {
+    ledger: effectiveFilter ? null : await readSnapshotMigrationLedger(srcDir),
   });
-  const legacyLedger = await snapshotLegacyLedger(srcDir, subdirFilter);
+  if (await hasUnrestorableScopedInbox(srcDir, effectiveFilter, legacyStores, BRAIN_STORE_SCHEMA_VERSION)) {
+    throw new ServerError(
+      'The selected scope contains brain/inbox_log.jsonl without a usable newer Brain inbox. '
+      + 'A scoped restore keeps the live migration ledger, so it cannot convert these captures. '
+      + 'If the snapshot has a readable ledger with migrations 081 and 200 pending, preview a full file restore to replay them in order. '
+      + 'For a scoped recovery, upgrade a disposable copy of the snapshot first, then restore from a fresh snapshot of that copy.',
+      { status: 409, code: 'BACKUP_RESTORE_LEGACY_BRAIN_INBOX' },
+    );
+  }
+  const legacyLedger = await snapshotLegacyLedger(srcDir, effectiveFilter);
   const restoreNotes = (restoredLegacy, restoredLegacyLedger = legacyLedger) => ({
     ...(ledgerGap !== undefined && { ledgerGap }),
     ...(restoredLegacy.stores.length > 0 && { restoredLegacyStores: restoredLegacy.stores }),
@@ -432,17 +452,17 @@ async function restoreHeldSnapshot({ snapshotDir, currentSource }, snapshotId, {
     ...RESTORE_CREDENTIAL_RSYNC_EXCLUDES,
     // The directory-wide include for a selective restore also matches parent
     // metadata. Keep private directory permissions outside unrelated scopes.
-    ...(!scopeTouchesPrivateDirectory(subdirFilter) ? [PRIVATE_DIRECTORY_RSYNC_EXCLUDE] : [])];
+    ...(!scopeTouchesPrivateDirectory(effectiveFilter) ? [PRIVATE_DIRECTORY_RSYNC_EXCLUDE] : [])];
   if (dryRun) flags.push('--dry-run');
-  if (subdirFilter) {
+  if (effectiveFilter) {
     // Anchored with a leading `/` — rsync matches an unanchored pattern against
     // the END of every path, so a bare `youtube/***` would also restore
     // `data/brain/youtube/**` over live files the user never selected. The
     // integrity preflight above scopes itself to `data/<filter>/**` only, so an
     // unanchored transfer overwrites bytes it never verified.
     // Exact files need their own rule: rsync 3 excludes a file from the directory-only /*** pattern.
-    flags.push(`--include=/${subdirFilter}`);
-    flags.push(`--include=/${subdirFilter}/***`);
+    flags.push(`--include=/${effectiveFilter}`);
+    flags.push(`--include=/${effectiveFilter}/***`);
     flags.push('--include=*/');
     flags.push('--exclude=*');
   }
@@ -453,7 +473,7 @@ async function restoreHeldSnapshot({ snapshotDir, currentSource }, snapshotId, {
   const idleTimeoutMs = restoreIdleTimeoutMs(verification.largestFileBytes);
   const transferFiles = () => {
     const transfer = () => transferWithCredentials(credentials, PATHS.data,
-      () => runRsync(srcDir, PATHS.data, flags, { idleTimeoutMs }), { dryRun, scope: subdirFilter });
+      () => runRsync(srcDir, PATHS.data, flags, { idleTimeoutMs }), { dryRun, scope: effectiveFilter });
     const withLiveProvidersRestore = getAIToolkitInstance()?.withLiveProvidersRestore;
     // Only the toolkit's legacy provider file shares this write queue. Hold it
     // through publication and invalidate its cached file after the transfer.
@@ -467,7 +487,7 @@ async function restoreHeldSnapshot({ snapshotDir, currentSource }, snapshotId, {
     return { dryRun, snapshotId, subdirFilter, changedFiles, verification, ...restoreNotes(describeLegacySplitStores(legacyStores)) };
   }
 
-  const scope = subdirFilter;
+  const scope = effectiveFilter;
   console.log(`💾 Restore starting: snapshot ${snapshotId}${scope ? ` (filter ${scope})` : ''}`);
   let restoredLegacy = { stores: [], migrations: null };
   let restoredLegacyLedger = legacyLedger;
@@ -475,7 +495,7 @@ async function restoreHeldSnapshot({ snapshotDir, currentSource }, snapshotId, {
   // and before reconciliation so the Brain caches drop the parked records. It
   // follows ledger adoption so a replay reads the ledger the boot would read.
   const changedFiles = await withLiveFileRestoreOwners(scope, srcDir, ownerRefreshes => transferAndReconcileLiveFiles({
-    subdirFilter, ownerRefreshes,
+    subdirFilter: effectiveFilter, ownerRefreshes,
     transfer: async () => {
       const changed = await transferWithIdentityFence({
         installsIdentity: identity.installs,
@@ -490,7 +510,7 @@ async function restoreHeldSnapshot({ snapshotDir, currentSource }, snapshotId, {
       return changed;
     },
   }));
-  await clearRestoredImageTombstones(subdirFilter);
+  await clearRestoredImageTombstones(effectiveFilter);
   console.log(`💾 Restore complete: snapshot ${snapshotId}, ${changedFiles.length} files changed`);
   return { dryRun, snapshotId, subdirFilter, changedFiles, verification, ...restoreNotes(restoredLegacy, restoredLegacyLedger) };
 }
@@ -699,6 +719,16 @@ const LIVE_FILE_RESTORE_OWNERS = Object.freeze([
     },
   },
   {
+    name: 'genome',
+    refreshLabel: 'genome index invalidation',
+    // Marker writes can depend on both the raw SNP data and its metadata.
+    appliesTo: scope => !scope || ['meatspace', 'meatspace/genome-raw.txt', 'meatspace/genome.json'].includes(scope),
+    hold: async inner => {
+      const { withLiveGenomeRestore } = await import('../genome.js');
+      return withLiveGenomeRestore(inner);
+    },
+  },
+  {
     name: 'digital twin',
     refreshLabel: 'digital twin cache invalidation',
     appliesTo: scope => !scope || scope === 'digital-twin' || scope.startsWith('digital-twin/'),
@@ -707,6 +737,9 @@ const LIVE_FILE_RESTORE_OWNERS = Object.freeze([
       return metaMutex(() => inner(invalidateDigitalTwinCaches));
     },
   },
+  cachedStoreOwner('digital-twin/social-accounts.json', () => import('../socialAccounts.js')),
+  cachedStoreOwner('digital-twin/feedback.json', () => import('../feedbackStore.js')),
+  cachedStoreOwner('digital-twin/taste-profile.json', () => import('../taste-questionnaire.js')),
   {
     name: 'voice timers',
     refreshLabel: 'voice timers reload',
@@ -715,6 +748,15 @@ const LIVE_FILE_RESTORE_OWNERS = Object.freeze([
       const { withLiveVoiceTimersRestore } = await import('../voice/timers.js');
       return withLiveVoiceTimersRestore(inner);
     },
+  },
+  cachedStoreOwner('cos/decisions.json', () => import('../decisionLog.js')),
+  cachedStoreOwner('cos/learning.json', () => import('../taskLearning/store.js')),
+  cachedStoreOwner('memory-classifier-config.json', () => import('../memoryClassifier.js')),
+  {
+    name: 'tools',
+    refreshLabel: 'tools cache invalidation',
+    appliesTo: scope => !scope || scope.toLowerCase() === 'tools' || scope.toLowerCase().startsWith('tools/'),
+    hold: async inner => (await import('../tools.js')).withLiveRestore(inner),
   },
   cachedStoreOwner('notifications.json', () => import('../notifications.js')),
   cachedStoreOwner('feeds.json', () => import('../feeds.js')),

@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, screen, fireEvent, cleanup, act } from '@testing-library/react';
+import { render as renderView, screen, fireEvent, cleanup, act } from '@testing-library/react';
+import { MemoryRouter } from 'react-router';
 import userEvent from '@testing-library/user-event';
+
+const render = (ui) => renderView(ui, { wrapper: MemoryRouter });
 
 // Same hook stubs as GlobalConfigControls.test.jsx, but ReviewerPicker is REAL
 // here — these tests prove the picker + controls emit only what changed (#6208).

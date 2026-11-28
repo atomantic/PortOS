@@ -110,6 +110,7 @@ describe('Messages Gmail OAuth setup', () => {
     expect(window.open).toHaveBeenCalledWith(
       'https://accounts.google.com/o/oauth2/auth?state=messages',
       '_blank',
+      'noopener,noreferrer',
     );
   });
 

@@ -21,6 +21,7 @@ import { cosEvents } from './cosEvents.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { loadState, saveState, withStateLock, readAgentsStateForSafetyCheck, AGENTS_DIR } from './cosState.js';
 import { atomicWrite, ensureDir, readFileTail, safeJSONParse, tryReadFile } from '../../lib/fileUtils.js';
+import { mapWithConcurrency } from '../../lib/mapWithConcurrency.js';
 import { recordDomainUsage } from '../domainUsage.js';
 import { repairCodexTaskSummary } from '../codexSummaryRepair.js';
 import { loadAgentIndex, saveAgentIndex, getAgentDir, recordArchivedAgentOrder, moveAgentDir, writeArchivedAgentMetadata } from './cosAgentIndex.js';
@@ -43,6 +44,11 @@ export {
   isSettleableCompletionReceipt, recordAuditFindingsReceipt, recordCompletionCleanup,
   recordAbsentCheckoutRetirement, settleAbsentTaskCompletion,
 } from './cosCompletionReceipts.js';
+
+// Cap concurrent archive metadata reads during cleanup-ownership scans so
+// large histories avoid serial I/O stalls under withStateLock without
+// exhausting file descriptors.
+const ARCHIVE_METADATA_SCAN_CONCURRENCY = 32;
 
 function hasPendingRepoStateVerification(agent) {
   return agent?.status === 'completed' && agent?.metadata?.repoStateVerification?.status === 'pending';
@@ -126,17 +132,19 @@ export async function readProtectedCleanupOwners({ state = null, index = null, t
     const candidates = targetAgentId
       ? (index.has(targetAgentId) ? [[targetAgentId, index.get(targetAgentId)]] : [])
       : [...index.entries()];
-    for (const [id, date] of candidates) {
-      if (protectedOwners.ownerIds.has(id) || state?.agents?.[id] || !date) continue;
+    const pendingCandidates = candidates.filter(([id, date]) =>
+      Boolean(date) && !protectedOwners.ownerIds.has(id) && !state?.agents?.[id]
+    );
+    await mapWithConcurrency(pendingCandidates, ARCHIVE_METADATA_SCAN_CONCURRENCY, async ([id, date]) => {
       const content = await tryReadFile(join(AGENTS_DIR, date, id, 'metadata.json'));
       if (!content) {
         if (continuationTasks.size) protectedOwners.ownerIds.add(id);
-        continue;
+        return;
       }
       const parsed = safeJSONParse(content, null, { logError: false });
       if (hasPendingRepoStateVerification(parsed)) protectedOwners.ownerIds.add(id);
       protectSynchronizationEvidence(id, parsed);
-    }
+    });
   }
   return protectedOwners;
 }

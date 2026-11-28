@@ -14,9 +14,9 @@
  *   GET  /api/brain/import/chatgpt/archive/:name  Fetch one archived conversation transcript
  */
 
+import { previewSchema, importSchema } from '../lib/brainImportValidation.js';
 import { markdownImages } from '../lib/markdownImages.js';
 import { Router } from 'express';
-import { z } from 'zod';
 import { unlink } from 'fs/promises';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
@@ -26,16 +26,6 @@ import { parseExport, stripPreview, importConversations, readArchivedConversatio
 import { importChatgptZip } from '../services/chatgptZipImport.js';
 
 const router = Router();
-
-const previewSchema = z.object({
-  data: z.unknown()
-});
-
-const importSchema = z.object({
-  data: z.unknown(),
-  tags: z.array(z.string().min(1).max(50)).max(10).optional(),
-  skipEmpty: z.boolean().optional()
-});
 
 router.post('/chatgpt/preview', asyncHandler(async (req, res) => {
   const { data } = validateRequest(previewSchema, req.body);

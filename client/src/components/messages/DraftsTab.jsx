@@ -1,9 +1,11 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { normalizeEmail } from '../../../../server/lib/messageRecipientEmail.js';
+import { unfoldEmailHeader } from '../../../../server/lib/messageReplySubject.js';
 import { FileText, Trash2, Send, Check, RefreshCw, Copy, Pencil } from 'lucide-react';
 import toast from '../ui/Toast';
 import {
   reconcileMessageDraft,
+  getMessageDetail,
   getMessageDrafts,
   approveMessageDraft,
   sendMessageDraft,
@@ -12,6 +14,7 @@ import {
 } from '../../services/apiMessages.js';
 import InlineConfirmRow from '../ui/InlineConfirmRow';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
+import { formatDateTime } from '../../utils/formatters';
 import { copyToClipboard } from '../../lib/clipboard.js';
 import BrailleSpinner from '../BrailleSpinner';
 import ListLoadError from '../ui/ListLoadError';
@@ -32,7 +35,12 @@ function parseRecipientList(value) {
   return value.split(',').map(part => part.trim()).filter(Boolean);
 }
 
+function formatRecipientList(recipients) {
+  return Array.isArray(recipients) ? recipients.join(', ') : recipients ?? '';
+}
+
 function DeliveryReconciliation({ draft, onReconciled }) {
+  const startedAt = draft.sendAttempts?.find(attempt => attempt.id === draft.sendAttemptId)?.startedAt;
   const [checkedMailbox, setCheckedMailbox] = useState(false);
   const [pending, setPending] = useState(false);
   const pendingRef = useRef(false);
@@ -62,6 +70,7 @@ function DeliveryReconciliation({ draft, onReconciled }) {
         confirmed it. It may already have reached the recipient. Check your sent mailbox
         or conversation before recording the outcome. PortOS will not resend it automatically.
       </p>
+      {draft.privacyErased && startedAt && <p>Send attempt started {formatDateTime(startedAt)}.</p>}
       <label className="flex items-start gap-2" htmlFor={`checked-mailbox-${draft.id}`}>
         <input id={`checked-mailbox-${draft.id}`} type="checkbox"
           checked={checkedMailbox} disabled={pending}
@@ -80,7 +89,9 @@ function DeliveryReconciliation({ draft, onReconciled }) {
           Confirm not sent
         </button>
       </div>
-      <p className="text-gray-400">Confirmed sent is final. Confirmed not sent restores a draft that needs fresh approval before sending.</p>
+      <p className="text-gray-400">{draft.privacyErased
+        ? 'This draft was erased. Either choice records the outcome and keeps the draft closed.'
+        : 'Confirmed sent is final. Confirmed not sent restores a draft that needs fresh approval before sending.'}</p>
       {error && <p role="alert" className="text-port-error">{error}</p>}
     </div>
   );
@@ -92,11 +103,15 @@ export default function DraftsTab({ accounts }) {
   const [loadError, setLoadError] = useState(null);
   const sendingRef = useRef(new Set());
   const [sendingIds, setSendingIds] = useState(new Set());
+  const approvingRef = useRef(new Set());
+  const [approvingIds, setApprovingIds] = useState(new Set());
+  const draftsRequestRef = useRef(0);
   const [copiedId, setCopiedId] = useState(null);
   const [editingId, setEditingId] = useState(null);
-  const [editForm, setEditForm] = useState({ to: '', subject: '', body: '' });
+  const [editForm, setEditForm] = useState({ to: '', cc: '', subject: '', body: '' });
   const savingEditRef = useRef(false);
-  const [savingEdit, setSavingEdit] = useState(false);
+  const [editAction, setEditAction] = useState(null);
+  const savingEdit = editAction !== null;
   const [expandedIds, setExpandedIds] = useState(() => new Set());
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
 
@@ -110,13 +125,17 @@ export default function DraftsTab({ accounts }) {
   };
 
   const fetchDrafts = useCallback(async () => {
+    const request = ++draftsRequestRef.current;
     setLoading(true);
     // A failed read keeps whatever drafts are already shown and surfaces an error row;
     // it must not read as "No drafts".
     const data = await getMessageDrafts({}, { silent: true }).catch((err) => {
-      setLoadError(err instanceof Error ? err : new Error('Request failed'));
+      if (request === draftsRequestRef.current) {
+        setLoadError(err instanceof Error ? err : new Error('Request failed'));
+      }
       return null;
     });
+    if (request !== draftsRequestRef.current) return;
     if (data) {
       setDrafts(data);
       setLoadError(null);
@@ -126,6 +145,7 @@ export default function DraftsTab({ accounts }) {
 
   useEffect(() => {
     fetchDrafts();
+    return () => { draftsRequestRef.current += 1; };
   }, [fetchDrafts]);
 
   useEffect(() => {
@@ -137,40 +157,76 @@ export default function DraftsTab({ accounts }) {
   }, [fetchDrafts]);
 
   const handleApprove = async (id) => {
-    const result = await approveMessageDraft(id).catch(() => null);
+    if (approvingRef.current.has(id)) return;
+    approvingRef.current.add(id);
+    setApprovingIds(new Set(approvingRef.current));
+    const result = await approveMessageDraft(id).catch(() => null).finally(() => {
+      approvingRef.current.delete(id);
+      setApprovingIds(new Set(approvingRef.current));
+    });
     if (!result) return;
     setDrafts(prev => prev.map(d => d.id === id ? result : d));
     toast.success('Draft approved');
   };
 
   const startEdit = (draft) => {
+    if (savingEditRef.current) return;
     setEditingId(draft.id);
     setEditForm({
-      to: (draft.to || []).join(', '),
+      to: formatRecipientList(draft.to),
+      cc: formatRecipientList(draft.cc),
       subject: draft.subject || '',
       body: draft.body || '',
     });
   };
 
-  const handleSaveEdit = async (event) => {
-    event.preventDefault();
-    if (!editingId || savingEditRef.current) return;
+  const editingDraft = drafts.find(draft => draft.id === editingId);
+  const editingAccount = accounts.find(account => account.id === editingDraft?.accountId);
+  const isTeamsDraft = editingAccount?.type === 'teams';
+  const isEmailReply = !isTeamsDraft && Boolean(editingDraft?.replyToMessageId);
+  // Outlook replies use the recipients already set by the provider.
+  const canEditCc = editingAccount?.canSend !== false && (
+    (editingAccount?.type === 'gmail' && editingDraft?.sendVia === 'api') ||
+    (editingAccount?.type === 'outlook' && editingDraft?.sendVia === 'playwright' && !editingDraft.replyToMessageId)
+  );
+
+  const runEditAction = async (action, update) => {
+    if (!editingDraft || savingEditRef.current) return;
     savingEditRef.current = true;
-    setSavingEdit(true);
-    // The response is the draft after the server drops approval when content changed.
-    const result = await updateMessageDraft(editingId, {
-      to: parseRecipientList(editForm.to),
-      subject: editForm.subject,
-      body: editForm.body,
-    }).catch(() => null).finally(() => {
+    setEditAction(action);
+    try {
+      const result = await update(editingDraft).catch(() => null);
+      if (!result) return;
+      // The response is the draft after the server drops approval when content changed.
+      setDrafts(prev => prev.map(d => d.id === result.id ? result : d));
+      if (action === 'save') setEditingId(null);
+      toast.success(action === 'restore' ? 'Original subject restored' : 'Draft updated');
+    } finally {
       savingEditRef.current = false;
-      setSavingEdit(false);
-    });
-    if (!result) return;
-    setDrafts(prev => prev.map(d => d.id === result.id ? result : d));
-    setEditingId(null);
-    toast.success('Draft updated');
+      setEditAction(null);
+    }
   };
+
+  const handleSaveEdit = (event) => {
+    event.preventDefault();
+    return runEditAction('save', draft => updateMessageDraft(draft.id, {
+      to: parseRecipientList(editForm.to),
+      ...(canEditCc && { cc: parseRecipientList(editForm.cc) }),
+      ...(!isEmailReply && !isTeamsDraft && { subject: editForm.subject }),
+      body: editForm.body,
+    }));
+  };
+
+  const handleRestoreSubject = () => runEditAction('restore', async draft => {
+    const { accountId, replyToMessageId, status } = draft;
+    const original = await getMessageDetail(accountId, replyToMessageId, { silent: true }).catch(() => null);
+    if (original?.id !== replyToMessageId || original.accountId !== accountId || typeof original.subject !== 'string') {
+      toast.error('The original subject is unavailable. Sync this account and try again.');
+      return null;
+    }
+    const subject = editingAccount?.type === 'gmail' ? unfoldEmailHeader(original.subject) : original.subject;
+    return updateMessageDraft(draft.id, { subject, ...(status === 'failed' && { status: 'draft' }) });
+  });
 
   const toggleExpanded = (id) => {
     setExpandedIds(prev => {
@@ -213,8 +269,8 @@ export default function DraftsTab({ accounts }) {
     return account.name;
   };
 
-  const isCopyOnly = draft => draft.sendVia === 'review' ||
-    accounts.find(account => account.id === draft.accountId)?.canSend === false;
+  const isCopyOnly = draft => !draft.privacyErased && (draft.sendVia === 'review' ||
+    accounts.find(account => account.id === draft.accountId)?.canSend === false);
 
   const needsTeamsRecipient = draft =>
     accounts.find(account => account.id === draft.accountId)?.type === 'teams' &&
@@ -222,6 +278,7 @@ export default function DraftsTab({ accounts }) {
 
   const statusColors = {
     draft: 'bg-gray-700 text-gray-300',
+    erased: 'bg-gray-700 text-gray-300',
     pending_review: 'bg-port-warning/20 text-port-warning',
     approved: 'bg-port-success/20 text-port-success',
     sending: 'bg-port-accent/20 text-port-accent',
@@ -282,7 +339,8 @@ export default function DraftsTab({ accounts }) {
                   <button
                     type="button"
                     onClick={() => startEdit(draft)}
-                    className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-400 hover:text-white transition-colors"
+                    disabled={savingEdit}
+                    className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-400 hover:text-white transition-colors disabled:opacity-50"
                     title="Edit" aria-label="Edit"
                   >
                     <Pencil size={16} />
@@ -291,7 +349,8 @@ export default function DraftsTab({ accounts }) {
                 {APPROVABLE_DRAFT_STATUSES.includes(draft.status) && !isCopyOnly(draft) && editingId !== draft.id && (
                   <button
                     onClick={() => handleApprove(draft.id)}
-                    disabled={needsTeamsRecipient(draft)}
+                    disabled={approvingIds.has(draft.id) || needsTeamsRecipient(draft)}
+                    aria-busy={approvingIds.has(draft.id)}
                     className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-400 hover:text-port-success transition-colors disabled:opacity-50"
                     title="Approve" aria-label="Approve"
                   >
@@ -332,7 +391,7 @@ export default function DraftsTab({ accounts }) {
                 {/* Review-only drafts never reach a 'sent' state (there's no send
                     channel), so keep Delete available at any status — otherwise an
                     approved iMessage/Signal draft would be stuck with no action. */}
-                {(['draft', 'pending_review', 'failed'].includes(draft.status) || isCopyOnly(draft)) && (
+                {(['draft', 'pending_review', 'failed', 'erased'].includes(draft.status) || isCopyOnly(draft)) && (
                   <button
                     onClick={() => requestDelete(draft.id)}
                     className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-400 hover:text-port-error transition-colors"
@@ -350,7 +409,18 @@ export default function DraftsTab({ accounts }) {
                   : 'Choose Edit and enter a valid Teams recipient email in the To field before approval or sending.'}
               </p>
             )}
-            {editingId === draft.id ? (
+            {(draft.privacyErased || editingId !== draft.id) && (
+              <>
+                <div className="text-sm text-white">{draft.subject || '(no subject)'}</div>
+                {draft.to?.length > 0 && (
+                  <div className="text-xs text-gray-500 break-words">To: {formatRecipientList(draft.to)}</div>
+                )}
+              </>
+            )}
+            {draft.cc?.length > 0 && (editingId !== draft.id || !canEditCc) && (
+              <div className="text-xs text-gray-500 break-words">Cc: {formatRecipientList(draft.cc)}</div>
+            )}
+            {!draft.privacyErased && editingId === draft.id ? (
               <form onSubmit={handleSaveEdit} className="space-y-2">
                 <div>
                   <label htmlFor={`draft-to-${draft.id}`} className="block text-xs text-gray-400 mb-1">To</label>
@@ -363,16 +433,51 @@ export default function DraftsTab({ accounts }) {
                     className={draftFieldClass}
                   />
                 </div>
-                <div>
-                  <label htmlFor={`draft-subject-${draft.id}`} className="block text-xs text-gray-400 mb-1">Subject</label>
-                  <input
-                    id={`draft-subject-${draft.id}`}
-                    value={editForm.subject}
-                    onChange={event => setEditForm(prev => ({ ...prev, subject: event.target.value }))}
-                    disabled={savingEdit}
-                    className={draftFieldClass}
-                  />
-                </div>
+                {canEditCc && (
+                  <div>
+                    <label htmlFor={`draft-cc-${draft.id}`} className="block text-xs text-gray-400 mb-1">Cc</label>
+                    <input
+                      id={`draft-cc-${draft.id}`}
+                      value={editForm.cc}
+                      onChange={event => setEditForm(prev => ({ ...prev, cc: event.target.value }))}
+                      placeholder="one@example.com, two@example.com"
+                      disabled={savingEdit}
+                      className={draftFieldClass}
+                    />
+                  </div>
+                )}
+                {!isTeamsDraft && (
+                  <div>
+                    <label htmlFor={`draft-subject-${draft.id}`} className="block text-xs text-gray-400 mb-1">Subject</label>
+                    <input
+                      id={`draft-subject-${draft.id}`}
+                      value={isEmailReply ? draft.subject || '' : editForm.subject}
+                      onChange={isEmailReply ? undefined : event => setEditForm(prev => ({ ...prev, subject: event.target.value }))}
+                      readOnly={isEmailReply}
+                      aria-describedby={isEmailReply ? `draft-subject-note-${draft.id}` : undefined}
+                      disabled={savingEdit}
+                      className={draftFieldClass}
+                    />
+                    {isEmailReply && (
+                      <div className="flex flex-wrap items-center gap-2 mt-1">
+                        <p id={`draft-subject-note-${draft.id}`} className="text-xs text-gray-400">
+                          The mail provider keeps the conversation subject.
+                        </p>
+                        {draft.accountId && (
+                          <button
+                            type="button"
+                            onClick={handleRestoreSubject}
+                            disabled={savingEdit}
+                            aria-busy={editAction === 'restore'}
+                            className="min-h-[44px] px-3 rounded border border-port-border text-sm text-port-accent hover:bg-port-border disabled:opacity-50"
+                          >
+                            Restore original subject
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
                 <div>
                   <label htmlFor={`draft-body-${draft.id}`} className="block text-xs text-gray-400 mb-1">Body</label>
                   <textarea
@@ -388,7 +493,7 @@ export default function DraftsTab({ accounts }) {
                   <button
                     type="submit"
                     disabled={savingEdit}
-                    aria-busy={savingEdit}
+                    aria-busy={editAction === 'save'}
                     className="min-h-[44px] px-3 rounded bg-port-accent text-white text-sm disabled:opacity-50"
                   >
                     Save draft
@@ -405,10 +510,6 @@ export default function DraftsTab({ accounts }) {
               </form>
             ) : (
               <>
-                <div className="text-sm text-white">{draft.subject || '(no subject)'}</div>
-                {draft.to?.length > 0 && (
-                  <div className="text-xs text-gray-500">To: {draft.to.join(', ')}</div>
-                )}
                 {/* Review-only drafts are sent by hand, so show the full body (not
                     clamped) — it's the text the user copies into their messaging app. */}
                 <div

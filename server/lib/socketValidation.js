@@ -141,6 +141,15 @@ export const appDeploySchema = z.object({
 
 export const appDeployCancelSchema = appDeploySchema.pick({ appId: true });
 
+export const appDeployCompleteSchema = appDeployCancelSchema.extend({
+  startedAt: z.number().int(),
+  success: z.boolean(),
+  code: z.number().int().nullable(),
+  cancelled: z.boolean(),
+  timedOut: z.boolean(),
+  error: z.string().optional(),
+});
+
 // =============================================================================
 // VALIDATION HELPER
 // =============================================================================

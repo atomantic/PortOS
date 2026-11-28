@@ -48,6 +48,7 @@ export const pipelinePdfQuerySchema = z.object({
   colophon: z.string().optional(),
 });
 
+export const pipelineStageRecoveryParamsSchema = z.object({ id: z.string().min(1), stageId: z.enum(TEXT_STAGE_IDS) });
 export const pipelineStageRecoverySchema = z.object({ revision: z.string().regex(/^[a-f0-9]{64}$/) });
 
 // Per-call timeout bounds: STAGE_TIMEOUT_MIN_MS / STAGE_TIMEOUT_MAX_MS are
@@ -609,3 +610,48 @@ export function createPipelineMusicSchemas(engines) {
 
   return { musicGenerateSchema, cuesGenerateSchema, cueRenderSchema };
 }
+
+// Render-schema factory — every cover/back-cover render route shares the
+// same shape (image-gen knobs + proof/final variant + useProofAsBase i2i),
+// differing only in the script-field name. Four routes × ~16 fields each
+// were a 60-line mirror before this factory; new fields now apply to all
+// four call sites at once. `target` is the proof/final variant; the route
+// param resolves the cover-vs-backCover slot.
+//
+// `seed` mirrors the page/panel render schemas so the shared image-gen
+// drawer flows the same render settings into the cover —
+// enqueueImageJob honors it via options.seed. `useProofAsBase` is honored by
+// local (mflux `--image-path`) and codex (gpt-image-2 image-edit via the
+// CLI's `-i <file>` flag); external SD-API has no i2i wiring and silently
+// drops the init image at the dispatcher.
+const makeCoverRenderSchema = (scriptField) => z.object({
+  [scriptField]: z.string().max(8000).optional(),
+  negativePrompt: z.string().trim().max(2000).optional(),
+  extraStyle: z.string().trim().max(2000).optional(),
+  mode: z.enum(QUEUEABLE_IMAGE_MODES).optional(),
+  modelId: z.string().trim().max(64).optional(),
+  width: imageEdgeSchema,
+  height: imageEdgeSchema,
+  steps: z.number().int().min(1).max(150).optional(),
+  cfgScale: z.number().min(0).max(30).optional(),
+  guidance: z.number().min(0).max(30).optional(),
+  seed: z.number().int().min(0).optional(),
+  target: z.enum(COMIC_PAGE_VARIANTS).optional().default('proof'),
+  useProofAsBase: z.boolean().optional().default(false),
+}).refine(refineImagePixelCap, { message: PIXEL_CAP_MESSAGE, path: ['width'] });
+
+export const coverRenderSchema = makeCoverRenderSchema('coverScript');
+export const backCoverRenderSchema = makeCoverRenderSchema('backCoverScript');
+
+export const volumeCoverConceptsSchema = z.object({
+  commit: z.boolean().optional().default(false),
+  providerOverride: z.string().trim().max(80).optional(),
+  modelOverride: z.string().trim().max(200).optional(),
+});
+
+export const comicCoverConceptsSchema = z.object({
+  target: z.enum(['cover', 'backCover', 'both']).optional().default('both'),
+  commit: z.boolean().optional().default(false),
+  providerOverride: z.string().trim().max(80).optional(),
+  modelOverride: z.string().trim().max(200).optional(),
+});

@@ -1,9 +1,10 @@
 import { useRef, useMemo, useEffect, useState, Suspense } from 'react';
-import { Canvas, useFrame, useThree } from '@react-three/fiber';
+import { Canvas, useFrame } from '@react-three/fiber';
 import { AGENT_STATES } from './constants';
 import CoSAvatarOrbitControls from './CoSAvatarOrbitControls';
 import CoSBackgroundCamera from './CoSBackgroundCamera';
 import CoSCanvasGuard from './CoSCanvasGuard';
+import CoSInvalidateOnStateChange from './CoSInvalidateOnStateChange';
 import useClonedGltf, { GltfPrimitive } from '../../hooks/useClonedGltf';
 import { resolvePlaybackClip } from '../../hooks/useAvatarCapabilities';
 import { fitModelToHeight } from '../../utils/modelFit';
@@ -111,23 +112,13 @@ function StageLighting({ color }) {
   );
 }
 
-// Under frameloop='demand', state/speaking changes that only affect
-// useFrame-driven properties need to invalidate the frame so one renders.
-function InvalidateOnStateChange({ state, speaking }) {
-  const { invalidate } = useThree();
-  useEffect(() => {
-    invalidate();
-  }, [state, speaking, invalidate]);
-  return null;
-}
-
 function Scene({ state, speaking, background, variant, coverage = null }) {
   const stateConfig = AGENT_STATES[state] || AGENT_STATES.sleeping;
   const color = stateConfig.color;
   return (
     <>
       <CoSBackgroundCamera enabled={background} z={3.6} />
-      <InvalidateOnStateChange state={state} speaking={speaking} />
+      <CoSInvalidateOnStateChange state={state} speaking={speaking} />
       <StageLighting color={color} />
       <MiniCharacter state={state} speaking={speaking} variant={variant} coverage={coverage} />
       <CoSAvatarOrbitControls />

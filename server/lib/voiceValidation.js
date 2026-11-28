@@ -5,16 +5,17 @@
  */
 
 import { z } from 'zod';
-import { nonEmptyString } from './sharedSchemas.js';
+import { mediaFilenameSchema, nonEmptyString } from './sharedSchemas.js';
 import { MAX_AVATAR_WAV_BYTES } from './uploadLimits.js';
 import { HHMM_RE } from './timezone.js';
 import { TTS_ENGINE_IDS } from './voiceEngines.js';
 import { VOICE_TEXT_MAX_CHARS } from './apiContractSchemas.js';
+import { AVATAR_CHANNEL_COUNT, AVATAR_CHANNEL_LABEL_MAX, CHANNEL_AGENT_LIMITS } from './voiceChannels.js';
 
 export const voicePiperFetchBodySchema = z.object({ voice: nonEmptyString });
 
 export const voiceAvatarCommandSchema = z.object({
-  action: z.enum(['install', 'update', 'cancel', 'start', 'stop', 'uninstall']),
+  action: z.enum(['install', 'update', 'cancel', 'start', 'stop', 'uninstall', 'autostart']),
   acceptTerms: z.literal(true).optional(),
 }).strict();
 
@@ -22,7 +23,55 @@ export const voiceAvatarWaveSchema = z.custom(wav => Buffer.isBuffer(wav) && wav
   wav.length <= MAX_AVATAR_WAV_BYTES && wav.toString('ascii', 0, 4) === 'RIFF' &&
   wav.toString('ascii', 8, 12) === 'WAVE', 'Expected PCM WAV audio.');
 
+export const voiceAvatarIdleSchema = z.object({
+  stage: z.enum(['idle', 'listening', 'thinking']).default('idle'),
+}).strict();
+
+/**
+ * A channel's agent overrides. Every field is optional and an absent one inherits the
+ * global voice config; `voiceAvatarChannels` normalization drops anything invalid.
+ */
+const L = CHANNEL_AGENT_LIMITS;
+export const voiceChannelAgentSchema = z.object({
+  voiceId: z.string().trim().max(L.voiceId).optional(),
+  provider: z.string().trim().max(L.provider).optional(),
+  model: z.string().trim().max(L.model).optional(),
+  name: z.string().trim().max(L.name).optional(),
+  role: z.string().trim().max(L.role).optional(),
+  speechStyle: z.string().trim().max(L.speechStyle).optional(),
+  customPrompt: z.string().trim().max(L.customPrompt).optional(),
+  traits: z.array(z.string().trim().max(L.trait)).max(L.traits).optional(),
+}).strict();
+
+/** Voice Call transceiver channels; each can wear one avatar and tune its own agent. */
+const voiceAvatarChannelSchema = z.object({
+  label: z.string().trim().max(AVATAR_CHANNEL_LABEL_MAX),
+  avatar: mediaFilenameSchema.nullable(),
+  agent: voiceChannelAgentSchema.optional(),
+}).strict();
+
+export const voiceAvatarChannelsSchema = z.object({
+  active: z.number().int().min(0).max(AVATAR_CHANNEL_COUNT - 1).optional(),
+  channels: z.array(voiceAvatarChannelSchema).length(AVATAR_CHANNEL_COUNT).optional(),
+}).strict().refine((body) => body.active !== undefined || body.channels !== undefined, 'Send active or channels');
+
+/** A field-wise agent edit: a value sets the field, `null` clears it, and `agent: null` clears them all. */
+const voiceChannelAgentPatchSchema = z.object(Object.fromEntries(
+  Object.entries(voiceChannelAgentSchema.shape).map(([field, schema]) => [field, schema.unwrap().nullable().optional()]),
+)).strict().nullable();
+
+/** One channel's edit; the server merges `agent` field by field (mergeChannelAgentPatch). */
+export const voiceAvatarChannelPatchSchema = voiceAvatarChannelSchema.extend({ agent: voiceChannelAgentPatchSchema.optional() }).partial()
+  .refine((body) => Object.keys(body).length > 0, 'Send label, avatar or agent');
+export const voiceAvatarChannelParamsSchema = z.object({
+  index: z.coerce.number().int().min(0).max(AVATAR_CHANNEL_COUNT - 1),
+}).strict();
+
+export const voiceAvatarAddSchema = z.object({ filename: mediaFilenameSchema }).strict();
+export const voiceAvatarFilenameParamsSchema = z.object({ filename: mediaFilenameSchema }).strict();
+
 export const facetimeActionSchema = z.object({}).strict();
+export const voiceLlmPreloadSchema = z.object({}).strict();
 
 export const voiceConfigPatchSchema = z.object({
   enabled: z.boolean().optional(),
@@ -36,6 +85,15 @@ export const voiceConfigPatchSchema = z.object({
     escalateCritical: z.boolean().optional(),
     escalateAfterMinutes: z.number().int().min(1).max(1440).optional(),
     autoAnswer: z.boolean().optional(),
+  }).partial().optional(),
+  avatar: z.object({
+    autoStart: z.boolean().optional(),
+  }).partial().optional(),
+  realtime: z.object({
+    enabled: z.boolean().optional(),
+    engine: z.literal('sophon').optional(),
+    size: z.enum(['32B', '4B']).optional(),
+    home: z.string().trim().min(1).max(512).optional(),
   }).partial().optional(),
   stt: z.object({
     engine: z.enum(['whisper', 'web-speech']).optional(),
@@ -81,6 +139,7 @@ export const voiceConfigPatchSchema = z.object({
     tools: z.object({
       enabled: z.boolean().optional(),
       maxIterations: z.number().int().min(1).max(10).optional(),
+      trimByIntent: z.boolean().optional(),
     }).partial().optional(),
     codeAgent: z.object({
       enabled: z.boolean().optional(),
@@ -219,3 +278,5 @@ export const voiceStudioProfilesQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(30),
   cursor: z.string().max(512).optional(),
 }).strict();
+
+export const avatarModelQuerySchema = z.object({ variant: z.string().optional() });

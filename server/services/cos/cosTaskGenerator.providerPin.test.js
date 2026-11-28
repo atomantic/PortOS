@@ -314,7 +314,7 @@ describe('claim dispatch reviewer identity preflight (#13522)', () => {
     expect(prepared.task).toBeNull();
     expect(prepared.skip).toMatchObject({ gate: 'reviewer-identity', detail: { reviewers: ['missing-reviewer'] } });
     expect(prepared.skip.reason).toContain('@missing-reviewer');
-    expect(prepared.skip.reason).toContain('Settings → Code Reviewers (usernames)');
+    expect(prepared.skip.reason).toContain('Models → Code Reviewers (usernames)');
     expect(recordPreflightOutcome).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'failed', reason: 'REVIEWER_IDENTITY_NOT_FOUND', note: prepared.skip.reason }));
     await prepare();
     expect(identityLookup).toHaveBeenCalledTimes(2);

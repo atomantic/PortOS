@@ -27,7 +27,6 @@
 
 import { randomBytes, createCipheriv, createDecipheriv } from 'crypto';
 import { readFileSync } from 'fs';
-import { chmod } from 'fs/promises';
 import { tryReadFileStrict, atomicWrite } from './fileUtils.js';
 import { createSingleFlight } from './singleFlight.js';
 import { PORTOS_ENV_PATH, queuePortosEnvWrite } from './portosEnv.js';
@@ -147,13 +146,10 @@ async function provisionVaultKey(envPath) {
   // Drop any invalid PRIVACY_VAULT_KEY lines (none are valid — checked above).
   const cleaned = content.replace(/^PRIVACY_VAULT_KEY=.*(\r?\n|$)/gm, '');
   const separator = cleaned && !cleaned.endsWith('\n') ? '\n' : '';
-  await atomicWrite(envPath, `${cleaned}${separator}PRIVACY_VAULT_KEY=${key}\n`);
-  // Enforce owner-only permissions whenever writing PRIVACY_VAULT_KEY (including
-  // existing .env files created earlier with umask default 0644) so the vault
-  // master key is never left world-readable.
-  await chmod(envPath, 0o600).catch((err) => {
-    if (err?.code !== 'ENOENT') console.log(`⚠️ Could not set permissions on .env (${err?.code || 'error'})`);
-  });
+  // Enforce owner-only permissions on the temp file before PRIVACY_VAULT_KEY
+  // is written (including when replacing an existing 0644 .env) so the vault
+  // master key never touches a world-readable inode.
+  await atomicWrite(envPath, `${cleaned}${separator}PRIVACY_VAULT_KEY=${key}\n`, { mode: 0o600 });
   process.env.PRIVACY_VAULT_KEY = key;
   console.log('🔐 Generated PRIVACY_VAULT_KEY and wrote it to .env (vault encryption engaged)');
   return { generated: true };

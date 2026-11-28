@@ -174,6 +174,32 @@ describe('telegramBridge service', () => {
       expect(getStatus().connected).toBe(false);
     });
 
+    it('returns false and logs when access.json contains malformed JSON', async () => {
+      fileStore.set(ENV_FILE, `TELEGRAM_BOT_TOKEN=${BOT_TOKEN}\n`);
+      fileStore.set(ACCESS_FILE, '{not-valid-json');
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      expect(await init()).toBe(false);
+      expect(getStatus().connected).toBe(false);
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('📱 TG Bridge: invalid JSON in access.json')
+      );
+    });
+
+    it('returns false and logs when API returns a JSON null body', async () => {
+      seedCredentials();
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+        ok: false,
+        status: 502,
+        json: async () => null
+      }));
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      expect(await init()).toBe(false);
+      expect(getStatus().connected).toBe(false);
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('📱 TG Bridge: API error on getMe — HTTP 502')
+      );
+    });
+
     it('returns false and clears the token when getMe rejects the token', async () => {
       seedCredentials();
       vi.stubGlobal('fetch', mockTelegramFetch({ getMeOk: false }));

@@ -2,12 +2,13 @@
 // Inbound:  voice:turn | voice:text | voice:interrupt | voice:reset
 //           | voice:dictation:set | voice:ui:index | voice:screenshot:result
 //           | voice:ui:read-response | voice:output:available | voice:output:claim
-// Outbound: voice:transcript | voice:llm:delta | voice:llm:done | voice:tts:audio
+//           | voice:image:attach | voice:image:remove | voice:vision:state
+// Outbound: voice:transcript | voice:llm:loading | voice:llm:delta | voice:llm:done | voice:tts:audio
 //           | voice:tts:cancel | voice:tool | voice:dictation | voice:navigate
 //           | voice:ui:click | voice:ui:fill | voice:ui:select | voice:ui:check
 //           | voice:ui:read-request
 //           | voice:dailyLog:appended | voice:error | voice:idle
-//           | voice:screenshot:request
+//           | voice:screenshot:request | voice:image
 //           | voice:speak | voice:output:primary | voice:output:detached
 // Call host (FaceTime Audio bridge):
 // Inbound:  voice:call:attach | voice:call:audio | voice:call:detach | voice:call:hangup
@@ -15,9 +16,13 @@
 // Meeting capture (same page, same audio bridge, no LLM — STT only):
 // Inbound:  voice:capture:start | voice:call:audio | voice:capture:stop
 // Outbound: voice:capture:state
+// Realtime speech-to-speech call:
+// Inbound:  voice:realtime:start | voice:realtime:audio | voice:realtime:interrupt | voice:realtime:stop
+// Outbound: voice:realtime:state | voice:realtime:audio | voice:realtime:interrupt
+//           | voice:realtime:reply | voice:realtime:delegate | voice:realtime:result | voice:realtime:event
 
 import { SOCKET_MEDIA_MAX_BYTES } from '../lib/socketPayloadLimits.js';
-import { socketHasCurrentHostControl } from '../services/authGate.js';
+import { HOST_CONTROL_FORBIDDEN_MESSAGE, socketHasCurrentHostControl } from '../services/authGate.js';
 import { getVoiceConfig } from '../services/voice/config.js';
 import { registerEchoBuffer, unregisterEchoBuffer } from '../services/voice/echo.js';
 import {
@@ -46,7 +51,8 @@ import {
   recordTurn,
   setCallStateListener,
 } from '../services/voice/callSession.js';
-import { synthesize } from '../services/voice/tts.js';
+import { synthesizeAgentSpeech } from '../services/voice/channelAgent.js';
+import { attachImage, parseImageAttachment, removeImage, setTabSharing } from '../services/voice/imageAttachments.js';
 import {
   attachCaptureHost,
   detachCaptureHost,
@@ -193,7 +199,7 @@ export const registerVoiceHandlers = (socket) => {
 
     try {
       const { runTurn } = await import('../services/voice/pipeline.js');
-      const { transcript, reply } = await runTurn({
+      const { transcript, reply, userContent } = await runTurn({
         audio, mimeType, text, source, history: state.history, emit, signal, state,
         hasHostControl: () => socketHasCurrentHostControl(socket),
       });
@@ -205,7 +211,9 @@ export const registerVoiceHandlers = (socket) => {
       // the conversation with the CoS, just raw journal content. An exception:
       // the stop-dictation reply IS a normal assistant turn, push both sides.
       if (!state.dictation.enabled || reply) {
-        pushHistory('user', transcript);
+        // userContent carries the descriptions of any images shown this turn,
+        // so later turns can still talk about them.
+        pushHistory('user', userContent || transcript);
         pushHistory('assistant', reply);
       }
     } catch (err) {
@@ -218,6 +226,17 @@ export const registerVoiceHandlers = (socket) => {
       }
       socket.emit('voice:idle', { reason: 'error' });
     }
+  };
+
+  // A realtime call owns the conversation: the realtime voice hears the mic
+  // and speaks. A pipeline turn arriving meanwhile (the widget's hands-free
+  // listener, a typed line) would answer separately in the Piper voice as a
+  // second conversation, so it is dropped while the call is live or starting.
+  const realtimeOwnsTurn = (stage) => {
+    if (!realtime && !realtimeStarting) return false;
+    socket.emit('voice:idle', { reason: 'realtime-active' });
+    socket.emit('voice:error', { stage, code: 'REALTIME_ACTIVE', message: 'A realtime call is live. Hang up the realtime call to use the regular voice.' });
+    return true;
   };
 
   // Gate voice:turn / voice:text on the Settings voice.enabled toggle so the
@@ -235,7 +254,8 @@ export const registerVoiceHandlers = (socket) => {
   socket.on('voice:turn', async (payload = {}) => {
     try {
       if (!(await ensureEnabled('turn'))) return;
-      const { audio, mimeType: rawMime } = payload;
+      if (realtimeOwnsTurn('turn')) return;
+      const { audio, mimeType: rawMime } = payload && typeof payload === 'object' ? payload : {};
       if (!audio) {
         socket.emit('voice:error', { stage: 'turn', message: 'audio is required' });
         return;
@@ -269,6 +289,7 @@ export const registerVoiceHandlers = (socket) => {
   socket.on('voice:text', async (payload = {}) => {
     try {
       if (!(await ensureEnabled('text'))) return;
+      if (realtimeOwnsTurn('text')) return;
       const raw = payload?.text;
       if (typeof raw !== 'string' && typeof raw !== 'number') {
         socket.emit('voice:error', { stage: 'text', message: 'text is required' });
@@ -283,7 +304,8 @@ export const registerVoiceHandlers = (socket) => {
         socket.emit('voice:error', { stage: 'text', message: `text too long (${text.length} > ${MAX_TEXT_LEN} chars)` });
         return;
       }
-      await runTurnWithState({ text, source: payload?.source, errorStage: 'text' });
+      const source = payload?.source === 'voice' || payload?.source === 'text' ? payload.source : undefined;
+      await runTurnWithState({ text, source, errorStage: 'text' });
     } catch (err) {
       console.error(`❌ voice:text failed: ${err.message}`);
       socket.emit('voice:error', { stage: 'text', message: err.message });
@@ -307,6 +329,9 @@ export const registerVoiceHandlers = (socket) => {
     // context, so a pending destructive click from the prior turn must
     // not survive into the next utterance.
     state.pendingDestructive = null;
+    // The cleared history no longer holds the last shared frame, so the next
+    // turn re-attaches it even when the screen did not change.
+    if (state.images) state.images.lastFrame = null;
     socket.emit('voice:dictation', { enabled: false });
     socket.emit('voice:idle', { reason: 'reset' });
   });
@@ -357,8 +382,21 @@ export const registerVoiceHandlers = (socket) => {
     // module-level constant for the rationale.)
     const MAX_ELEMENTS = 200;
     const filtered = elements
-      .filter((e) => e && typeof e === 'object' && typeof e.ref === 'number' && typeof e.label === 'string')
-      .slice(0, MAX_ELEMENTS);
+      .filter((e) => e && typeof e === 'object' && Number.isFinite(e.ref) && typeof e.label === 'string')
+      .slice(0, MAX_ELEMENTS)
+      .map((e) => ({
+        ref: e.ref,
+        ...(typeof e.kind === 'string' && { kind: e.kind.slice(0, 32) }),
+        label: e.label.slice(0, 160),
+        ...(e.guard === 'confirm' && { guard: 'confirm' }),
+        ...(e.active === true && { active: true }),
+        ...(typeof e.type === 'string' && { type: e.type.slice(0, 32) }),
+        ...(typeof e.value === 'string' && { value: e.value.slice(0, 160) }),
+        ...(typeof e.checked === 'boolean' && { checked: e.checked }),
+        ...(Array.isArray(e.options) && {
+          options: e.options.filter((option) => typeof option === 'string').slice(0, 30).map((option) => option.slice(0, 120)),
+        }),
+      }));
     state.ui = {
       path: typeof path === 'string' ? path.slice(0, 256) : null,
       title: typeof title === 'string' ? title.slice(0, 120) : null,
@@ -393,8 +431,47 @@ export const registerVoiceHandlers = (socket) => {
     const resolve = state.screenshotWaiters.get(requestId);
     if (resolve) {
       state.screenshotWaiters.delete(requestId);
-      resolve(dataUrl);
+      resolve(dataUrl ? { dataUrl, signature: payload.signature, name: payload.name } : null);
     }
+  });
+
+  // Images the user shows the agent between turns: an upload or a snapshot of
+  // the shared tab. Described right away so the next turn rarely waits; the
+  // description joins that turn's message and the chip shows it.
+  socket.on('voice:image:attach', async (payload) => {
+    try {
+      const parsed = parseImageAttachment(payload, { maxBytes: MAX_SCREENSHOT_BYTES });
+      if (parsed.error) {
+        if (parsed.id) socket.emit('voice:image', { id: parsed.id, status: 'error', error: parsed.error });
+        return;
+      }
+      if (!(await ensureEnabled('image'))) {
+        socket.emit('voice:image', { id: parsed.id, status: 'error', error: 'voice mode disabled' });
+        return;
+      }
+      const { describeAttachedImage } = await import('../services/voice/pipeline.js');
+      attachImage(state, parsed, {
+        describe: (dataUrl) => describeAttachedImage(dataUrl, { hasHostControl: () => socketHasCurrentHostControl(socket) }),
+        emit: (event, data) => socket.emit(event, data),
+      });
+    } catch (err) {
+      console.error(`❌ voice:image:attach failed: ${err.message}`);
+    }
+  });
+
+  socket.on('voice:image:remove', (payload) => {
+    if (typeof payload?.id === 'string') removeImage(state, payload.id, (event, data) => socket.emit(event, data));
+  });
+
+  // The client reports whether a tab is being shared; while it is, each turn
+  // attaches a fresh frame when the screen changed.
+  socket.on('voice:vision:state', (payload) => {
+    setTabSharing(state, payload?.live === true);
+  });
+
+  // Voice Call timing debug: while on, each turn's stage timings are also pushed as voice:timing.
+  socket.on('voice:debug:timing', (payload) => {
+    state.timingDebug = payload?.enabled === true;
   });
 
   // Lazy visible-text reply. The ui_read tool emitted voice:ui:read-request;
@@ -506,7 +583,7 @@ export const registerVoiceHandlers = (socket) => {
     call.busy = true;
     markSpeaking();
     try {
-      const { wav, latencyMs } = await synthesize(line);
+      const { wav, latencyMs } = await synthesizeAgentSpeech(line);
       socket.emit('voice:call:tts', { sentence: line, wav, latencyMs });
       // Consume only now that the line has actually been delivered. Clearing
       // it before synthesize resolved is what turned one TTS failure into a
@@ -526,6 +603,13 @@ export const registerVoiceHandlers = (socket) => {
 
   const emitCallState = (snapshot) => {
     socket.emit('voice:call:state', snapshot);
+    // A call just started (placed, or answered): prefill the persona and tool
+    // prompt while it rings so the caller's first turn starts from the cache.
+    if (snapshot?.state === 'dialing' || snapshot?.state === 'connected') {
+      import('../services/voice/pipeline.js')
+        .then(({ warmPromptPrefix }) => warmPromptPrefix({ reason: 'call' }))
+        .catch((err) => console.error(`❌ voice call: prompt warm-up failed: ${err.message}`));
+    }
     // 'listening' is the first state the poll reaches once the helper reports a
     // connected call. The line is consumed only on a delivery that succeeded,
     // so the repeated state emits this broadcast produces retry a failed line
@@ -763,6 +847,155 @@ export const registerVoiceHandlers = (socket) => {
     }
   });
 
+  // ── Realtime (speech-to-speech) call ─────────────────────────────────────
+  // The browser streams 16 kHz PCM16 microphone audio; a local full-duplex
+  // voice model hears it, takes turns, can be interrupted and speaks. When it
+  // needs a lookup or an action it delegates a task, which runs through the
+  // regular Voice tool pipeline as a text-only turn, and the voice speaks the
+  // result. One realtime call per socket.
+  let realtime = null;
+  let realtimeStarting = false;
+  let realtimeGeneration = 0;
+  let unsubscribeRealtimeStop = null;
+  // Aborts startup and delegated turns still running when the call ends, so
+  // tool actions stop and nothing reaches the tab after hang-up or sidecar exit.
+  let realtimeCtrl = null;
+  const closeRealtime = () => {
+    realtimeGeneration += 1;
+    realtimeStarting = false;
+    unsubscribeRealtimeStop?.();
+    unsubscribeRealtimeStop = null;
+    const session = realtime;
+    realtime = null;
+    realtimeCtrl?.abort();
+    realtimeCtrl = null;
+    session?.close();
+  };
+  // Pipeline events a delegated turn may send the tab: tool side effects
+  // (navigation, UI actions, dictation, errors). Its own speech, transcript and
+  // streaming text are dropped — the realtime voice says the result.
+  const DELEGATE_DROPPED = /^voice:(tts:|transcript$|llm:(delta|done|loading)$|idle$)/;
+  const runRealtimeDelegate = async (task) => {
+    const signal = realtimeCtrl?.signal;
+    if (!signal || signal.aborted) return '';
+    const { runTurn } = await import('../services/voice/pipeline.js');
+    const { reply } = await runTurn({
+      text: task,
+      source: 'delegate',
+      history: state.history,
+      state,
+      speak: false,
+      signal,
+      hasHostControl: () => socketHasCurrentHostControl(socket),
+      emit: (event, data) => { if (!signal.aborted && !DELEGATE_DROPPED.test(event)) socket.emit(event, data); },
+    });
+    if (signal.aborted) return '';
+    pushHistory('user', task);
+    pushHistory('assistant', reply);
+    return reply;
+  };
+
+  const startRealtime = async () => {
+    if (realtime || realtimeStarting) return;
+    realtimeStarting = true;
+    const gen = ++realtimeGeneration;
+    const ctrl = new AbortController();
+    realtimeCtrl = ctrl;
+    try {
+      const cfg = await getVoiceConfig();
+      if (realtimeGeneration !== gen) return;
+      if (socket.disconnected || socket.connected === false) {
+        realtimeStarting = false;
+        if (realtimeCtrl === ctrl) realtimeCtrl = null;
+        return;
+      }
+      if (await socketHasCurrentHostControl(socket) !== true) {
+        if (realtimeGeneration !== gen) return;
+        realtimeStarting = false;
+        if (realtimeCtrl === ctrl) realtimeCtrl = null;
+        socket.emit('voice:realtime:state', { active: false, code: 'HOST_CONTROL_FORBIDDEN', error: HOST_CONTROL_FORBIDDEN_MESSAGE });
+        return;
+      }
+      if (realtimeGeneration !== gen || socket.disconnected) return;
+      if (!cfg.enabled || !cfg.realtime?.enabled) {
+        realtimeStarting = false;
+        if (realtimeCtrl === ctrl) realtimeCtrl = null;
+        const error = !cfg.enabled
+          ? 'Voice mode is turned off in Voice settings.'
+          : 'Realtime voice is turned off in Voice settings.';
+        socket.emit('voice:realtime:state', { active: false, error });
+        return;
+      }
+      socket.emit('voice:realtime:state', { active: false, loading: true });
+      const [{ openRealtimeCall }, { onRealtimeSidecarStop }] = await Promise.all([
+        import('../services/voice/realtimeSession.js'),
+        import('../services/voice/realtimeRuntime.js'),
+      ]);
+      if (realtimeGeneration !== gen || socket.disconnected) return;
+      unsubscribeRealtimeStop?.();
+      unsubscribeRealtimeStop = onRealtimeSidecarStop((reason) => {
+        const wasActiveOrStarting = Boolean(realtime || realtimeStarting);
+        closeRealtime();
+        if (wasActiveOrStarting && !socket.disconnected) {
+          socket.emit('voice:realtime:state', {
+            active: false,
+            reason,
+            ...(reason === 'disabled' ? { error: 'Realtime voice is turned off in Voice settings.' } : {}),
+          });
+        }
+      });
+      const session = await openRealtimeCall({
+        cfg,
+        signal: ctrl.signal,
+        emit: (event, data) => { if (realtimeGeneration === gen && !socket.disconnected) socket.emit(event, data); },
+        runDelegate: runRealtimeDelegate,
+        onClose: () => {
+          if (realtimeGeneration !== gen) return;
+          realtimeStarting = false;
+          realtime = null;
+          unsubscribeRealtimeStop?.();
+          unsubscribeRealtimeStop = null;
+          if (realtimeCtrl === ctrl) {
+            realtimeCtrl = null;
+            ctrl.abort();
+          }
+        },
+      });
+      if (realtimeGeneration !== gen || socket.disconnected) { session?.close(); return; }
+      realtimeStarting = false;
+      realtime = session;
+    } catch (err) {
+      if (realtimeGeneration !== gen || socket.disconnected) return;
+      realtimeStarting = false;
+      unsubscribeRealtimeStop?.();
+      unsubscribeRealtimeStop = null;
+      if (realtimeCtrl === ctrl) {
+        realtimeCtrl = null;
+        ctrl.abort();
+      }
+      console.error(`🗣️ voice:realtime:start failed: ${err.message}`);
+      socket.emit('voice:realtime:state', { active: false, error: err.message });
+    }
+  };
+
+  socket.on('voice:realtime:start', async () => {
+    try {
+      await startRealtime();
+    } catch (err) {
+      console.error(`🗣️ voice:realtime:start failed: ${err.message}`);
+    }
+  });
+
+  socket.on('voice:realtime:audio', (payload = {}) => {
+    const pcm = payload?.pcm;
+    const bytes = audioByteLength(pcm);
+    if (!realtime || !bytes || bytes > MAX_CALL_FRAME_BYTES) return;
+    realtime.pushAudio(Buffer.isBuffer(pcm) ? pcm : Buffer.from(ArrayBuffer.isView(pcm) ? pcm.buffer.slice(pcm.byteOffset, pcm.byteOffset + pcm.byteLength) : pcm));
+  });
+
+  socket.on('voice:realtime:interrupt', () => realtime?.interrupt());
+  socket.on('voice:realtime:stop', () => closeRealtime());
+
   socket.on('disconnect', () => {
     hostRequestGeneration += 1;
     // Drop this tab from the voice-output registry; if it was the sole
@@ -771,6 +1004,7 @@ export const registerVoiceHandlers = (socket) => {
     releaseVoiceOutput(socket);
     state.ctrl?.abort();
     call.ctrl?.abort();
+    closeRealtime();
     // Abort any pending UI refresh waiters so their turns don't hang.
     const waiters = state.uiWaiters;
     state.uiWaiters = [];

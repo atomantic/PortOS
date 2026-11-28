@@ -1,19 +1,17 @@
-import { parse } from '@babel/parser';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { mayHaveSocketBroadcast, parseStrictRuntimeAst, SOCKET_SERVER_HANDLES } from '../../guardSources.js';
 import { readText, REPO_ROOT, trackedFiles } from '../../../../scripts/lib/guardCorpus.js';
 
 const SERVER_ROOT = join(REPO_ROOT, 'server');
-const SERVER_HANDLES = new Set(['io', 'ioInstance', 'boundIo', 'providersIo', 'ioRef', 'ns']);
-const MAY_HAVE_SERVER_HANDLE = new RegExp(`\\b(?:${[...SERVER_HANDLES, 'getIo'].join('|')})\\b`);
 const SCOPED_METHODS = new Set(['in', 'to']);
 const isMember = (node) => ['MemberExpression', 'OptionalMemberExpression'].includes(node?.type);
 const isCall = (node) => ['CallExpression', 'OptionalCallExpression'].includes(node?.type);
 const memberName = (node) => node.computed ? node.property.value : node.property.name;
 
 function hasUnscopedServerReceiver(node) {
-  if (node.type === 'Identifier') return SERVER_HANDLES.has(node.name);
-  if (isMember(node)) return SERVER_HANDLES.has(memberName(node)) || hasUnscopedServerReceiver(node.object);
+  if (node.type === 'Identifier') return SOCKET_SERVER_HANDLES.has(node.name);
+  if (isMember(node)) return SOCKET_SERVER_HANDLES.has(memberName(node)) || hasUnscopedServerReceiver(node.object);
   if (!isCall(node)) return false;
   const { callee, arguments: args } = node;
   if (callee.type === 'Identifier') return callee.name === 'getIo';
@@ -26,34 +24,37 @@ function hasUnscopedServerReceiver(node) {
   return hasUnscopedServerReceiver(callee.object);
 }
 
-function findUnscopedEmits(source) {
-  if (!source.includes('\\u') && (!source.includes('emit') || !MAY_HAVE_SERVER_HANDLE.test(source))) return [];
+function findUnscopedEmits(source, program) {
   const violations = [];
   function visit(node) {
     if (isCall(node) && isMember(node.callee) && memberName(node.callee) === 'emit'
-      && hasUnscopedServerReceiver(node.callee.object)) violations.push(node.loc.start.line);
+      && hasUnscopedServerReceiver(node.callee.object)) violations.push(source.slice(0, node.start).split(/\r\n?|[\n\u2028\u2029]/).length);
     for (const value of Object.values(node)) {
       if (Array.isArray(value)) {
         for (const child of value) if (child?.type) visit(child);
       } else if (value?.type) visit(value);
     }
   }
-  visit(parse(source, { sourceType: 'unambiguous', attachComment: false }).program);
+  visit(program);
   return violations;
 }
+
+const scanSource = (source, path = null) => mayHaveSocketBroadcast(source)
+  ? findUnscopedEmits(source, parseStrictRuntimeAst(path, source).program) : [];
 
 describe('Socket.IO operator broadcast audience', () => {
   it('requires operator broadcasts to go through the shared audience helper', () => {
     const violations = trackedFiles(SERVER_ROOT, ['*.js']).flatMap((file) => {
       if (file.endsWith('.test.js') || file.startsWith('test/') || file.startsWith('cos-runner/')
         || file === 'lib/socketAudience.js') return [];
-      return findUnscopedEmits(readText(join(SERVER_ROOT, file))).map(line => `${file}:${line}`);
+      const path = join(SERVER_ROOT, file);
+      return scanSource(readText(path), path).map(line => `${file}:${line}`);
     });
     expect(violations, 'Use emitToOperators or emitToOperatorsOn for operator broadcasts.').toEqual([]);
   });
 
   it('finds optional, computed, exclusion-only and route-given server emits', () => {
-    expect(findUnscopedEmits([
+    expect(scanSource([
       "io.emit('example');",
       "getIo()?.emit('example');",
       "req.app.get('io')?.['emit']('example');",
@@ -63,8 +64,12 @@ describe('Socket.IO operator broadcast audience', () => {
     ].join('\n'))).toEqual([1, 2, 3, 4, 5, 6]);
   });
 
+  it('checks escaped property names and preserves JavaScript line numbers', () => {
+    expect(scanSource("const label = 'example';\r\n" + String.raw`io['e\x6dit'](label);`)).toEqual([2]);
+  });
+
   it('allows individual sends, explicit room and namespace sends, and the operator helpers', () => {
-    expect(findUnscopedEmits(`
+    expect(scanSource(`
       socket.emit('build:id', build);
       io.to(activeRoom).emit('example:scoped');
       io.of('/hosted').emit('example:hosted');

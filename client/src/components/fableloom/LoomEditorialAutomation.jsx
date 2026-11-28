@@ -1,4 +1,5 @@
 import { BrainCircuit } from 'lucide-react';
+import ListLoadError from '../ui/ListLoadError';
 import useLoomEditorialAutopilot from './useLoomEditorialAutopilot';
 import EditorialRunControls from './EditorialRunControls';
 import EditorialFindingsSummary from './EditorialFindingsSummary';
@@ -12,7 +13,7 @@ const statusClass = (status) => {
 
 /** Whole-series one-pass editor, bounded editor/reviewer autopilot, and playthrough QA. */
 export default function LoomEditorialAutomation({ loom, dirty, onLoomUpdate }) {
-  const { settings, actions, autopilotRun, autopilotActive, shownRun, result } = useLoomEditorialAutopilot({ loom, onLoomUpdate });
+  const { settings, actions, autopilotRun, autopilotActive, shownRun, result, readState, readError, retry } = useLoomEditorialAutopilot({ loom, onLoomUpdate });
 
   return (
     <section
@@ -39,6 +40,7 @@ export default function LoomEditorialAutomation({ loom, dirty, onLoomUpdate }) {
         ) : null}
       </div>
 
+      {readError && <ListLoadError what="editorial autopilot status" error={readError} onRetry={retry} retrying={readState === 'loading'} />}
       <EditorialRunControls
         hasEpisodes={loom.episodes.length > 0}
         dirty={dirty}

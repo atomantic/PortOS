@@ -1,6 +1,7 @@
+import { homedir } from 'os';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { join, resolve } from 'path';
-import { existsSync } from 'fs';
+import { existsSync, realpathSync, statSync } from 'fs';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
 
@@ -23,9 +24,12 @@ vi.mock('fs/promises', () => ({
   stat: vi.fn().mockResolvedValue({ isDirectory: () => true })
 }));
 
+const WORKSPACE = join(homedir(), 'example-workspace');
+
 // Parent dir exists; target dir does not (so a valid request proceeds).
 vi.mock('fs', () => ({
-  existsSync: vi.fn((p) => p === '/tmp/workspace'),
+  existsSync: vi.fn((p) => p === WORKSPACE),
+  statSync: vi.fn(() => ({ isDirectory: () => true })),
   realpathSync: vi.fn((p) => p)
 }));
 
@@ -41,11 +45,6 @@ vi.mock('../services/apps.js', () => ({
 
 vi.mock('../services/ports.js', () => ({
   allocatePorts: vi.fn().mockResolvedValue([5570, 5571])
-}));
-
-vi.mock('../lib/workspaceRoots.js', () => ({
-  isWithinAllowedRoots: vi.fn(() => true),
-  outsideAllowedRootsMessage: vi.fn((realPath, { field = 'path' } = {}) => `${field} is outside allowed directories: ${realPath}`)
 }));
 
 vi.mock('./scaffoldVite.js', () => ({ scaffoldVite: vi.fn().mockResolvedValue(undefined) }));
@@ -96,8 +95,29 @@ describe('POST /api/scaffold — request validation before filesystem mutation (
   const validBody = {
     name: 'My App',
     template: 'ios-native',
-    parentDir: '/tmp/workspace'
+    parentDir: WORKSPACE
   };
+
+  it('rejects a file as the scaffold parent before writing anything', async () => {
+    statSync.mockReturnValueOnce({ isDirectory: () => false });
+    const response = await request(makeApp()).post('/api/scaffold').send(validBody);
+
+    expect(response.status).toBe(400);
+    expect(response.body.code).toBe('INVALID_PARENT');
+    expectZeroMutations();
+  });
+
+  it('rejects a scaffold parent whose canonical path is outside the workspace roots', async () => {
+    const outsidePath = process.platform === 'win32'
+      ? resolve(`${process.env.SystemDrive || 'C:'}/Windows`)
+      : '/etc';
+    realpathSync.mockReturnValueOnce(outsidePath);
+    const response = await request(makeApp()).post('/api/scaffold').send(validBody);
+
+    expect(response.status).toBe(403);
+    expect(response.body.code).toBe('FORBIDDEN');
+    expectZeroMutations();
+  });
 
   it('rejects an unknown template with a validation error and zero mutations', async () => {
     const res = await request(app)
@@ -158,14 +178,14 @@ describe('POST /api/scaffold — request validation before filesystem mutation (
     expect(res.body.success).toBe(true);
     // Validation passed → the route reached the first filesystem mutation
     // (directory creation) and registered the app.
-    expect(ensureDir).toHaveBeenCalledWith(join('/tmp/workspace', 'my-app'));
+    expect(ensureDir).toHaveBeenCalledWith(join(WORKSPACE, 'my-app'));
     expect(createApp).toHaveBeenCalledTimes(1);
   });
 
   it('excludes an explicit sibling port from automatic allocation', async () => {
     allocatePorts.mockResolvedValueOnce([5571]);
     const res = await request(app).post('/api/scaffold').send({
-      name: 'My App', template: 'vite-express', parentDir: '/tmp/workspace', apiPort: 5570
+      name: 'My App', template: 'vite-express', parentDir: WORKSPACE, apiPort: 5570
     });
 
     expect(res.status).toBe(200);
@@ -176,7 +196,7 @@ describe('POST /api/scaffold — request validation before filesystem mutation (
   it('rejects an allocator result that collides with an explicit sibling port', async () => {
     allocatePorts.mockResolvedValueOnce([5570]);
     const res = await request(app).post('/api/scaffold').send({
-      name: 'My App', template: 'vite-express', parentDir: '/tmp/workspace', apiPort: 5570
+      name: 'My App', template: 'vite-express', parentDir: WORKSPACE, apiPort: 5570
     });
 
     expect(res.status).toBe(409);
@@ -187,7 +207,7 @@ describe('POST /api/scaffold — request validation before filesystem mutation (
   it('returns port exhaustion before filesystem writes', async () => {
     allocatePorts.mockResolvedValueOnce([]);
     const res = await request(app).post('/api/scaffold').send({
-      name: 'My App', template: 'vite-react', parentDir: '/tmp/workspace'
+      name: 'My App', template: 'vite-react', parentDir: WORKSPACE
     });
 
     expect(res.status).toBe(409);
@@ -203,7 +223,7 @@ describe('POST /api/scaffold — request validation before filesystem mutation (
     ]);
     for (const [, , options] of runCliBounded.mock.calls) {
       expect(options).toMatchObject({
-        cwd: join('/tmp/workspace', 'my-app'), timeoutMs: 30_000,
+        cwd: join(WORKSPACE, 'my-app'), timeoutMs: 30_000,
         stdio: ['ignore', 'pipe', 'pipe'], env: { GIT_TERMINAL_PROMPT: '0' },
       });
     }
@@ -214,7 +234,7 @@ describe('POST /api/scaffold — request validation before filesystem mutation (
     runCliBounded.mockResolvedValueOnce({ code: -1, stdout: '', stderr: 'timed out' });
     const res = await request(app).post('/api/scaffold').send(validBody);
     expect(res.status).toBe(500);
-    expect(rm).toHaveBeenCalledWith(join('/tmp/workspace', 'my-app'), { recursive: true, force: true });
+    expect(rm).toHaveBeenCalledWith(join(WORKSPACE, 'my-app'), { recursive: true, force: true });
     expect(createApp).not.toHaveBeenCalled();
   });
 
@@ -252,8 +272,8 @@ describe('POST /api/scaffold — request validation before filesystem mutation (
   // Regression (#9650): a failed scaffold left the directory behind, so a retry
   // with the same name was permanently blocked by DIR_EXISTS.
   it('removes the partial directory on failure so a retry with the same name succeeds', async () => {
-    const repoPath = join('/tmp/workspace', 'my-app');
-    const onDisk = new Set(['/tmp/workspace']);
+    const repoPath = join(WORKSPACE, 'my-app');
+    const onDisk = new Set([WORKSPACE]);
     existsSync.mockImplementation((p) => onDisk.has(p));
     ensureDir.mockImplementation(async (p) => { onDisk.add(p); });
     rm.mockImplementation(async (p) => { onDisk.delete(p); });
@@ -275,7 +295,7 @@ describe('POST /api/scaffold — request validation before filesystem mutation (
     expect(retry.status).toBe(200);
     expect(createApp).toHaveBeenCalledTimes(1);
 
-    existsSync.mockImplementation((p) => p === '/tmp/workspace');
+    existsSync.mockImplementation((p) => p === WORKSPACE);
     ensureDir.mockResolvedValue(undefined);
   });
 
@@ -295,9 +315,9 @@ describe('POST /api/scaffold — request validation before filesystem mutation (
     expect(res.status).toBe(200);
     expect(scaffoldVite).toHaveBeenCalledTimes(1);
     expect(scaffoldVite).toHaveBeenCalledWith(expect.objectContaining({
-      repoPath: join('/tmp/workspace', 'my-app'),
+      repoPath: join(WORKSPACE, 'my-app'),
       dirName: 'my-app',
-      parentDir: '/tmp/workspace',
+      parentDir: WORKSPACE,
       template: 'vite-express',
       uiPort: 3100,
       apiPort: 3101,
@@ -312,7 +332,7 @@ describe('POST /api/scaffold — request validation before filesystem mutation (
 
     expect(res.status).toBe(200);
     expect(scaffoldPortOS).toHaveBeenCalledWith(expect.objectContaining({
-      repoPath: join('/tmp/workspace', 'my-app'),
+      repoPath: join(WORKSPACE, 'my-app'),
       name: 'My App',
       dirName: 'my-app',
       uiPort: 3100,
@@ -328,7 +348,7 @@ describe('POST /api/scaffold — request validation before filesystem mutation (
 
     expect(res.status).toBe(200);
     expect(scaffoldXcode).toHaveBeenCalledWith(
-      join('/tmp/workspace', 'my-app'),
+      join(WORKSPACE, 'my-app'),
       'My App',
       'my-app',
       expect.any(Function)
@@ -342,7 +362,7 @@ describe('POST /api/scaffold — request validation before filesystem mutation (
 
     expect(res.status).toBe(200);
     expect(scaffoldXcode).toHaveBeenCalledWith(
-      join('/tmp/workspace', 'my-app'),
+      join(WORKSPACE, 'my-app'),
       'My App',
       'my-app',
       expect.any(Function),
@@ -354,25 +374,25 @@ describe('POST /api/scaffold — request validation before filesystem mutation (
 
 describe('GET /api/scaffold/directories', () => {
   it('includes selectable files only when requested, preserving directory-only responses', async () => {
-    existsSync.mockImplementation((p) => p === resolve('/tmp/workspace'));
+    existsSync.mockImplementation((p) => p === resolve(WORKSPACE));
     readdir.mockResolvedValue([
       { name: 'Chromium.app', isDirectory: () => true, isFile: () => false, isSymbolicLink: () => false },
       { name: 'chrome', isDirectory: () => false, isFile: () => true, isSymbolicLink: () => false },
       { name: '.hidden', isDirectory: () => false, isFile: () => true, isSymbolicLink: () => false },
     ]);
     const app = makeApp();
-    const folders = await request(app).get('/api/scaffold/directories?path=/tmp/workspace');
+    const folders = await request(app).get(`/api/scaffold/directories?path=${encodeURIComponent(WORKSPACE)}`);
     expect(folders.status).toBe(200);
     expect(folders.body).not.toHaveProperty('files');
-    const files = await request(app).get('/api/scaffold/directories?path=/tmp/workspace&includeFiles=true');
+    const files = await request(app).get(`/api/scaffold/directories?path=${encodeURIComponent(WORKSPACE)}&includeFiles=true`);
     expect(files.status).toBe(200);
-    expect(files.body.files).toEqual([{ name: 'chrome', path: join(resolve('/tmp/workspace'), 'chrome') }]);
+    expect(files.body.files).toEqual([{ name: 'chrome', path: join(resolve(WORKSPACE), 'chrome') }]);
     expect(files.body.directories).toEqual(folders.body.directories);
   });
 
   it('rejects an includeFiles value that is not a flag before reading the directory', async () => {
     const app = makeApp();
-    const res = await request(app).get('/api/scaffold/directories?path=/tmp/workspace&includeFiles=yes');
+    const res = await request(app).get(`/api/scaffold/directories?path=${encodeURIComponent(WORKSPACE)}&includeFiles=yes`);
     expect(res.status).toBe(400);
     expect(readdir).not.toHaveBeenCalled();
   });

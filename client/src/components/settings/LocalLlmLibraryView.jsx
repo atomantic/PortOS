@@ -85,8 +85,14 @@ export default function LocalLlmLibraryView() {
     // opens the upgrade banner, so this layer owns install notification.
     return runAction(
       `install-${modelId}`,
-      () => installLocalLlmModel(selected, modelId, { silent: true, force }),
-      (r) => r?.canceled ? `${modelId} download canceled` : r?.pending ? `${modelId} download started` : `${modelId} ${force ? 'redownloaded' : 'installed'}`,
+      async () => {
+        const result = await installLocalLlmModel(selected, modelId, { silent: true, force });
+        if (result?.canceled) toast.info(`${modelId} download canceled`);
+        else if (result?.pending) toast.success(`${modelId} download started`);
+        else toast.success(`${modelId} ${force ? 'redownloaded' : 'installed'}`);
+        return result;
+      },
+      null,
       {
         onError: (err) => {
           if (err?.code === 'OLLAMA_OUTDATED' && selected === 'ollama') {

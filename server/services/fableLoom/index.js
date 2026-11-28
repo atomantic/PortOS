@@ -103,6 +103,8 @@ export {
   initialPhaseForNode,
   processHostedUtterance,
   releaseHostedSpeechOutput,
+  revokeAllHostedSessions,
+  revokeHostedSessionsByOwner,
   revalidateLiveConversationGate,
   sanitizeHostedSession,
   startHostedListening,

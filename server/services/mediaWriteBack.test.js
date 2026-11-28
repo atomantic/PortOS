@@ -18,7 +18,7 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) => {
 vi.mock('./instanceIdentity.js', () => ({ getInstanceId: async () => 'local-test', UNKNOWN_INSTANCE_ID: 'unknown' }));
 vi.mock('./sharing/annotationIdentity.js', () => ({ resolveLocalAuthorName: async () => 'Example' }));
 vi.mock('./apps.js', () => ({ getAppById: vi.fn(), PORTOS_APP_ID: 'portos-default' }));
-vi.mock('./brain.js', () => ({ createLinkFromUrl: vi.fn() }));
+vi.mock('./brainLinks.js', () => ({ createLinkFromUrl: vi.fn() }));
 vi.mock('./brainStorage.js', () => ({ getLinkByUrl: vi.fn() }));
 vi.mock('./brainJournal.js', () => ({ getSettings: async () => ({ obsidianVaultId: null }) }));
 vi.mock('./cos/cosTaskStore.js', () => ({ addTask: vi.fn() }));

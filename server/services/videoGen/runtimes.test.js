@@ -2,7 +2,7 @@ import { EventEmitter } from 'node:events';
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { pinPlatform, resolveTestPython } from '../../lib/testHelper.js';
@@ -84,7 +84,7 @@ describe('retired runtime filtering', () => {
 describe('Wan 2.2 CUDA locked currency', () => {
   const python = resolveTestPython();
 
-  it.skipIf(!python)('checks transitive metadata, missing packages, Python minor and Conda before declaring a runtime current', () => {
+  it.skipIf(!python)('checks locked metadata, retired PyAV and the Python base before declaring the runtime current', () => {
     const root = mkdtempSync(join(tmpdir(), 'portos-cuda-currency-'));
     try {
       const lock = join(root, 'runtime.lock.txt');
@@ -104,7 +104,7 @@ describe('Wan 2.2 CUDA locked currency', () => {
       writeFileSync(join(direct, 'METADATA'), 'Name: portos-currency-direct\nVersion: 1.0\n');
       const metadata = join(transitive, 'METADATA');
       writeFileSync(metadata, 'Name: portos-currency-transitive\nVersion: 2.0\n');
-      const probe = (version = '3.11', base = root) => spawnSync(python, ['-c', `
+      const probe = (version = '3.11', base = root) => spawnSync(python, ['-I', '-S', '-c', `
 import importlib.metadata, re, sys
 from pathlib import Path
 sys.path.insert(0, sys.argv[2])
@@ -113,6 +113,13 @@ sys.base_prefix = sys.argv[4]
 ${BYOV_RUNTIME_INFO.wan22_cuda.currencyProbeArgs[1]}`, lock, root, version, base], { encoding: 'utf8', timeout: 10000 });
 
       expect(probe().status).toBe(0);
+      const retired = join(root, 'av-18.1.0.dist-info');
+      mkdirSync(retired);
+      writeFileSync(join(retired, 'METADATA'), 'Name: av\nVersion: 18.1.0\n');
+      expect(probe().status).toBe(78);
+      rmSync(retired, { recursive: true });
+      expect(probe().status).toBe(0);
+
       writeFileSync(metadata, 'Name: portos-currency-transitive\nVersion: 1.0\n');
       expect(probe().status).toBe(78);
       rmSync(transitive, { recursive: true });
@@ -163,6 +170,83 @@ describe('MLX video runtime currency', () => {
       await expect(isByovRuntimeReady('ltx25')).resolves.toBe(true);
     } finally { log.mockRestore(); }
   });
+
+  const python = resolveTestPython();
+  const markerPython = resolveTestPython({ modules: ['packaging.markers'] })
+    ?? resolveTestPython({ modules: ['pip._vendor.packaging.markers'] });
+
+  const h3Lock = 'requirements-minimax-h3-mlx.lock.txt';
+  const fastVideoLock = 'requirements-fastvideo-mlx.lock.txt';
+  const cases = [
+    { runtime: 'minimax_h3', lockName: h3Lock, minor: 11 },
+    { runtime: 'minimax_h3', lockName: h3Lock, minor: 12 },
+    { runtime: 'fastvideo', lockName: fastVideoLock, minor: 11, pythonMarker: "python_full_version < '3.12'" },
+    { runtime: 'fastvideo', lockName: fastVideoLock, minor: 12, pythonMarker: "python_full_version >= '3.12'" },
+  ];
+  for (const { runtime, lockName, minor, pythonMarker } of cases) {
+    const interpreter = pythonMarker ? markerPython : python;
+    it.skipIf(!interpreter)(`checks ${runtime} active pins with Python 3.${minor} after verifying the source`, async () => {
+      const info = BYOV_RUNTIME_INFO[runtime];
+      const [isolation, command, script, lock] = info.currencyProbeArgs;
+      expect(basename(lock)).toBe(lockName);
+      const lockText = readFileSync(lock, 'utf8');
+      const installed = Object.fromEntries(Array.from(
+        lockText.matchAll(/^([a-z0-9-]+)==([^\s;]+)([^\r\n]*)/gm),
+        ([, name, version, rest]) => [name, version, rest],
+      ).filter(([, , rest]) => !rest.includes('python_full_version') || rest.includes(pythonMarker))
+        .map(([name, version]) => [name, version]));
+      const source = info.sourcePath ? `# branch.oid ${info.expectedRevision}\n` : `${info.expectedRevision}\n`;
+      const check = async (packages) => {
+        runtimeMocks.spawn.mockImplementationOnce(() => statusChild(source))
+          .mockImplementationOnce((_file, args) => {
+            expect(args).toEqual([isolation, command, script, lock]);
+            const result = spawnSync(interpreter, [isolation, command, `
+import importlib.metadata as metadata
+import json, platform, sys
+from collections import namedtuple
+if sys.argv[3] == "fastvideo":
+    try:
+        import packaging.markers
+    except ModuleNotFoundError:
+        from pip._vendor import packaging
+        sys.modules["packaging"] = packaging
+installed = json.loads(sys.argv[2])
+def installed_version(name):
+    if name not in installed:
+        raise metadata.PackageNotFoundError(name)
+    return installed[name]
+metadata.version = installed_version
+minor = int(sys.argv[4])
+sys.platform = "darwin"
+sys.version_info = namedtuple("VersionInfo", "major minor micro releaselevel serial")(3, minor, 0, "final", 0)
+platform.machine = lambda: "arm64"
+platform.python_version = lambda: f"3.{minor}.0"
+${script}`, lock, JSON.stringify(packages), runtime, String(minor)], { encoding: 'utf8', timeout: 10000 });
+            expect(result.error).toBeUndefined();
+            expect(result.stderr).toBe('');
+            return exitChild(result.status);
+          });
+        return isByovRuntimeCurrent(runtime);
+      };
+
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+      try {
+        await expect(check(installed)).resolves.toBe(true);
+        const changedPin = pythonMarker ? 'av' : 'certifi';
+        const missingPin = pythonMarker ? 'av' : 'httpx2';
+        expect(installed[changedPin]).toBeDefined();
+        expect(installed[missingPin]).toBeDefined();
+        await expect(check({ ...installed, [changedPin]: '0.0.0' })).resolves.toBe(false);
+        const incomplete = { ...installed };
+        delete incomplete[missingPin];
+        await expect(check(incomplete)).resolves.toBe(false);
+        expect(runtimeMocks.spawn).toHaveBeenCalledTimes(6);
+        expect(runtimeMocks.spawn.mock.calls.map(([file]) => file)).toEqual([
+          'git', info.venvPython, 'git', info.venvPython, 'git', info.venvPython,
+        ]);
+      } finally { log.mockRestore(); }
+    });
+  }
 });
 
 describe('MiniMax H3 Ref2VA runtime', () => {
@@ -233,9 +317,10 @@ describe('MLX LightX2V runtime admission', () => {
 
     runtimeMocks.spawn.mockClear();
     runtimeMocks.spawn.mockImplementationOnce(() => statusChild(`# branch.oid ${REVISION}\n`))
+      .mockImplementationOnce(() => exitChild(0))
       .mockImplementationOnce(() => exitChild(0));
     await expect(resolveMiniMaxH3MlxSpeedCapable()).resolves.toBe(true);
-    expect(runtimeMocks.spawn.mock.calls[1][1]).toEqual([
+    expect(runtimeMocks.spawn.mock.calls[2][1]).toEqual([
       expect.stringContaining('_minimax_h3_mlx_lightx2v.py'), '--probe',
       BYOV_RUNTIME_INFO.minimax_h3.repoDir, REVISION,
     ]);
@@ -609,9 +694,11 @@ describe('fastvideo runtime registration', () => {
   const info = BYOV_RUNTIME_INFO.fastvideo;
 
   it('marks older FastVideo checkouts as upgradeable and recognizes the VSA-capable pin', async () => {
-    runtimeMocks.spawn.mockImplementation(() => statusChild('old-runtime-revision\n'));
+    runtimeMocks.spawn.mockImplementationOnce(() => statusChild('old-runtime-revision\n'));
     await expect(isByovRuntimeCurrent('fastvideo')).resolves.toBe(false);
-    runtimeMocks.spawn.mockImplementation(() => statusChild(`${info.expectedRevision}\n`));
+    expect(runtimeMocks.spawn).toHaveBeenCalledExactlyOnceWith('git', expect.any(Array), expect.any(Object));
+    runtimeMocks.spawn.mockImplementationOnce(() => statusChild(`${info.expectedRevision}\n`))
+      .mockImplementationOnce(() => exitChild(0));
     await expect(isByovRuntimeCurrent('fastvideo')).resolves.toBe(true);
   });
 
