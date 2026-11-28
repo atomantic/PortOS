@@ -7,9 +7,11 @@
 # installed with `uv pip install --no-deps --no-build-isolation -e ~/.portos/fastvideo`
 # after the lock sync. Dependencies match the MLX video generation runtime stack
 # with OSV-clean pins (Pillow 13.0.0, torch 2.15.0, diffusers 0.42.1,
-# filelock 4.2.9, mlx 0.32.4). Unused training, eval, OpenAI-server, and
-# CUDA-only packages (peft, accelerate, loguru, timm, torchaudio, omegaconf,
-# duplicate httpx) are omitted.
+# filelock 4.2.9, mlx 0.32.4). PortOS's scripts/ml/generate_fastvideo.py only
+# launches local MLX video scripts (never FastVideo's training, VBench eval,
+# CUDA audio, or OpenAI media-policy/streaming server entrypoints), so peft,
+# accelerate, loguru, timm, torchaudio, omegaconf, and duplicate httpx/httpcore
+# 0.x (alongside huggingface-hub's httpx2/httpcore2) are omitted.
 torch==2.15.0
 torchvision==0.29.2
 diffusers==0.42.1

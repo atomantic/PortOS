@@ -18,7 +18,7 @@
 #   printf '[project]\nname = "fastvideo-lock"\nversion = "0"\n[tool.uv]\nenvironments = ["sys_platform == '"'"'darwin'"'"' and platform_machine == '"'"'arm64'"'"'"]\n' > "$TMP/pyproject.toml"
 #   (cd "$TMP" && uv pip compile requirements-fastvideo-mlx.txt --universal --python-version 3.11 \
 #     --generate-hashes --only-binary :all: --no-header --no-annotate \
-#     --index-url https://pypi.org/simple --exclude-newer <UTC date at least 3 days ago> -o requirements-fastvideo-mlx.lock.txt)
+#     --index-url https://pypi.org/simple --exclude-newer "$CUTOFF" -o requirements-fastvideo-mlx.lock.txt)
 #   cp "$TMP/requirements-fastvideo-mlx.lock.txt" "$LOCK"
 # then check the result against OSV (including MAL- malicious-package records).
 # OSV querybatch (including MAL records), 2026-11-28: all 63 distributions, 0 matches.

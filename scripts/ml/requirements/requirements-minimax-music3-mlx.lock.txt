@@ -8,16 +8,18 @@
 # Preserve existing blocks to reuse unrelated pins. On Apple Silicon with Python 3.12:
 #   REQS=scripts/ml/requirements/requirements-minimax-music3-mlx.txt
 #   LOCK=scripts/ml/requirements/requirements-minimax-music3-mlx.lock.txt
+#   PY312="$(uv python find 3.12)"
+#   CUTOFF=2026-11-07T00:00:00Z  # UTC timestamp at least 3 days ago
 #   TMP="$(mktemp -d)"
 #   awk '/^[a-z0-9]/ && !/^mlx-audio==/' "$REQS" > "$TMP/base.txt"
 #   grep -E '^mlx-audio==' "$REQS" > "$TMP/addon.txt"
 #   cp "$LOCK" "$TMP/base.lock.txt"
-#   uv --no-config pip compile "$TMP/base.txt" --python <python3.12> \
+#   uv --no-config pip compile "$TMP/base.txt" --python "$PY312" \
 #     --generate-hashes --no-header --no-annotate --only-binary :all: \
-#     --index-url https://pypi.org/simple --exclude-newer <UTC date at least 3 days ago> -o "$TMP/base.lock.txt"
-#   uv --no-config pip compile "$TMP/addon.txt" --no-deps --python <python3.12> \
+#     --index-url https://pypi.org/simple --exclude-newer "$CUTOFF" -o "$TMP/base.lock.txt"
+#   uv --no-config pip compile "$TMP/addon.txt" --no-deps --python "$PY312" \
 #     --generate-hashes --no-header --no-annotate --only-binary :all: \
-#     --index-url https://pypi.org/simple --exclude-newer <UTC date at least 3 days ago> -o "$TMP/addon.lock.txt"
+#     --index-url https://pypi.org/simple --exclude-newer "$CUTOFF" -o "$TMP/addon.lock.txt"
 # Merge both outputs in package-name order, then audit the entire lock with OSV,
 # including MAL- records.
 annotated-doc==0.0.5 \

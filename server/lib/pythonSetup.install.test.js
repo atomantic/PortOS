@@ -113,6 +113,12 @@ describe('installPackages generic repair', () => {
     expect(calls[0]).not.toContain('--upgrade');
   });
 
+  it('on Apple Silicon dispatches cv2 repair to the mflux-video lock that owns opencv-python-headless', async () => {
+    await installPackages('/image/python', ['cv2'], vi.fn(), { appleSilicon: true }).promise;
+    const calls = spawned();
+    expect(calls.at(-1)).toMatch(/--require-hashes --no-deps --only-binary :all: -r .*requirements-mflux-video-mlx\.lock\.txt$/);
+  });
+
   it('dispatches mlx_vlm / mlx_video repair to the video lock, restoring the real package after removing the wrong namesake', async () => {
     await installPackages('/image/python', ['mlx-video-with-audio>=0.1.35', 'mlx_vlm', 'mflux'], vi.fn(), { appleSilicon: true }).promise;
     const calls = spawned();
