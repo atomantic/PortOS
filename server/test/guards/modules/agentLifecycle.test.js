@@ -43,7 +43,7 @@ describe('self-update spawn gate — funnel coverage (#4124)', () => {
    */
   const invokersOf = (name) => serviceSources()
     .filter(({ src }) => new RegExp(`(?<!function )\\b${name}\\(`).test(src))
-    .map(({ path }) => path.slice(SERVICES_DIR.length + 1))
+    .map(({ path }) => path.slice(SERVICES_DIR.length + 1).replaceAll('\\', '/'))
     .sort();
 
   it('spawnAgentForTask is invoked from exactly one place — the gated task:ready listener', () => {
