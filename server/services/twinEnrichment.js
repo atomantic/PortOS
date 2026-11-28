@@ -49,8 +49,8 @@ export function applyTasteObservedMerge(mergeFn) {
     const local = await readJSONFile(TASTE_OBSERVED_FILE, null, { strict: true });
     const { merged, changed } = mergeFn(local);
     if (!changed) return false;
-    await ensureDir(DIR);
-    await atomicWrite(TASTE_OBSERVED_FILE, merged);
+    await ensureDir(DIR, { mode: 0o700 });
+    await atomicWrite(TASTE_OBSERVED_FILE, merged, { mode: 0o600, dirMode: 0o700 });
     return true;
   });
 }
@@ -402,11 +402,11 @@ export async function aggregateTwinEvidence({ now = Date.now() } = {}) {
   await queueTasteObservedWrite(async () => {
     // Preserve a prior AI interpretation across LLM-free recomputes (read inside the queue).
     const priorTaste = await getTasteEvidence();
-    await ensureDir(DIR);
+    await ensureDir(DIR, { mode: 0o700 });
     await atomicWrite(TASTE_OBSERVED_FILE, {
       ...taste,
       ...(priorTaste?.interpretation ? { interpretation: priorTaste.interpretation } : {}),
-    });
+    }, { mode: 0o600, dirMode: 0o700 });
   });
 
   // Chronotype window: outbound messages + meetings + media by local hour.
@@ -432,7 +432,7 @@ export async function aggregateTwinEvidence({ now = Date.now() } = {}) {
       overall: peakHour(histogram, 'total'),
     },
   };
-  await atomicWrite(CHRONOTYPE_OBSERVED_FILE, chronotype);
+  await atomicWrite(CHRONOTYPE_OBSERVED_FILE, chronotype, { mode: 0o600, dirMode: 0o700 });
 
   console.log(`🧭 Twin evidence aggregated: ${monthMedia.length} media / ${chronoEvents.length} activity event(s), observed chronotype ${observed.type || 'n/a'}`);
   return {
@@ -588,8 +588,8 @@ export async function interpretConsumption({ providerId, model } = {}) {
   await queueTasteObservedWrite(async () => {
     const current = await getTasteEvidence();
     const merged = { ...(current || { source: 'observed', derivedAt: interpretation.generatedAt }), interpretation };
-    await ensureDir(DIR);
-    await atomicWrite(TASTE_OBSERVED_FILE, merged);
+    await ensureDir(DIR, { mode: 0o700 });
+    await atomicWrite(TASTE_OBSERVED_FILE, merged, { mode: 0o600, dirMode: 0o700 });
   });
   console.log(`🧭 Twin interpretation generated via ${interpretation.providerName} (${text.length} chars)`);
   return interpretation;

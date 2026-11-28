@@ -2,7 +2,7 @@
  * Time capsule snapshot store — corrupt/missing files must not crash ops (#7010).
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdirSync, rmSync, writeFileSync, existsSync, readFileSync } from 'fs';
+import { chmodSync, statSync, mkdirSync, rmSync, writeFileSync, existsSync, readFileSync } from 'fs';
 import * as fsPromises from 'fs/promises';
 import { join } from 'path';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
@@ -113,6 +113,11 @@ describe('createSnapshot', () => {
     expect(stored.data['goals.json']).toBeUndefined();
     expect(stored.data.documents['notes.md']).toBe('# Notes');
     expect(readIndex().snapshots).toHaveLength(1);
+    if (process.platform !== 'win32') {
+      expect(statSync(snapshotsDir()).mode & 0o777).toBe(0o700);
+      expect(statSync(indexPath()).mode & 0o777).toBe(0o600);
+      expect(statSync(join(snapshotsDir(), `${snapshot.id}.json`)).mode & 0o777).toBe(0o600);
+    }
   });
 
   it('recovers from a corrupt index instead of crashing', async () => {
@@ -278,9 +283,18 @@ describe('genome capture', () => {
 
     const snap = await createSnapshot('pre-delete');
     const beforeHash = snap.dataHash;
+    const snapshotPath = join(snapshotsDir(), `${snap.id}.json`);
+    if (process.platform !== 'win32') {
+      chmodSync(snapshotPath, 0o644);
+      chmodSync(indexPath(), 0o644);
+    }
 
     await expect(stripGenomeFromSnapshots()).resolves.toEqual({ updated: 1 });
 
+    if (process.platform !== 'win32') {
+      expect(statSync(snapshotPath).mode & 0o777).toBe(0o600);
+      expect(statSync(indexPath()).mode & 0o777).toBe(0o600);
+    }
     const after = await getSnapshot(snap.id);
     expect(after.data['genome.json']).toBeUndefined();
     expect(after.data['chronotype.json']).toEqual({

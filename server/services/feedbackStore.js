@@ -36,9 +36,9 @@ export async function loadFeedback() {
 }
 
 export async function saveFeedback(data) {
-  await ensureDir(PATHS.digitalTwin);
+  await ensureDir(PATHS.digitalTwin, { mode: 0o700 });
   data.updatedAt = new Date().toISOString();
-  await atomicWrite(feedbackFile(), data);
+  await atomicWrite(feedbackFile(), data, { mode: 0o600, dirMode: 0o700 });
   feedbackCache = data;
 }
 
@@ -52,8 +52,8 @@ export function applyFeedbackMerge(mergeFn, readLocal = path => readJSONFile(pat
     const local = await readLocal(feedbackFile());
     const { merged, changed } = mergeFn(local);
     if (!changed) return false;
-    await ensureDir(PATHS.digitalTwin);
-    await atomicWrite(feedbackFile(), merged);
+    await ensureDir(PATHS.digitalTwin, { mode: 0o700 });
+    await atomicWrite(feedbackFile(), merged, { mode: 0o600, dirMode: 0o700 });
     feedbackCache = merged;
     return true;
   });
