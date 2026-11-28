@@ -25,7 +25,7 @@ import {
 import { falExtraReferenceLimit } from '../../lib/falVideoModels.js';
 import { RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL, getRunwayVideoModel } from '../../lib/runwayVideoModels.js';
 import { RUNWAY_SPECIAL_VIDEO_MODELS, getRunwaySpecialVideoModel, RUNWAY_SPECIAL_VIDEO_MODES } from '../../../../server/lib/runwaySpecialVideoModels.js';
-import { useVideoGenBackendCaps } from './useVideoGenBackendCaps.js';
+import { HOSTED_VIDEO_BACKENDS, useVideoGenBackendCaps } from './useVideoGenBackendCaps.js';
 import { useVideoGenFieldState } from './useVideoGenFieldState.js';
 import { useVideoGenRemixResume } from './useVideoGenRemixResume.js';
 import { useVideoGenSubmitFlow } from './useVideoGenSubmitFlow.js';
@@ -64,6 +64,19 @@ import { useVideoGenValidation } from './useVideoGenValidation.js';
  *     so the page doesn't need its own copy of that gate to build the payload —
  *     only to decide whether to show the control at all.
  */
+// Object URL for a selected upload File so previews render before submit;
+// revoked on change or unmount so blobs are released.
+function useFileObjectUrl(file) {
+  const [url, setUrl] = useState(null);
+  useEffect(() => {
+    if (!(file instanceof File)) { setUrl(null); return undefined; }
+    const nextUrl = URL.createObjectURL(file);
+    setUrl(nextUrl);
+    return () => URL.revokeObjectURL(nextUrl);
+  }, [file]);
+  return url;
+}
+
 export function useVideoGenForm({
   models, modelContext, availableLoras, grokEnabled, falEnabled = false, reactorEnabled = false, runwayEnabled = false, geminiEnabled = false, higgsfieldEnabled = false, googleEnabled = false,
   remoteSubmissionFields = null, displaySleepEnabled = false,
@@ -131,23 +144,8 @@ export function useVideoGenForm({
     if (modelContext?.defaultModel) setModelId((prev) => prev || modelContext.defaultModel);
   }, [modelContext?.defaultModel]);
 
-  // Object URLs for the currently-selected upload Files so we can render
-  // real previews before the files ever hit the server. Revoked on change /
-  // unmount so the blobs are released.
-  const [sourceUploadUrl, setSourceUploadUrl] = useState(null);
-  useEffect(() => {
-    if (!(sourceImageUpload instanceof File)) { setSourceUploadUrl(null); return; }
-    const url = URL.createObjectURL(sourceImageUpload);
-    setSourceUploadUrl(url);
-    return () => URL.revokeObjectURL(url);
-  }, [sourceImageUpload]);
-  const [lastUploadUrl, setLastUploadUrl] = useState(null);
-  useEffect(() => {
-    if (!(lastImageUpload instanceof File)) { setLastUploadUrl(null); return; }
-    const url = URL.createObjectURL(lastImageUpload);
-    setLastUploadUrl(url);
-    return () => URL.revokeObjectURL(url);
-  }, [lastImageUpload]);
+  const sourceUploadUrl = useFileObjectUrl(sourceImageUpload);
+  const lastUploadUrl = useFileObjectUrl(lastImageUpload);
 
   // Auto-snap the default W×H to a selected I2V source image's aspect ratio so
   // the server's cover-crop (force_original_aspect_ratio=increase,crop in
@@ -177,46 +175,6 @@ export function useVideoGenForm({
     img.src = src;
     return () => { cancelled = true; };
   }, [sourceImageFile, sourceUploadUrl, modelId, models]);
-
-  // ?lora=<filename> preselects a video LoRA when the user clicks "Test" on a
-  // video LoRA card in /models/loras. Mirrors the ImageGen ?lora= handoff:
-  // defer until the library has loaded (for name/scale/triggers), append the
-  // LoRA's trigger words, then strip the param so a refresh doesn't re-add it.
-  useEffect(() => {
-    const fromUrl = searchParams.get('lora');
-    if (!fromUrl || !availableLoras.length) return;
-    const match = availableLoras.find((l) => l.filename === fromUrl);
-    if (match) {
-      // A video (ltx-video) LoRA only renders on an ltx2 model. The default
-      // video model is often mlx_video (e.g. ltx23_distilled_q4 on macOS), where
-      // the picker is hidden and the payload omits the LoRA — so the Test
-      // handoff would silently no-op. Switch to an available ltx2 model first.
-      // Wait for `models` to load before deciding (the LoRA library usually
-      // loads first); the mode is still the default 'text', with which every
-      // ltx2 model is compatible, so the modelId-validation effect won't undo
-      // this. A non-video LoRA needs no switch (the image picker tolerates it).
-      // Family-agnostic on BOTH sides: an incoming H3 LoRA must be recognized as
-      // video (else the Test handoff from /models/loras lands in the no-op
-      // branch), and the model it switches to must be one whose family matches,
-      // not an ltx2 model that would reject it.
-      const incomingFamily = loraFamilyOf(match);
-      const cur = models.find((m) => m.id === modelId);
-      if (isVideoLoraFamily(incomingFamily) && videoLoraFamily(cur) !== incomingFamily) {
-        if (!models.length) return; // re-runs when models loads (in deps)
-        const compatible = models.find((m) => videoLoraFamily(m) === incomingFamily);
-        if (compatible) setModelId(compatible.id);
-      }
-      setSelectedLoras((prev) => prev.find((s) => s.filename === fromUrl) ? prev : [...prev, {
-        filename: match.filename,
-        name: match.name,
-        scale: typeof match.recommendedScale === 'number' ? match.recommendedScale : 1.0,
-      }]);
-      if (match.triggerWords?.length) {
-        setPrompt((p) => { const add = match.triggerWords.join(', '); return p && p.trim() ? `${p}, ${add}` : add; });
-      }
-    }
-    setSearchParams((prev) => { const next = new URLSearchParams(prev); next.delete('lora'); return next; }, { replace: true });
-  }, [availableLoras, models]);
 
   // Keep compatibility fallbacks separate from discoverable models in other modes.
   const visibleModels = useMemo(
@@ -749,7 +707,7 @@ export function useVideoGenForm({
   const handleBackendChange = (id) => {
     setBackend(id);
     if (id !== 'runway' && RUNWAY_SPECIAL_VIDEO_MODES.includes(mode)) handleModeChange('text');
-    if ((id === 'grok' || id === 'fal' || id === 'reactor' || id === 'runway' || id === 'gemini' || id === 'higgsfield' || id === 'google') && mode !== 'text' && mode !== 'image') {
+    if (HOSTED_VIDEO_BACKENDS.has(id) && mode !== 'text' && mode !== 'image') {
       handleModeChange((sourceImageFile || sourceImageUpload) ? 'image' : 'text');
     }
   };
