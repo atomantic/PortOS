@@ -4,12 +4,14 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 // without warming the AI toolkit.
 vi.mock('../provider/providers.js', () => ({ getProviderById: vi.fn() }));
 import { getProviderById } from '../provider/providers.js';
+vi.mock('./llmResidency.js', () => ({ probeVoiceLlmResidency: vi.fn() }));
+import { probeVoiceLlmResidency } from './llmResidency.js';
 import { CONVERSATIONAL_GEMMA } from '../../lib/voiceModelCatalog.js';
 
 import {
   extractInlineToolCalls, isToolCapable, isReasoningModel,
   TOOL_CAPABLE_PATTERNS, REASONING_PATTERNS, resolveLlmEndpoint,
-  streamChat, VOICE_LLM_TIMEOUT_MS, VOICE_LLM_TIMEOUT_MESSAGE,
+  streamChat, VOICE_LLM_TIMEOUT_MS, VOICE_LLM_TIMEOUT_MESSAGE, VOICE_LLM_COLD_LOAD_TIMEOUT_MS,
 } from './llm.js';
 
 describe('extractInlineToolCalls', () => {
@@ -413,6 +415,34 @@ describe('streamChat request lifecycle', () => {
     expect(onTimeout).toHaveBeenCalledTimes(1);
     expect(chatSignal.aborted).toBe(true);
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('announces a cold model before the request and gives the load the longer budget', async () => {
+    probeVoiceLlmResidency.mockResolvedValue({ state: 'unloaded', runtime: 'ollama', model: 'test-model' });
+    const order = [];
+    installFetch(({ signal }) => {
+      order.push('request');
+      return pendingUntilAbort(signal);
+    });
+    const onModelLoading = vi.fn(() => order.push('loading'));
+
+    const result = streamChat([], { provider: 'test-provider', model: 'test-model', onModelLoading });
+    const rejection = expect(result).rejects.toThrow(VOICE_LLM_TIMEOUT_MESSAGE);
+    await vi.advanceTimersByTimeAsync(VOICE_LLM_TIMEOUT_MS);
+    expect(chatSignal.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(VOICE_LLM_COLD_LOAD_TIMEOUT_MS - VOICE_LLM_TIMEOUT_MS);
+
+    await rejection;
+    expect(onModelLoading).toHaveBeenCalledWith({ model: 'test-model' });
+    expect(order).toEqual(['loading', 'request']);
+  });
+
+  it('stays quiet and keeps the normal budget for a resident model', async () => {
+    probeVoiceLlmResidency.mockResolvedValue({ state: 'loaded', runtime: 'ollama', model: 'test-model' });
+    installFetch(() => Promise.resolve(new Response('data: [DONE]\n\n')));
+    const onModelLoading = vi.fn();
+    await streamChat([], { provider: 'test-provider', model: 'test-model', onModelLoading });
+    expect(onModelLoading).not.toHaveBeenCalled();
   });
 
   it('aborts a provider stream that stops yielding SSE data', async () => {

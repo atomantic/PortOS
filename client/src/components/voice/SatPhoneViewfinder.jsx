@@ -1,12 +1,21 @@
 import VoiceCallGenerativePortrait from './VoiceCallGenerativePortrait';
+import SatPhoneCaption from './SatPhoneCaption';
 
 const STATUS_LABELS = {
   idle: 'Standby',
   listening: 'Listening',
   handsfree: 'Mic open',
   capturing: 'Listening',
+  loading: 'Loading model',
   thinking: 'Thinking',
   speaking: 'Speaking',
+};
+
+const STATUS_DOTS = {
+  idle: 'bg-port-text-muted',
+  speaking: 'bg-port-success animate-pulse',
+  loading: 'bg-port-warning animate-ping',
+  thinking: 'bg-port-warning animate-pulse',
 };
 
 export default function SatPhoneViewfinder({
@@ -57,29 +66,13 @@ export default function SatPhoneViewfinder({
         >
           <span
             aria-hidden="true"
-            className={`h-1.5 w-1.5 rounded-full ${
-              capturing
-                ? 'bg-port-accent-2 animate-pulse'
-                : stage === 'speaking'
-                  ? 'bg-port-success animate-pulse'
-                  : stage === 'thinking'
-                    ? 'bg-port-warning animate-pulse'
-                    : 'bg-port-text-muted'
-            }`}
+            className={`h-1.5 w-1.5 rounded-full ${capturing ? 'bg-port-accent-2 animate-pulse' : STATUS_DOTS[stage] || STATUS_DOTS.idle}`}
           />
           {statusText}
         </p>
       </div>
 
-      {/* Bottom integrated live subtitle / caption bar */}
-      <div className="pointer-events-none absolute inset-x-2 bottom-2">
-        <p
-          aria-hidden="true"
-          className="port-media-overlay line-clamp-2 min-h-9 break-words rounded-md border border-port-border/60 border-l-2 border-l-port-accent px-2.5 py-1.5 font-mono text-[11px] leading-snug"
-        >
-          {caption || 'Ready when you are.'}
-        </p>
-      </div>
+      <SatPhoneCaption caption={caption} />
     </div>
   );
 }

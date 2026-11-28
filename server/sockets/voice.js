@@ -2,7 +2,7 @@
 // Inbound:  voice:turn | voice:text | voice:interrupt | voice:reset
 //           | voice:dictation:set | voice:ui:index | voice:screenshot:result
 //           | voice:ui:read-response | voice:output:available | voice:output:claim
-// Outbound: voice:transcript | voice:llm:delta | voice:llm:done | voice:tts:audio
+// Outbound: voice:transcript | voice:llm:loading | voice:llm:delta | voice:llm:done | voice:tts:audio
 //           | voice:tts:cancel | voice:tool | voice:dictation | voice:navigate
 //           | voice:ui:click | voice:ui:fill | voice:ui:select | voice:ui:check
 //           | voice:ui:read-request

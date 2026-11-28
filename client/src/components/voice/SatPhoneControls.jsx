@@ -3,6 +3,7 @@ import {
 } from 'lucide-react';
 import SatPhoneRotaryDial from './SatPhoneRotaryDial';
 import { voiceModelDisplayName } from '../../../../server/lib/voiceModelCatalog.js';
+import { voiceLlmResidencyBadge } from './voiceLlmResidencyBadge';
 
 const keyBase = 'satphone-key inline-flex min-h-10 pointer-coarse:min-h-11 items-center justify-center gap-1 rounded-lg border px-2 py-1.5 font-mono text-[10px] font-semibold uppercase tracking-wider disabled:opacity-45';
 
@@ -114,6 +115,7 @@ export function SatPhoneTelemetry({
   voiceLabel,
   llmProvider,
   llmModel,
+  llmResidency = null,
   signalLevel,
   onVolumeChange,
   onToggleMute,
@@ -122,7 +124,8 @@ export function SatPhoneTelemetry({
   const llmDisplay = llmModel && llmModel !== 'auto'
     ? voiceModelDisplayName(llmModel)
     : (llmProvider ? `${llmProvider} · auto` : null);
-  const lcdSubline = [voiceLabel || 'Saved voice', llmDisplay].filter(Boolean).join(' · ');
+  const residencyShort = voiceLlmResidencyBadge(llmResidency)?.short;
+  const lcdSubline = [voiceLabel || 'Saved voice', llmDisplay, llmDisplay && residencyShort].filter(Boolean).join(' · ');
   const channelNumber = (channel?.index ?? 0) + 1;
   const channelName = channel?.label || `Channel ${channelNumber}`;
 

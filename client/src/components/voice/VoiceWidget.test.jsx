@@ -111,6 +111,7 @@ vi.mock('../../services/apiPalette', () => ({ getPaletteManifest: vi.fn() }));
 vi.mock('../../services/apiVoice', () => ({
   getVoiceConfig: mocks.getVoiceConfig,
   updateVoiceConfig: vi.fn(async (patch) => ({ config: patch })),
+  getVoiceLlmResidency: vi.fn(async () => ({ state: 'unloaded', runtime: 'lmstudio', model: 'qwen3:14b' })),
 }));
 vi.mock('../../services/apiProviders', () => ({
   getProviders: vi.fn(async () => ({
@@ -321,7 +322,13 @@ describe('Voice Call console', () => {
     fireEvent.click(ui.getByRole('button', { name: 'Send text' }));
     expect(voiceClientMock.sendText).toHaveBeenCalledWith('Hello');
     expect(voiceClientMock.prepareVoicePlayback).toHaveBeenCalledTimes(2);
+    expect(await ui.findByRole('button', { name: /Voice brain.*not loaded/ })).toBeInTheDocument();
+    // A cold model reads as a load, not as thinking, until its first token.
+    act(() => mocks.events.get('voice:llm:loading')?.({ model: 'qwen3:14b' }));
+    expect(ui.getByText('Loading model', { selector: '[role="status"]' })).toBeInTheDocument();
+    expect(ui.getByRole('button', { name: /Voice brain.*loading/ })).toBeInTheDocument();
     act(() => mocks.events.get('voice:llm:delta')?.({ delta: 'Hi back' }));
+    expect(ui.getByText('Thinking', { selector: '[role="status"]' })).toBeInTheDocument();
     expect(ui.getByRole('log')).toHaveTextContent('Hi back');
 
     // The transceiver has no audio-only toggle or radio-check sample; its channel key

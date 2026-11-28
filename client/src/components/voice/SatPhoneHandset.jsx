@@ -6,6 +6,7 @@ import SatPhoneViewfinder from './SatPhoneViewfinder';
 import { SatPhoneActionKeys, SatPhoneTalkPaddle, SatPhoneTelemetry } from './SatPhoneControls';
 import SatPhoneConversation from './SatPhoneConversation';
 import SatPhoneComposer from './SatPhoneComposer';
+import useVoiceLlmResidency from '../../hooks/useVoiceLlmResidency';
 
 /**
  * Video-enabled Satellite Phone / Tactical Transceiver Handset.
@@ -37,6 +38,9 @@ export default function SatPhoneHandset({
   voiceLabel,
   llmProvider,
   llmModel,
+  // The page console reads residency once for its chips and passes it down;
+  // the floating handset reads its own.
+  llmResidency,
   onLlmSaved,
   avatarData,
   avatarError,
@@ -73,8 +77,10 @@ export default function SatPhoneHandset({
     ? () => saveAvatarChannels({ active: ((channel?.index ?? 0) + 1) % channelCount }).then(updateLibrary).catch(() => {})
     : undefined;
   const isFloating = variant === 'floating';
+  const ownResidency = useVoiceLlmResidency({ provider: onAirLlm.provider, model: onAirLlm.model, stage, enabled: llmResidency === undefined });
+  const residency = llmResidency === undefined ? ownResidency : llmResidency;
   const caption = interimTranscript || history.at(-1)?.text;
-  const liveAttr = capturing ? 'tx' : (stage === 'speaking' || stage === 'thinking') ? 'rx' : 'idle';
+  const liveAttr = capturing ? 'tx' : (stage === 'speaking' || stage === 'thinking' || stage === 'loading') ? 'rx' : 'idle';
 
   return (
     <div className={`relative flex flex-col ${isFloating ? 'w-[21.25rem] max-w-[calc(100vw-2rem)]' : 'w-full'}`}>
@@ -120,6 +126,7 @@ export default function SatPhoneHandset({
           <SatPhoneSetup
             llmProvider={llmProvider}
             llmModel={llmModel}
+            llmResidency={residency}
             onLlmSaved={onLlmSaved}
             avatarData={avatarData}
             avatarError={avatarError}
@@ -161,6 +168,7 @@ export default function SatPhoneHandset({
           voiceLabel={channelVoiceLabel(channel, voiceLabel)}
           llmProvider={onAirLlm.provider}
           llmModel={onAirLlm.model}
+          llmResidency={residency}
           signalLevel={signalLevel}
           onVolumeChange={onVolumeChange}
           onToggleMute={onToggleMute}

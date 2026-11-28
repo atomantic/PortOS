@@ -2,7 +2,7 @@ import { emitToOperatorsOn } from '../services/socketIo.js';
 import * as callSession from '../services/voice/callSession.js';
 import { voiceObservation } from '../services/localModelObservations.js';
 import { observeModelMutations } from '../services/modelObservation.js';
-import { voiceEngineQuerySchema } from '../lib/queryValidation.js';
+import { emptyQuerySchema, voiceEngineQuerySchema } from '../lib/queryValidation.js';
 /**
  * Voice Routes
  *
@@ -39,6 +39,8 @@ import { validateRequest } from '../lib/validateRequest.js';
 import { MAX_BASE64_UPLOAD_BYTES } from '../lib/uploadLimits.js';
 import { getVoiceConfig, updateVoiceConfig } from '../services/voice/config.js';
 import { invalidateHealthCache } from '../services/voice/health.js';
+import { readVoiceLlmResidency } from '../services/voice/llm.js';
+import { getAgentVoiceConfig } from '../services/voice/channelAgent.js';
 import * as facetimeBridge from '../services/voice/facetimeBridge.js';
 import { reconcile, downloadPiperVoice, startWhisper, stopWhisper } from '../services/voice/bootstrap.js';
 import { synthesize, listVoices, listVoiceEngines, VALID_ENGINES } from '../services/voice/tts.js';
@@ -121,6 +123,13 @@ router.put('/config', asyncHandler(async (req, res) => {
 // GET /api/voice/status — reachability + enabled flag + binary/model presence
 router.get('/status', asyncHandler(async (_req, res) => {
   res.json(await voiceObservation.read());
+}));
+
+// GET /api/voice/llm/residency — is the on-air channel's Voice LLM resident in memory? Read-only; never loads it.
+router.get('/llm/residency', asyncHandler(async (req, res) => {
+  validateRequest(emptyQuerySchema, req.query);
+  const { llm } = await getAgentVoiceConfig();
+  res.json(await readVoiceLlmResidency({ provider: llm?.provider, model: llm?.model }));
 }));
 
 router.get('/facetime/status', asyncHandler(async (_req, res) => {

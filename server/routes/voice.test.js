@@ -14,6 +14,14 @@ vi.mock('../services/voice/config.js', () => ({
   getVoiceConfig: vi.fn(),
   updateVoiceConfig: vi.fn(),
 }));
+vi.mock('../services/voice/channelAgent.js', async (importActual) => ({
+  ...(await importActual()),
+  getAgentVoiceConfig: vi.fn(),
+}));
+vi.mock('../services/voice/llm.js', async (importActual) => ({
+  ...(await importActual()),
+  readVoiceLlmResidency: vi.fn(),
+}));
 vi.mock('../services/voice/health.js', () => ({
   checkAll: vi.fn(),
   invalidateHealthCache: vi.fn(),
@@ -78,6 +86,8 @@ vi.mock('../services/voice/callSession.js', () => ({
 
 const callSession = await import('../services/voice/callSession.js');
 const config = await import('../services/voice/config.js');
+const llm = await import('../services/voice/llm.js');
+const channelAgent = await import('../services/voice/channelAgent.js');
 const health = await import('../services/voice/health.js');
 const bootstrap = await import('../services/voice/bootstrap.js');
 const tts = await import('../services/voice/tts.js');
@@ -298,6 +308,20 @@ describe('Voice Routes', () => {
       expect(fineTuning.getFineTuningJobStatus).not.toHaveBeenCalled();
     });
 
+  });
+
+  describe('GET /api/voice/llm/residency', () => {
+    it('reports residency for the on-air channel\'s Voice LLM and refuses unknown query keys', async () => {
+      channelAgent.getAgentVoiceConfig.mockResolvedValue({ ...DEFAULT_CFG, llm: { provider: 'ollama', model: 'model-a' } });
+      llm.readVoiceLlmResidency.mockResolvedValue({ state: 'unloaded', runtime: 'ollama', model: 'model-a' });
+      const res = await request(buildApp()).get('/api/voice/llm/residency');
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ state: 'unloaded', runtime: 'ollama', model: 'model-a' });
+      expect(llm.readVoiceLlmResidency).toHaveBeenCalledWith({ provider: 'ollama', model: 'model-a' });
+
+      const bad = await request(buildApp()).get('/api/voice/llm/residency?model=other');
+      expect(bad.status).toBe(400);
+    });
   });
 
   describe('GET /api/voice/config', () => {

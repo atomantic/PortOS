@@ -55,7 +55,7 @@ export function SatPhoneFaceplate({
       ? 'warn'
       : 'on';
 
-  const rxLedState = stage === 'speaking' ? 'rx' : stage === 'thinking' ? 'warn' : 'off';
+  const rxLedState = stage === 'speaking' ? 'rx' : (stage === 'thinking' || stage === 'loading') ? 'warn' : 'off';
 
   return (
     <header className="flex items-center justify-between gap-1.5 min-w-0">
@@ -144,6 +144,7 @@ export function SatPhoneFaceplate({
 export function SatPhoneSetup({
   llmProvider,
   llmModel,
+  llmResidency = null,
   onLlmSaved,
   avatarData,
   avatarError,
@@ -156,6 +157,7 @@ export function SatPhoneSetup({
         compact
         globalProvider={llmProvider}
         globalModel={llmModel}
+        residency={llmResidency}
         onGlobalSaved={onLlmSaved}
       />
       <AvatarRuntimeSettings

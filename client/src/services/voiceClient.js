@@ -255,7 +255,7 @@ const refuseLongRecording = () => {
 
 /**
  * Subscribe to voice events. Returns an unsubscribe function.
- * Events: voice:transcript, voice:llm:delta, voice:llm:done, voice:error, voice:idle
+ * Events: voice:transcript, voice:llm:loading, voice:llm:delta, voice:llm:done, voice:error, voice:idle
  */
 export const onVoiceEvent = (event, handler) => {
   socket.on(event, handler);

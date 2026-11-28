@@ -7,7 +7,7 @@ import { activeChannelOf, channelLlm, useAvatarLibrary } from './useAvatarLibrar
  * The Voice brain picker for the on-air channel. "All channels" edits the global voice
  * LLM; "CHn only" gives that channel its own LLM, starting from the current one.
  */
-export default function ChannelBrainPicker({ compact = false, globalProvider, globalModel, onGlobalSaved }) {
+export default function ChannelBrainPicker({ compact = false, globalProvider, globalModel, onGlobalSaved, residency = null }) {
   const { data: library, updateData } = useAvatarLibrary();
   const channel = activeChannelOf(library);
   const llm = channelLlm(channel, globalProvider, globalModel);
@@ -23,6 +23,7 @@ export default function ChannelBrainPicker({ compact = false, globalProvider, gl
       compact={compact}
       provider={llm.provider}
       model={llm.model}
+      residency={residency}
       onSave={llm.own ? saveOwn : undefined}
       onSaved={llm.own ? undefined : onGlobalSaved}
     >
