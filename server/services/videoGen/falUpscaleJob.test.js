@@ -125,6 +125,7 @@ describe('enqueueFalSeedvr2Upscale', () => {
         mode: 'fal',
         upscaleMethod: 'fal-seedvr2',
         historyId: SOURCE_ID,
+        sourceFilename: BASE_ITEM.filename,
         targetResolution: '1080p',
         estimatedCostUsd: 0.2528,
         musicVideoCostUsd: 0.2528,
@@ -246,6 +247,25 @@ describe('runVideoUpscale & spend accounting', () => {
     }
   });
 
+  it.each([
+    [{ filename: 'replacement.mp4' }, /replaced/],
+    [{ upscaledFrom: 'another-clip' }, /already-upscaled/],
+  ])('refuses a changed queued source (%j) before contacting fal.ai', async (change, message) => {
+    await enqueueFalSeedvr2Upscale(SOURCE_ID);
+    const params = mocks.enqueueJob.mock.lastCall[0].params;
+    mocks.getHistoryItem.mockResolvedValueOnce({ ...BASE_ITEM, ...change });
+    const failed = vi.fn();
+    videoGenEvents.once('failed', failed);
+    try {
+      await expect(runVideoUpscale({ ...params, jobId: 'queued-upscale' })).resolves.toBeNull();
+      expect(failed).toHaveBeenCalledWith({ generationId: 'queued-upscale', error: expect.stringMatching(message) });
+      expect(mocks.hostFalDataUri).not.toHaveBeenCalled();
+      expect(mocks.submitFalRequest).not.toHaveBeenCalled();
+    } finally {
+      videoGenEvents.off('failed', failed);
+    }
+  });
+
   it('cancels an active in-flight upscale locally and remotely', async () => {
     let resolvePoll;
     mocks.probeVideoStreamInfo.mockResolvedValue({ width: 854, height: 480, fps: 24, frameCount: 121 });
@@ -262,7 +282,16 @@ describe('runVideoUpscale & spend accounting', () => {
     await vi.waitFor(() => expect(mocks.awaitFalCompletion).toHaveBeenCalledOnce());
     expect(await cancel('job-cancel-1')).toBe(true);
     expect(mocks.cancelFalRequest).toHaveBeenCalledOnce();
-    resolvePoll({ outcome: 'canceled' });
-    expect(await pending).toBeNull();
+    const log = vi.spyOn(console, 'log');
+    const errorLog = vi.spyOn(console, 'error');
+    try {
+      resolvePoll({ outcome: 'canceled' });
+      expect(await pending).toBeNull();
+      expect(log).toHaveBeenCalledWith(expect.stringMatching(/^🛑 .*canceled/));
+      expect(errorLog).not.toHaveBeenCalled();
+    } finally {
+      log.mockRestore();
+      errorLog.mockRestore();
+    }
   });
 });

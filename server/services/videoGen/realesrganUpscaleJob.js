@@ -23,23 +23,21 @@
  * the kind is local-only (absent from the federation kind maps).
  */
 
-import { existsSync } from 'fs';
 import { mkdir, readdir, rename, rm, writeFile } from 'fs/promises';
 import { randomUUID } from 'crypto';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { PATHS, unlinkGuarded } from '../../lib/fileUtils.js';
+import { PATHS } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
-import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
-import { FINISHED_OUTPUT_ADMISSION_MS } from '../../lib/backupPublicationWait.js';
 import {
-  safeUnder, generateThumbnail, probeVideoStreamInfo, probeVideoDuration,
   findFfmpeg, runFfmpegProcess, vfrSyncArgs, bt709TagFilter, BT709_CONTAINER_ARGS,
 } from '../../lib/ffmpeg.js';
-import { omitDerivedRenderFields, renderTimingFields } from '../../lib/renderTiming.js';
 import { enqueueJob } from '../mediaJobQueue/index.js';
 import { videoGenEvents } from './events.js';
-import { getHistoryItem, loadHistory, mutateVideoHistory } from './history.js';
+import { getHistoryItem } from './history.js';
+import {
+  publishUpscaledVideo, removeOwnedUpscaleFile, resolveQueuedUpscaleSource, resolveUpscaleMusicVideo,
+} from './upscaleJobHelpers.js';
 import { finalizeUpscaleOutput } from './upscaleFfmpeg.js';
 import { planUpscaleHistoryItem } from './upscaleVideo.js';
 import { realesrganArgs, resolveRealesrganInvocation } from './realesrganRuntime.js';
@@ -101,11 +99,6 @@ export async function enqueueRealesrganUpscale(historyId, {
   }
   const item = await getHistoryItem(plan.id);
   if (!item) throw new ServerError('Video not found', { status: 404, code: 'NOT_FOUND' });
-  const attribution = musicVideo?.projectId
-    ? musicVideo
-    : musicVideoProjectId
-      ? { projectId: musicVideoProjectId, ...(sceneId ? { sceneId } : {}), tier: 'final' }
-      : null;
   return enqueueJob({
     kind: LTX_UPSCALE_JOB_KIND,
     params: {
@@ -123,7 +116,7 @@ export async function enqueueRealesrganUpscale(historyId, {
       height: plan.target.height,
       numFrames: plan.target.frameCount,
       fps: plan.source.fps,
-      ...(attribution ? { musicVideo: attribution, musicVideoProjectId: attribution.projectId } : {}),
+      ...resolveUpscaleMusicVideo(item, { musicVideo, musicVideoProjectId, sceneId }),
     },
   });
 }
@@ -234,24 +227,13 @@ export async function runVideoUpscale({
   const renderStartedAtMs = Date.now();
   // Deterministic, so a run replayed after a crash clears its predecessor's scratch.
   const workDir = join(tmpdir(), `portos-realesrgan-${jobId}`);
-  let deliverablePath = null;
-  let thumbnailPath = null;
+  let unpublishedPath = null;
   let result = null;
   let failureReason = null;
-  const removeOwnedFile = (path) => (path ? unlinkGuarded(path).catch(() => {}) : Promise.resolve());
   try {
     const model = REALESRGAN_MODELS[realesrganModel];
     if (!model) throw new ServerError(`Unknown Real-ESRGAN weights '${realesrganModel}'`, { status: 400, code: 'VALIDATION_ERROR' });
-    // Re-read the row: a queued job can wait behind a long render, and the
-    // source may have been deleted, replaced or already upscaled meanwhile.
-    const item = (await loadHistory()).find((h) => h.id === historyId);
-    if (!item) throw new ServerError('Video not found', { status: 404, code: 'NOT_FOUND' });
-    if (item.upscaledFrom) throw new ServerError('Cannot upscale an already-upscaled video', { status: 400, code: 'ALREADY_UPSCALED' });
-    if (item.filename !== sourceFilename) {
-      throw new ServerError('The source clip was replaced while this upscale was queued.', { status: 409, code: 'UPSCALE_SOURCE_CHANGED' });
-    }
-    const sourcePath = safeUnder(PATHS.videos, sourceFilename);
-    if (!sourcePath || !existsSync(sourcePath)) throw new ServerError('Video file not found on disk', { status: 404, code: 'NOT_FOUND' });
+    const { item, sourcePath } = await resolveQueuedUpscaleSource(historyId, sourceFilename);
     const invocation = await resolveRealesrganInvocation(model.id);
     const ffmpeg = await findFfmpeg({ requiredEncoder: 'libx264' });
     if (!ffmpeg) throw new ServerError('ffmpeg not found', { status: 500, code: 'FFMPEG_MISSING' });
@@ -302,7 +284,8 @@ export async function runVideoUpscale({
     videoGenEvents.emit('progress', { generationId: jobId, progress: 0.92, status: 'Restoring the source audio…' });
     const newId = randomUUID();
     const newFilename = `${newId}.mp4`;
-    deliverablePath = join(PATHS.videos, newFilename);
+    const deliverablePath = join(PATHS.videos, newFilename);
+    unpublishedPath = deliverablePath;
     const finalized = await finalizeUpscaleOutput(rawPath, deliverablePath, {
       width: target.width,
       height: target.height,
@@ -313,53 +296,24 @@ export async function runVideoUpscale({
     failIfCanceled(entry);
     if (!finalized.ok) throw new ServerError(`Failed to finish the upscaled clip: ${finalized.reason}`, { status: 500, code: 'UPSCALE_MUX_FAILED' });
 
-    await withBackupAssetPublication(async () => {
-      try {
-        failIfCanceled(entry);
-        // Measured off the deliverable, never copied from the plan.
-        const [measured, duration] = await Promise.all([probeVideoStreamInfo(deliverablePath), probeVideoDuration(deliverablePath)]);
-        const thumbnail = await generateThumbnail(deliverablePath, newId);
-        thumbnailPath = thumbnail ? safeUnder(PATHS.videoThumbnails, thumbnail) : null;
-        const attributedMusicVideo = musicVideo?.projectId
-          ? { projectId: musicVideo.projectId, ...(musicVideo.sceneId ? { sceneId: musicVideo.sceneId } : {}) }
-          : item.musicVideo;
-        const newEntry = {
-          ...omitDerivedRenderFields(item),
-          id: newId,
-          filename: newFilename,
-          thumbnail,
-          createdAt: new Date().toISOString(),
-          width: measured.width ?? target.width,
-          height: measured.height ?? target.height,
-          fps: measured.fps ?? source.fps,
-          numFrames: measured.frameCount ?? frames.length,
-          duration,
-          durationSec: duration,
-          upscaledFrom: item.id,
-          upscaleMethod: 'realesrgan',
-          upscaleRuntime: REALESRGAN_RUNTIME_ID,
-          upscaleModel: model.id,
-          prompt: upscaledPrompt(item.prompt),
-          ...(attributedMusicVideo ? { musicVideo: attributedMusicVideo } : {}),
-          hidden: false,
-          ...renderTimingFields(renderStartedAtMs),
-        };
-        await mutateVideoHistory((h) => { h.unshift(newEntry); return h; });
-        result = newEntry;
-        console.log(`✅ Upscaled [${newId.slice(0, 8)}] with ${model.id}: ${newFilename} (${newEntry.width}×${newEntry.height}, ${newEntry.numFrames} frames, ${Math.round((newEntry.renderMs ?? 0) / 1000)}s)`);
-      } catch (error) {
-        if (!result) for (const path of [deliverablePath, join(PATHS.videoThumbnails, `${newId}.jpg`)]) await removeOwnedFile(path);
-        throw error;
-      }
-    }, {
-      timeoutMs: FINISHED_OUTPUT_ADMISSION_MS,
-      onWait: () => {
-        console.log(`⏸️ Video upscale [${jobId.slice(0, 8)}] waiting for the backup to finish before saving`);
-        videoGenEvents.emit('activity', { generationId: jobId });
-      },
+    unpublishedPath = null;
+    result = await publishUpscaledVideo({
+      jobId, newId, newFilename, deliverablePath, item, musicVideo, renderStartedAtMs,
+      isCanceled: () => entry.canceled,
+      buildFields: measured => ({
+        width: measured.width ?? target.width,
+        height: measured.height ?? target.height,
+        fps: measured.fps ?? source.fps,
+        numFrames: measured.frameCount ?? frames.length,
+        upscaleMethod: 'realesrgan',
+        upscaleRuntime: REALESRGAN_RUNTIME_ID,
+        upscaleModel: model.id,
+        prompt: upscaledPrompt(item.prompt),
+      }),
+      formatSuccessLog: row => `✅ Upscaled [${newId.slice(0, 8)}] with ${model.id}: ${newFilename} (${row.width}×${row.height}, ${row.numFrames} frames, ${Math.round((row.renderMs ?? 0) / 1000)}s)`,
     });
   } catch (err) {
-    for (const path of result ? [] : [deliverablePath, thumbnailPath]) await removeOwnedFile(path);
+    await removeOwnedUpscaleFile(jobId, unpublishedPath);
     const reason = entry.canceled ? 'Canceled while running' : (err?.message || 'Upscale failed');
     if (entry.canceled) console.log(`🛑 Real-ESRGAN upscale canceled [${jobId.slice(0, 8)}]`);
     else console.error(`❌ Real-ESRGAN upscale failed [${jobId.slice(0, 8)}]: ${reason}`);

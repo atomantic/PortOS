@@ -11,12 +11,12 @@ import { PATHS, UUID_RE } from '../../lib/fileUtils.js';
 import { safeUnder, probeVideoStreamInfo, probeFrameCount, probeVideoDuration, probeSquareVideoPixels, probeVideoAudioPresence, generateThumbnail } from '../../lib/ffmpeg.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { FINISHED_OUTPUT_ADMISSION_MS } from '../../lib/backupPublicationWait.js';
-import { omitDerivedRenderFields } from '../../lib/renderTiming.js';
 import { maintenance } from '../../lib/maintenanceAdmission.js';
 import { withAbortTimeout } from '../../lib/abortTimeout.js';
 import { enqueueJob, getJob, listJobs, updateJobResult } from '../mediaJobQueue/index.js';
-import { HISTORY_UNCHANGED, loadHistory, mutateVideoHistory } from './history.js';
+import { HISTORY_UNCHANGED, getHistoryItem, loadHistory, mutateVideoHistory } from './history.js';
 import { finalizeUpscaleOutput } from './upscaleFfmpeg.js';
+import { buildUpscaleHistoryEntry, resolveUpscaleMusicVideo } from './upscaleJobHelpers.js';
 import { consumeTopazQuote, hashTopazFile, topazKey, topazKeyFingerprint, topazRequest, TOPAZ_MODELS } from './topazQuote.js';
 import { registerStaging, hasTopazStaging, cleanupTopazStaging, releaseTopazStaging, topazPreparedPath, topazOutputPath, topazFinalPath } from './topazStaging.js';
 import { videoGenEvents } from './events.js';
@@ -66,21 +66,25 @@ export function assertNoPendingTopaz(historyId) {
   if (pending || admitting.has(historyId)) throw new ServerError('A Topaz request for this video is still running or has an uncertain outcome. Check the existing request before starting another.', { status: 409, code: 'TOPAZ_PENDING' });
 }
 
-export async function enqueueTopazUpscale(historyId, token, { musicVideo } = {}) {
+export async function enqueueTopazUpscale(historyId, token, attribution = {}) {
   assertNoPendingTopaz(historyId);
   admitting.add(historyId);
   try {
-  // Consume once: two simultaneous clicks cannot reserve twice for one quote.
-  const quote = consumeTopazQuote(token, historyId);
-  const path = sourcePathFor(quote);
-  const source = path && await stat(path).catch(() => null);
-  if (!source || source.size !== quote.size || source.mtimeMs !== quote.mtimeMs) {
-    await cleanupTopazStaging(quote.preparedId).catch(() => { throw new ServerError('Could not clean Topaz staging.', { status: 500, code: 'TOPAZ_CLEANUP_FAILED' }); });
-    throw new ServerError('The source changed after the estimate. Request a new estimate.', { status: 409, code: 'TOPAZ_SOURCE_CHANGED' });
-  }
-  return await enqueueJob({ kind: 'video-upscale', params: { mode: 'topaz', ...quote, ...(musicVideo ? { musicVideo } : {}), prompt: 'Topaz video upscale', width: 1920, height: 1080 } })
-    .then(result => { releaseTopazStaging(quote.preparedId); return result; })
-    .catch(async error => { await cleanupTopazStaging(quote.preparedId).catch(() => { throw new ServerError('Could not clean Topaz staging.', { status: 500, code: 'TOPAZ_CLEANUP_FAILED' }); }); throw error; });
+    const item = await getHistoryItem(historyId);
+    // Consume once: two simultaneous clicks cannot reserve twice for one quote.
+    const quote = consumeTopazQuote(token, historyId);
+    const path = sourcePathFor(quote);
+    const source = path && await stat(path).catch(() => null);
+    if (!source || source.size !== quote.size || source.mtimeMs !== quote.mtimeMs) {
+      await cleanupTopazStaging(quote.preparedId).catch(() => { throw new ServerError('Could not clean Topaz staging.', { status: 500, code: 'TOPAZ_CLEANUP_FAILED' }); });
+      throw new ServerError('The source changed after the estimate. Request a new estimate.', { status: 409, code: 'TOPAZ_SOURCE_CHANGED' });
+    }
+    return await enqueueJob({
+      kind: 'video-upscale',
+      params: { mode: 'topaz', ...quote, ...resolveUpscaleMusicVideo(item, attribution), prompt: 'Topaz video upscale', width: 1920, height: 1080 },
+    })
+      .then(result => { releaseTopazStaging(quote.preparedId); return result; })
+      .catch(async error => { await cleanupTopazStaging(quote.preparedId).catch(() => { throw new ServerError('Could not clean Topaz staging.', { status: 500, code: 'TOPAZ_CLEANUP_FAILED' }); }); throw error; });
   } finally { admitting.delete(historyId); }
 }
 
@@ -282,7 +286,8 @@ function failureMessage(error, { cancelRequested, confirmedCancel, status, reque
 }
 
 export async function runVideoUpscale(params) {
-  const { jobId, historyId, filename, size, mtimeMs, preparedId, source, target, requestId, model } = params;
+  const renderStartedAtMs = Date.now();
+  const { jobId, historyId, filename, size, mtimeMs, preparedId, source, target, requestId, model, musicVideo } = params;
   const entry = { cancelRequested: params.topazCancelRequested === true, abort: new AbortController() };
   active.set(jobId, entry);
   let delivered = false;
@@ -397,7 +402,22 @@ export async function runVideoUpscale(params) {
           thumbnail = await generateThumbnail(outputPath, jobId);
           if (!thumbnail) { await unlink(candidate).catch(error => { if (error.code !== 'ENOENT') throw error; }); thumbnailPath = null; }
         }
-        const row = { ...omitDerivedRenderFields(item), topazRequestId: requestId, id: jobId, filename: `${jobId}.mp4`, thumbnail, createdAt: new Date().toISOString(), width: measured.width, height: measured.height, fps: measured.fps, numFrames: frames, duration, upscaledFrom: historyId, upscaleMethod: 'topaz', upscaleRuntime: 'topaz', upscaleModel: TOPAZ_MODELS[model], hidden: false };
+        const row = buildUpscaleHistoryEntry(item, {
+          id: jobId,
+          filename: `${jobId}.mp4`,
+          thumbnail,
+          topazRequestId: requestId,
+          width: measured.width,
+          height: measured.height,
+          fps: measured.fps,
+          numFrames: frames,
+          duration,
+          musicVideo,
+          renderStartedAtMs,
+          upscaleMethod: 'topaz',
+          upscaleRuntime: 'topaz',
+          upscaleModel: TOPAZ_MODELS[model],
+        });
         await mutateVideoHistory(rows => { rows.unshift(row); return rows; });
         return row;
       } catch (error) {
