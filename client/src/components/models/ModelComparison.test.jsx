@@ -285,3 +285,22 @@ it('plots measured first-token time with lower-is-better copy and sends unmeasur
   expect(JSON.parse(screen.getByTestId('scatter-mtplx:example-mtp').dataset.values)).toEqual([[1500, 30]]);
   expect(screen.queryByTestId('scatter-mtplx:example-mlx')).toBeNull();
 });
+
+it('avoids a duplicate h1, collapses model toggles until searched, and styles active toggle buttons', async () => {
+  render(<ModelComparison />);
+  await screen.findByTestId('scatter-example:gpt-6-luna');
+  expect(screen.queryByRole('heading', { level: 1 })).toBeNull();
+  expect(screen.getByRole('heading', { level: 2, name: 'Cost vs. intelligence' })).toBeTruthy();
+
+  const modelDetails = screen.getByText(/Select individual models/).closest('details');
+  expect(modelDetails).not.toHaveAttribute('open');
+  fireEvent.change(screen.getByLabelText('Filter models'), { target: { value: 'luna' } });
+  expect(modelDetails).toHaveAttribute('open');
+
+  const activeHeight = screen.getByRole('button', { name: '600px' });
+  const inactiveHeight = screen.getByRole('button', { name: '420px' });
+  expect(activeHeight).toHaveAttribute('aria-pressed', 'true');
+  expect(activeHeight.className).toContain('border-port-accent');
+  expect(inactiveHeight).toHaveAttribute('aria-pressed', 'false');
+  expect(inactiveHeight.className).not.toContain('border-port-accent');
+});
