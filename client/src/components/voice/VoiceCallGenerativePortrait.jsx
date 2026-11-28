@@ -8,6 +8,11 @@ import { streamVoiceAvatar, streamVoiceAvatarIdle } from '../../services/apiVoic
 const IDLE_STAGES = new Set(['idle', 'listening', 'thinking']);
 const FRAME_INTERVAL_MS = 40; // 25 fps
 const MAX_IDLE_QUEUE = 20;
+// Recent idle frames replayed while the LLM is thinking, so the worker stays off the GPU.
+const MAX_HELD_FRAMES = 50; // 2 s at 25 fps
+
+// Forward then backward without repeating either end, so the loop has no visible jump.
+const pingPong = (frames) => [...frames, ...frames.slice(1, -1).reverse()];
 
 // A model load reads as thinking on the portrait; only the status chip tells them apart.
 const normalizeIdleStage = (stage) => (stage === 'loading' ? 'thinking' : IDLE_STAGES.has(stage) ? stage : 'idle');
@@ -88,7 +93,8 @@ export default function VoiceCallGenerativePortrait({ running, fill = false, sta
   const [unavailable, setUnavailable] = useState(false);
 
   // Drive continuous real AvatarForcing neural frames whenever the model is
-  // running (idle, listening, thinking, and speaking) on the same 512x512 canvas.
+  // running (idle, listening, and speaking) on the same 512x512 canvas. Thinking
+  // replays recent idle frames so the worker never renders while the LLM does.
   // Speech immediately preempts idle and resumes continuous idle seamlessly
   // afterward with zero snap back to the static placeholder image.
   useEffect(() => {
@@ -108,7 +114,9 @@ export default function VoiceCallGenerativePortrait({ running, fill = false, sta
     let idleLoading = false;
     let lastIdleDrawAt = 0;
     let hasPaintedFrame = false;
+    let holdingIdle = false;
     const idleQueue = [];
+    const heldFrames = [];
 
     const stopIdlePlayback = () => {
       if (idleRaf) {
@@ -117,6 +125,7 @@ export default function VoiceCallGenerativePortrait({ running, fill = false, sta
       }
       idleQueue.length = 0;
       idleLoading = false;
+      holdingIdle = false;
     };
 
     const stopIdleStream = () => {
@@ -144,27 +153,46 @@ export default function VoiceCallGenerativePortrait({ running, fill = false, sta
         idleRaf = 0;
         return;
       }
+      const canLoop = holdingIdle && heldFrames.length > 1;
+      if (canLoop && idleQueue.length === 0) idleQueue.push(...pingPong(heldFrames));
       if (!idleLoading && idleQueue.length > 0 && now - lastIdleDrawAt >= FRAME_INTERVAL_MS - 4) {
         const jpeg = idleQueue.shift();
+        const replayed = holdingIdle;
         idleLoading = true;
         lastIdleDrawAt = now;
         decodeAndPaint(
           target,
           jpeg,
           () => !disposed && !speechAnimation && !stopForReducedMotion(),
-          () => { hasPaintedFrame = true; },
+          () => {
+            hasPaintedFrame = true;
+            if (replayed) return;
+            heldFrames.push(jpeg);
+            if (heldFrames.length > MAX_HELD_FRAMES) heldFrames.shift();
+          },
         ).finally(() => { idleLoading = false; });
       }
-      if (idleAbort || idleQueue.length > 0) {
+      if (idleAbort || idleQueue.length > 0 || canLoop) {
         idleRaf = requestAnimationFrame(paintIdleTick);
       } else {
         idleRaf = 0;
       }
     };
 
+    // While the LLM is thinking, the worker would compete with it for the GPU and slow
+    // the reply, so cancel neural idle and loop the frames already on hand instead.
+    const holdIdleLoop = () => {
+      holdingIdle = true;
+      if (!idleRaf && heldFrames.length > 1) idleRaf = requestAnimationFrame(paintIdleTick);
+    };
+
     const startIdleStream = () => {
       if (disposed || speechAnimation || stopForReducedMotion() || document.hidden) return;
       stopIdleStream();
+      if (idleStageRef.current === 'thinking') {
+        holdIdleLoop();
+        return;
+      }
       const abort = new AbortController();
       idleAbort = abort;
       let receivedAny = false;
