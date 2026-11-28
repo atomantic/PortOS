@@ -104,6 +104,7 @@ const { ServerError } = await import('../lib/errorHandler.js');
 const piperVoices = await import('../services/voice/piper-voices.js');
 const facetimeBridge = await import('../services/voice/facetimeBridge.js');
 const { default: voiceRoutes } = await import('./voice.js');
+const { hostControlRouteGate } = await import('../services/authGate.js');
 const { errorEvents } = await import('../lib/errorHandler.js');
 
 // Node's EventEmitter throws if 'error' is emitted with zero listeners.
@@ -345,6 +346,43 @@ describe('Voice Routes', () => {
 
       const bad = await request(buildApp()).get('/api/voice/llm/residency?model=other');
       expect(bad.status).toBe(400);
+    });
+  });
+
+  describe('GET /api/voice/realtime/status host-control gate', () => {
+    it('refuses remote password-free requests and allows local or operator-session requests', async () => {
+      const runtime = await import('../services/voice/realtimeRuntime.js');
+      runtime.realtimeStatus.mockReturnValue({
+        home: '~/.portos/sophon-mac',
+        size: '32B',
+        parts: { python: false, engine: false, weights: false },
+        installed: false,
+        running: false,
+      });
+      const makeGatedApp = (authContext, remoteAddress) => {
+        const app = express();
+        app.use((req, _res, next) => {
+          req.portosAuthContext = authContext;
+          if (remoteAddress) Object.defineProperty(req.socket, 'remoteAddress', { value: remoteAddress, configurable: true });
+          next();
+        });
+        app.use(hostControlRouteGate);
+        app.use('/api/voice', voiceRoutes);
+        return app;
+      };
+
+      const remote = await request(makeGatedApp({ enabled: false }, '192.0.2.10')).get('/api/voice/realtime/status');
+      expect(remote.status).toBe(403);
+      expect(remote.body.code).toBe('HOST_CONTROL_FORBIDDEN');
+      expect(runtime.realtimeStatus).not.toHaveBeenCalled();
+
+      const local = await request(makeGatedApp({ enabled: false }, '127.0.0.1')).get('/api/voice/realtime/status');
+      expect(local.status).toBe(200);
+      expect(local.body).toHaveProperty('installed');
+
+      const operator = await request(makeGatedApp({ enabled: true, authenticated: true, method: 'session' }, '192.0.2.10')).get('/api/voice/realtime/status');
+      expect(operator.status).toBe(200);
+      expect(operator.body).toHaveProperty('installed');
     });
   });
 

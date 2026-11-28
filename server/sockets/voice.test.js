@@ -35,8 +35,14 @@ vi.mock('../services/voice/stt.js', () => ({ transcribe: vi.fn() }));
 // The call-host audio path (runCallUtterance) drives the full LLM/tools
 // pipeline; stub it so the barge-in test below can observe exactly what
 // signal a call turn was given without a real STT/LLM/TTS round trip.
-vi.mock('../services/voice/pipeline.js', () => ({ runTurn: vi.fn(async () => ({})), warmPromptPrefix: vi.fn(async () => ({})) }));
-vi.mock('../services/voice/realtimeSession.js', () => ({ openRealtimeCall: vi.fn() }));
+vi.mock('../services/voice/pipeline.js', () => ({
+  runTurn: vi.fn(async () => ({})),
+  warmPromptPrefix: vi.fn(async () => ({})),
+  describeAttachedImage: vi.fn(async () => ({ text: 'synthetic description', model: 'example-vision' })),
+}));
+vi.mock('../services/voice/realtimeSession.js', () => ({
+  openRealtimeCall: vi.fn(async () => ({ pushAudio: vi.fn(), interrupt: vi.fn(), close: vi.fn() })),
+}));
 // Partial-mock the call session so one test can make detachHost() reject the
 // way a failing teardown does. endCall()'s own hangup/journal/mind steps are
 // each internally guarded, so no dependency seam can force that rejection from
@@ -66,7 +72,7 @@ const {
 } = await import('../services/voice/voiceOutput.js');
 const { transcribe } = await import('../services/voice/stt.js');
 const { synthesize } = await import('../services/voice/tts.js');
-const { runTurn, warmPromptPrefix } = await import('../services/voice/pipeline.js');
+const { runTurn, warmPromptPrefix, describeAttachedImage } = await import('../services/voice/pipeline.js');
 const { openRealtimeCall } = await import('../services/voice/realtimeSession.js');
 const { isAuthEnabled, verifyRequestSession } = await import('../services/auth.js');
 const { PEER_SOCKET_ROOM } = await import('../services/socketIo.js');
@@ -1352,7 +1358,7 @@ describe('voice host startup cancellation', () => {
       return { pushAudio: vi.fn(), interrupt: vi.fn(), close: vi.fn() };
     });
 
-    const host = makeFakeSocket();
+    const host = Object.assign(makeFakeSocket(), { data: { portosLocalConnection: true } });
     registerVoiceHandlers(host);
     const first = host.fire('voice:realtime:start');
     const duplicate = host.fire('voice:realtime:start');
@@ -1374,10 +1380,13 @@ describe('realtime speech-to-speech voice call', () => {
     interrupt: vi.fn(),
     close: vi.fn(),
   });
+  const makeLocalSocket = () => Object.assign(makeFakeSocket(), { data: { portosLocalConnection: true } });
 
   beforeEach(() => {
     vi.clearAllMocks();
     getVoiceConfig.mockResolvedValue({ enabled: true, realtime: { enabled: true, size: '4B' } });
+    vi.mocked(isAuthEnabled).mockResolvedValue(false);
+    vi.mocked(verifyRequestSession).mockResolvedValue(false);
   });
 
   it.each([
@@ -1386,7 +1395,7 @@ describe('realtime speech-to-speech voice call', () => {
     ['realtime omitted', { enabled: true }, 'Realtime voice is turned off in Voice settings.'],
   ])('refuses voice:realtime:start when %s without opening a sidecar', async (_label, cfg, expectedError) => {
     getVoiceConfig.mockResolvedValue(cfg);
-    const socket = makeFakeSocket();
+    const socket = makeLocalSocket();
     registerVoiceHandlers(socket);
 
     await socket.fire('voice:realtime:start');
@@ -1401,7 +1410,7 @@ describe('realtime speech-to-speech voice call', () => {
   it('starts one session, relays valid PCM frames, forwards interrupts, and tears down on stop or disconnect', async () => {
     const session = makeSession();
     openRealtimeCall.mockResolvedValue(session);
-    const socket = makeFakeSocket();
+    const socket = makeLocalSocket();
     registerVoiceHandlers(socket);
 
     await socket.fire('voice:realtime:start');
@@ -1442,7 +1451,7 @@ describe('realtime speech-to-speech voice call', () => {
   it('closes an active realtime session on socket disconnect', async () => {
     const session = makeSession();
     openRealtimeCall.mockResolvedValue(session);
-    const socket = makeFakeSocket();
+    const socket = makeLocalSocket();
     registerVoiceHandlers(socket);
 
     await socket.fire('voice:realtime:start');
@@ -1475,7 +1484,7 @@ describe('realtime speech-to-speech voice call', () => {
       return { reply: 'Opened the dashboard.' };
     });
 
-    const socket = makeFakeSocket();
+    const socket = makeLocalSocket();
     registerVoiceHandlers(socket);
     await socket.fire('voice:realtime:start');
 
@@ -1516,7 +1525,7 @@ describe('realtime speech-to-speech voice call', () => {
   it('closes a late-resolved session and ignores stale rejections when the user hangs up while loading', async () => {
     let resolveOpen;
     openRealtimeCall.mockImplementationOnce(() => new Promise((resolve) => { resolveOpen = resolve; }));
-    const socket = makeFakeSocket();
+    const socket = makeLocalSocket();
     registerVoiceHandlers(socket);
 
     const starting = socket.fire('voice:realtime:start');
@@ -1558,7 +1567,7 @@ describe('realtime speech-to-speech voice call', () => {
     getVoiceConfig.mockImplementationOnce(() => new Promise((resolve) => { resolveCfg = resolve; }));
     openRealtimeCall.mockResolvedValue(makeSession());
 
-    const socket = makeFakeSocket();
+    const socket = makeLocalSocket();
     registerVoiceHandlers(socket);
     const first = socket.fire('voice:realtime:start');
     const second = socket.fire('voice:realtime:start');
@@ -1575,7 +1584,7 @@ describe('realtime speech-to-speech voice call', () => {
       return makeSession();
     });
 
-    const socket = makeFakeSocket();
+    const socket = makeLocalSocket();
     registerVoiceHandlers(socket);
     await socket.fire('voice:realtime:start');
     expect(openRealtimeCall).toHaveBeenCalledTimes(1);
@@ -1588,5 +1597,89 @@ describe('realtime speech-to-speech voice call', () => {
     // A fresh start succeeds without requiring a prior voice:realtime:stop.
     await socket.fire('voice:realtime:start');
     expect(openRealtimeCall).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('voice:realtime:start host-control boundary', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getVoiceConfig.mockResolvedValue({ enabled: true, realtime: { enabled: true } });
+    vi.mocked(isAuthEnabled).mockResolvedValue(false);
+    vi.mocked(verifyRequestSession).mockResolvedValue(false);
+    openRealtimeCall.mockResolvedValue({ pushAudio: vi.fn(), interrupt: vi.fn(), close: vi.fn() });
+  });
+
+  it('refuses voice:realtime:start without host control before opening the sidecar', async () => {
+    const socket = makeFakeSocket();
+    socket.data = { portosLocalConnection: false };
+    registerVoiceHandlers(socket);
+
+    await socket.fire('voice:realtime:start');
+
+    expect(openRealtimeCall).not.toHaveBeenCalled();
+    expect(socket.emitted).toContainEqual({
+      event: 'voice:realtime:state',
+      payload: expect.objectContaining({ active: false, code: 'HOST_CONTROL_FORBIDDEN' }),
+    });
+  });
+
+  it('allows voice:realtime:start for a local password-free socket and a delegated operator session', async () => {
+    const localSocket = makeFakeSocket();
+    localSocket.data = { portosLocalConnection: true };
+    registerVoiceHandlers(localSocket);
+
+    await localSocket.fire('voice:realtime:start');
+    expect(openRealtimeCall).toHaveBeenCalledTimes(1);
+
+    openRealtimeCall.mockClear();
+    vi.mocked(isAuthEnabled).mockResolvedValue(true);
+    const headers = { authorization: 'Bearer example-agent-session' };
+    vi.mocked(verifyRequestSession).mockImplementation(async (req) => req.headers === headers);
+    const sessionSocket = makeFakeSocket();
+    sessionSocket.handshake = { headers };
+    registerVoiceHandlers(sessionSocket);
+
+    await sessionSocket.fire('voice:realtime:start');
+    expect(openRealtimeCall).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('voice:image:attach enabled gate', () => {
+  const validPayload = {
+    id: 'img-1',
+    source: 'upload',
+    name: 'chart.png',
+    dataUrl: 'data:image/png;base64,iVBORw0KGgo=',
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getVoiceConfig.mockResolvedValue({ enabled: true });
+  });
+
+  it('refuses voice:image:attach when voice mode is disabled without invoking vision inference', async () => {
+    getVoiceConfig.mockResolvedValue({ enabled: false });
+    const socket = makeFakeSocket();
+    registerVoiceHandlers(socket);
+
+    await socket.fire('voice:image:attach', validPayload);
+
+    expect(describeAttachedImage).not.toHaveBeenCalled();
+    expect(socket.emitted).toContainEqual({
+      event: 'voice:error',
+      payload: { stage: 'image', message: 'voice mode disabled' },
+    });
+    expect(socket.emitted).toContainEqual({
+      event: 'voice:image',
+      payload: { id: 'img-1', status: 'error', error: 'voice mode disabled' },
+    });
+  });
+
+  it('describes attached images when voice mode is enabled', async () => {
+    const socket = makeFakeSocket();
+    registerVoiceHandlers(socket);
+
+    await socket.fire('voice:image:attach', validPayload);
+    await vi.waitFor(() => expect(describeAttachedImage).toHaveBeenCalledTimes(1));
   });
 });
