@@ -58,7 +58,7 @@ const importProbePathFor = (importName) => IMPORT_PROBE_PATHS[importName] || imp
 const MLX_VIDEO_PIP = 'mlx-video-with-audio>=0.1.35';
 
 const PIP_NAMES = {
-  cv2: 'opencv-python',
+  cv2: 'opencv-python-headless',
   // Apple Silicon never installs transformers by name: the mflux lock pins the
   // >=5,<6 build mflux 0.17.5 needs (see MFLUX_LOCK_PACKAGES). Other Macs keep <5.
   ...(IS_DARWIN && !hostIsAppleSilicon() ? { transformers: 'transformers<5' } : {}),

@@ -106,7 +106,7 @@ describe('installLockedRuntime', () => {
 
 describe('installPackages generic repair', () => {
   it('on Apple Silicon repairs mflux-owned packages from the hash-pinned lock, never by bare name', async () => {
-    await installPackages('/image/python', ['mflux', 'transformers', 'opencv-python'], vi.fn(), { appleSilicon: true }).promise;
+    await installPackages('/image/python', ['mflux', 'transformers', 'huggingface_hub'], vi.fn(), { appleSilicon: true }).promise;
     const calls = spawned();
     expect(calls).toHaveLength(1);
     expect(calls[0]).toMatch(new RegExp(`^/image/python -m pip install (--user )?--require-hashes --no-deps --only-binary :all: -r .*requirements-mflux-mlx\\.lock\\.txt$`));
