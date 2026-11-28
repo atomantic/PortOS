@@ -1,5 +1,6 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'fs';
+import { opendir } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { makePathsProxy } from '../lib/mockPathsDataRoot.js';
@@ -42,7 +43,7 @@ vi.mock('./dataManagerBusy.js', () => ({
   updateDetachedBusy: vi.fn(async () => ({ busy: false })),
 }));
 
-const { getDataOverview, deleteBackup } = await import('./dataManager.js');
+const { getCategoryDetail, getDataOverview, deleteBackup } = await import('./dataManager.js');
 
 afterAll(() => vi.useRealTimers());
 afterAll(() => rmSync(testDataRoot, { recursive: true, force: true }));
@@ -183,5 +184,48 @@ describe('overview scan cache lifecycle', () => {
     vi.setSystemTime(Date.now() + 31_000);
     await getDataOverview();
     expect(mocks.execFile.mock.calls.length).toBeGreaterThan(completed);
+  });
+});
+
+describe('dataManager strict category detail', () => {
+  it('builds the measurement from one scan per directory and allocated bytes for regular files', async () => {
+    const category = join(testDataRoot, 'cache');
+    const first = join(category, 'first');
+    const second = join(category, 'second');
+    const file = join(category, 'top.json');
+    mkdirSync(first);
+    mkdirSync(second);
+    writeFileSync(join(first, 'nested.json'), '{}');
+    writeFileSync(file, 'top');
+    const topFile = statSync(file);
+    const topFileAllocation = typeof topFile.blocks === 'number' ? topFile.blocks * 512 : topFile.size;
+    opendir.mockClear();
+
+    const detail = await getCategoryDetail('cache', { measure: true });
+
+    expect(mocks.execFile.mock.calls.map(([command, args]) => [command, ...args]).sort()).toEqual([
+      ['du', '-sk', first],
+      ['du', '-sk', second],
+    ]);
+    expect(opendir.mock.calls.map(([path]) => path).sort()).toEqual([first, second]);
+    expect(detail.totalSize).toBe(2 * 1024 + topFile.size);
+    expect(detail.measurement).toMatchObject({ size: 2 * 1024 + topFileAllocation, fileCount: 2 });
+    expect(detail.measurement.disk.total).toBeGreaterThan(0);
+  });
+
+  it('keeps default directory entries readable and rejects incomplete measured counts', async () => {
+    mocks.countErrorPath = join(testDataRoot, 'cache', 'nested');
+    mkdirSync(mocks.countErrorPath);
+
+    const detail = await getCategoryDetail('cache');
+    expect(detail.items).toMatchObject([{ name: 'nested', size: 1024, fileCount: null }]);
+    await expect(getCategoryDetail('cache', { measure: true })).rejects.toThrow('enumeration denied');
+  });
+
+  it('rejects a regular file stat failure for measured details', async () => {
+    mocks.statErrorPath = join(testDataRoot, 'cache', 'top.json');
+    writeFileSync(mocks.statErrorPath, '{}');
+
+    await expect(getCategoryDetail('cache', { measure: true })).rejects.toThrow('stat access denied');
   });
 });
