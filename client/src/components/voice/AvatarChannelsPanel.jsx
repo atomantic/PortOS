@@ -290,12 +290,13 @@ export default function AvatarChannelsPanel({ agentDefaults }) {
                     </div>
                     {confirmRemove === avatar.filename ? (
                       <ConfirmButtonPair
-                        prompt="Remove?"
+                        ariaLabel="Remove avatar from the collection?"
                         confirmText="Remove"
                         onConfirm={() => remove(avatar.filename)}
                         onCancel={() => setConfirmRemove(null)}
                         busy={removing}
                         responsiveTouchTargets
+                        stacked
                       />
                     ) : (
                       <button

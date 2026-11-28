@@ -125,4 +125,12 @@ describe('ConfirmButtonPair', () => {
     render(<ConfirmButtonPair ariaLabel="x" className="shrink-0" />);
     expect(screen.getByRole('group', { name: 'x' }).className).toContain('shrink-0');
   });
+
+  it('stacks full-width buttons for narrow cells', () => {
+    render(<ConfirmButtonPair ariaLabel="x" stacked />);
+    const group = screen.getByRole('group', { name: 'x' });
+    expect(group.className).toContain('flex-col');
+    expect(group.className).toContain('w-full');
+    expect(group.className).not.toContain('items-center');
+  });
 });
