@@ -335,6 +335,30 @@ describe('VoiceWidget async lifecycle', () => {
     expect(mocks.stopContinuous).toHaveBeenCalledTimes(1);
     expect(mocks.interrupt).toHaveBeenCalled();
   });
+
+  it('keeps engage waiting until all overlapping cancellations settle', async () => {
+    await renderWidget();
+    let releaseFirstStop;
+    mocks.isContinuous.mockReturnValue(true);
+    mocks.stopContinuous.mockReturnValueOnce(new Promise((r) => { releaseFirstStop = r; }));
+    mocks.startContinuous.mockClear();
+
+    // First disengage starts an async continuous-capture teardown.
+    act(() => { window.dispatchEvent(new Event(DISENGAGE_EVENT)); });
+    // Second disengage lands after isContinuous flipped false, so its teardown settles immediately.
+    mocks.isContinuous.mockReturnValue(false);
+    act(() => { window.dispatchEvent(new Event(DISENGAGE_EVENT)); });
+    await settle();
+
+    // Re-engage must still wait for the first teardown rather than starting early.
+    act(() => { window.dispatchEvent(new Event(ENGAGE_EVENT)); });
+    await settle();
+    expect(mocks.startContinuous).not.toHaveBeenCalled();
+
+    await act(async () => { releaseFirstStop(); });
+    await settle();
+    expect(mocks.startContinuous).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('Voice Call console', () => {

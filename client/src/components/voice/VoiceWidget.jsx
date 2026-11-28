@@ -223,15 +223,19 @@ export default function VoiceWidget({ config, claimHeld, consoleHost }) {
 
   // Serialize teardown through `cancelInFlightRef` so any engage that lands
   // while a previous stop/hide/disengage/unmount is releasing tracks waits.
+  // Overlapping cancellations combine with any still-pending teardown so a
+  // faster second cancel can never clear `cancelInFlightRef` before an earlier
+  // mic release settles.
   const trackCancel = useCallback((options) => {
+    const previous = cancelInFlightRef.current;
     const teardown = handleCancelRef.current?.(options);
-    if (teardown && typeof teardown.then === 'function') {
-      cancelInFlightRef.current = teardown;
-      teardown.finally(() => {
-        if (cancelInFlightRef.current === teardown) cancelInFlightRef.current = null;
-      });
-    }
-    return teardown;
+    if (!teardown || typeof teardown.then !== 'function') return previous || teardown;
+    const combined = previous ? Promise.allSettled([previous, teardown]).then(() => undefined) : teardown;
+    cancelInFlightRef.current = combined;
+    combined.finally(() => {
+      if (cancelInFlightRef.current === combined) cancelInFlightRef.current = null;
+    });
+    return combined;
   }, []);
 
   // Disabling voice mode must release every mic path and drop queued TTS.
