@@ -1,4 +1,4 @@
-import { once } from 'node:events';
+import { EventEmitter, once } from 'node:events';
 import { createServer, request as httpRequest } from 'node:http';
 import express from 'express';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -7,8 +7,10 @@ import { Server as SocketIoServer } from 'socket.io';
 import { io as SocketIoClient } from 'socket.io-client';
 import { installUpgradeFallback } from '../lib/upgradeFallback.js';
 import { EIDOVERSE_ROOT_EXACT_PATHS } from '../lib/eidoverseProxyRoutes.js';
+import { registerSessionRevocation } from '../sessionRevocation.js';
 import {
   closeEidoverseProxySockets,
+  closeEidoverseProxySocketsForSessions,
   createEidoverseExpressMiddleware,
   embedParentOrigin,
   mountEidoverseWebSocket,
@@ -29,6 +31,10 @@ vi.mock('./eidoverseWorld.js', () => ({
   readEidoverseHostDescriptor: vi.fn(async () => HOST_DESCRIPTOR),
 }));
 
+const SESSION_IDS = {
+  'operator-session': 'session-operator-1',
+  'operator-session-2': 'session-operator-2',
+};
 const auth = vi.hoisted(() => ({ enabled: false, readable: true }));
 vi.mock('./auth.js', async () => {
   const { extractTokens } = await import('../../lib/portosAuthCore.js');
@@ -36,8 +42,9 @@ vi.mock('./auth.js', async () => {
     isAuthEnabled: async () => auth.enabled,
     verifyRequestSession: async (req) => {
       if (!auth.readable) throw new Error('session store unreadable');
-      return extractTokens(req).find((token) => token === 'operator-session') ?? null;
+      return extractTokens(req).find((token) => Object.hasOwn(SESSION_IDS, token)) ?? null;
     },
+    sessionIdForToken: (token) => SESSION_IDS[token] ?? null,
     verifyPassword: async (password) => password === 'instance-password',
   };
 });
@@ -258,6 +265,32 @@ describe('main-server eidoverse admission', () => {
     const closed = once(webSocketClients.at(-1), 'close');
     closeEidoverseProxySockets();
     await closed;
+  });
+
+  it('closes only the revoked operator session sockets on targeted sessions:revoked', async () => {
+    auth.enabled = true;
+    const { upstreamPort } = await listenRecordingUpstream();
+    const port = await mountApp({ active: true, upstreamPort });
+    const origin = `http://127.0.0.1:${port}`;
+    expect(await upgradeStatus(port, '/ws', { cookie: 'portos_auth=operator-session', origin })).toBe(101);
+    const revokedSocket = webSocketClients.at(-1);
+    expect(await upgradeStatus(port, '/eidoverse-host/ws', { cookie: 'portos_auth=operator-session-2', origin })).toBe(101);
+    const keptSocket = webSocketClients.at(-1);
+
+    const authEvents = new EventEmitter();
+    registerSessionRevocation({
+      authEvents,
+      closeEidoverseProxySockets,
+      closeEidoverseProxySocketsForSessions,
+    });
+    const closed = once(revokedSocket, 'close');
+    authEvents.emit('sessions:revoked', ['session-operator-1']);
+    await closed;
+
+    expect(revokedSocket.readyState).toBe(WebSocket.CLOSED);
+    expect(keptSocket.readyState).toBe(WebSocket.OPEN);
+    keptSocket.close();
+    await once(keptSocket, 'close');
   });
 });
 

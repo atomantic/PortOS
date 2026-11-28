@@ -206,4 +206,68 @@ describe('remote desktop broker', () => {
       unmount();
     }
   });
+
+  it('revokes only the targeted operator session tokens, live VNC bridges, and in-flight creations on sessions:revoked', async () => {
+    const vncSockets = [];
+    const vncServer = createServer((socket) => { vncSockets.push(socket); socket.pipe(socket); });
+    servers.push(vncServer);
+    await new Promise((resolve) => vncServer.listen(0, '127.0.0.1', resolve));
+
+    let resolvePendingProbe;
+    const probeFn = vi.fn()
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(true)
+      .mockImplementationOnce(() => new Promise((resolve) => { resolvePendingProbe = resolve; }));
+    const broker = createRemoteDesktopBroker({ port: vncServer.address().port, probeFn });
+    const tokenFor = async (ownerSessionId) => new URL(
+      (await broker.createSession({ ownerSessionId })).viewerPath,
+      'http://portos.invalid',
+    ).searchParams.get('token');
+
+    const revokedLiveToken = await tokenFor('session-a');
+    const revokedIdleToken = await tokenFor('session-a');
+    const keptLiveToken = await tokenFor('session-b');
+    const pendingCreation = broker.createSession({ ownerSessionId: 'session-a' });
+
+    const httpServer = createHttpServer();
+    servers.push(httpServer);
+    const unmount = broker.mountWebSocket(httpServer);
+    await new Promise((resolve) => httpServer.listen(0, '127.0.0.1', resolve));
+
+    const nextEvent = (client, event) => once(client, event, { signal: AbortSignal.timeout(3000) });
+    const url = (token) => `ws://127.0.0.1:${httpServer.address().port}/remote-desktop/ws?token=${token}`;
+    try {
+      const revokedClient = new WebSocket(url(revokedLiveToken));
+      const keptClient = new WebSocket(url(keptLiveToken));
+      await Promise.all([nextEvent(revokedClient, 'open'), nextEvent(keptClient, 'open')]);
+      await vi.waitFor(() => expect(vncSockets).toHaveLength(2));
+
+      const authEvents = new EventEmitter();
+      registerSessionRevocation({ authEvents, remoteDesktopBroker: broker, revokeAllHostedSessions: vi.fn() });
+      const revokedClosed = nextEvent(revokedClient, 'close');
+      authEvents.emit('sessions:revoked', ['session-a']);
+
+      const [code, reason] = await revokedClosed;
+      expect(code).toBe(1008);
+      expect(reason.toString()).toBe('PortOS session revoked');
+      expect(broker.hasSession(revokedLiveToken)).toBe(false);
+      expect(broker.hasSession(revokedIdleToken)).toBe(false);
+      expect(broker.hasSession(keptLiveToken)).toBe(true);
+      expect(keptClient.readyState).toBe(WebSocket.OPEN);
+
+      resolvePendingProbe(true);
+      await expect(pendingCreation).rejects.toMatchObject({ code: 'REMOTE_DESKTOP_SESSION_REVOKED' });
+
+      const echoed = nextEvent(keptClient, 'message');
+      keptClient.send(Buffer.from('RFB 003.008\n'));
+      expect(Buffer.from((await echoed)[0]).toString()).toBe('RFB 003.008\n');
+
+      const keptClosed = nextEvent(keptClient, 'close');
+      keptClient.close();
+      await keptClosed;
+    } finally {
+      unmount();
+    }
+  });
 });

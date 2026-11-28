@@ -416,6 +416,12 @@ export const verifyRequestSession = async (req) => {
   return null;
 };
 
+// Synchronous session id lookup for a token already verified in the same tick.
+export const sessionIdForToken = (token) => {
+  if (typeof token !== 'string' || !token) return null;
+  return sessions.get(hashToken(token))?.id ?? null;
+};
+
 // Audit identity for a verified session. Never expose its token or hash; a shared
 // agent session identifies the credential, not an individual agent or a human.
 export const verifyRequestSessionIdentity = async (req) => {

@@ -532,6 +532,26 @@ describe('FableLoom routes', () => {
       expect(fableLoom.createHostedSession).toHaveBeenCalledWith('loom-1', 'ep-1', { audioTarget: 'host' });
     });
 
+    it('POST host forwards ownerSessionId from authenticated session context', async () => {
+      fableLoom.createHostedSession.mockResolvedValueOnce({ session: { id: 'sess-2' }, token: 'def' });
+      const app = express();
+      app.use(express.json());
+      app.use((req, _res, next) => {
+        req.portosAuthContext = { enabled: true, authenticated: true, method: 'session', sessionId: 'op-sess-1' };
+        next();
+      });
+      app.use('/api/fableloom', routes);
+      app.use(errorMiddleware);
+      const res = await request(app)
+        .post('/api/fableloom/loom-1/episodes/ep-1/sessions/host')
+        .send({ audioTarget: 'host' });
+      expect(res.status).toBe(201);
+      expect(fableLoom.createHostedSession).toHaveBeenCalledWith('loom-1', 'ep-1', {
+        audioTarget: 'host',
+        ownerSessionId: 'op-sess-1',
+      });
+    });
+
     it('GET sessions/:sessionId retrieves session or 404s', async () => {
       fableLoom.getHostedSession.mockReturnValueOnce({ id: 'sess-1', status: 'active' });
       const res = await request(makeApp()).get('/api/fableloom/sessions/sess-1');

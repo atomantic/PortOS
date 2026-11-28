@@ -106,8 +106,8 @@ const usableHostHeader = (raw) => {
   return /^(?:\[[0-9a-fA-F:.]+\]|[a-zA-Z0-9.-]+)(?::\d{1,5})?$/.test(host) ? host : null;
 };
 
-const ADMITTED = Object.freeze({ refusal: null, guest: false });
-const refused = (status, reason, message) => ({ refusal: { status, reason, message }, guest: false });
+const ADMITTED = Object.freeze({ refusal: null, guest: false, sessionId: null });
+const refused = (status, reason, message) => ({ refusal: { status, reason, message }, guest: false, sessionId: null });
 
 /**
  * The one admission decision for every Eidoverse HTTP and WebSocket entry point
@@ -138,16 +138,23 @@ export const authorizeEidoverseProxyRequest = async (req) => {
   }
   try {
     // Deferred so suites that only reach the proxy don't load the settings store.
-    const { isAuthEnabled, verifyRequestSession } = await import('./auth.js');
+    const authModule = await import('./auth.js');
     const guestTicket = parseCookie(req.headers?.cookie, EIDOVERSE_GUEST_COOKIE_NAME);
-    const authEnabled = await isAuthEnabled();
-    if ((!authEnabled && !guestTicket) || await verifyRequestSession(req)) return ADMITTED;
+    const authEnabled = await authModule.isAuthEnabled();
+    if (!authEnabled && !guestTicket) return ADMITTED;
+    const sessionToken = await authModule.verifyRequestSession(req);
+    if (sessionToken) {
+      const sessionId = typeof sessionToken === 'string' && Object.hasOwn(authModule, 'sessionIdForToken')
+        ? authModule.sessionIdForToken(sessionToken)
+        : null;
+      return { refusal: null, guest: false, sessionId };
+    }
     // Deferred: travel reaches this module again through the host bridge, and
     // only a request that presents a guest ticket needs its session table.
     if (guestTicket) {
       const { getEidoverseGuestSession } = await import('./eidoverseTravel.js');
       const session = await getEidoverseGuestSession(req);
-      if (session?.identity) return { refusal: null, guest: true, guestIdentity: session.identity };
+      if (session?.identity) return { refusal: null, guest: true, guestIdentity: session.identity, sessionId: null };
     }
   } catch (error) {
     console.error(`❌ Eidoverse admission check failed: ${error.message}`);
@@ -188,13 +195,27 @@ export const handleGatedEidoverseHttp = async (options) => {
   handleEidoverseHttp(options);
 };
 
-// Live upgraded client sockets. An upgrade is admitted once, so a revoked
-// credential must also end the connections it already opened.
-const upgradedSockets = new Set();
+// Live upgraded client sockets mapped to the operator sessionId that opened them
+// (or null for password-free/guest connections). An upgrade is admitted once, so
+// full or targeted revocation must end the connections it already opened.
+const upgradedSockets = new Map();
 
 /** Drop every proxied WebSocket; a still-authorized renderer reconnects. */
 export const closeEidoverseProxySockets = () => {
-  for (const socket of upgradedSockets) socket.destroy();
+  for (const socket of [...upgradedSockets.keys()]) socket.destroy();
+};
+
+/** Drop proxied WebSockets opened by any of the revoked operator session IDs. */
+export const closeEidoverseProxySocketsForSessions = (sessionIds) => {
+  const revoked = new Set(sessionIds);
+  if (!revoked.size) return 0;
+  let closed = 0;
+  for (const [socket, sessionId] of [...upgradedSockets.entries()]) {
+    if (!sessionId || !revoked.has(sessionId)) continue;
+    closed += 1;
+    socket.destroy();
+  }
+  return closed;
 };
 
 /** Gate + proxy one WebSocket upgrade (see proxyUpgradeToEidoverse for options). */
@@ -204,7 +225,7 @@ export const handleGatedEidoverseUpgrade = async (options) => {
   // during admission would otherwise be an uncaught 'error'.
   markUpgradeClaimed(clientSocket);
   clientSocket.on('error', () => clientSocket.destroy());
-  const { refusal, guest, guestIdentity } = await authorizeEidoverseProxyRequest(req);
+  const { refusal, guest, guestIdentity, sessionId } = await authorizeEidoverseProxyRequest(req);
   if (clientSocket.destroyed) return;
   if (refusal) {
     const { status, reason, message } = refusal;
@@ -214,7 +235,7 @@ export const handleGatedEidoverseUpgrade = async (options) => {
     );
     return;
   }
-  upgradedSockets.add(clientSocket);
+  upgradedSockets.set(clientSocket, sessionId ?? null);
   clientSocket.once('close', () => upgradedSockets.delete(clientSocket));
   if (guest) {
     const { bindEidoverseGuestSocket } = await import('./eidoverseTravel.js');

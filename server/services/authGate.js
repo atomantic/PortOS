@@ -1,4 +1,5 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
+import * as authService from './auth.js';
 import { isAuthEnabled, verifyPassword, verifyRequestSession, verifyRequestSessionIdentity } from './auth.js';
 // Shared with sidecar processes (lib/sidecarAuthGate.js) so the Autofixer UI
 // on :5560 applies byte-identical credential extraction and CSRF rules.
@@ -203,8 +204,17 @@ export const authGate = async (req, res, next) => {
   // introduced here so a Settings toggle takes effect on the very next request.
   // A passwordless API exemption must not discard a supplied operator/agent
   // session: conditional host-control handlers still need that identity.
-  if (await verifyRequestSession(req)) {
-    req.portosAuthContext = { enabled: true, authenticated: true, method: 'session' };
+  const sessionToken = await verifyRequestSession(req);
+  if (sessionToken) {
+    const sessionId = typeof sessionToken === 'string' && Object.hasOwn(authService, 'sessionIdForToken')
+      ? authService.sessionIdForToken(sessionToken)
+      : null;
+    req.portosAuthContext = {
+      enabled: true,
+      authenticated: true,
+      method: 'session',
+      ...(sessionId ? { sessionId } : {}),
+    };
     return next();
   }
   const settings = await getSettings();

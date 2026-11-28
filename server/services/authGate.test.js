@@ -479,10 +479,10 @@ describe('authGate per-API public registry (apiAccess)', () => {
     await writeApiAccess({ voice: { exposed: true, requireAuth: false } });
     const { authGate, requestHasHostControl } = await import('./authGate.js');
     for (const label of [null, 'agent']) {
-      const { token } = await auth.createSession({ label });
+      const { token, id } = await auth.createSession({ label });
       const req = { path: '/api/voice/public/synthesize', headers: { authorization: `Bearer ${token}` }, socket: { remoteAddress: '192.0.2.10' } };
       expect((await runGate(authGate, req)).called).toBe(true);
-      expect(req.portosAuthContext).toEqual({ enabled: true, authenticated: true, method: 'session' });
+      expect(req.portosAuthContext).toEqual({ enabled: true, authenticated: true, method: 'session', sessionId: id });
       expect(requestHasHostControl(req)).toBe(true);
     }
   });
@@ -567,12 +567,12 @@ describe('authGate Express path matching', () => {
 
   it('authenticates mixed-case routes without changing record IDs or asset paths', async () => {
     const auth = await import('./auth.js');
-    const { token } = await auth.setPassword({ newPassword: 'correct-horse' });
+    const { token, id } = await auth.setPassword({ newPassword: 'correct-horse' });
     const { app, mutations } = await buildApp();
     const record = await request(app).get('/API/example/records/CaseSensitiveID')
       .set('Cookie', `portos_auth=${token}`);
     expect(record.status).toBe(200);
-    expect(record.body).toEqual({ id: 'CaseSensitiveID', auth: { enabled: true, authenticated: true, method: 'session' } });
+    expect(record.body).toEqual({ id: 'CaseSensitiveID', auth: { enabled: true, authenticated: true, method: 'session', sessionId: id } });
 
     const asset = await request(app).get('/DaTa/images/ExampleAsset.txt')
       .set('Authorization', `Bearer ${token}`);
