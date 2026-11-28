@@ -47,6 +47,12 @@ export const createPrivacySubject = (data, options) => request('/privacy/subject
   body: JSON.stringify(data),
   ...options,
 });
+/** Update a subject's display name and/or relationship. */
+export const updatePrivacySubject = (id, patch, options) => request(`/privacy/subjects/${id}`, {
+  method: 'PUT',
+  body: JSON.stringify(patch),
+  ...options,
+});
 /** Hard delete — cascades this subject's vault records, orgs, changes, and cases. */
 export const deletePrivacySubject = (id, options) => request(`/privacy/subjects/${id}`, {
   method: 'DELETE',

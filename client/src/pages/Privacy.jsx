@@ -71,6 +71,10 @@ export default function Privacy() {
     selectSubject(subject.id);
   };
 
+  const handleUpdated = (updated) => {
+    setSubjects((prev) => prev.map((s) => (s.id === updated.id ? { ...s, ...updated } : s)));
+  };
+
   const handleDeleted = (deletedId) => {
     setSubjects((prev) => prev.filter((s) => s.id !== deletedId));
     // Never strand the view on a subject that no longer exists.
@@ -162,6 +166,7 @@ export default function Privacy() {
         subjects={subjects}
         onClose={() => setDrawerOpen(false)}
         onCreated={handleCreated}
+        onUpdated={handleUpdated}
         onDeleted={handleDeleted}
         onConsentChanged={handleConsentChanged}
       />

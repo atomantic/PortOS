@@ -5,6 +5,7 @@ import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 // engine refuses to scan/opt-out for a subject with no consent row.
 vi.mock('../../services/apiPrivacy.js', () => ({
   createPrivacySubject: vi.fn(),
+  updatePrivacySubject: vi.fn(),
   deletePrivacySubject: vi.fn(),
   getPrivacySubjectConsents: vi.fn(),
   grantPrivacySubjectConsent: vi.fn(),
@@ -15,6 +16,7 @@ vi.mock('../ui/Toast');
 import SubjectsDrawer from './SubjectsDrawer';
 import {
   createPrivacySubject,
+  updatePrivacySubject,
   deletePrivacySubject,
   getPrivacySubjectConsents,
   grantPrivacySubjectConsent,
@@ -149,5 +151,41 @@ describe('SubjectsDrawer', () => {
     renderDrawer();
     fireEvent.click(screen.getAllByRole('button', { name: /Consent record/i })[1]);
     await waitFor(() => expect(screen.getByText(/revoked/)).toBeInTheDocument());
+  });
+
+  it('edits a household member display name and relationship', async () => {
+    updatePrivacySubject.mockResolvedValue({ id: 'sub-2', displayName: 'Jordan', relationship: 'parent' });
+    const onUpdated = vi.fn();
+    renderDrawer({ onUpdated });
+
+    fireEvent.click(screen.getByLabelText('Edit Alex'));
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Jordan' } });
+    fireEvent.change(screen.getByLabelText('Relationship'), { target: { value: 'parent' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(updatePrivacySubject).toHaveBeenCalledWith(
+      'sub-2',
+      { displayName: 'Jordan', relationship: 'parent' },
+      { silent: true },
+    ));
+    expect(onUpdated).toHaveBeenCalledWith({ id: 'sub-2', displayName: 'Jordan', relationship: 'parent' });
+  });
+
+  it('edits the self subject display name without changing relationship', async () => {
+    updatePrivacySubject.mockResolvedValue({ id: SELF_SUBJECT_ID, displayName: 'Primary', relationship: 'self' });
+    const onUpdated = vi.fn();
+    renderDrawer({ onUpdated });
+
+    fireEvent.click(screen.getByLabelText('Edit Me'));
+    expect(screen.queryByLabelText('Relationship')).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Primary' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(updatePrivacySubject).toHaveBeenCalledWith(
+      SELF_SUBJECT_ID,
+      { displayName: 'Primary' },
+      { silent: true },
+    ));
+    expect(onUpdated).toHaveBeenCalledWith({ id: SELF_SUBJECT_ID, displayName: 'Primary', relationship: 'self' });
   });
 });

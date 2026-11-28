@@ -17,6 +17,7 @@ const SUBJECTS = vi.hoisted(() => [
 vi.mock('../services/apiPrivacy.js', () => ({
   getPrivacySubjects: vi.fn().mockResolvedValue(SUBJECTS),
   createPrivacySubject: vi.fn(),
+  updatePrivacySubject: vi.fn(),
   deletePrivacySubject: vi.fn(),
   getPrivacySubjectConsents: vi.fn().mockResolvedValue([]),
   grantPrivacySubjectConsent: vi.fn().mockResolvedValue({ id: 'c-9', scope: 'broker_scan' }),
@@ -102,6 +103,7 @@ import {
   getPrivacyChanges,
   getPrivacySubjects,
   createPrivacySubject,
+  updatePrivacySubject,
 } from '../services/apiPrivacy.js';
 
 const SELF_ID = '00000000-0000-4000-8000-000000000001';
@@ -288,6 +290,18 @@ describe('Privacy Center', () => {
         expect(screen.queryByRole('alert')).not.toBeInTheDocument();
       });
       expect(screen.getByLabelText('Subject')).toBeInTheDocument();
+    });
+
+    it('updates the Subject switcher when a household member is renamed in the drawer', async () => {
+      updatePrivacySubject.mockResolvedValueOnce({ id: 'sub-2', displayName: 'Jordan', relationship: 'parent' });
+      renderAt('/privacy/vault');
+      await screen.findByRole('option', { name: /Alex · Partner/ });
+      fireEvent.click(screen.getByRole('button', { name: /Household/ }));
+      fireEvent.click(await screen.findByLabelText('Edit Alex'));
+      fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Jordan' } });
+      fireEvent.change(screen.getByLabelText('Relationship'), { target: { value: 'parent' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+      expect(await screen.findByRole('option', { name: /Jordan · Parent/ })).toBeInTheDocument();
     });
 
     it('shows empty copy when subjects list is empty and ready', async () => {
