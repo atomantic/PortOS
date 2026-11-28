@@ -186,7 +186,7 @@ export default function Wiki() {
         <button
           type="button"
           onClick={clearVaultParam}
-          className="mt-3 text-xs text-port-accent hover:underline"
+          className="mt-3 px-3 py-1.5 rounded-lg border border-port-border bg-port-card text-xs font-medium text-port-accent hover:border-port-accent/50 hover:text-white transition-colors"
         >
           Show default vault
         </button>
@@ -237,7 +237,7 @@ export default function Wiki() {
         }
       />
 
-      <TabPills tabs={TABS} activeTab={activeTab} onChange={(id) => navigate({ pathname: `/wiki/${id}`, search: searchParams.toString() })} ariaLabel="Wiki sections" />
+      <TabPills tabs={TABS} activeTab={activeTab} onChange={(id) => navigate({ pathname: `/wiki/${id}`, search: searchParams.toString() })} mobileCompact ariaLabel="Wiki sections" />
 
       {scanFailedScope === vaultScope && (
         <ListLoadError what="this vault's notes" onRetry={loadNotes} className="m-3" />

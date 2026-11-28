@@ -119,4 +119,16 @@ describe('OverviewTab Health Report', () => {
     expect(screen.queryByText("Couldn't load the health report")).toBeNull();
     expect(getNote).not.toHaveBeenCalled();
   });
+
+  it('uses consistent h2 headings across peer cards and 44px button affordance for Refresh', async () => {
+    renderTab([]);
+    await screen.findByText(/Weekly wiki maintenance is off/);
+    const headings = screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent);
+    expect(headings).toEqual(['Recent Activity', 'Health Report', 'How to Use']);
+
+    const refresh = screen.getByRole('button', { name: 'Refresh' });
+    expect(refresh.className).toContain('min-h-[44px]');
+    expect(refresh.className).toContain('min-w-[44px]');
+    expect(refresh.className).toContain('border');
+  });
 });

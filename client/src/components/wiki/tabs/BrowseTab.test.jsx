@@ -44,9 +44,10 @@ describe('BrowseTab responsive list/detail', () => {
     getNote.mockResolvedValue(sampleNote);
   });
 
-  it('uses a responsive grid parent instead of a fixed calc() height', () => {
+  it('uses a full-width responsive grid parent instead of a fixed calc() height', () => {
     const { container } = renderTab();
     const root = container.firstChild;
+    expect(root.className).toContain('w-full');
     expect(root.className).toContain('grid-cols-1');
     expect(root.className).toContain('md:grid-cols-[320px_1fr]');
     expect(root.className).toContain('min-h-0');

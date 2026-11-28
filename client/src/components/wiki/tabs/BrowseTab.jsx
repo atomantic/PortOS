@@ -117,22 +117,24 @@ export default function BrowseTab({ vaultId, notes, rawNotes, allNotes, onRefres
     // opened; the detail pane's back button restores it), both panes from md+.
     // Fills its flex parent (min-h-0) rather than a fixed calc() so a wrapped
     // header never clips it.
-    <div className="grid grid-cols-1 md:grid-cols-[320px_1fr] grid-rows-1 h-full min-h-0 overflow-hidden">
+    <div className="w-full grid grid-cols-1 md:grid-cols-[320px_1fr] grid-rows-1 h-full min-h-0 overflow-hidden">
       {/* Left panel — tree/list. Hidden on mobile while a note is open. */}
-      <div className={`border-r border-port-border flex-col min-h-0 overflow-hidden ${noteParam ? 'hidden md:flex' : 'flex'}`}>
+      <div className={`md:border-r border-port-border flex-col min-h-0 overflow-hidden ${noteParam ? 'hidden md:flex' : 'flex'}`}>
         {/* Section toggle */}
         <div className="p-3 border-b border-port-border flex items-center gap-2">
           <button
+            type="button"
             onClick={() => setActiveSection('wiki')}
-            className={`flex-1 px-3 py-1.5 rounded text-sm font-medium transition-colors ${
+            className={`flex-1 whitespace-nowrap px-3 py-1.5 rounded text-sm font-medium transition-colors ${
               activeSection === 'wiki' ? 'bg-port-accent text-white' : 'bg-port-bg text-gray-400 hover:text-white'
             }`}
           >
             Wiki ({notes.length})
           </button>
           <button
+            type="button"
             onClick={() => setActiveSection('raw')}
-            className={`flex-1 px-3 py-1.5 rounded text-sm font-medium transition-colors ${
+            className={`flex-1 whitespace-nowrap px-3 py-1.5 rounded text-sm font-medium transition-colors ${
               activeSection === 'raw' ? 'bg-port-accent text-white' : 'bg-port-bg text-gray-400 hover:text-white'
             }`}
           >
