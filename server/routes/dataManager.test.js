@@ -14,7 +14,7 @@ vi.mock('../services/dataManager.js', () => ({
   deleteBackup: vi.fn(),
 }));
 
-const { purgeCategory } = await import('../services/dataManager.js');
+const { archiveCategory, deleteBackup, getCategoryDetail, purgeCategory } = await import('../services/dataManager.js');
 const { default: dataRoutes } = await import('./dataManager.js');
 
 const makeApp = () => {
@@ -25,13 +25,13 @@ const makeApp = () => {
   return app;
 };
 
+beforeEach(() => vi.resetAllMocks());
+
 describe('DELETE /api/data/:category', () => {
-  beforeEach(() => {
-    purgeCategory.mockReset().mockResolvedValue({ category: 'images', subPath: null });
-  });
 
   it('treats a bodiless request as a whole-category purge', async () => {
-    const res = await request(makeApp()).delete('/api/data/screenshots').send({});
+    purgeCategory.mockResolvedValue({ category: 'screenshots', subPath: null });
+    const res = await request(makeApp()).delete('/api/data/screenshots');
     expect(res.status).toBe(200);
     expect(purgeCategory).toHaveBeenCalledWith('screenshots', { subPath: undefined });
   });
@@ -73,5 +73,71 @@ describe('DELETE /api/data/:category', () => {
     expect(res.status).toBe(409);
     expect(res.body.error?.code ?? res.body.code).toBe('CATEGORY_BUSY');
     expect(JSON.stringify(res.body)).toContain(reason);
+  });
+});
+
+describe('DELETE /api/data/backups/:filename', () => {
+  it('deletes the named backup without dispatching a category purge', async () => {
+    const filename = 'example-backup.tar.gz';
+    deleteBackup.mockResolvedValue({ deleted: filename });
+    const res = await request(makeApp()).delete(`/api/data/backups/${filename}`);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ deleted: filename });
+    expect(deleteBackup).toHaveBeenCalledExactlyOnceWith(filename);
+    expect(purgeCategory).not.toHaveBeenCalled();
+  });
+
+  it('surfaces an invalid filename refusal without dispatching a category purge', async () => {
+    deleteBackup.mockRejectedValue(new ServerError('Invalid filename', { status: 400, code: 'INVALID_FILENAME' }));
+    const res = await request(makeApp()).delete('/api/data/backups/example.txt');
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_FILENAME');
+    expect(purgeCategory).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/data/:category/archive', () => {
+  it('passes the parsed retention window to the archive service', async () => {
+    const result = { filename: 'screenshots.tar.gz' };
+    archiveCategory.mockResolvedValue(result);
+    const res = await request(makeApp()).post('/api/data/screenshots/archive').send({ daysToKeep: '7' });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(result);
+    expect(archiveCategory).toHaveBeenCalledExactlyOnceWith('screenshots', { daysToKeep: 7 });
+  });
+
+  it('rejects negative retention before archiving', async () => {
+    const res = await request(makeApp()).post('/api/data/screenshots/archive').send({ daysToKeep: -1 });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+    expect(archiveCategory).not.toHaveBeenCalled();
+  });
+});
+
+describe('GET /api/data/:category', () => {
+  it.each([
+    { suffix: '', measure: false },
+    { suffix: '?measure=1', measure: true },
+  ])('passes measure=$measure for "$suffix"', async ({ suffix, measure }) => {
+    const detail = { key: 'screenshots', entries: [] };
+    getCategoryDetail.mockResolvedValue(detail);
+    const res = await request(makeApp()).get(`/api/data/screenshots${suffix}`);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(detail);
+    expect(getCategoryDetail).toHaveBeenCalledExactlyOnceWith('screenshots', { measure });
+  });
+
+  it('rejects an invalid measure flag before reading the category', async () => {
+    const res = await request(makeApp()).get('/api/data/screenshots?measure=true');
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+    expect(getCategoryDetail).not.toHaveBeenCalled();
+  });
+
+  it('maps a missing category to 404', async () => {
+    getCategoryDetail.mockResolvedValue(null);
+    const res = await request(makeApp()).get('/api/data/missing-category');
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('NOT_FOUND');
   });
 });
