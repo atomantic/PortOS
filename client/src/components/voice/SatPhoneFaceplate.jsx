@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link } from 'react-router';
-import { AudioLines, Brain, EyeOff, Maximize2, PanelBottomClose, SlidersHorizontal, Volume2, VolumeX, X } from 'lucide-react';
+import { AudioLines, Brain, EyeOff, Maximize2, PanelBottomClose, SlidersHorizontal, VolumeX, X } from 'lucide-react';
 import RealtimeCallPanel from './RealtimeCallPanel';
 import ChannelBrainPicker from './ChannelBrainPicker';
 import TabPills from '../ui/TabPills';
@@ -9,18 +9,7 @@ import { safeReadStorage, safeWriteStorage } from '../../lib/safeStorage';
 
 const utilityBtn = 'inline-flex items-center justify-center rounded-md border border-transparent p-1 pointer-coarse:min-h-11 pointer-coarse:min-w-11 text-port-text-muted hover:border-port-border hover:bg-port-bg/60 hover:text-port-text transition-colors';
 
-function CornerScrew() {
-  return (
-    <span
-      aria-hidden="true"
-      className="satphone-screw inline-flex h-2.5 w-2.5 shrink-0 items-center justify-center rounded-full"
-    >
-      <span className="h-[1px] w-1.5 rotate-45 bg-port-border/80" />
-    </span>
-  );
-}
-
-function StatusLed({ label, state }) {
+function StatusLed({ label, state, title }) {
   const tone = state === 'tx'
     ? 'bg-port-accent-2 shadow-[0_0_7px_rgb(var(--port-accent-2)/0.95)] ring-port-accent-2/60 animate-pulse'
     : state === 'rx'
@@ -34,7 +23,7 @@ function StatusLed({ label, state }) {
             : 'bg-port-text/15 ring-port-text/25';
 
   return (
-    <span className="inline-flex items-center gap-1 font-mono text-[9px] font-semibold uppercase tracking-wider text-port-text-muted">
+    <span title={title} className="inline-flex items-center gap-1 font-mono text-[9px] font-semibold uppercase tracking-wider text-port-text-muted">
       <span aria-hidden="true" className={`h-1.5 w-1.5 rounded-full ring-1 transition-colors ${tone}`} />
       {label}
     </span>
@@ -58,31 +47,25 @@ export function SatPhoneFaceplate({
     : (avatarData?.phase === 'starting' || avatarData?.phase === 'installing')
       ? 'warn'
       : 'on';
+  const linkTitle = runningAvatar
+    ? 'Live animated avatar active'
+    : (avatarData?.phase === 'starting' || avatarData?.phase === 'installing')
+      ? 'Avatar runtime starting'
+      : 'Portrait ready';
 
   const rxLedState = stage === 'speaking' ? 'rx' : (stage === 'thinking' || stage === 'loading') ? 'warn' : 'off';
 
   return (
     <header className="flex items-center justify-between gap-1.5 min-w-0">
-      <div className="flex items-center gap-1.5 min-w-0">
-        <CornerScrew />
-        <div className="flex items-baseline gap-1.5 min-w-0">
-          <span className="font-mono text-[11px] font-bold uppercase tracking-[0.14em] text-port-text shrink-0">
-            PortOS
-          </span>
-          {!isFloating && (
-            <span className="font-mono text-[9px] uppercase tracking-[0.16em] text-port-text-muted truncate" title="Transceiver">
-              Sat-Comm
-            </span>
-          )}
-        </div>
-      </div>
+      <span className="font-mono text-[11px] font-bold uppercase tracking-[0.14em] text-port-text shrink-0">
+        PortOS
+      </span>
 
       <div className="flex items-center gap-2 shrink-0">
         <div className="flex items-center gap-1.5" aria-hidden="true">
-          <StatusLed label="PWR" state="on" />
-          <StatusLed label="LNK" state={linkLedState} />
-          <StatusLed label="TX" state={capturing ? 'tx' : 'off'} />
-          <StatusLed label="RX" state={rxLedState} />
+          <StatusLed label="LNK" state={linkLedState} title={linkTitle} />
+          <StatusLed label="TX" state={capturing ? 'tx' : 'off'} title={capturing ? 'Microphone transmitting' : 'Microphone idle'} />
+          <StatusLed label="RX" state={rxLedState} title={rxLedState === 'rx' ? 'Receiving voice' : rxLedState === 'warn' ? 'Generating reply' : 'Receiver idle'} />
         </div>
 
         {isFloating && (
@@ -195,32 +178,18 @@ export function SatPhoneSpeaker({
   isVoiceOutputTab,
   onClaimVoiceOutput,
 }) {
+  // Only render when another tab holds proactive audio output and this tab can reclaim it.
+  if (!isFloating || !onClaimVoiceOutput || isVoiceOutputTab) return null;
   return (
-    <div className="flex items-center justify-between gap-2 pt-0.5">
-      <CornerScrew />
-      <div aria-hidden="true" className="satphone-grille h-2.5 flex-1 rounded-sm opacity-80" />
-      {isFloating && onClaimVoiceOutput ? (
-        <button
-          type="button"
-          onClick={onClaimVoiceOutput}
-          aria-pressed={isVoiceOutputTab}
-          title={isVoiceOutputTab
-            ? 'This tab plays proactive alerts & reminders. Only one tab speaks at a time.'
-            : 'Proactive alerts play on another tab. Click to make this tab the speaker.'}
-          className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 pointer-coarse:min-h-11 font-mono text-[9px] font-semibold uppercase tracking-wider transition-colors ${
-            isVoiceOutputTab
-              ? 'border-port-success/40 bg-port-success/10 text-port-success-text'
-              : 'border-port-border bg-port-bg/60 text-port-text-muted hover:text-port-text'
-          }`}
-        >
-          {isVoiceOutputTab ? <Volume2 size={10} aria-hidden="true" /> : <VolumeX size={10} aria-hidden="true" />}
-          {isVoiceOutputTab ? 'speaker' : 'claim speaker'}
-        </button>
-      ) : (
-        <span className="font-mono text-[9px] uppercase tracking-[0.16em] text-port-text-muted border border-port-border/80 rounded px-1.5 py-0.5 bg-port-bg/60">
-          PT-01
-        </span>
-      )}
-    </div>
+    <button
+      type="button"
+      onClick={onClaimVoiceOutput}
+      aria-pressed={false}
+      title="Proactive alerts play on another tab. Click to make this tab the speaker."
+      className="satphone-key inline-flex min-h-9 pointer-coarse:min-h-11 w-full items-center justify-center gap-1.5 rounded-lg border px-2.5 py-1 font-mono text-[10px] font-semibold uppercase tracking-wider text-port-text-muted hover:text-port-text"
+    >
+      <VolumeX size={12} aria-hidden="true" />
+      claim speaker
+    </button>
   );
 }

@@ -105,7 +105,7 @@ function StationTabs({ runningAvatar, llmProvider, llmModel, llmResidency, onLlm
 export default function VoiceCallConsole({
   stage, history, scrollRef, interimTranscript, capturing, handsFree, canChangeMicMode,
   hotkey, draft, onDraft, onSend, onMic, onMode, onInterrupt, onEnd, onClear,
-  voiceLabel, llmProvider, llmModel, onLlmSaved, agentDefaults, volume = 0.85, muted = false, onVolumeChange, onToggleMute,
+  agentName, voiceLabel, llmProvider, llmModel, onLlmSaved, agentDefaults, volume = 0.85, muted = false, onVolumeChange, onToggleMute,
   sfxEnabled = true, onToggleSfx, signalLevel = 0, visionEnabled = false, onToggleVision, images,
 }) {
   const { data, error, updateData, refetch } = useAvatarRuntime(true, { autoStart: true });
@@ -153,6 +153,7 @@ export default function VoiceCallConsole({
           onInterrupt={onInterrupt}
           onEnd={onEnd}
           onClear={onClear}
+          agentName={agentName}
           voiceLabel={voiceLabel}
           llmProvider={llmProvider}
           llmModel={llmModel}
@@ -245,7 +246,7 @@ export default function VoiceCallConsole({
             >
               {!hasRows && !interimTranscript && (
                 <p className="opacity-65">
-                  Channel quiet. Press the TALK paddle or type on the handset.
+                  Channel quiet. Press TALK or type on the handset.
                 </p>
               )}
               {rows.map(({ turn, timing: line }, i) => (line ? (

@@ -1,5 +1,4 @@
 import VoiceCallGenerativePortrait from './VoiceCallGenerativePortrait';
-import SatPhoneCaption from './SatPhoneCaption';
 
 const STATUS_LABELS = {
   idle: 'Standby',
@@ -23,20 +22,21 @@ const STATUS_DOTS = {
 export default function SatPhoneViewfinder({
   avatarFilename = null,
   channel,
+  agentName = '',
   runningAvatar,
   connecting = false,
   stage,
   capturing,
-  caption,
 }) {
   // Connecting wins over the idle states: the call is not usable yet. A turn in progress still shows its own stage.
   const shownStage = connecting && (stage === 'idle' || !STATUS_LABELS[stage]) ? 'connecting' : stage;
   const statusText = STATUS_LABELS[shownStage] || STATUS_LABELS.idle;
   const channelBadge = `CH${(channel?.index ?? 0) + 1}`;
-  const screenBadge = `${channelBadge} · ${runningAvatar ? 'AVATAR LIVE' : 'PORTRAIT'}`;
+  const trimmedName = agentName?.trim();
+  const screenBadge = trimmedName ? `${channelBadge} · ${trimmedName}` : channelBadge;
 
   return (
-    <div className="satphone-bezel relative isolate flex-1 min-w-0 overflow-hidden rounded-xl border">
+    <div className="satphone-bezel relative isolate w-full min-w-0 overflow-hidden rounded-xl border">
       {/* Remount per face so a channel change restarts the idle stream on the new portrait. */}
       <VoiceCallGenerativePortrait
         key={`${runningAvatar ? 'animated' : 'still'}:${avatarFilename || 'default'}`}
@@ -47,28 +47,17 @@ export default function SatPhoneViewfinder({
         fill
       />
 
-      {/* Subtle CRT/OLED scanlines (disabled under reduced-motion) */}
-      <div aria-hidden="true" className="satphone-scanlines pointer-events-none absolute inset-0" />
-
-      {/* Viewfinder corner targeting reticles */}
-      <svg
-        aria-hidden="true"
-        viewBox="0 0 100 100"
-        preserveAspectRatio="none"
-        className="pointer-events-none absolute inset-2 h-[calc(100%-1rem)] w-[calc(100%-1rem)] text-port-accent"
-      >
-        <path d="M0 9V0H9 M91 0H100V9" fill="none" stroke="currentColor" strokeWidth="1.5" opacity="0.55" vectorEffect="non-scaling-stroke" />
-        <path d="M0 72V81H9 M91 81H100V72" fill="none" stroke="currentColor" strokeWidth="1.5" opacity="0.4" vectorEffect="non-scaling-stroke" />
-      </svg>
-
       {/* Top HUD chips (theme-safe .port-media-overlay-strong over media) */}
-      <div className="pointer-events-none absolute inset-x-2 top-2 flex items-center justify-between gap-1.5">
-        <span className="port-media-overlay-strong rounded px-1.5 py-0.5 font-mono text-[9px] font-semibold uppercase tracking-[0.12em] border border-port-border/70">
+      <div className="pointer-events-none absolute inset-x-2 top-2 flex items-center justify-between gap-1.5 min-w-0">
+        <span
+          title={screenBadge}
+          className="port-media-overlay-strong min-w-0 truncate rounded px-1.5 py-0.5 font-mono text-[9px] font-semibold uppercase tracking-[0.12em] border border-port-border/70"
+        >
           {screenBadge}
         </span>
         <p
           role="status"
-          className="port-media-overlay-strong inline-flex items-center gap-1.5 rounded px-2 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-wider border border-port-border/70"
+          className="port-media-overlay-strong shrink-0 inline-flex items-center gap-1.5 rounded px-2 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-wider border border-port-border/70"
         >
           <span
             aria-hidden="true"
@@ -77,8 +66,6 @@ export default function SatPhoneViewfinder({
           {statusText}
         </p>
       </div>
-
-      <SatPhoneCaption caption={caption} />
     </div>
   );
 }

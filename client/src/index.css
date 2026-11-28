@@ -2177,44 +2177,6 @@ html[data-port-theme-mode="day"] .satphone-chassis[data-live="rx"] {
     0 0 0 1px rgb(var(--port-accent) / 0.5);
 }
 
-.satphone-antenna {
-  background:
-    repeating-linear-gradient(
-      180deg,
-      transparent 0px,
-      transparent 3px,
-      rgb(var(--port-text) / 0.18) 3px,
-      rgb(var(--port-text) / 0.18) 4px
-    ),
-    linear-gradient(
-      90deg,
-      rgb(var(--port-bg)) 0%,
-      rgb(var(--port-card)) 38%,
-      color-mix(in srgb, rgb(var(--port-card)) 75%, rgb(var(--port-text)) 25%) 55%,
-      rgb(var(--port-bg)) 100%
-    );
-  border-color: rgb(var(--port-border));
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.18);
-}
-
-.satphone-screw {
-  background: radial-gradient(
-    circle at 35% 35%,
-    rgb(var(--port-text) / 0.28),
-    rgb(var(--port-bg)) 72%
-  );
-  box-shadow: inset 0 1px 2px rgb(0 0 0 / 0.45), 0 1px 0 rgb(255 255 255 / 0.1);
-}
-
-html[data-port-theme-mode="day"] .satphone-screw {
-  background: radial-gradient(
-    circle at 35% 35%,
-    rgb(var(--port-card)),
-    rgb(var(--port-border)) 80%
-  );
-  box-shadow: inset 0 1px 1.5px rgb(15 23 42 / 0.24), 0 1px 0 rgb(255 255 255 / 0.8);
-}
-
 .satphone-bezel {
   background-color: rgb(var(--port-bg));
   border-color: rgb(var(--port-border));
@@ -2229,16 +2191,6 @@ html[data-port-theme-mode="day"] .satphone-bezel {
     0 1px 0 rgb(255 255 255 / 0.85);
 }
 
-.satphone-scanlines {
-  background-image: repeating-linear-gradient(
-    180deg,
-    transparent 0px,
-    transparent 2px,
-    rgb(var(--port-accent) / 0.09) 2px,
-    rgb(var(--port-accent) / 0.09) 3px
-  );
-}
-
 /* A bright band rolling down the pixelated portrait while a call connects. */
 .satphone-connecting-sweep {
   top: -20%;
@@ -2248,16 +2200,6 @@ html[data-port-theme-mode="day"] .satphone-bezel {
 
 @keyframes satphone-connecting-sweep {
   to { transform: translateY(600%); }
-}
-
-html[data-port-theme-mode="day"] .satphone-scanlines {
-  background-image: repeating-linear-gradient(
-    180deg,
-    transparent 0px,
-    transparent 3px,
-    rgb(var(--port-text) / 0.045) 3px,
-    rgb(var(--port-text) / 0.045) 4px
-  );
 }
 
 .satphone-lcd {
@@ -2374,41 +2316,35 @@ html[data-port-theme-mode="day"] .satphone-key[data-active="true"] {
 }
 
 .satphone-paddle {
-  background-image:
-    repeating-linear-gradient(
-      180deg,
-      transparent 0px,
-      transparent 3px,
-      rgb(var(--port-text) / 0.08) 3px,
-      rgb(var(--port-text) / 0.08) 4px
-    ),
-    linear-gradient(
-      90deg,
-      rgb(var(--port-bg)) 0%,
-      rgb(var(--port-card)) 55%,
-      color-mix(in srgb, rgb(var(--port-card)) 82%, rgb(var(--port-text)) 18%) 100%
-    );
-  border-color: rgb(var(--port-border));
+  background-image: linear-gradient(
+    180deg,
+    color-mix(in srgb, rgb(var(--port-card)) 84%, rgb(var(--port-accent-2)) 16%) 0%,
+    rgb(var(--port-card)) 52%,
+    rgb(var(--port-bg)) 100%
+  );
+  border-color: rgb(var(--port-accent-2) / 0.55);
   color: rgb(var(--port-text));
   box-shadow:
-    inset 1px 0 0 rgb(255 255 255 / 0.1),
-    0 3px 10px rgb(0 0 0 / 0.35);
+    inset 0 1px 0 rgb(255 255 255 / 0.12),
+    0 2px 0 rgb(0 0 0 / 0.4),
+    0 3px 8px rgb(0 0 0 / 0.28);
+  transition: transform 80ms ease, border-color 120ms ease, box-shadow 120ms ease, background-color 120ms ease;
+}
+
+.satphone-paddle:hover:not(:disabled) {
+  border-color: rgb(var(--port-accent-2));
+}
+
+.satphone-paddle:active:not(:disabled) {
+  transform: translateY(1px);
 }
 
 .satphone-paddle[aria-pressed="true"] {
-  background-image:
-    repeating-linear-gradient(
-      180deg,
-      transparent 0px,
-      transparent 3px,
-      rgb(var(--port-on-accent-2) / 0.12) 3px,
-      rgb(var(--port-on-accent-2) / 0.12) 4px
-    ),
-    linear-gradient(
-      180deg,
-      rgb(var(--port-accent-2)) 0%,
-      color-mix(in srgb, rgb(var(--port-accent-2)) 82%, rgb(var(--port-bg)) 18%) 100%
-    );
+  background-image: linear-gradient(
+    180deg,
+    rgb(var(--port-accent-2)) 0%,
+    color-mix(in srgb, rgb(var(--port-accent-2)) 82%, rgb(var(--port-bg)) 18%) 100%
+  );
   border-color: rgb(var(--port-accent-2));
   color: rgb(var(--port-on-accent-2));
   box-shadow:
@@ -2417,22 +2353,15 @@ html[data-port-theme-mode="day"] .satphone-key[data-active="true"] {
 }
 
 html[data-port-theme-mode="day"] .satphone-paddle:not([aria-pressed="true"]) {
-  background-image:
-    repeating-linear-gradient(
-      180deg,
-      transparent 0px,
-      transparent 3px,
-      rgb(var(--port-text) / 0.06) 3px,
-      rgb(var(--port-text) / 0.06) 4px
-    ),
-    linear-gradient(
-      90deg,
-      rgb(var(--port-bg)) 0%,
-      rgb(var(--port-card)) 100%
-    );
+  background-image: linear-gradient(
+    180deg,
+    rgb(var(--port-card)) 0%,
+    color-mix(in srgb, rgb(var(--port-card)) 88%, rgb(var(--port-accent-2)) 12%) 100%
+  );
   box-shadow:
-    inset 1px 0 0 rgb(255 255 255 / 0.9),
-    0 2px 6px rgb(15 23 42 / 0.12);
+    inset 0 1px 0 rgb(255 255 255 / 0.9),
+    0 2px 0 rgb(var(--port-accent-2) / 0.35),
+    0 2px 6px rgb(15 23 42 / 0.1);
 }
 
 .satphone-dial-body {
@@ -2464,17 +2393,6 @@ html[data-port-theme-mode="day"] .satphone-dial-body {
     0 3px 8px rgb(15 23 42 / 0.16);
 }
 
-.satphone-grille {
-  background-image: repeating-linear-gradient(
-    -55deg,
-    rgb(var(--port-text) / 0.24) 0px,
-    rgb(var(--port-text) / 0.24) 2px,
-    transparent 2px,
-    transparent 6px
-  );
-  mask-image: linear-gradient(90deg, transparent, black 12%, black 88%, transparent);
-}
-
 .satphone-log-well {
   background-color: var(--port-terminal-bg);
   background-image: radial-gradient(rgb(var(--port-text) / 0.08) 1px, transparent 1px);
@@ -2492,7 +2410,6 @@ html[data-port-theme-mode="day"] .satphone-log-well {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .satphone-scanlines,
   .satphone-connecting-sweep {
     display: none;
   }
