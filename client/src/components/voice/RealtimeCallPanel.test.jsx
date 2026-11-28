@@ -37,6 +37,19 @@ describe('RealtimeCallPanel', () => {
     await waitFor(() => expect(mocks.updateVoiceConfig).toHaveBeenCalledWith({ realtime: { home: '/custom/sophon' } }, { silent: true }));
   });
 
+  it('preserves an unsaved install-path draft when model size or refresh updates status', async () => {
+    mocks.getVoiceRealtimeStatus
+      .mockResolvedValueOnce({ ...installed, enabled: false, size: '32B' })
+      .mockResolvedValueOnce({ ...installed, enabled: false, size: '4B' });
+    mocks.updateVoiceConfig.mockResolvedValue({});
+    render(<RealtimeCallPanel />);
+    const input = await screen.findByLabelText('Install path');
+    fireEvent.change(input, { target: { value: '/unsaved/custom/path' } });
+    fireEvent.change(screen.getByLabelText('Model'), { target: { value: '4B' } });
+    await waitFor(() => expect(mocks.updateVoiceConfig).toHaveBeenCalledWith({ realtime: { size: '4B' } }, { silent: true }));
+    expect(screen.getByLabelText('Install path')).toHaveValue('/unsaved/custom/path');
+  });
+
   it('saves the enable switch and the model size', async () => {
     mocks.getVoiceRealtimeStatus.mockResolvedValue({ ...installed, enabled: false });
     mocks.updateVoiceConfig.mockResolvedValue({});

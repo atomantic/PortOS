@@ -21,14 +21,18 @@ export default function RealtimeCallPanel({ compact = false }) {
   const handle = useRef(null);
   // Bumped by hang-up and unmount, so a call still starting (mic prompt, worklet load) is stopped when it resolves.
   const attempt = useRef(0);
+  const lastSavedHomeRef = useRef(null);
   const modelId = useId();
   const homeId = useId();
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async ({ syncHome = false } = {}) => {
     try {
       const next = await getVoiceRealtimeStatus({ silent: true });
+      const nextHome = next?.home || '';
+      const prevHome = lastSavedHomeRef.current;
+      lastSavedHomeRef.current = nextHome;
       setStatus(next);
-      setHomeDraft(next?.home || '');
+      setHomeDraft((draft) => (syncHome || prevHome === null || draft.trim() === prevHome ? nextHome : draft));
       setLoadError('');
     } catch (err) {
       setLoadError(err.message);
@@ -46,7 +50,7 @@ export default function RealtimeCallPanel({ compact = false }) {
     setSaving(true);
     try {
       await updateVoiceConfig({ realtime: patch }, { silent: true });
-      await refresh();
+      await refresh({ syncHome: Object.hasOwn(patch, 'home') });
     } catch (err) {
       setLoadError(err.message);
     } finally {

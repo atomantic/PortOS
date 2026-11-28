@@ -47,7 +47,9 @@ describe('VoiceCallConsole', () => {
     window.localStorage.clear();
   });
 
-  it('opens the Realtime voice station tab and mounts RealtimeCallPanel', async () => {
+  it('opens the Realtime voice station tab and keeps an active call mounted across tab switches', async () => {
+    const stop = vi.fn();
+    mocks.startRealtimeCall.mockResolvedValue({ stop, interrupt: vi.fn() });
     mocks.getVoiceRealtimeStatus.mockResolvedValue({
       enabled: true,
       installed: true,
@@ -88,7 +90,13 @@ describe('VoiceCallConsole', () => {
     expect(tab).toHaveAttribute('aria-expanded', 'false');
     fireEvent.click(tab);
     expect(tab).toHaveAttribute('aria-expanded', 'true');
-    expect(await screen.findByRole('button', { name: 'Start realtime call' })).toBeInTheDocument();
+    const startBtn = await screen.findByRole('button', { name: 'Start realtime call' });
     expect(screen.queryByTestId('avatar-runtime-settings')).toBeNull();
+    fireEvent.click(startBtn);
+    await screen.findByRole('button', { name: 'Hang up' });
+
+    fireEvent.click(screen.getByRole('button', { name: /Voice brain/ }));
+    expect(tab).toHaveAttribute('aria-expanded', 'false');
+    expect(stop).not.toHaveBeenCalled();
   });
 });

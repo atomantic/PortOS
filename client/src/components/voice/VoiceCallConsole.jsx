@@ -27,9 +27,11 @@ function StationTabs({ runningAvatar, llmProvider, llmModel, llmResidency, onLlm
     const saved = safeReadStorage(TAB_KEY);
     return saved === 'none' ? null : TABS.includes(saved) ? saved : 'video';
   });
+  const [realtimeMounted, setRealtimeMounted] = useState(() => tab === 'realtime');
   const { data: library } = useAvatarLibrary();
   const choose = (next) => {
     const value = tab === next ? null : next;
+    if (value === 'realtime') setRealtimeMounted(true);
     safeWriteStorage(TAB_KEY, value || 'none');
     setTab(value);
   };
@@ -89,8 +91,8 @@ function StationTabs({ runningAvatar, llmProvider, llmModel, llmResidency, onLlm
           <AvatarChannelsPanel agentDefaults={{ ...agentDefaults, provider: llmProvider, model: llmModel }} />
         </div>
       )}
-      {tab === 'realtime' && (
-        <div id="station-panel-realtime">
+      {realtimeMounted && (
+        <div id="station-panel-realtime" hidden={tab !== 'realtime'}>
           <RealtimeCallPanel compact />
         </div>
       )}
