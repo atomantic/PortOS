@@ -33,8 +33,15 @@ export const floatToPcm16 = (samples) => {
 
 /** PCM16 bytes to Float32 samples. */
 export const pcm16ToFloat = (bytes) => {
-  const view = bytes instanceof ArrayBuffer ? new Int16Array(bytes, 0, Math.floor(bytes.byteLength / 2))
-    : new Int16Array(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + (bytes.byteLength & ~1)));
+  if (!bytes) return new Float32Array(0);
+  let view;
+  if (bytes instanceof ArrayBuffer) {
+    view = new Int16Array(bytes, 0, Math.floor(bytes.byteLength / 2));
+  } else if (ArrayBuffer.isView(bytes)) {
+    view = new Int16Array(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + (bytes.byteLength & ~1)));
+  } else {
+    return new Float32Array(0);
+  }
   const out = new Float32Array(view.length);
   for (let i = 0; i < view.length; i += 1) out[i] = view[i] / 0x8000;
   return out;
@@ -94,8 +101,10 @@ export const startRealtimeCall = async (handlers = {}) => {
     playing.clear();
     nextAt = 0;
   };
-  const onAudio = ({ pcm }) => {
-    const samples = pcm16ToFloat(pcm);
+  let stopped = false;
+  const onAudio = (payload) => {
+    if (stopped || outCtx.state === 'closed' || !payload?.pcm) return;
+    const samples = pcm16ToFloat(payload.pcm);
     if (!samples.length) return;
     const buffer = outCtx.createBuffer(1, samples.length, OUT_RATE);
     buffer.copyToChannel(samples, 0);
@@ -108,7 +117,6 @@ export const startRealtimeCall = async (handlers = {}) => {
     playing.add(src);
     src.onended = () => playing.delete(src);
   };
-  let stopped = false;
   const teardown = ({ emitStop = true } = {}) => {
     if (stopped) return;
     stopped = true;
