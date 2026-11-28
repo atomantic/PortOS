@@ -33,8 +33,8 @@ export default function SearchTab({ vaultId }) {
   return (
     <div className="max-w-4xl mx-auto space-y-4">
       {/* Search bar */}
-      <div className="relative">
-        <Search size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-500" />
+      <div className="flex items-center gap-2 bg-port-card border border-port-border rounded-lg pl-3.5 pr-2 py-1.5 focus-within:border-port-accent">
+        <Search size={18} className="text-gray-500 shrink-0" aria-hidden="true" />
         <input
           ref={inputRef}
           value={query}
@@ -42,24 +42,28 @@ export default function SearchTab({ vaultId }) {
           onKeyDown={e => e.key === 'Enter' && handleSearch()}
           placeholder="Search wiki pages and raw sources..."
           aria-label="Search wiki pages and raw sources"
-          className="w-full bg-port-card border border-port-border rounded-lg pl-11 pr-20 py-3 text-white placeholder-gray-500 focus:outline-none focus:border-port-accent"
+          className="flex-1 min-w-0 bg-transparent py-1.5 text-base sm:text-sm text-white placeholder-gray-500 focus:outline-none"
           autoFocus
         />
-        <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-2">
-          {query && (
-            <button onClick={() => { setQuery(''); setResults(null); }} aria-label="Clear search" className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 text-gray-500 hover:text-white">
-              <X size={16} />
-            </button>
-          )}
+        {query && (
           <button
-            onClick={handleSearch}
-            disabled={searching || !query.trim()}
-            aria-label="Search"
-            className="px-3 py-1 rounded bg-port-accent text-white text-sm disabled:opacity-50"
+            type="button"
+            onClick={() => { setQuery(''); setResults(null); }}
+            aria-label="Clear search"
+            className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center rounded border border-transparent hover:border-port-border hover:bg-port-bg text-gray-500 hover:text-white shrink-0 transition-colors"
           >
-            {searching ? <RefreshCw size={14} className="animate-spin" /> : 'Search'}
+            <X size={16} />
           </button>
-        </div>
+        )}
+        <button
+          type="button"
+          onClick={handleSearch}
+          disabled={searching || !query.trim()}
+          aria-label="Search"
+          className="min-h-[36px] px-3 py-1.5 rounded bg-port-accent text-white text-sm font-medium disabled:opacity-50 shrink-0 transition-colors"
+        >
+          {searching ? <RefreshCw size={14} className="animate-spin" /> : 'Search'}
+        </button>
       </div>
 
       {/* Results */}
