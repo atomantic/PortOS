@@ -381,8 +381,8 @@ export const describeSession = async (token) => {
   return entry ? { id: entry.id, label: entry.label, expiresAt: entry.expiresAt } : null;
 };
 
-export const verifySession = async (token) => {
-  if (typeof token !== 'string' || token.length === 0) return false;
+const verifySessionEntry = async (token) => {
+  if (typeof token !== 'string' || token.length === 0) return null;
   await ensureLoaded();
   const key = hashToken(token);
   let entry = sessions.get(key);
@@ -391,7 +391,7 @@ export const verifySession = async (token) => {
     await queueSessions(mergeSessionsFromDisk);
     entry = sessions.get(key);
   }
-  if (!entry) return false;
+  if (!entry) return null;
   if (entry.expiresAt <= now()) {
     await queueSessionMutation(async () => {
       const current = sessions.get(key);
@@ -400,10 +400,12 @@ export const verifySession = async (token) => {
         await writeSessions();
       }
     }).catch(() => null);
-    return false;
+    return null;
   }
-  return true;
+  return entry;
 };
+
+export const verifySession = async (token) => (await verifySessionEntry(token)) !== null;
 
 // Authorize a request against every candidate token it carries (all PortOS
 // session cookies + Bearer — see extractTokens). Returns the first token that
@@ -411,24 +413,19 @@ export const verifySession = async (token) => {
 // different port of the same host) must never mask this install's valid one.
 export const verifyRequestSession = async (req) => {
   for (const token of extractTokens(req)) {
-    if (await verifySession(token)) return token;
+    if (await verifySessionEntry(token)) return token;
   }
   return null;
-};
-
-// Synchronous session id lookup for a token already verified in the same tick.
-export const sessionIdForToken = (token) => {
-  if (typeof token !== 'string' || !token) return null;
-  return sessions.get(hashToken(token))?.id ?? null;
 };
 
 // Audit identity for a verified session. Never expose its token or hash; a shared
 // agent session identifies the credential, not an individual agent or a human.
 export const verifyRequestSessionIdentity = async (req) => {
-  const token = await verifyRequestSession(req);
-  if (!token) return null;
-  const entry = sessions.get(hashToken(token));
-  return entry ? { kind: 'session', sessionId: entry.id, label: entry.label || null } : null;
+  for (const token of extractTokens(req)) {
+    const entry = await verifySessionEntry(token);
+    if (entry) return { kind: 'session', sessionId: entry.id, label: entry.label || null };
+  }
+  return null;
 };
 
 export const revokeSession = (token) => queueSessionMutation(async () => {

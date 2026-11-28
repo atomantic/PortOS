@@ -270,4 +270,46 @@ describe('remote desktop broker', () => {
       unmount();
     }
   });
+
+  it('closes a live VNC bridge on targeted revocation even after its token has already been evicted from sessions', async () => {
+    const vncServer = createServer((socket) => socket.pipe(socket));
+    servers.push(vncServer);
+    await new Promise((resolve) => vncServer.listen(0, '127.0.0.1', resolve));
+
+    let currentTime = 1_000;
+    const broker = createRemoteDesktopBroker({
+      port: vncServer.address().port,
+      probeFn: async () => true,
+      now: () => currentTime,
+      connectedSessionTtlMs: 60_000,
+    });
+    const token = new URL(
+      (await broker.createSession({ ownerSessionId: 'session-evicted' })).viewerPath,
+      'http://portos.invalid',
+    ).searchParams.get('token');
+
+    const httpServer = createHttpServer();
+    servers.push(httpServer);
+    const unmount = broker.mountWebSocket(httpServer);
+    await new Promise((resolve) => httpServer.listen(0, '127.0.0.1', resolve));
+
+    const nextEvent = (client, event) => once(client, event, { signal: AbortSignal.timeout(3000) });
+    try {
+      const client = new WebSocket(`ws://127.0.0.1:${httpServer.address().port}/remote-desktop/ws?token=${token}`);
+      await nextEvent(client, 'open');
+
+      // Advance logical clock past connectedSessionTtlMs and probe hasSession to
+      // evict the token from the sessions map while the live bridge is still open.
+      currentTime += 65_000;
+      expect(broker.hasSession(token)).toBe(false);
+
+      const closed = nextEvent(client, 'close');
+      broker.revokeByOwnerSessions(['session-evicted'], 'PortOS session revoked');
+      const [code, reason] = await closed;
+      expect(code).toBe(1008);
+      expect(reason.toString()).toBe('PortOS session revoked');
+    } finally {
+      unmount();
+    }
+  });
 });

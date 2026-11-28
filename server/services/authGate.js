@@ -204,16 +204,15 @@ export const authGate = async (req, res, next) => {
   // introduced here so a Settings toggle takes effect on the very next request.
   // A passwordless API exemption must not discard a supplied operator/agent
   // session: conditional host-control handlers still need that identity.
-  const sessionToken = await verifyRequestSession(req);
-  if (sessionToken) {
-    const sessionId = typeof sessionToken === 'string' && Object.hasOwn(authService, 'sessionIdForToken')
-      ? authService.sessionIdForToken(sessionToken)
-      : null;
+  const session = Object.hasOwn(authService, 'verifyRequestSessionIdentity')
+    ? await authService.verifyRequestSessionIdentity(req)
+    : ((await verifyRequestSession(req)) ? { kind: 'session', sessionId: null, label: null } : null);
+  if (session) {
     req.portosAuthContext = {
       enabled: true,
       authenticated: true,
       method: 'session',
-      ...(sessionId ? { sessionId } : {}),
+      ...(session.sessionId ? { sessionId: session.sessionId } : {}),
     };
     return next();
   }

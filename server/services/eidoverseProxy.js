@@ -142,12 +142,11 @@ export const authorizeEidoverseProxyRequest = async (req) => {
     const guestTicket = parseCookie(req.headers?.cookie, EIDOVERSE_GUEST_COOKIE_NAME);
     const authEnabled = await authModule.isAuthEnabled();
     if (!authEnabled && !guestTicket) return ADMITTED;
-    const sessionToken = await authModule.verifyRequestSession(req);
-    if (sessionToken) {
-      const sessionId = typeof sessionToken === 'string' && Object.hasOwn(authModule, 'sessionIdForToken')
-        ? authModule.sessionIdForToken(sessionToken)
-        : null;
-      return { refusal: null, guest: false, sessionId };
+    const session = Object.hasOwn(authModule, 'verifyRequestSessionIdentity')
+      ? await authModule.verifyRequestSessionIdentity(req)
+      : ((await authModule.verifyRequestSession(req)) ? { sessionId: null } : null);
+    if (session) {
+      return { refusal: null, guest: false, sessionId: session.sessionId ?? null };
     }
     // Deferred: travel reaches this module again through the host bridge, and
     // only a request that presents a guest ticket needs its session table.
@@ -197,11 +196,14 @@ export const handleGatedEidoverseHttp = async (options) => {
 
 // Live upgraded client sockets mapped to the operator sessionId that opened them
 // (or null for password-free/guest connections). An upgrade is admitted once, so
-// full or targeted revocation must end the connections it already opened.
+// full or targeted revocation must end the connections it already opened — and
+// refuse any in-flight admission that spanned a revocation.
 const upgradedSockets = new Map();
+const pendingUpgrades = new Set();
 
 /** Drop every proxied WebSocket; a still-authorized renderer reconnects. */
 export const closeEidoverseProxySockets = () => {
+  for (const pending of pendingUpgrades) pending.revokedAll = true;
   for (const socket of [...upgradedSockets.keys()]) socket.destroy();
 };
 
@@ -209,6 +211,9 @@ export const closeEidoverseProxySockets = () => {
 export const closeEidoverseProxySocketsForSessions = (sessionIds) => {
   const revoked = new Set(sessionIds);
   if (!revoked.size) return 0;
+  for (const pending of pendingUpgrades) {
+    for (const id of revoked) pending.revokedSessions.add(id);
+  }
   let closed = 0;
   for (const [socket, sessionId] of [...upgradedSockets.entries()]) {
     if (!sessionId || !revoked.has(sessionId)) continue;
@@ -225,26 +230,36 @@ export const handleGatedEidoverseUpgrade = async (options) => {
   // during admission would otherwise be an uncaught 'error'.
   markUpgradeClaimed(clientSocket);
   clientSocket.on('error', () => clientSocket.destroy());
-  const { refusal, guest, guestIdentity, sessionId } = await authorizeEidoverseProxyRequest(req);
-  if (clientSocket.destroyed) return;
-  if (refusal) {
-    const { status, reason, message } = refusal;
-    clientSocket.end(
-      `HTTP/1.1 ${status} ${reason}\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: ${Buffer.byteLength(message)}\r\nConnection: close\r\n\r\n${message}`,
-      () => clientSocket.destroy(),
-    );
-    return;
+  const pending = { revokedAll: false, revokedSessions: new Set() };
+  pendingUpgrades.add(pending);
+  let admission;
+  try {
+    admission = await authorizeEidoverseProxyRequest(req);
+    if (clientSocket.destroyed) return;
+    if (!admission.refusal && (pending.revokedAll || (admission.sessionId && pending.revokedSessions.has(admission.sessionId)))) {
+      admission = refused(401, 'Unauthorized', 'Session revoked.');
+    }
+    if (admission.refusal) {
+      const { status, reason, message } = admission.refusal;
+      clientSocket.end(
+        `HTTP/1.1 ${status} ${reason}\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: ${Buffer.byteLength(message)}\r\nConnection: close\r\n\r\n${message}`,
+        () => clientSocket.destroy(),
+      );
+      return;
+    }
+    upgradedSockets.set(clientSocket, admission.sessionId ?? null);
+    clientSocket.once('close', () => upgradedSockets.delete(clientSocket));
+  } finally {
+    pendingUpgrades.delete(pending);
   }
-  upgradedSockets.set(clientSocket, sessionId ?? null);
-  clientSocket.once('close', () => upgradedSockets.delete(clientSocket));
-  if (guest) {
+  if (admission.guest) {
     const { bindEidoverseGuestSocket } = await import('./eidoverseTravel.js');
     // The ticket can lapse between admission and here.
     if (!bindEidoverseGuestSocket(req, clientSocket)) {
       clientSocket.destroy();
       return;
     }
-    proxyGuestWebSocket(options, guestIdentity);
+    proxyGuestWebSocket(options, admission.guestIdentity);
     return;
   }
   proxyUpgradeToEidoverse(options);

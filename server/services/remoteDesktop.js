@@ -38,8 +38,9 @@ export const createRemoteDesktopBroker = ({
   connectedSessionTtlMs = CONNECTED_SESSION_TTL_MS,
 } = {}) => {
   const sessions = new Map();
-  // Live bridges per token so revokeAll/revokeByOwnerSessions can end connections the session map no longer gates.
-  const liveBridges = new Map();
+  // Live bridges with their ownerSessionId so revokeAll/revokeByOwnerSessions can
+  // end active connections independently of the sessions map.
+  const liveBridges = new Set();
   // Pending createSession calls awaiting the loopback VNC probe; prevents a revoked session from minting after probe resolves.
   const pendingCreations = new Set();
   const mountedServers = new WeakMap();
@@ -160,7 +161,7 @@ export const createRemoteDesktopBroker = ({
       }
       try {
         wss.handleUpgrade(request, socket, head, (webSocket) => {
-          wss.emit('connection', webSocket, request, token, session.expiresAt);
+          wss.emit('connection', webSocket, request, token, session.expiresAt, session.ownerSessionId);
         });
       } catch {
         releaseSession(token);
@@ -169,13 +170,12 @@ export const createRemoteDesktopBroker = ({
     };
     httpServer.on('upgrade', onUpgrade);
 
-    wss.on('connection', (webSocket, _request, token, expiresAt) => {
+    wss.on('connection', (webSocket, _request, token, expiresAt, ownerSessionId) => {
       const vncSocket = connect({ host, port });
       const webSocketStream = createWebSocketStream(webSocket, { encoding: null });
       let cleanedUp = false;
-      let bridges = liveBridges.get(token);
-      if (!bridges) liveBridges.set(token, bridges = new Set());
-      bridges.add(webSocket);
+      const bridge = { webSocket, ownerSessionId };
+      liveBridges.add(bridge);
       const expiryTimer = setTimeout(() => {
         webSocket.close(1000, 'Remote desktop session expired');
       }, Math.max(1, expiresAt - now()));
@@ -184,8 +184,7 @@ export const createRemoteDesktopBroker = ({
         if (cleanedUp) return;
         cleanedUp = true;
         clearTimeout(expiryTimer);
-        bridges.delete(webSocket);
-        if (bridges.size === 0 && liveBridges.get(token) === bridges) liveBridges.delete(token);
+        liveBridges.delete(bridge);
         releaseSession(token);
         vncSocket.destroy();
         webSocketStream.destroy();
@@ -218,13 +217,13 @@ export const createRemoteDesktopBroker = ({
   const revokeAll = (reason = 'Remote desktop access revoked') => {
     for (const pending of pendingCreations) pending.revoked = true;
     sessions.clear();
-    for (const bridges of [...liveBridges.values()]) {
-      for (const webSocket of [...bridges]) webSocket.close(1008, reason);
-    }
+    for (const { webSocket } of [...liveBridges]) webSocket.close(1008, reason);
   };
 
   // Targeted revocation: drop tokens and close live VNC bridges minted by the
   // revoked PortOS operator session IDs without disrupting other sessions.
+  // Live bridges retain ownerSessionId so they close even if the token map entry
+  // was already dropped.
   const revokeByOwnerSessions = (sessionIds, reason = 'Remote desktop access revoked') => {
     const revoked = new Set(sessionIds);
     if (!revoked.size) return 0;
@@ -236,9 +235,9 @@ export const createRemoteDesktopBroker = ({
       if (!session.ownerSessionId || !revoked.has(session.ownerSessionId)) continue;
       sessions.delete(token);
       count += 1;
-      for (const webSocket of [...(liveBridges.get(token) ?? [])]) {
-        webSocket.close(1008, reason);
-      }
+    }
+    for (const { webSocket, ownerSessionId } of [...liveBridges]) {
+      if (ownerSessionId && revoked.has(ownerSessionId)) webSocket.close(1008, reason);
     }
     return count;
   };

@@ -22,6 +22,9 @@ vi.mock('../services/auth.js', async (importOriginal) => ({
   ...await importOriginal(),
   isAuthEnabled: vi.fn(),
   verifyRequestSession: async (req) => req.headers.authorization === OPERATOR,
+  verifyRequestSessionIdentity: async (req) => (req.headers.authorization === OPERATOR
+    ? { kind: 'session', sessionId: 'example-operator-session', label: null }
+    : null),
   verifyPassword: async (password) => password === PASSWORD,
 }));
 vi.mock('../services/settings.js', async (importOriginal) => ({

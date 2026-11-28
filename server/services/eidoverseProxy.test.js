@@ -35,16 +35,21 @@ const SESSION_IDS = {
   'operator-session': 'session-operator-1',
   'operator-session-2': 'session-operator-2',
 };
-const auth = vi.hoisted(() => ({ enabled: false, readable: true }));
+const auth = vi.hoisted(() => ({ enabled: false, readable: true, onVerify: null }));
 vi.mock('./auth.js', async () => {
   const { extractTokens } = await import('../../lib/portosAuthCore.js');
+  const findToken = async (req) => {
+    if (!auth.readable) throw new Error('session store unreadable');
+    if (auth.onVerify) await auth.onVerify(req);
+    return extractTokens(req).find((token) => Object.hasOwn(SESSION_IDS, token)) ?? null;
+  };
   return {
     isAuthEnabled: async () => auth.enabled,
-    verifyRequestSession: async (req) => {
-      if (!auth.readable) throw new Error('session store unreadable');
-      return extractTokens(req).find((token) => Object.hasOwn(SESSION_IDS, token)) ?? null;
+    verifyRequestSession: findToken,
+    verifyRequestSessionIdentity: async (req) => {
+      const token = await findToken(req);
+      return token ? { kind: 'session', sessionId: SESSION_IDS[token], label: null } : null;
     },
-    sessionIdForToken: (token) => SESSION_IDS[token] ?? null,
     verifyPassword: async (password) => password === 'instance-password',
   };
 });
@@ -291,6 +296,28 @@ describe('main-server eidoverse admission', () => {
     expect(keptSocket.readyState).toBe(WebSocket.OPEN);
     keptSocket.close();
     await once(keptSocket, 'close');
+  });
+
+  it('rejects an in-flight WebSocket upgrade when its session is revoked during admission', async () => {
+    auth.enabled = true;
+    const { reached, upstreamPort } = await listenRecordingUpstream();
+    const port = await mountApp({ active: true, upstreamPort });
+    const origin = `http://127.0.0.1:${port}`;
+    const authEvents = new EventEmitter();
+    registerSessionRevocation({
+      authEvents,
+      closeEidoverseProxySockets,
+      closeEidoverseProxySocketsForSessions,
+    });
+    auth.onVerify = async () => {
+      authEvents.emit('sessions:revoked', ['session-operator-1']);
+    };
+    try {
+      expect(await upgradeStatus(port, '/ws', { cookie: 'portos_auth=operator-session', origin })).toBe(401);
+      expect(reached).toEqual([]);
+    } finally {
+      auth.onVerify = null;
+    }
   });
 });
 
