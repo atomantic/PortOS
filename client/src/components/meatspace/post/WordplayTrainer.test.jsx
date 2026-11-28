@@ -17,6 +17,10 @@ vi.mock('../../../services/apiMeatspace.js', () => ({
 vi.mock('../../../services/apiProviders.js', () => ({
   getProviders: vi.fn(() => Promise.resolve({ providers: [] })),
 }));
+vi.mock('./WordplayDrillUI', async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, scoreWordplayResponse: vi.fn() };
+});
 
 import WordplayTrainer from './WordplayTrainer';
 import {
@@ -25,6 +29,7 @@ import {
   getPostDrillCacheStatus,
   submitTrainingEntry,
 } from '../../../services/apiMeatspace.js';
+import { scoreWordplayResponse } from './WordplayDrillUI';
 
 // Mode activation crosses cache-status and drill-generation promises before a
 // clue renders. Give that real async chain enough time when the full client
@@ -84,6 +89,12 @@ let cacheStatusPromise;
 beforeEach(() => {
   vi.clearAllMocks();
   submitTrainingEntry.mockResolvedValue({});
+  scoreWordplayResponse.mockReset();
+  scoreWordplayResponse.mockImplementation((...args) => scorePostLlmDrill(...args.slice(0, 6)).then(scored => ({
+    score: scored.score,
+    feedback: scored.evaluation.scores[0].feedback || scored.evaluation.summary,
+    ...scored.evaluation.scores[0],
+  })));
   // Cache reported warm for every mode so startMode skips the cache-fill
   // consent modal and goes straight to runMode — the modal flow is covered
   // separately and isn't the concern of these tests.
@@ -122,6 +133,48 @@ async function selectMode(name) {
 }
 
 describe('WordplayTrainer — training-log persistence (issue #2097)', () => {
+  it('ignores scoring that resolves after leaving a mode and prevents duplicate submissions', async () => {
+    let resolveScore;
+    scoreWordplayResponse.mockImplementationOnce(() => new Promise(resolve => { resolveScore = resolve; }));
+    generatePostDrill
+      .mockResolvedValueOnce({ type: 'bridge-word', puzzles: [{ clues: ['news___', '___back'], answer: 'paper' }] })
+      .mockResolvedValueOnce({ type: 'compound-chain', challenges: [{ rootWord: 'fire', position: 'prefix', minExpected: 1 }] });
+    render(<TrainerHarness onBack={() => {}} config={{}} onConfigUpdate={() => {}} />);
+    await selectMode('Bridge Word');
+    await waitFor(() => expect(screen.getByText('news___')).toBeInTheDocument(), { timeout: GENERATED_DRILL_TIMEOUT });
+
+    const submit = screen.getByText('Submit');
+    fireEvent.change(screen.getByPlaceholderText(/bridge word is/i), { target: { value: 'paper' } });
+    fireEvent.click(submit);
+    fireEvent.click(submit);
+    expect(scoreWordplayResponse).toHaveBeenCalledTimes(1);
+    expect(screen.getByText(/Evaluating your response/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getAllByRole('button')[0]);
+    await screen.findByText('Bridge Word');
+    fireEvent.click(screen.getByText('Compound Chain'));
+    await waitFor(() => expect(screen.getByText('fire')).toBeInTheDocument(), { timeout: GENERATED_DRILL_TIMEOUT });
+
+    await act(async () => resolveScore({ score: 20, feedback: 'Stale result' }));
+    expect(screen.queryByText('Stale result')).toBeNull();
+    expect(screen.queryByText('Next')).toBeNull();
+  });
+
+  it('does not autofocus the post-scoring Next button', async () => {
+    generatePostDrill.mockResolvedValue({
+      type: 'bridge-word',
+      puzzles: [{ clues: ['news___', '___back'], answer: 'paper' }],
+    });
+    scoreWordplayResponse.mockResolvedValue({ score: 85, feedback: 'Good answer' });
+    render(<TrainerHarness onBack={() => {}} config={{}} onConfigUpdate={() => {}} />);
+    await selectMode('Bridge Word');
+    await waitFor(() => expect(screen.getByText('news___')).toBeInTheDocument(), { timeout: GENERATED_DRILL_TIMEOUT });
+    fireEvent.change(screen.getByPlaceholderText(/bridge word is/i), { target: { value: 'paper' } });
+    fireEvent.click(screen.getByText('Submit'));
+    const next = await screen.findByText('See Results');
+    expect(next).not.toHaveAttribute('autofocus');
+  });
+
   it('submits a training entry on round completion, with correctCount derived from the scored responses', async () => {
     let resolveSave;
     submitTrainingEntry.mockImplementation(() => new Promise(resolve => { resolveSave = resolve; }));
