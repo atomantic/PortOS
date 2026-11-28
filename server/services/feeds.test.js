@@ -151,9 +151,11 @@ describe('addFeed', () => {
 </channel></rss>` }));
     const { feed } = await feeds.addFeed('https://example.com/rss');
     expect(feed.title).toBe('Bits & Bobs');
-    expect(await feeds.getItems({ feedId: feed.id })).toMatchObject([
-      { title: 'It’s here & now', link: 'https://example.com/read?a=1&b=2', description: 'Fish & chips' },
+    const items = await feeds.getItems({ feedId: feed.id });
+    // Undated items sort by fetch time, which may differ within the batch.
+    expect(items.toSorted((a, b) => a.link.localeCompare(b.link))).toMatchObject([
       { title: 'Ampersands & CDATA', link: 'https://example.com/guid-only', description: '1 < 2' },
+      { title: 'It’s here & now', link: 'https://example.com/read?a=1&b=2', description: 'Fish & chips' },
     ]);
   });
 
