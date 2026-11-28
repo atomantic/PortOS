@@ -34,6 +34,16 @@ describe('locked runtime profiles', () => {
     for (const pin of mflux) expect(video).toContain(pin);
   });
 
+  it('limits the mflux-video lock to shared mflux dependencies and the LTX-2 inference additions', () => {
+    const packageNames = (profile) => new Set(
+      Array.from(readFileSync(profile.lockFile, 'utf8').matchAll(/^([a-z0-9][a-z0-9-]*)==/gm), ([, name]) => name),
+    );
+    expect(packageNames(LOCK_PROFILES['mflux-video'])).toEqual(new Set([
+      ...packageNames(LOCK_PROFILES.mflux),
+      'cffi', 'mlx-video-with-audio', 'mlx-vlm', 'pycparser', 'soundfile',
+    ]));
+  });
+
   it('locks the AuK and Laya runtimes with the build backend their commit-pinned source installs use', () => {
     const locks = Object.fromEntries(['auk-mlx', 'laya-mlx'].map((id) => [id, readFileSync(LOCK_PROFILES[id].lockFile, 'utf8')]));
     // Installed with --no-build-isolation: an absent backend would silently fall back to nothing, not to PyPI.
