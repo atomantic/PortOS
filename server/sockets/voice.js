@@ -2,12 +2,13 @@
 // Inbound:  voice:turn | voice:text | voice:interrupt | voice:reset
 //           | voice:dictation:set | voice:ui:index | voice:screenshot:result
 //           | voice:ui:read-response | voice:output:available | voice:output:claim
+//           | voice:image:attach | voice:image:remove | voice:vision:state
 // Outbound: voice:transcript | voice:llm:loading | voice:llm:delta | voice:llm:done | voice:tts:audio
 //           | voice:tts:cancel | voice:tool | voice:dictation | voice:navigate
 //           | voice:ui:click | voice:ui:fill | voice:ui:select | voice:ui:check
 //           | voice:ui:read-request
 //           | voice:dailyLog:appended | voice:error | voice:idle
-//           | voice:screenshot:request
+//           | voice:screenshot:request | voice:image
 //           | voice:speak | voice:output:primary | voice:output:detached
 // Call host (FaceTime Audio bridge):
 // Inbound:  voice:call:attach | voice:call:audio | voice:call:detach | voice:call:hangup
@@ -47,6 +48,7 @@ import {
   setCallStateListener,
 } from '../services/voice/callSession.js';
 import { synthesizeAgentSpeech } from '../services/voice/channelAgent.js';
+import { attachImage, parseImageAttachment, removeImage, setTabSharing } from '../services/voice/imageAttachments.js';
 import {
   attachCaptureHost,
   detachCaptureHost,
@@ -193,7 +195,7 @@ export const registerVoiceHandlers = (socket) => {
 
     try {
       const { runTurn } = await import('../services/voice/pipeline.js');
-      const { transcript, reply } = await runTurn({
+      const { transcript, reply, userContent } = await runTurn({
         audio, mimeType, text, source, history: state.history, emit, signal, state,
         hasHostControl: () => socketHasCurrentHostControl(socket),
       });
@@ -205,7 +207,9 @@ export const registerVoiceHandlers = (socket) => {
       // the conversation with the CoS, just raw journal content. An exception:
       // the stop-dictation reply IS a normal assistant turn, push both sides.
       if (!state.dictation.enabled || reply) {
-        pushHistory('user', transcript);
+        // userContent carries the descriptions of any images shown this turn,
+        // so later turns can still talk about them.
+        pushHistory('user', userContent || transcript);
         pushHistory('assistant', reply);
       }
     } catch (err) {
@@ -308,6 +312,9 @@ export const registerVoiceHandlers = (socket) => {
     // context, so a pending destructive click from the prior turn must
     // not survive into the next utterance.
     state.pendingDestructive = null;
+    // The cleared history no longer holds the last shared frame, so the next
+    // turn re-attaches it even when the screen did not change.
+    if (state.images) state.images.lastFrame = null;
     socket.emit('voice:dictation', { enabled: false });
     socket.emit('voice:idle', { reason: 'reset' });
   });
@@ -407,8 +414,38 @@ export const registerVoiceHandlers = (socket) => {
     const resolve = state.screenshotWaiters.get(requestId);
     if (resolve) {
       state.screenshotWaiters.delete(requestId);
-      resolve(dataUrl);
+      resolve(dataUrl ? { dataUrl, signature: payload.signature, name: payload.name } : null);
     }
+  });
+
+  // Images the user shows the agent between turns: an upload or a snapshot of
+  // the shared tab. Described right away so the next turn rarely waits; the
+  // description joins that turn's message and the chip shows it.
+  socket.on('voice:image:attach', async (payload) => {
+    try {
+      const parsed = parseImageAttachment(payload, { maxBytes: MAX_SCREENSHOT_BYTES });
+      if (parsed.error) {
+        if (parsed.id) socket.emit('voice:image', { id: parsed.id, status: 'error', error: parsed.error });
+        return;
+      }
+      const { describeAttachedImage } = await import('../services/voice/pipeline.js');
+      attachImage(state, parsed, {
+        describe: (dataUrl) => describeAttachedImage(dataUrl, { hasHostControl: () => socketHasCurrentHostControl(socket) }),
+        emit: (event, data) => socket.emit(event, data),
+      });
+    } catch (err) {
+      console.error(`❌ voice:image:attach failed: ${err.message}`);
+    }
+  });
+
+  socket.on('voice:image:remove', (payload) => {
+    if (typeof payload?.id === 'string') removeImage(state, payload.id, (event, data) => socket.emit(event, data));
+  });
+
+  // The client reports whether a tab is being shared; while it is, each turn
+  // attaches a fresh frame when the screen changed.
+  socket.on('voice:vision:state', (payload) => {
+    setTabSharing(state, payload?.live === true);
   });
 
   // Lazy visible-text reply. The ui_read tool emitted voice:ui:read-request;

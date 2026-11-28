@@ -1,5 +1,6 @@
 import { ChevronDown, ChevronUp, Trash2 } from 'lucide-react';
 import SatPhoneComposer from './SatPhoneComposer';
+import VoiceImageChips from './VoiceImageChips';
 
 export default function SatPhoneConversation({
   history,
@@ -13,6 +14,7 @@ export default function SatPhoneConversation({
   onToggleCollapsed,
   conversationId,
   inputRef,
+  images,
 }) {
   return (
     <div className="flex flex-col gap-2">
@@ -65,12 +67,13 @@ export default function SatPhoneConversation({
                 <p className="opacity-60">Standby — press TALK or type below.</p>
               )}
               {history.map((turn, i) => (
-                <p key={i} className={turn.role === 'user' ? 'opacity-75' : ''}>
+                <div key={i} className={turn.role === 'user' ? 'opacity-75' : ''}>
                   <span className="mr-1.5 text-[9px] font-bold uppercase tracking-wider text-port-accent">
                     {turn.role === 'user' ? 'TX>' : 'RX<'}
                   </span>
                   {turn.text}
-                </p>
+                  <VoiceImageChips images={turn.images} className="mt-1" />
+                </div>
               ))}
             </div>
             {interimTranscript && (
@@ -83,7 +86,7 @@ export default function SatPhoneConversation({
         )}
       </div>
 
-      <SatPhoneComposer draft={draft} onDraft={onDraft} onSend={onSend} inputRef={inputRef} />
+      <SatPhoneComposer draft={draft} onDraft={onDraft} onSend={onSend} inputRef={inputRef} images={images} />
     </div>
   );
 }

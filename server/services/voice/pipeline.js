@@ -15,6 +15,7 @@ import { isEchoOfRecentTts } from './echo.js';
 import { appendJournal, getToday } from '../brainJournal.js';
 import { resolvePending, isExpired } from './confirmGate.js';
 import { ServerError } from '../../lib/errorHandler.js';
+import { attachTabFrame, takePendingImages, appendImageBlocks, resolveVoiceVisionTarget, IMAGE_DESCRIBE_PROMPT, IMAGE_DESCRIBE_MAX_TOKENS } from './imageAttachments.js';
 
 export { splitSentences } from './turnTtsSpeaker.js';
 
@@ -108,7 +109,8 @@ const waitForUiRefresh = (state, timeoutMs, signal) => new Promise((resolve) => 
 // client echoes the same id back on voice:screenshot:result (handled in
 // sockets/voice.js). Keying by id means a late result from an earlier capture
 // can't satisfy a newer waiter and describe the wrong screen.
-// Resolves with the data URL or null on timeout/abort/denied-capture.
+// Resolves with the client's { dataUrl, signature, name } frame, or null on
+// timeout/abort/denied-capture.
 let screenshotRequestSeq = 0;
 const requestScreenshot = (emit, state, timeoutMs, signal) => new Promise((resolve) => {
   if (!state) { resolve(null); return; }
@@ -132,26 +134,29 @@ const requestScreenshot = (emit, state, timeoutMs, signal) => new Promise((resol
   emit('voice:screenshot:request', { requestId });
 });
 
-// Send a captured image (base64 data URL) to the voice LLM provider's vision
-// endpoint and return the description text. Reuses visionTest's provider-aware
-// OpenAI-compatible /chat/completions call so we don't reimplement the request
-// shape. Lazy import keeps tools.js / the pipeline free of a hard vision dep.
-//
-// Vision model selection is DECOUPLED from the voice text model: reusing
-// `cfg.llm.model` here meant that pinning a text-only voice model silently broke
-// ui_describe_visually even when the provider had a working vision-capable
-// default. Prefer an explicit `cfg.llm.visionModel` when set; otherwise pass
-// undefined so describeImageDataUrl falls back to the provider's defaultModel
-// (which is vision-capable for vision-capable providers).
-const describeScreenshot = async (dataUrl, prompt, cfg, hasHostControl) => {
+// Send a captured image (base64 data URL) to a vision model and return
+// { text, model }. Reuses visionTest's provider-aware call so the request shape
+// isn't reimplemented; the lazy import keeps the pipeline free of a hard
+// vision dependency. The model comes from resolveVoiceVisionTarget: an explicit
+// `llm.visionModel`, else the voice model when it can see, else another local
+// vision model. Falling back to the provider's default model picked a
+// text-only model on installs whose default is not multimodal.
+const describeVoiceImage = async (dataUrl, prompt, cfg, hasHostControl) => {
   const { describeImageDataUrl } = await import('../visionTest.js');
-  const providerId = cfg?.llm?.provider || 'lmstudio';
-  const visionModel = cfg?.llm?.visionModel;
-  const model = typeof visionModel === 'string' && visionModel && visionModel !== 'auto'
-    ? visionModel
-    : undefined;
-  return describeImageDataUrl({ dataUrl, prompt, providerId, model, hasHostControl });
+  const { providerId, model } = await resolveVoiceVisionTarget(cfg);
+  const text = await describeImageDataUrl({ dataUrl, prompt, providerId, model, hasHostControl, maxTokens: IMAGE_DESCRIBE_MAX_TOKENS });
+  return { text, model: model || null };
 };
+
+// Describe an image the user attached between turns (an upload), with the
+// on-air channel's settings, for the next turn's message.
+export const describeAttachedImage = async (dataUrl, { hasHostControl } = {}) => (
+  describeVoiceImage(dataUrl, IMAGE_DESCRIBE_PROMPT, await getAgentVoiceConfig(), hasHostControl)
+);
+
+// A shared-tab frame for the turn arrives fast or not at all: the client grabs
+// it from an already-authorized stream.
+const TURN_FRAME_TIMEOUT_MS = 4000;
 
 // Lazily fetch the page's visible text from the client. The client ships the
 // UI index WITHOUT the heavy visible-text blob by default (textOnDemand:true);
@@ -440,8 +445,8 @@ const executeTurnToolCall = async ({ tc, cfg, emit, state, signal, hasHostContro
     // ui_describe_visually: capture the active tab (client round-trip) and
     // describe it via the voice provider's vision endpoint. Provided here
     // so tools.js stays free of socket/vision coupling.
-    captureScreenshot: () => requestScreenshot(emit, state, 15000, signal),
-    describeImage: (dataUrl, prompt) => describeScreenshot(dataUrl, prompt, cfg, hasHostControl),
+    captureScreenshot: () => requestScreenshot(emit, state, 15000, signal).then((frame) => frame?.dataUrl || null),
+    describeImage: async (dataUrl, prompt) => (await describeVoiceImage(dataUrl, prompt, cfg, hasHostControl)).text,
     requestUiText: () => requestUiText(state, emit, signal),
   };
   try {
@@ -569,7 +574,7 @@ const filterToolSpecs = (specs, cfg) =>
 const FORM_FILL_HINT = 'This turn puts text into a field on the page: call ui_fill with the field label and the value. '
   + 'Do not call brain_capture or daily_log_append, even if the value says remember, note, or save.';
 
-const buildTurnMessages = async ({ cfg, systemContext, userText, intent, state, history, tlog }) => {
+const buildTurnMessages = async ({ cfg, systemContext, userText, userContent = userText, intent, state, history, tlog }) => {
   const messages = [
     { role: 'system', content: buildSystemPrompt(cfg) },
   ];
@@ -607,7 +612,7 @@ const buildTurnMessages = async ({ cfg, systemContext, userText, intent, state, 
   if (intent.formFill && intent.specs?.some((s) => s.function?.name === 'brain_capture')) {
     messages.push({ role: 'system', content: FORM_FILL_HINT });
   }
-  messages.push({ role: 'user', content: userText });
+  messages.push({ role: 'user', content: userContent });
   return messages;
 };
 
@@ -757,6 +762,26 @@ export const warmPromptPrefix = async ({ reason = 'call' } = {}) => {
   }
 };
 
+// Add the images the user is showing to this turn's message: a fresh frame of
+// the shared tab (skipped when the screen is unchanged since the last frame in
+// the conversation) plus any uploads queued since the last turn. Each image is
+// a labeled description block that the client shows as a chip.
+const withAttachedImages = async ({ userText, cfg, state, emit, signal, hasHostControl, tlog }) => {
+  if (!state) return userText;
+  const describe = (dataUrl) => describeVoiceImage(dataUrl, IMAGE_DESCRIBE_PROMPT, cfg, hasHostControl);
+  const frame = await attachTabFrame(state, {
+    capture: () => requestScreenshot(emit, state, TURN_FRAME_TIMEOUT_MS, signal),
+    describe,
+    emit,
+    newId: () => `tab_${shortId()}`,
+  });
+  if (frame) tlog('image.frame attached');
+  const tImages = Date.now();
+  const blocks = await takePendingImages(state, { emit, signal });
+  if (blocks.length) tlog(`image.attach ${blocks.length} image(s) ${blocks.reduce((n, b) => n + b.length, 0)}c +${Date.now() - tImages}ms wait`);
+  return appendImageBlocks(userText, blocks);
+};
+
 /**
  * Run one turn.
  *
@@ -768,7 +793,8 @@ export const warmPromptPrefix = async ({ reason = 'call' } = {}) => {
  * @param {AbortSignal} [args.signal]
  * @param {boolean} [args.speak=true]  false = text only: no TTS, the reply is returned for another voice to say
  *   (the realtime speech-to-speech voice speaks the result of a task it delegated).
- * @returns {Promise<{ transcript: string, reply: string }>}
+ * @returns {Promise<{ transcript: string, reply: string, userContent?: string }>} userContent is
+ *   the message sent to the model when images were added to it.
  */
 export const runTurn = async ({ audio, text, mimeType, source, history = [], emit, signal, state, systemContext = null, hasHostControl, speak = true }) => {
   // The on-air Voice Call channel's agent: global settings plus that channel's overrides.
@@ -853,7 +879,11 @@ export const runTurn = async ({ audio, text, mimeType, source, history = [], emi
     ? getTurnToolSpecs(userText, { trimByIntent: cfg.llm.tools?.trimByIntent === true })
     : { specs: undefined, ...resolveTurnIntent(userText) };
   const toolSpecs = filterToolSpecs(intent.specs, cfg);
-  const messages = await buildTurnMessages({ cfg, systemContext, userText, intent, state, history, tlog });
+  const userContent = await withAttachedImages({ userText, cfg, state, emit, signal, hasHostControl, tlog });
+  if (signal?.aborted) return { transcript: userText, reply: '' };
+  // The history keeps the image descriptions so later turns can refer to them.
+  const imagesAdded = userContent === userText ? {} : { userContent };
+  const messages = await buildTurnMessages({ cfg, systemContext, userText, userContent, intent, state, history, tlog });
   const maxIterations = Math.max(1, cfg.llm.tools?.maxIterations ?? 3);
 
   const speaker = speak ? createTurnTtsSpeaker({ signal, state, emit, tlog }) : SILENT_SPEAKER;
@@ -871,7 +901,7 @@ export const runTurn = async ({ audio, text, mimeType, source, history = [], emi
   if (confirmationPrompt && !signal?.aborted) {
     tlog(`confirm.prompt chars=${confirmationPrompt.length}`);
     await speakSyntheticReply(confirmationPrompt);
-    return { transcript: userText, reply: confirmationPrompt };
+    return { transcript: userText, reply: confirmationPrompt, ...imagesAdded };
   }
 
   const totalMs = Date.now() - turnStart;
@@ -911,5 +941,5 @@ export const runTurn = async ({ audio, text, mimeType, source, history = [], emi
 
   emit('voice:llm:done', { text: finalText, model: lastLlm?.model, ttfbMs: firstLlm?.ttfbMs });
   emit('voice:idle', { reason: 'turn-complete' });
-  return { transcript: userText, reply: finalText };
+  return { transcript: userText, reply: finalText, ...imagesAdded };
 };

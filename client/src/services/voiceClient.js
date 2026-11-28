@@ -40,7 +40,10 @@ export {
   onVisionCaptureEnded,
   enableVisionCapture,
   disableVisionCapture,
-  captureScreenForVision,
+  captureVisionFrame,
+  imageFileToDataUrl,
+  attachVoiceImage,
+  removeVoiceImage,
   sendScreenshotResult
 } from './voiceVision.js';
 

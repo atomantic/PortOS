@@ -56,6 +56,8 @@ export default function SatPhoneHandset({
   signalLevel = 0,
   visionEnabled = false,
   onToggleVision,
+  // { pending, attachFiles, remove } — images queued for the next turn.
+  images,
   isVoiceOutputTab = true,
   onClaimVoiceOutput,
   // Floating-only controls
@@ -188,7 +190,7 @@ export default function SatPhoneHandset({
 
         {/* Page handset: type without scrolling to the log below. The floating
             handset's composer sits under its own log instead. */}
-        {!isFloating && <SatPhoneComposer draft={draft} onDraft={onDraft} onSend={onSend} inputRef={inputRef} />}
+        {!isFloating && <SatPhoneComposer draft={draft} onDraft={onDraft} onSend={onSend} inputRef={inputRef} images={images} />}
 
         <SatPhoneSpeaker
           isFloating={isFloating}
@@ -209,6 +211,7 @@ export default function SatPhoneHandset({
             onToggleCollapsed={onToggleCollapsed}
             conversationId={conversationId}
             inputRef={inputRef}
+            images={images}
           />
         )}
       </div>
