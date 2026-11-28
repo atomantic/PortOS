@@ -1444,11 +1444,7 @@ if [[ "$INSTALL_ACESTEP15" == "1" ]]; then
     "$ACESTEP15_PY" -m pip install --require-hashes --no-deps -r "$SCRIPT_DIR/ml/requirements/requirements-acestep15-mlx.lock.txt"
     "$ACESTEP15_PY" -m pip install --no-deps --no-build-isolation --ignore-requires-python "${ACESTEP15_DIR}"
   else
-    # Direct pins: scripts/ml/requirements/requirements-acestep15-cuda.txt. The package is
-    # installed from the ACESTEP15_PIN checkout (the v0.1.8 release commit) with
-    # --no-deps, like Apple Silicon: a git SHA cannot satisfy --require-hashes.
-    # --no-deps also keeps the package's own cu128 torch pins from displacing the
-    # shared cu126 lock.
+    # Sync dependencies before building the pinned source with the locked backend.
     sync_cuda_lock_venv "ACE-Step 1.5" "$ACESTEP15_VENV" requirements-acestep15-cuda
     ACESTEP15_PY="$(venv_python "$ACESTEP15_VENV")"
     if [[ ! -d "${ACESTEP15_DIR}/.git" ]]; then
@@ -1458,7 +1454,39 @@ if [[ "$INSTALL_ACESTEP15" == "1" ]]; then
       git -C "${ACESTEP15_DIR}" fetch --progress origin
     fi
     git_checkout_pin "${ACESTEP15_DIR}" "${ACESTEP15_PIN}"
-    portos_uv pip install --no-deps --no-build-isolation --ignore-requires-python --python "$ACESTEP15_PY" "${ACESTEP15_DIR}"
+    (
+      build_dir="$(mktemp -d "${ACESTEP15_VENV%/*}/acestep15-build.XXXXXXXX")"
+      trap 'rm -rf -- "$build_dir"' EXIT
+      git -C "$ACESTEP15_DIR" archive --format=zip HEAD > "$build_dir/source.zip"
+      # Use the inference dependencies as wheel metadata so pip check can
+      # validate the installed profile. Leave the upstream checkout intact.
+      "$ACESTEP15_PY" - "$build_dir" "$SCRIPT_DIR/ml/requirements/requirements-acestep15-cuda.txt" <<'PY'
+import json
+from pathlib import Path
+import re
+import sys
+import tomllib
+from zipfile import ZipFile
+
+build_dir, requirements = map(Path, sys.argv[1:])
+source = build_dir / "source"
+with ZipFile(build_dir / "source.zip") as archive:
+    archive.extractall(source)
+
+dependencies = [
+    line for line in map(str.strip, requirements.read_text(encoding="utf-8").splitlines())
+    if line and not line.startswith("#") and line != "hatchling"
+]
+manifest = source / "pyproject.toml"
+text = manifest.read_text(encoding="utf-8")
+updated, count = re.subn(r"^dependencies\s*=\s*\[.*?^\]", lambda _: "dependencies = " + json.dumps(dependencies),
+                         text, flags=re.MULTILINE | re.DOTALL)
+if count != 1 or tomllib.loads(updated)["project"]["dependencies"] != dependencies:
+    raise SystemExit("ACE-Step 1.5 project dependency metadata changed upstream")
+manifest.write_text(updated, encoding="utf-8")
+PY
+      portos_uv pip install --no-deps --no-build-isolation --python "$ACESTEP15_PY" "$build_dir/source"
+    )
   fi
   pin_venv_arm64 "$ACESTEP15_VENV"
   probe_or_fail \
