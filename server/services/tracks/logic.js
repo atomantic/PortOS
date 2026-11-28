@@ -58,7 +58,7 @@ import { compareNewerWins } from '../../lib/lwwTimestamp.js';
 import { sanitizeChiptuneScore } from '../../lib/chiptuneScore.js';
 import { normalizeWaveSketch } from '../../lib/waveSketch.js';
 import { normalizeSunoSongId } from '../../lib/sunoSong.js';
-import { isStr, trimTo } from '../../lib/textUtils.js';
+import { isNonBlankStr, isStr, trimTo } from '../../lib/textUtils.js';
 import { promptAdditionsSchema } from '../../lib/modelInput.js';
 import { TITLE_MAX, ALBUM_ID_MAX, ARTIST_ID_MAX, ARTIST_NAME_MAX, CONCEPT_MAX, LYRICS_MAX, PROMPT_MAX, ENGINE_MAX, MODEL_ID_MAX, EXECUTION_PROFILE_MAX, AUDIO_FILENAME_MAX, RENDER_ID_MAX, RENDER_SOURCE_MAX, RENDERS_MAX } from '../../lib/trackLimits.js';
 import { DURATION_MIN_SEC, DURATION_MAX_SEC } from '../../lib/trackLimits.js';
@@ -228,6 +228,7 @@ export function sanitizeTrack(raw) {
 
   return {
     id: raw.id,
+    ...(isNonBlankStr(raw.bundledByPeerId) ? { bundledByPeerId: raw.bundledByPeerId } : {}),
     title,
     albumId: trimTo(raw.albumId, ALBUM_ID_MAX),
     artistId: trimTo(raw.artistId, ARTIST_ID_MAX),
@@ -355,12 +356,18 @@ const PATCHABLE = [
  * LWW merge decision for one incoming track record against the local copy.
  * Mirrors mergeAlbumRecord. Returns `{ next, inserted, remoteWins, changed }`.
  */
-export function mergeTrackRecord(local, remoteRaw) {
-  const remote = sanitizeTrack(remoteRaw);
+export function mergeTrackRecord(local, remoteRaw, { bundledByPeerId } = {}) {
+  // Only the admitted envelope can establish provenance. A track's wire fields
+  // cannot grant its sender authority over later project bundles.
+  const remote = sanitizeTrack({ ...remoteRaw, bundledByPeerId });
   if (!remote) return { next: null, inserted: false, remoteWins: false, changed: false };
   if (!local) return { next: remote, inserted: true, remoteWins: true, changed: true };
   const remoteWins = compareNewerWins(remote.updatedAt, local.updatedAt);
   let next = remoteWins ? remote : local;
+  if (!remoteWins && local.bundledByPeerId && !bundledByPeerId) {
+    const { bundledByPeerId: _supplier, ...directlySynced } = local;
+    next = directlySynced;
+  }
   // Absent-vs-cleared (#2911, per the AGENTS.md merge convention): a payload
   // from a chiptune-unaware (≤v2) peer lacks the chiptune KEYS entirely, while
   // a v3 peer that intentionally cleared the score sends `chiptuneScore: null`

@@ -21,6 +21,7 @@ import {
   formatVersionGap,
   getPortosVersion,
 } from '../../lib/schemaVersions.js';
+import { withMusicMutation } from '../musicMembershipMutation.js';
 import { UNKNOWN_INSTANCE_ID } from '../instanceIdentity.js';
 import { mergeIssuesFromSync } from '../pipeline/issues.js';
 import { SERIES_ID_RE } from '../pipeline/series.js';
@@ -149,27 +150,6 @@ async function bindCatalogBundle({ kind, record, catalogBundle, sourceInstanceId
     }
   }
   return refs.length === 0 && ingredients.length === 0 ? null : { ingredients, refs };
-}
-
-// A project bundles only the track it links, and only when no local track has
-// that id. Track records carry no sender provenance, so a track that already
-// exists locally is never overwritten here — not even one the local project
-// links, since a prior push can set that link (#12466). Later edits arrive
-// through the Tracks category.
-async function bindLinkedTrack({ record, linkedTrack, sourceInstanceId, onLookupError }) {
-  if (!isPlainObject(linkedTrack) || linkedTrack.id !== record.trackId) return null;
-  let localTrack;
-  try {
-    localTrack = await loadOrNotFound(() => RECORD_KINDS.track.load(linkedTrack.id));
-  } catch (err) {
-    onLookupError(err);
-    return null;
-  }
-  if (localTrack) {
-    console.warn(`⚠️ peerSync: skipped linkedTrack from ${sourceInstanceId} — a local track with that id already exists`);
-    return null;
-  }
-  return linkedTrack;
 }
 
 /**
@@ -313,21 +293,26 @@ async function mergeSeriesSidecars({ record, issues, manuscriptReview, reverseOu
   }
 }
 
-/**
- * #1858: merge the bundled linked track so a receiver WITHOUT the Tracks
- * category can still resolve `project.trackId` at render time. The bundle's id
- * must MATCH the project's `trackId` so a malformed/malicious sender can't
- * smuggle an unrelated track through. Routed through RECORD_KINDS.track.merge so
- * exactly one place knows how to merge a track. Non-fatal; returns true only when
- * the merge RAN and succeeded (#1922: gates `linkedTrack` in `ackedDeletesUpTo`,
- * so the sender is never told a track tombstone was applied when it wasn't).
- */
-async function mergeLinkedTrack({ record, linkedTrack, bundlesMergeable, source, markPending }) {
-  if (!bundlesMergeable || !isPlainObject(linkedTrack) || linkedTrack.id !== record.trackId) return false;
-  return RECORD_KINDS.track.merge([linkedTrack], { source }).then(() => true, (err) => {
-    markPending('linkedTrack')(err);
-    return false;
-  });
+// A project link alone confers no authority over an existing track (#12466).
+// Serialize the ownership read and merge with direct sync and local edits,
+// including competing inserts for a track that does not exist yet.
+async function mergeLinkedTrack({ record, linkedTrack, source, onError }) {
+  if (!isPlainObject(linkedTrack) || linkedTrack.id !== record.trackId) return null;
+  try {
+    return await withMusicMutation(async () => {
+      const local = await loadOrNotFound(() => RECORD_KINDS.track.load(linkedTrack.id));
+      if (local && local.bundledByPeerId !== source.peerId) return null;
+      const result = await RECORD_KINDS.track.merge([linkedTrack], { source, bundledByPeerId: source.peerId });
+      if (result.applied) return linkedTrack;
+      // A duplicate delivery can still confirm the existing tombstone. An
+      // ignored payload must neither advance its delete cursor nor supply assets.
+      if (local?.deleted && linkedTrack.deleted && local.deletedAt === linkedTrack.deletedAt) return linkedTrack;
+      return local && !local.deleted && !linkedTrack.deleted ? local : null;
+    });
+  } catch (err) {
+    onError(err);
+    return null;
+  }
 }
 
 /**
@@ -526,12 +511,7 @@ export async function applyIncomingPush(payload, authorization) {
   const catalogBundle = bundlesMergeable
     ? await bindCatalogBundle({ kind, record, catalogBundle: pushedCatalog, sourceInstanceId })
     : null;
-  // Only a music-video push has a linked track to bundle.
-  const linkedTrack = bundlesMergeable && kind === 'musicVideoProject'
-    ? await bindLinkedTrack({ record, linkedTrack: pushedTrack, sourceInstanceId, onLookupError: markPending('linkedTrack') })
-    : null;
-  // #1922: true only once the bundled linkedTrack merge ran and succeeded.
-  let linkedTrackApplied = false;
+  let linkedTrack = null;
   // Merge into local state via the existing LWW path, dispatched through the
   // same per-kind table isSubscriptionRecordTombstone/buildPushPayload use —
   // every PEER_SUBSCRIBABLE_KINDS entry has a descriptor (the registry guard
@@ -545,8 +525,8 @@ export async function applyIncomingPush(payload, authorization) {
   const mergeResult = await desc.merge([record], { source, senderSchemaVersions });
   if (kind === 'series') {
     await mergeSeriesSidecars({ record, issues, manuscriptReview, reverseOutline, localEphemeral, bundlesMergeable, source, senderSchemaVersions, markPending });
-  } else if (kind === 'musicVideoProject') {
-    linkedTrackApplied = await mergeLinkedTrack({ record, linkedTrack, bundlesMergeable, source, markPending });
+  } else if (kind === 'musicVideoProject' && bundlesMergeable) {
+    linkedTrack = await mergeLinkedTrack({ record, linkedTrack: pushedTrack, source, onError: markPending('linkedTrack') });
   }
 
   await applyLinkedBundles({ bundlesMergeable, linkedCollection, catalogBundle, portosMeta, source });
@@ -559,12 +539,6 @@ export async function applyIncomingPush(payload, authorization) {
   // independent `track` subscription would never ack a bundled track delete
   // through ANY cursor, so the sender's track-tombstone GC could prune the
   // tombstone before a transient delivery failure got a chance to retry).
-  // Only pass `linkedTrack` through when `linkedTrackApplied` — i.e. the
-  // merge gate above actually ran AND succeeded. Acking it unconditionally
-  // would tell the sender "delivered" for a track that was skipped (mismatched
-  // id, local-ephemeral, tombstoned project) or whose merge threw
-  // (`trackSyncPending`), letting the sender's cursor advance past a deletion
-  // this receiver never actually applied.
   // We return this to the sender so THEY can advance THEIR cursor (which
   // tracks what we — the receiver — have acked of THEIR pushes). We do
   // NOT call ackDeletesUpTo here: that would write
@@ -576,7 +550,7 @@ export async function applyIncomingPush(payload, authorization) {
   // seen them — even though peer-A is just telling us about ITS own
   // tombstones. In bidirectional sync, that lets peer-A's stale live
   // records resurrect after GC drops our tombstones.
-  const ackedDeletesUpTo = computeAckedDeletesFromPayload(record, issues, linkedTrackApplied ? linkedTrack : null);
+  const ackedDeletesUpTo = computeAckedDeletesFromPayload(record, issues, linkedTrack);
 
   // Best-effort reverse subscription. Failures don't fail the push — the
   // record is already merged and the response will tell the sender what

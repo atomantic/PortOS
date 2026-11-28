@@ -1,4 +1,4 @@
-/** Local album/track unit of work. Federation retains its per-record LWW path. */
+/** Album/track unit of work shared by local edits and inbound track merges. */
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { withTransaction } from '../lib/db.js';
 import { isFileBackend } from '../lib/pgFileFacade.js';
@@ -75,7 +75,7 @@ export function withMusicMutation(operation) {
       await Promise.all([albums.prepareAlbumsBackend(), tracks.prepareTracksBackend()]);
       result = await withTransaction(async (client) => {
         // One domain lock, acquired before any row lock or membership read.
-        // All LOCAL writers share it, including track metadata saves.
+        // Local writers and track sync share it, including before a missing track is inserted.
         await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', ['portos:music-membership']);
         context.client = client;
         return mutations.run(context, operation);

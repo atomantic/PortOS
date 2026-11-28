@@ -374,7 +374,11 @@ export function sanitizeRecordForWire(kind, record, { includeIssueRunHistory = f
       // with no local process to actually stop. Stripping keeps the fan-out
       // machine-local by construction. `mergeProjectRecord` re-attaches the
       // receiver's own value so a remote LWW win can't erase it.
-      const { deleted: _d, deletedAt: _da, commissionId: _c, videoExecution: _execution, videoReplica: _replica, peerReplica: _peerReplica, ...rest } = record;
+      // A track's bundle supplier grants write access only on this receiver.
+      const {
+        deleted: _d, deletedAt: _da, commissionId: _c, videoExecution: _execution,
+        videoReplica: _replica, peerReplica: _peerReplica, bundledByPeerId: _supplier, ...rest
+      } = record;
       return { ...rest, ...sanitizeSoftDeleteFields(record) };
     }
     case 'moodBoard':

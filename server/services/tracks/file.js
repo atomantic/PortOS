@@ -16,6 +16,7 @@ export const {
   pruneTombstoned: pruneTombstonedTracks,
 } = createLwwRecordFileBackend({
   kind: 'track',
+  clearOnLocalWrite: ['bundledByPeerId'],
   filePath: join(PATHS.data, 'tracks.json'),
   idPrefix: 'track-',
   labelColumn: 'title',
