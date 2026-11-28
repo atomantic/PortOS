@@ -75,9 +75,9 @@ export default function MediaHostsChip({ entry, disabled = false }) {
         type="button"
         onClick={() => { setOpen((v) => !v); setChoiceId(null); }}
         aria-expanded={open}
-        aria-controls={panelId}
+        aria-controls={open ? panelId : undefined}
         title={`Held by ${names(holders)}`}
-        className={`${CHIP} bg-port-warning/20 text-port-warning hover:bg-port-warning/30 focus:outline-none focus-visible:ring-1 focus-visible:ring-port-warning`}
+        className={`${CHIP} pointer-coarse:min-h-11 bg-port-warning/20 text-port-warning hover:bg-port-warning/30 focus:outline-none focus-visible:ring-1 focus-visible:ring-port-warning`}
       >
         <Server className="w-2.5 h-2.5" aria-hidden="true" />{holders.length} hosts
       </button>
@@ -87,7 +87,7 @@ export default function MediaHostsChip({ entry, disabled = false }) {
             {holders.map((h) => (
               <li key={h.instanceId} className="flex flex-wrap items-center justify-between gap-1">
                 <span className="min-w-0 flex-[1_1_7rem] flex items-start gap-1">
-                  {h.primary && <Crown className="w-3 h-3 text-port-warning shrink-0" aria-label="Primary" />}
+                  {h.primary && <Crown className="w-3 h-3 text-port-warning shrink-0" role="img" aria-label="Primary" />}
                   <span className="min-w-0 [overflow-wrap:anywhere]">
                     {hostName(h)}
                     {h.releasePending && <span className="text-port-warning"> · delete pending</span>}
