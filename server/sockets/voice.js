@@ -22,7 +22,7 @@
 //           | voice:realtime:reply | voice:realtime:delegate | voice:realtime:result | voice:realtime:event
 
 import { SOCKET_MEDIA_MAX_BYTES } from '../lib/socketPayloadLimits.js';
-import { socketHasCurrentHostControl } from '../services/authGate.js';
+import { HOST_CONTROL_FORBIDDEN_MESSAGE, socketHasCurrentHostControl } from '../services/authGate.js';
 import { getVoiceConfig } from '../services/voice/config.js';
 import { registerEchoBuffer, unregisterEchoBuffer } from '../services/voice/echo.js';
 import {
@@ -445,6 +445,10 @@ export const registerVoiceHandlers = (socket) => {
         if (parsed.id) socket.emit('voice:image', { id: parsed.id, status: 'error', error: parsed.error });
         return;
       }
+      if (!(await ensureEnabled('image'))) {
+        socket.emit('voice:image', { id: parsed.id, status: 'error', error: 'voice mode disabled' });
+        return;
+      }
       const { describeAttachedImage } = await import('../services/voice/pipeline.js');
       attachImage(state, parsed, {
         describe: (dataUrl) => describeAttachedImage(dataUrl, { hasHostControl: () => socketHasCurrentHostControl(socket) }),
@@ -847,12 +851,15 @@ export const registerVoiceHandlers = (socket) => {
   let realtime = null;
   let realtimeStarting = false;
   let realtimeGeneration = 0;
+  let unsubscribeRealtimeStop = null;
   // Aborts startup and delegated turns still running when the call ends, so
   // tool actions stop and nothing reaches the tab after hang-up or sidecar exit.
   let realtimeCtrl = null;
   const closeRealtime = () => {
     realtimeGeneration += 1;
     realtimeStarting = false;
+    unsubscribeRealtimeStop?.();
+    unsubscribeRealtimeStop = null;
     const session = realtime;
     realtime = null;
     realtimeCtrl?.abort();
@@ -892,6 +899,19 @@ export const registerVoiceHandlers = (socket) => {
     try {
       const cfg = await getVoiceConfig();
       if (realtimeGeneration !== gen) return;
+      if (socket.disconnected || socket.connected === false) {
+        realtimeStarting = false;
+        if (realtimeCtrl === ctrl) realtimeCtrl = null;
+        return;
+      }
+      if (await socketHasCurrentHostControl(socket) !== true) {
+        if (realtimeGeneration !== gen) return;
+        realtimeStarting = false;
+        if (realtimeCtrl === ctrl) realtimeCtrl = null;
+        socket.emit('voice:realtime:state', { active: false, code: 'HOST_CONTROL_FORBIDDEN', error: HOST_CONTROL_FORBIDDEN_MESSAGE });
+        return;
+      }
+      if (realtimeGeneration !== gen || socket.disconnected) return;
       if (!cfg.enabled || !cfg.realtime?.enabled) {
         realtimeStarting = false;
         if (realtimeCtrl === ctrl) realtimeCtrl = null;
@@ -902,29 +922,48 @@ export const registerVoiceHandlers = (socket) => {
         return;
       }
       socket.emit('voice:realtime:state', { active: false, loading: true });
-      const { openRealtimeCall } = await import('../services/voice/realtimeSession.js');
-      if (realtimeGeneration !== gen) return;
+      const [{ openRealtimeCall }, { onRealtimeSidecarStop }] = await Promise.all([
+        import('../services/voice/realtimeSession.js'),
+        import('../services/voice/realtimeRuntime.js'),
+      ]);
+      if (realtimeGeneration !== gen || socket.disconnected) return;
+      unsubscribeRealtimeStop?.();
+      unsubscribeRealtimeStop = onRealtimeSidecarStop((reason) => {
+        const wasActiveOrStarting = Boolean(realtime || realtimeStarting);
+        closeRealtime();
+        if (wasActiveOrStarting && !socket.disconnected) {
+          socket.emit('voice:realtime:state', {
+            active: false,
+            reason,
+            ...(reason === 'disabled' ? { error: 'Realtime voice is turned off in Voice settings.' } : {}),
+          });
+        }
+      });
       const session = await openRealtimeCall({
         cfg,
         signal: ctrl.signal,
-        emit: (event, data) => { if (realtimeGeneration === gen) socket.emit(event, data); },
+        emit: (event, data) => { if (realtimeGeneration === gen && !socket.disconnected) socket.emit(event, data); },
         runDelegate: runRealtimeDelegate,
         onClose: () => {
           if (realtimeGeneration !== gen) return;
           realtimeStarting = false;
           realtime = null;
+          unsubscribeRealtimeStop?.();
+          unsubscribeRealtimeStop = null;
           if (realtimeCtrl === ctrl) {
             realtimeCtrl = null;
             ctrl.abort();
           }
         },
       });
-      if (realtimeGeneration !== gen) { session?.close(); return; }
+      if (realtimeGeneration !== gen || socket.disconnected) { session?.close(); return; }
       realtimeStarting = false;
       realtime = session;
     } catch (err) {
-      if (realtimeGeneration !== gen) return;
+      if (realtimeGeneration !== gen || socket.disconnected) return;
       realtimeStarting = false;
+      unsubscribeRealtimeStop?.();
+      unsubscribeRealtimeStop = null;
       if (realtimeCtrl === ctrl) {
         realtimeCtrl = null;
         ctrl.abort();

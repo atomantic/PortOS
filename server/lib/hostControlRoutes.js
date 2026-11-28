@@ -159,6 +159,7 @@ export const HOST_CONTROL_GET_ROUTES = Object.freeze([
   'GET /api/image-gen/setup/moss-install',
   'GET /api/voice/facetime/status',
   'GET /api/voice/avatar/status',
+  'GET /api/voice/realtime/status',
   'GET /api/local-llm/conversational-gemma/status',
   'GET /api/update/software',
   'GET /api/update/node-runtime',

@@ -27,7 +27,7 @@ export const realtimePersona = (cfg) => {
  * @param {(task: string) => Promise<string>} args.runDelegate  runs one delegated task, resolves the text to speak
  * @param {AbortSignal} [args.signal]  aborts startup and prevents emitting live state after hang-up
  * @param {(reason: string) => void} [args.onClose]  called when the session closes (hang-up or sidecar close)
- * @param {Function} [args.connect]  WebSocket factory (tests)
+ * @param {(url: string, options?: object) => any} [args.connect]  WebSocket factory (tests)
  * @param {Function} [args.ensureSidecar]
  */
 export const openRealtimeCall = async ({
@@ -112,9 +112,10 @@ export const openRealtimeCall = async ({
     } catch (err) {
       output = `That failed: ${err.message}`;
     }
+    if (closed) return;
     output = String(output).slice(0, MAX_RESULT_CHARS);
     emit('voice:realtime:result', { callId, task: text, text: output });
-    if (!closed && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'tool_result', call_id: callId, output }));
+    if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'tool_result', call_id: callId, output }));
   };
 
   ws.on('message', (data, isBinary) => {

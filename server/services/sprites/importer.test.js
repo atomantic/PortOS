@@ -288,19 +288,45 @@ describe('importFromSource', () => {
     expect(existsSync(join(SPRITES_ROOT, 'hero/reference/hero-anchor-south.png'))).toBe(true);
   });
 
-  it('refuses to overwrite a destination whose reference set is locked (#2896 immutability)', async () => {
-    writeTree(SPRITES_ROOT, {
-      'hero/reference/hero-reference-set-v1.json': {
+  it.each([
+    {
+      state: 'a locked main reference',
+      manifest: JSON.stringify({
         schemaVersion: 1, mainReference: { path: 'reference/hero-walk-south-v1.png', locked: true },
-      },
-    });
-    const { results } = await importFromSource({ sourceRoot: SOURCE_ROOT, characters: ['hero'], includeProps: false });
-    const hero = results.find((r) => r.id === 'hero');
-    expect(hero.errors.some((e) => e.includes('locked reference set'))).toBe(true);
-    expect(hero.files).toBe(0);
-    // The locked manifest survives untouched.
-    const manifest = JSON.parse(readFileSync(join(SPRITES_ROOT, 'hero/reference/hero-reference-set-v1.json'), 'utf8'));
-    expect(manifest.mainReference.locked).toBe(true);
+      }),
+      error: 'locked reference set',
+    },
+    {
+      state: 'a locked turnaround and unlocked main reference',
+      manifest: JSON.stringify({
+        schemaVersion: 2, mainReference: { locked: false }, turnaround: { locked: true },
+      }),
+      error: 'locked reference set',
+    },
+    { state: 'a corrupt manifest', manifest: '{', error: 'reference manifest is unreadable or corrupt' },
+    { state: 'an unreadable manifest', manifest: null, error: 'reference manifest is unreadable or corrupt' },
+  ])('refuses to overwrite a destination with $state', async ({ manifest, error }) => {
+    const manifestPath = join(SPRITES_ROOT, 'hero/reference/hero-reference-set-v1.json');
+    const referencePath = join(SPRITES_ROOT, 'hero/reference/hero-main.png');
+    const selectionPath = join(SPRITES_ROOT, 'hero/catalog/runtime-selection.json');
+    rmSync(manifestPath, { recursive: true, force: true });
+    mkdirSync(join(manifestPath, '..'), { recursive: true });
+    if (manifest === null) mkdirSync(manifestPath);
+    else writeFileSync(manifestPath, manifest);
+    mkdirSync(join(selectionPath, '..'), { recursive: true });
+    writeFileSync(referencePath, 'EXISTING-REFERENCE');
+    writeFileSync(selectionPath, 'EXISTING-SELECTION');
+    try {
+      const { results } = await importFromSource({ sourceRoot: SOURCE_ROOT, characters: ['hero'], includeProps: false });
+      expect(results).toEqual([expect.objectContaining({
+        id: 'hero', files: 0, errors: [expect.stringContaining(error)],
+      })]);
+      if (manifest !== null) expect(readFileSync(manifestPath, 'utf8')).toBe(manifest);
+      expect(readFileSync(referencePath, 'utf8')).toBe('EXISTING-REFERENCE');
+      expect(readFileSync(selectionPath, 'utf8')).toBe('EXISTING-SELECTION');
+    } finally {
+      rmSync(manifestPath, { recursive: true, force: true });
+    }
   });
 
   it('rejects a root that is not a sprite pipeline', async () => {

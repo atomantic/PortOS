@@ -1659,7 +1659,7 @@ describe('socket.js — initSocket', () => {
       expect(socket.emitted).toContainEqual(['shell:started', { sessionId: 'sess-1' }]);
       const [, opts] = vi.mocked(shellService.createShellSession).mock.calls.at(-1);
       expect(opts.env.ANTHROPIC_BASE_URL).toBe('http://127.0.0.1:11434');
-      expect(opts.initialCommand).toMatch(/^claude\b/);
+      expect(opts.initialCommand).toMatch(process.platform === 'win32' ? /^& 'claude' / : /^claude\b/);
       expect(opts.waitForPromptReady).toBe(true);
     });
 
@@ -1670,7 +1670,7 @@ describe('socket.js — initSocket', () => {
 
       const [, opts] = vi.mocked(shellService.createShellSession).mock.calls.at(-1);
       expect(opts.initialCommand).not.toContain('rm -rf');
-      expect(opts.initialCommand).toMatch(/^claude\b/);
+      expect(opts.initialCommand).toMatch(process.platform === 'win32' ? /^& 'claude' / : /^claude\b/);
       expect(opts.waitForPromptReady).toBe(true);
       expect(opts).not.toHaveProperty('exitWithCommand');
     });
@@ -2027,6 +2027,12 @@ describe('voice socket host-control boundary (#19169)', () => {
     vi.mocked(verifyRequestSession).mockResolvedValue(false);
   });
 
+  const realtimeHostEvents = [
+    'voice:realtime:start',
+    'voice:realtime:audio',
+    'voice:realtime:interrupt',
+  ];
+
   it.each(hostEvents)('stops %s before dispatch for a remote password-free socket', async (event, stage) => {
     const socket = connectedSocket();
     const next = vi.fn();
@@ -2035,22 +2041,30 @@ describe('voice socket host-control boundary (#19169)', () => {
     expect(socket.emitted).toContainEqual(['voice:error', expect.objectContaining({ stage, code: 'HOST_CONTROL_FORBIDDEN' })]);
   });
 
+  it.each(realtimeHostEvents)('stops %s before dispatch for a remote password-free socket with voice:realtime:state', async (event) => {
+    const socket = connectedSocket();
+    const next = vi.fn();
+    await socket.middleware([event], next);
+    expect(next).not.toHaveBeenCalled();
+    expect(socket.emitted).toContainEqual(['voice:realtime:state', expect.objectContaining({ active: false, code: 'HOST_CONTROL_FORBIDDEN' })]);
+  });
+
   it.each([['local password-free', false], ['delegated operator session', true]])('dispatches host events for a %s socket', async (_kind, authEnabled) => {
     const headers = authEnabled ? { authorization: 'Bearer example-session' } : {};
     vi.mocked(isAuthEnabled).mockResolvedValue(authEnabled);
     vi.mocked(verifyRequestSession).mockImplementation(async (request) => request.headers === headers);
     const socket = connectedSocket({ local: !authEnabled, headers });
-    for (const [event] of hostEvents) {
+    for (const event of [...hostEvents.map(([e]) => e), ...realtimeHostEvents]) {
       const next = vi.fn();
       await socket.middleware([event], next);
       expect(next).toHaveBeenCalledExactlyOnceWith();
     }
-    expect(socket.emitted.some(([event]) => event === 'voice:error')).toBe(false);
+    expect(socket.emitted.some(([event]) => event === 'voice:error' || event === 'voice:realtime:state')).toBe(false);
   });
 
   it('allows owner-scoped cleanup and conversational input through for password-free sockets', async () => {
     const socket = connectedSocket();
-    for (const event of ['voice:call:detach', 'voice:capture:stop', 'voice:text']) {
+    for (const event of ['voice:call:detach', 'voice:capture:stop', 'voice:realtime:stop', 'voice:text']) {
       const next = vi.fn();
       await socket.middleware([event], next);
       expect(next).toHaveBeenCalledExactlyOnceWith();

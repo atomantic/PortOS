@@ -1,7 +1,7 @@
 import { execFileSync, spawnSync } from 'child_process';
 import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
-import { dirname, join } from 'path';
+import { dirname, join, sep } from 'path';
 import { fileURLToPath } from 'url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { resolveBashBinary } from '../server/lib/bashResolver.js';
@@ -880,12 +880,26 @@ source "$1"
     expect(result.status).toBe(2);
     expect(result.stderr).toContain('fixture: package index connection refused');
     expect(result.stderr).toContain('LTX-2.5 MLX dependency sync failed (exit 2)');
-    expect(result.stderr).toContain(`${install.home}/.portos/tools/uv-0.13.7/bin/uv`);
+    const shellHome = execFileSync(resolveBashBinary(), ['-c', 'cd -- "$1" && pwd', 'bash', install.home], {
+      encoding: 'utf8',
+    }).trim();
+    expect(result.stderr).toContain(`${shellHome}/.portos/tools/uv-0.13.7/bin/uv`);
     expect(result.stderr).toContain('Little Snitch');
     expect(result.stderr).toContain('pypi.org and files.pythonhosted.org');
     expect(result.stderr).toContain('retry Install/Repair');
     expect(install.calls()).not.toContain('private pip install');
     expect(result.stdout).not.toContain('venv ready');
+  });
+
+  it('omits unused GUI opencv-python, fonttools, release HTTP, and hf-transfer packages from the Wan 2.2 MLX lock', () => {
+    const lock = readFileSync(join(REQUIREMENTS_DIR, 'requirements-wan22-mlx.lock.txt'), 'utf8');
+    const names = new Set(Array.from(lock.matchAll(/^([a-z0-9][a-z0-9._-]*)==/gim), ([, name]) => name.toLowerCase()));
+    for (const omitted of ['opencv-python', 'fonttools', 'requests', 'urllib3', 'charset-normalizer', 'hf-transfer']) {
+      expect(names.has(omitted), omitted).toBe(false);
+    }
+    for (const kept of ['av', 'ftfy', 'mlx', 'mlx-metal', 'torch', 'transformers', 'huggingface-hub', 'pillow', 'piexif', 'toml']) {
+      expect(names.has(kept), kept).toBe(true);
+    }
   });
 
   it('reports a missing bootstrap prerequisite before mutating the private tool or runtime venv', () => {
@@ -1316,7 +1330,11 @@ describe('Wan 2.2 CUDA hash-pinned installation', () => {
   const direct = readFileSync(join(REQUIREMENTS_DIR, 'requirements-wan22-cuda.txt'), 'utf8')
     .split(/\r?\n/).filter((line) => /^[\w.-]+==/.test(line));
 
-  it.each(['windows', 'linux'])('pins and hashes the entire %s runtime, including the CUDA torch stack', (target) => {
+  it('omits torchvision from the direct requirements', () => {
+    expect(direct.some((pin) => /^torchvision==/i.test(pin))).toBe(false);
+  });
+
+  it.each(['windows', 'linux'])('pins and hashes the entire %s runtime, including CUDA torch', (target) => {
     const lock = readFileSync(join(REQUIREMENTS_DIR, `requirements-wan22-cuda-${target}.lock.txt`), 'utf8');
     const requirements = lock.split(/\r?\n/).filter((line) => /^\w/.test(line));
     const blocks = lock.match(/^[\w.-]+==[^\n]+\n(?:[ \t]+[^\n]*\n?)*/gm) ?? [];
@@ -1329,7 +1347,7 @@ describe('Wan 2.2 CUDA hash-pinned installation', () => {
       expect(pins.some((pin) => pin.startsWith(backend))).toBe(true);
     }
     expect(pins.find((pin) => pin.startsWith('torch=='))).toMatch(/\+cu126$/);
-    expect(pins.find((pin) => pin.startsWith('torchvision=='))).toMatch(/\+cu126$/);
+    expect(pins.some((pin) => /^torchvision==/i.test(pin))).toBe(false);
     expect(lock.includes('nvidia-cuda-runtime-cu12==')).toBe(target === 'linux');
   });
 
@@ -1473,6 +1491,16 @@ describe.each([
     expect(section).toContain(`pip install --require-hashes --no-deps${binaryOnly} -r "$SCRIPT_DIR/ml/requirements/${lockName}"`);
     expect(section).not.toMatch(/pip install --upgrade/);
   });
+
+  if (lockName === 'requirements-musicgen-mlx.lock.txt') {
+    it('omits unused scipy from the MusicGen MLX lock', () => {
+      const names = new Set(Array.from(lock.matchAll(/^([a-z0-9][a-z0-9._-]*)==/gim), ([, name]) => name.toLowerCase()));
+      expect(names.has('scipy')).toBe(false);
+      for (const kept of ['mlx', 'mlx-metal', 'numpy', 'torch', 'transformers', 'sentencepiece', 'huggingface-hub']) {
+        expect(names.has(kept), kept).toBe(true);
+      }
+    });
+  }
 });
 
 describe('MiniMax Music 3 MLX Install/Repair', () => {
@@ -1558,6 +1586,17 @@ ${section}`;
     expect(result.status).not.toBe(0);
     expect(result.stdout).not.toContain('venv ready');
     if (failure.INSTALL_EXIT) expect(result.calls).not.toContain('from mlx_audio.music');
+  });
+
+  it('omits unused sounddevice, miniaudio, cffi, scipy, sentencepiece, and jinja2 packages from the MiniMax Music 3 MLX lock', () => {
+    const lock = readFileSync(join(REQUIREMENTS_DIR, 'requirements-minimax-music3-mlx.lock.txt'), 'utf8');
+    const names = new Set(Array.from(lock.matchAll(/^([a-z0-9][a-z0-9._-]*)==/gim), ([, name]) => name.toLowerCase()));
+    for (const omitted of ['sounddevice', 'cffi', 'pycparser', 'miniaudio', 'scipy', 'sentencepiece', 'jinja2', 'markupsafe']) {
+      expect(names.has(omitted), omitted).toBe(false);
+    }
+    for (const kept of ['mlx-audio', 'mlx', 'mlx-metal', 'numpy', 'transformers', 'huggingface-hub', 'tokenizers', 'safetensors']) {
+      expect(names.has(kept), kept).toBe(true);
+    }
   });
 });
 
@@ -1712,7 +1751,8 @@ describe.each([
 });
 
 describe('shared mflux Apple Silicon install is hash-pinned', () => {
-  const lockPath = join(REQUIREMENTS_DIR, 'requirements-mflux-mlx.lock.txt');
+  const scriptDir = join(REPO_ROOT, 'scripts').split(sep).join('/');
+  const lockPath = `${scriptDir}/ml/requirements/requirements-mflux-mlx.lock.txt`;
   const lock = readFileSync(lockPath, 'utf8');
   const directPins = readFileSync(join(REQUIREMENTS_DIR, 'requirements-mflux-mlx.txt'), 'utf8');
   const block = source.slice(source.indexOf('if [[ "$INSTALL_MFLUX" == "1" ]]; then'), source.indexOf('if [[ "$INSTALL_VIDEO" == "1" ]]; then'));
@@ -1735,7 +1775,7 @@ exit 0
 `);
     chmodSync(fakePython, 0o755);
     const script = `set -euo pipefail
-INSTALL_MFLUX=1; PYTHON_BIN="${fakePython}"; SCRIPT_DIR="${join(REPO_ROOT, 'scripts')}"; HOME="${dir}"
+INSTALL_MFLUX=1; PYTHON_BIN="${fakePython}"; SCRIPT_DIR="${scriptDir}"; HOME="${dir}"
 is_apple_silicon() { return ${appleSilicon ? 0 : 1}; }
 have() { return 0; }
 portos_uv() { echo "uv $*" >> "${log}"; }
@@ -1748,6 +1788,7 @@ ${block}`;
     expect(result.status, result.stderr).toBe(0);
     return {
       calls: readFileSync(log, 'utf8'),
+      home: dir,
       selfReq: existsSync(`${log}.self-req`) ? readFileSync(`${log}.self-req`, 'utf8') : null,
     };
   };
@@ -1798,11 +1839,12 @@ ${block}`;
   });
 
   it('an older PYTHON_BIN syncs the dedicated venv to the lock instead', () => {
-    const { calls } = runBlock({ oldPython: true });
+    const { calls, home } = runBlock({ oldPython: true });
+    const venvPython = `${home}/.portos/venv-mflux/bin/python3`;
     expect(calls).not.toMatch(/pip install --user/);
-    expect(calls).toMatch(new RegExp(`^uv pip sync --python \\S+/\\.portos/venv-mflux/bin/python3 --require-hashes --only-binary :all: ${lockPath.replace(/[.]/g, '\\.')}$`, 'm'));
+    expect(calls.split(/\r?\n/)).toContain(`uv pip sync --python ${venvPython} --require-hashes --only-binary :all: ${lockPath}`);
     expect(calls).not.toMatch(/^uv pip install/m);
-    expect(calls).toMatch(/^probe \S+venv-mflux\/bin\/python3 -c from mflux\.models\.flux\.cli\.flux_generate import main/m);
+    expect(calls).toContain(`probe ${venvPython} -c from mflux.models.flux.cli.flux_generate import main`);
   });
 });
 
@@ -1957,6 +1999,16 @@ ${section}`;
     expect(oldPy.status).toBe(1);
     expect(oldPy.stderr).toContain('FastVideo on Apple Silicon needs Python 3.11+');
     expect(oldPy.calls).not.toContain('uv pip sync');
+  });
+
+  it('omits unused peft, accelerate, loguru, timm, torchaudio, omegaconf, and duplicate httpx/httpcore packages', () => {
+    const names = new Set(Array.from(lock.matchAll(/^([a-z0-9][a-z0-9._-]*)==/gim), ([, name]) => name.toLowerCase()));
+    for (const omitted of ['peft', 'accelerate', 'loguru', 'timm', 'torchaudio', 'omegaconf', 'httpx', 'httpcore']) {
+      expect(names.has(omitted), omitted).toBe(false);
+    }
+    for (const kept of ['psutil', 'cloudpickle', 'remote-pdb', 'mlx', 'diffusers', 'transformers', 'huggingface-hub', 'httpx2', 'httpcore2']) {
+      expect(names.has(kept), kept).toBe(true);
+    }
   });
 });
 

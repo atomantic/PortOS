@@ -128,6 +128,22 @@ describe('FLUX.3 runtime lock', () => {
     expect(direct.length).toBeGreaterThan(0);
     for (const [name, version] of direct) expect(locked[name], name).toBe(version);
   });
+
+  it('omits unused PyTorch, GUI OpenCV, Matplotlib, release HTTP, and SentencePiece packages from the FLUX.3 MLX lock', () => {
+    const lock = readFileSync(flux3LockPath(), 'utf8');
+    const names = new Set(Array.from(lock.matchAll(/^([a-z0-9][a-z0-9._-]*)==/gim), ([, name]) => name.toLowerCase()));
+    for (const omitted of [
+      'torch', 'sympy', 'mpmath', 'networkx', 'setuptools',
+      'opencv-python', 'matplotlib', 'contourpy', 'cycler', 'fonttools', 'kiwisolver',
+      'pyparsing', 'python-dateutil', 'tzdata', 'requests', 'urllib3', 'charset-normalizer',
+      'hf-transfer', 'sentencepiece', 'protobuf',
+    ]) {
+      expect(names.has(omitted), omitted).toBe(false);
+    }
+    for (const kept of ['mflux', 'mlx', 'mlx-metal', 'transformers', 'tokenizers', 'huggingface-hub', 'pillow', 'jinja2', 'piexif', 'platformdirs', 'toml']) {
+      expect(names.has(kept), kept).toBe(true);
+    }
+  });
 });
 
 describe('FLUX.3 pinned snapshot', () => {

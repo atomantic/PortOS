@@ -17,7 +17,7 @@ const open = async ({ runDelegate = vi.fn().mockResolvedValue('It is 9 PM.') } =
   const ws = new FakeSocket();
   const emit = vi.fn();
   const connect = vi.fn(() => ws);
-  const ensureSidecar = vi.fn().mockResolvedValue({ url: 'ws://127.0.0.1:5569/', token: 'secret-tok' });
+  const ensureSidecar = vi.fn().mockResolvedValue({ url: 'ws://127.0.0.1:5569/', token: 'example-bearer-token' });
   const pending = openRealtimeCall({ cfg: { realtime: { size: '4B' }, llm: { personality: { name: 'Ada' } } }, emit, runDelegate, connect, ensureSidecar });
   await Promise.resolve();
   ws.text({ type: 'ready' });
@@ -29,7 +29,7 @@ describe('openRealtimeCall', () => {
   it('starts the sidecar with the persona, authenticates via Bearer header, and reports the call live once ready', async () => {
     const { emit, ensureSidecar, connect } = await open();
     expect(ensureSidecar).toHaveBeenCalledWith({ size: '4B' }, { persona: expect.stringContaining('You are Ada') });
-    expect(connect).toHaveBeenCalledWith('ws://127.0.0.1:5569/', { headers: { Authorization: 'Bearer secret-tok' } });
+    expect(connect).toHaveBeenCalledWith('ws://127.0.0.1:5569/', { headers: { Authorization: 'Bearer example-bearer-token' } });
     expect(emit).toHaveBeenCalledWith('voice:realtime:state', { active: true });
   });
 
@@ -158,6 +158,20 @@ describe('openRealtimeCall', () => {
     ws.close();
     expect(onClose).toHaveBeenCalledWith('sidecar-closed');
     expect(emit).toHaveBeenCalledWith('voice:realtime:state', { active: false, reason: 'sidecar-closed' });
+  });
+
+  it('does not emit a synthetic delegate result after the call has closed', async () => {
+    let finishDelegate;
+    const runDelegate = vi.fn(() => new Promise((resolve) => { finishDelegate = resolve; }));
+    const { ws, emit, call } = await open({ runDelegate });
+    ws.text({ type: 'delegate', call_id: 'c3', task: 'Check status' });
+    await vi.waitFor(() => expect(runDelegate).toHaveBeenCalledWith('Check status'));
+    call.close();
+    finishDelegate('');
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(emit).not.toHaveBeenCalledWith('voice:realtime:result', expect.anything());
+    expect(ws.sent).toEqual([]);
   });
 });
 

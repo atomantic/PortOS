@@ -10,8 +10,10 @@ vi.mock('../../lib/fileUtils.js', async () => {
   return makeProxy(actual);
 });
 
+vi.mock('fs/promises', { spy: true });
+
 const { getDateString } = await import('../../lib/fileUtils.js');
-const { getAgentStats, getActivityTimeline, getTodayActionCount, logActivity } = await import('./agentActivity.js');
+const { getActivities, getAgentStats, getActivityTimeline, getTodayActionCount, logActivity } = await import('./agentActivity.js');
 
 const activityRoot = join(tempRoot, 'agents', 'activity');
 
@@ -26,6 +28,14 @@ const entry = (id, timestamp) => ({ id, action: 'example', status: 'completed', 
 // Module-scope, not nested in a describe: `cleanup()` removes `tempRoot` itself,
 // so it must run after every describe block in the file (#9032).
 afterAll(cleanup);
+
+it('returns empty activity without creating directories on a fresh install', async () => {
+  await expect(getActivities('missing-agent')).resolves.toEqual([]);
+  await expect(getTodayActionCount('missing-account', 'post')).resolves.toBe(0);
+  await expect(getAgentStats('missing-agent', 2)).resolves.toMatchObject({ totalActivities: 0 });
+  await expect(getActivityTimeline()).resolves.toEqual([]);
+  await expect(readdir(activityRoot)).rejects.toMatchObject({ code: 'ENOENT' });
+});
 
 describe('getActivityTimeline', () => {
   beforeEach(async () => {
@@ -85,6 +95,21 @@ describe('getActivityTimeline', () => {
     await expect(ids({
       limit: 5, actions: ['mw_say'], beforeTimestamp: '2026-08-23T00:00:09.000Z',
     })).resolves.toEqual(['say-2']);
+  });
+
+  it('reads only discovered files on days needed to fill the page', async () => {
+    await writeDay('agent-a', '2026-08-23', [entry('newest', '2026-08-23T09:00:00.000Z')]);
+    await writeDay('agent-b', '2026-08-22', [entry('older', '2026-08-22T09:00:00.000Z')]);
+    await writeDay('agent-a', '2026-08-21', [entry('outside-page', '2026-08-21T09:00:00.000Z')]);
+
+    vi.mocked(readFile).mockClear();
+    const page = await getActivityTimeline({ limit: 2 });
+
+    expect(page.map(({ id }) => id)).toEqual(['newest', 'older']);
+    expect(vi.mocked(readFile).mock.calls.map(([file]) => file)).toEqual([
+      join(activityRoot, 'agent-a', '2026-08-23.json'),
+      join(activityRoot, 'agent-b', '2026-08-22.json'),
+    ]);
   });
 
   it('skips empty days while walking backward', async () => {

@@ -10,6 +10,7 @@ import { expandHome } from '../../lib/fileUtils.js';
 import { scrubHomePath } from '../../lib/homePath.js';
 import { PATHS } from '../../lib/paths.js';
 import { PORTS } from '../../lib/ports.js';
+import { safeChildProcessOptions, withoutServerSecretsEnv } from '../../lib/processEnv.js';
 
 export const SIDECAR_SCRIPT = join(PATHS.root, 'scripts', 'ml', 'sophon', 'portos_sophon.py');
 export const REALTIME_SIZES = Object.freeze({ '32B': 'models', '4B': 'models-4b' });
@@ -36,6 +37,19 @@ export const describeInstall = (realtime = {}) => {
 
 let current = null; // { child, port, token, key, ready: Promise, exited: Promise, idleTimer }
 let pendingStop = null;
+const stopListeners = new Set();
+
+/** Subscribe to sidecar shutdowns (e.g. Voice disabled during reconcile) to cancel pending/active calls. */
+export const onRealtimeSidecarStop = (listener) => {
+  stopListeners.add(listener);
+  return () => stopListeners.delete(listener);
+};
+
+const notifyStopListeners = (reason) => {
+  for (const listener of [...stopListeners]) {
+    try { listener(reason); } catch { /* listener cleanup must not block shutdown */ }
+  }
+};
 
 const trackPendingStop = (proc, { escalate = false } = {}) => {
   const waitExit = new Promise((resolve) => {
@@ -60,9 +74,10 @@ const trackPendingStop = (proc, { escalate = false } = {}) => {
 };
 
 const stopCurrent = (reason = 'stop') => {
+  if (reason === 'shutdown' || reason === 'disabled') notifyStopListeners(reason);
   const proc = current;
   current = null;
-  if (!proc) return Promise.resolve();
+  if (!proc) return pendingStop || Promise.resolve();
   clearTimeout(proc.idleTimer);
   console.log(`🗣️ voice.realtime.stop reason=${reason}`);
   proc.child.kill('SIGTERM');
@@ -70,7 +85,7 @@ const stopCurrent = (reason = 'stop') => {
 };
 
 /**
- * Start (or reuse) the sidecar for this install and resolve its loopback endpoint and auth token once loaded.
+ * Start (or reuse) the sidecar for this install and resolve its loopback endpoint and bearer token once loaded.
  * @returns {Promise<{ url: string, token: string }>}
  */
 export const ensureRealtimeSidecar = async (realtime = {}, { persona = '', launch = spawn } = {}) => {
@@ -87,13 +102,18 @@ export const ensureRealtimeSidecar = async (realtime = {}, { persona = '', launc
   if (!current) {
     const token = randomBytes(18).toString('hex');
     const port = PORTS.VOICE_REALTIME;
-    // Pass the bearer token and custom persona via child env rather than argv so they stay out of process listings.
-    const child = launch(install.python, ['-u', SIDECAR_SCRIPT, '--app', install.app, '--models', install.models,
-      '--port', String(port), '--lang', 'en'], {
-      shell: false,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env, PORTOS_REALTIME_TOKEN: token, PORTOS_REALTIME_PERSONA: persona },
-    });
+    // Strip server secrets before spawning third-party Python code, and pass the
+    // bearer token and custom persona via child env (cleared after startup) instead of argv.
+    const child = launch(
+      install.python,
+      ['-u', SIDECAR_SCRIPT, '--app', install.app, '--models', install.models,
+        '--port', String(port), '--lang', 'en'],
+      safeChildProcessOptions({
+        shell: false,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: { ...withoutServerSecretsEnv(process.env), PORTOS_REALTIME_TOKEN: token, PORTOS_REALTIME_PERSONA: persona },
+      }),
+    );
     let resolveExited;
     const exited = new Promise((resolve) => { resolveExited = resolve; });
     const proc = { child, port, token, key, exited, idleTimer: null };
@@ -141,7 +161,7 @@ export const scheduleRealtimeIdleStop = (ms = IDLE_STOP_MS) => {
   current.idleTimer.unref?.();
 };
 
-export const stopRealtimeSidecar = () => stopCurrent('shutdown');
+export const stopRealtimeSidecar = (reason = 'shutdown') => stopCurrent(reason);
 
 export const realtimeStatus = (realtime = {}) => {
   const install = describeInstall(realtime);

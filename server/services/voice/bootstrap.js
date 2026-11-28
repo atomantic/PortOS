@@ -434,6 +434,12 @@ const drainModelProvisioning = async () => {
 const reconcileVoice = async (cfg, { allowSetup = true } = {}) => {
   // Disabled voice or a retired-engine boot can supersede a pending pass.
   pendingModelConfig = null;
+  if (!cfg.enabled || !cfg.realtime?.enabled) {
+    const { stopRealtimeSidecar } = await import('./realtimeRuntime.js');
+    await stopRealtimeSidecar('disabled').catch((err) => {
+      console.warn(`🗣️ voice.realtime.stop failed: ${err.message}`);
+    });
+  }
   if (!cfg.enabled) return stopWhisperProcess();
   // A retired-engine upgrade must wait for the user's Save & Reconcile action.
   // Do not turn a normal restart into a new binary/model download.
