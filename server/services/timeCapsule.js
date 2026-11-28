@@ -8,9 +8,11 @@
 import { unlink, readdir } from 'fs/promises';
 import { join } from 'path';
 import { createHash } from 'crypto';
+import { isDeepStrictEqual } from 'node:util';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { atomicWrite, ensureDir, PATHS, readJSONFileStrict, tryReadFile, unreadableStoreError } from '../lib/fileUtils.js';
 import { isPlainObject } from '../lib/objects.js';
+import { chronotypeBehavioralInputSchema } from '../lib/identityValidation.js';
 import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 
@@ -225,16 +227,12 @@ export async function createSnapshot(label, description = '') {
   }));
 }
 
-function clearObjectFields(target, fields) {
-  if (!isPlainObject(target)) return false;
+function replaceSnapshotFields(target, fields) {
   let changed = false;
-  for (const field of fields) {
-    if (!Object.hasOwn(target, field)) continue;
-    const current = target[field];
-    if (!isPlainObject(current) || Object.keys(current).length > 0) {
-      target[field] = {};
-      changed = true;
-    }
+  for (const [field, value] of Object.entries(fields)) {
+    if (isDeepStrictEqual(target[field], value)) continue;
+    target[field] = value;
+    changed = true;
   }
   return changed;
 }
@@ -251,7 +249,7 @@ function clearNullFields(target, fields) {
   return changed;
 }
 
-function stripGenomeFromSnapshot(snapshot) {
+async function stripGenomeFromSnapshot(snapshot) {
   let changed = false;
   const data = isPlainObject(snapshot.data) ? structuredClone(snapshot.data) : null;
 
@@ -260,12 +258,41 @@ function stripGenomeFromSnapshot(snapshot) {
       delete data['genome.json'];
       changed = true;
     }
-    if (clearObjectFields(data['chronotype.json'], ['geneticMarkers', 'caffeineMarkers'])) {
-      changed = true;
+    const chronotype = data['chronotype.json'];
+    if (isPlainObject(chronotype)) {
+      const { computeChronotype, computeRecommendations } = await import('./identity/chronotype.js');
+      // Historical files can bypass input validation. Ignore unusable times for
+      // scoring while retaining the original behavioral data in the snapshot.
+      const { preferredWakeTime, preferredSleepTime } = chronotypeBehavioralInputSchema.shape;
+      const behavioralData = {
+        preferredWakeTime: preferredWakeTime.safeParse(chronotype.behavioralData?.preferredWakeTime).data,
+        preferredSleepTime: preferredSleepTime.safeParse(chronotype.behavioralData?.preferredSleepTime).data
+      };
+      const baseline = computeChronotype({}, behavioralData);
+      if (replaceSnapshotFields(chronotype, {
+        ...baseline,
+        geneticMarkers: {},
+        caffeineMarkers: {},
+        recommendations: computeRecommendations(baseline.type, {}, null)
+      })) changed = true;
     }
-    if (clearObjectFields(data['longevity.json'], ['longevityMarkers', 'cardiovascularMarkers'])) {
-      changed = true;
+
+    const longevity = data['longevity.json'];
+    if (isPlainObject(longevity)) {
+      const { computeLifeExpectancy } = await import('./identity/markers.js');
+      if (replaceSnapshotFields(longevity, {
+        longevityMarkers: {},
+        cardiovascularMarkers: {},
+        ...computeLifeExpectancy({}, {}, null)
+      })) changed = true;
     }
+
+    const sections = data['identity.json']?.sections;
+    if (isPlainObject(sections) && replaceSnapshotFields(sections, {
+      genome: { status: 'unavailable', label: 'Genome', updatedAt: null },
+      longevity: { status: 'unavailable', label: 'Longevity', updatedAt: null }
+    })) changed = true;
+
     if (clearNullFields(data['goals.json'], ['lifeExpectancy', 'timeHorizons'])) {
       changed = true;
     }
@@ -321,7 +348,7 @@ async function scrubSnapshotFiles() {
   const allMetas = [];
 
   for (const { filePath, parsed } of loaded) {
-    const { changed, snapshot } = stripGenomeFromSnapshot(parsed);
+    const { changed, snapshot } = await stripGenomeFromSnapshot(parsed);
     if (changed) {
       updatedSnapshots.push({ filePath, snapshot });
       const meta = indexEntryFromSnapshotFile(snapshot);
