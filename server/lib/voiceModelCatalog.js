@@ -14,3 +14,14 @@ export const isConversationalGemma = id => typeof id === 'string' && id.toLowerC
 
 /** A model id as voice pickers show it: the curated name for a catalog model, else the raw id. */
 export const voiceModelDisplayName = id => (isConversationalGemma(id) ? CONVERSATIONAL_GEMMA.name : id);
+
+// The fastest local Voice brain measured with the real Voice persona and tools:
+// a mixture-of-experts model, so only a few billion parameters run per token.
+// It reached the first word in about 1 s on turns that miss the prompt cache,
+// where dense ~30B models took 3 to 7 s on the same Apple Silicon host.
+export const RECOMMENDED_FAST_VOICE_MODEL = Object.freeze({
+  id: 'qwen3.6:35b',
+  name: 'Qwen3.6 35B',
+  providerId: 'ollama',
+  downloadLabel: '23 GB',
+});

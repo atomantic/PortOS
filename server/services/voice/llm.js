@@ -356,11 +356,13 @@ export const streamChat = async (messages, opts = {}) => {
   // o1) emit `<think>` unconditionally. The deprioritization in resolveModel
   // is the durable fix; this is best-effort speedup for the rare case where
   // a reasoning model is the only tool-capable option.
-  // Ollama exposes Inkling's opt-out as a model-defined compatibility effort.
-  // Apply it only to interactive Voice; other callers keep their own effort.
-  const ollamaInkling = (opts.provider || DEFAULT_VOICE_BACKEND) === 'ollama'
-    && /(?:^|[/:])inkling-2-mini(?:$|[-:/.])/i.test(model);
-  const legacyReasoning = !ollamaInkling && isReasoningModel(model);
+  // Ollama turns thinking on by default for hybrid models (Qwen3.x, Inkling,
+  // ...), and its OpenAI surface maps `reasoning_effort: 'none'` to think=false.
+  // Measured on qwen3.6:35b: a short reply took 1.6-2.6 s with thinking and
+  // 0.27 s without. Models that cannot think ignore it, so send it on every
+  // interactive Voice request to Ollama; other callers keep their own effort.
+  const ollamaVoice = (opts.provider || DEFAULT_VOICE_BACKEND) === 'ollama';
+  const legacyReasoning = !ollamaVoice && isReasoningModel(model);
   const sentMessages = legacyReasoning ? messages.map((m, i, arr) => {
     if (m.role !== 'system' || i !== arr.findLastIndex((x) => x.role === 'system')) return m;
     const directive = (m.content || '').includes('/no_think') ? '' : '\n/no_think';
@@ -375,7 +377,7 @@ export const streamChat = async (messages, opts = {}) => {
     // The provider owns default output limits; the Voice prompt requests brevity.
     ...(opts.maxTokens != null ? { max_tokens: opts.maxTokens } : {}),
   };
-  if (ollamaInkling) body.reasoning_effort = 'none';
+  if (ollamaVoice) body.reasoning_effort = 'none';
   // Trelis recommends the assistant template with thinking disabled for spoken turns.
   if (isConversationalGemma(model)) body.chat_template_kwargs = { enable_thinking: false };
   if (legacyReasoning) {

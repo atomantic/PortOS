@@ -328,8 +328,11 @@ describe('streamChat request lifecycle', () => {
     vi.unstubAllGlobals();
   });
 
-  it.each([undefined, 240])('sets Ollama Inkling thinking off and preserves only an explicit maxTokens (%s)', async maxTokens => {
-    const model = 'inkling-2-mini:26b-a5b-nvfp4';
+  it.each([
+    ['inkling-2-mini:26b-a5b-nvfp4', undefined],
+    ['inkling-2-mini:26b-a5b-nvfp4', 240],
+    ['qwen3.6:35b', undefined],
+  ])('sets Ollama thinking off for %s and preserves only an explicit maxTokens (%s)', async (model, maxTokens) => {
     const messages = [{ role: 'system', content: 'Keep replies short.' }];
     const tools = [{ type: 'function', function: { name: 'read_clock' } }];
     getProviderById.mockResolvedValue({ ...provider, id: 'ollama', defaultModel: model });
