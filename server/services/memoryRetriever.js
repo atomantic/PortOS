@@ -176,6 +176,15 @@ function formatForPrompt(memories, maxTokens = DEFAULT_MEMORY_CONFIG.maxContextT
   };
 }
 
+const PREVIEW_CHARS = 120;
+
+// A short, single-line snapshot of what was sent, so the agent card can name
+// each memory instead of showing only its id.
+function memoryPreview(memory) {
+  const text = (memory.summary?.trim() || memory.content?.trim() || '').replace(/\s+/g, ' ');
+  return text.length > PREVIEW_CHARS ? `${text.slice(0, PREVIEW_CHARS)}…` : text;
+}
+
 /** Get the fenced memory section and report the memories that contributed content. */
 export async function getMemorySection(task, options = {}) {
   const memories = await selectMemories(task, options);
@@ -187,6 +196,7 @@ export async function getMemorySection(task, options = {}) {
       id: memory.id,
       version: memory.version ?? null,
       relevance: memory.relevance ?? null,
+      preview: memoryPreview(memory),
     })));
   }
   return section;

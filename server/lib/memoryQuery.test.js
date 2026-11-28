@@ -147,9 +147,15 @@ describe('passesSearchMetaFilters', () => {
 describe('passesHybridMetaFilters', () => {
   const meta = { type: 'fact', category: 'work', tags: ['x'], status: 'active', sourceAppId: 'brain' };
 
-  it('does NOT special-case __not_brain (matches original behavior)', () => {
-    // With appId === '__not_brain', a brain entry's sourceAppId !== '__not_brain' -> filtered out
+  it('excludes only Brain entries for __not_brain, like the PostgreSQL backend', () => {
     expect(passesHybridMetaFilters(meta, { appId: '__not_brain' })).toBe(false);
+    expect(passesHybridMetaFilters({ ...meta, sourceAppId: 'app1' }, { appId: '__not_brain' })).toBe(true);
+    expect(passesHybridMetaFilters({ ...meta, sourceAppId: undefined }, { appId: '__not_brain' })).toBe(true);
+  });
+
+  it('filters by owning agent', () => {
+    expect(passesHybridMetaFilters({ ...meta, sourceAgentId: 'agent-a' }, { sourceAgentId: 'agent-b' })).toBe(false);
+    expect(passesHybridMetaFilters({ ...meta, sourceAgentId: 'agent-a' }, { sourceAgentId: 'agent-a' })).toBe(true);
   });
 
   it('passes active meta with no filters', () => {

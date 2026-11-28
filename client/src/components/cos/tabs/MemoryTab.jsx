@@ -188,13 +188,14 @@ export default function MemoryTab({ apps = [] }) {
       toast.error(err?.message || 'Failed to archive memory');
       return null;
     });
-    if (!result) return;
+    if (!result) return false;
     toast.success('Memory archived');
     // A socket read may already have removed this row and reconciled the total.
     list.updateData(prev => prev?.memories.some(memory => memory.id === id) ? {
       memories: prev.memories.filter(memory => memory.id !== id),
       total: (prev.total ?? prev.memories.length) - 1,
     } : prev);
+    return true;
   };
 
   const snippets = cardRecordLabels([...pendingMemories, ...memories].map(memory => [memory.id, memorySnippet(memory)]));
@@ -490,9 +491,6 @@ export default function MemoryTab({ apps = [] }) {
                           <Bot size={10} /> CoS
                         </span>
                       )}
-                      {memory.similarity && (
-                        <span className="text-xs text-port-accent">{formatPercent(memory.similarity * 100, { decimals: 0 })} match</span>
-                      )}
                     </div>
                     <p className="text-white text-sm whitespace-pre-wrap">{memory.summary || memory.content}</p>
                     {memory.tags?.length > 0 && (
@@ -596,6 +594,14 @@ export default function MemoryTab({ apps = [] }) {
             closeMemory();
           }}
           onClose={closeMemory}
+          onArchive={async id => {
+            const archived = await handleDelete(id);
+            if (archived) {
+              queue.updateData(prev => prev?.filter(memory => memory.id !== id));
+              closeMemory();
+            }
+            return archived;
+          }}
         />
       )}
     </div>
