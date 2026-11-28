@@ -101,6 +101,166 @@ async function prepareInstallRequestTask({ request, state, lane, taskScheduleMod
   return { task, pendingPerpetualDispatch: null, skip: null };
 }
 
+async function acquireQueuedRequest(queuedRequest, taskScheduleMod) {
+  if (queuedRequest.burn || queuedRequest.cleanupSourceAgentId) {
+    const claim = await claimOnDemandRequest(queuedRequest.id);
+    return { claim, request: claim?.request };
+  }
+  return { claim: null, request: await taskScheduleMod.clearOnDemandRequest(queuedRequest.id) };
+}
+
+// Waiting requests can stay visible without a claim. Repeated opens deduplicate by card id.
+async function openCard(request, apps) {
+  if (!cardIdForRequest(request)) return;
+  await startPreflightCard({
+    requestId: request.id,
+    taskType: request.taskType,
+    appId: request.appId ?? null,
+    appName: apps.find(app => app.id === request.appId)?.name || null,
+    targetPullRequest: request.targetPullRequest ?? null,
+  });
+}
+
+// Acquire before touching the card: a stale snapshot can belong to another drain.
+async function dropRequest(queuedRequest, apps, taskScheduleMod, level, reason, note) {
+  const { claim, request } = await acquireQueuedRequest(queuedRequest, taskScheduleMod);
+  if (!request) return;
+  if (claim) await settleOnDemandRequest(claim, { reason: `${note} Resume explicitly.` });
+  await openCard(request, apps);
+  emitLog(level, `On-demand request dropped — ${note}`, { requestId: queuedRequest.id, taskType: queuedRequest.taskType });
+  await finishPreflightCard(cardIdForRequest(request), { outcome: 'failed', reason, note });
+}
+
+async function persistOrReviveTask(task, request, claim, addTaskOptions, activity) {
+  // Stamp provenance before addTask so a blocked twin inherits it on revival
+  // and any continuing perpetual drain can decide which lane to use.
+  task.metadata = { ...(task.metadata || {}), ...onDemandRequestMetadata(request) };
+  if (request.cleanupSourceAgentId) {
+    task.metadata.cleanupRefillSource = request.cleanupSourceAgentId;
+    task.id = `sys-swarm-refill-${request.cleanupSourceAgentId}`;
+  }
+  // The dequeue engine can exclude a completing task from duplicate detection
+  // because agent:completed fires before its status is committed.
+  const persisted = await addTask(task, 'internal', { raw: true, ...addTaskOptions, suppressDequeue: true,
+    ...(request.cleanupSourceAgentId && { idempotencyKey: `swarm-cleanup-refill:${request.cleanupSourceAgentId}` }) });
+  if (persisted?.error) throw new Error(persisted.error);
+  if (!persisted?.duplicate) {
+    activity.acceptedTaskId = persisted?.id || task.id;
+    return { outcome: 'dispatch', spawnTask: task };
+  }
+  if (persisted.status === 'blocked' && !request.cleanupSourceAgentId) {
+    // Explicit Run resumes a failure-blocked twin (#2614).
+    const stored = await reviveBlockedTask(persisted.id, { priority: task.priority, metadata: task.metadata }, 'internal', { suppressDequeue: true });
+    if (stored?.error || stored?.statusChanged) return { outcome: 'held' };
+    activity.acceptedTaskId = stored?.id || persisted.id;
+    // Deep resumes must retain the stored branch pointer and original audit text.
+    const spawnTask = isLegacyDeepAudit(task.metadata) ? stored : { ...task, id: persisted.id };
+    return { outcome: 'revived', spawnTask, revivedTaskId: persisted.id };
+  }
+  if (!claim || quotaBurnProvenance(persisted.metadata).requestId === request.id
+    || (request.cleanupSourceAgentId && persisted.id === task.id)) {
+    activity.acceptedTaskId = persisted.id;
+  }
+  return { outcome: 'duplicate' };
+}
+
+async function handOffTask(spawnTask, cardId, activity, dispatch) {
+  const { emitSpawn, deferPreflightDispatch } = dispatch;
+  activity.handoffAttempted = true;
+  emitSpawn(spawnTask);
+  if (cardId && deferPreflightDispatch) {
+    deferPreflightDispatch(spawnTask.id, {
+      cardId, resultTaskId: activity.acceptedTaskId, endPreflight: activity.endPreflight, persisted: true,
+    });
+    activity.preflightTransferred = true;
+  } else {
+    await finishPreflightDispatch(cardId, activity.acceptedTaskId);
+  }
+}
+
+async function processClaimedRequest(request, claim, activity, {
+  apps, state, schedule, reviewStartedApps, taskScheduleMod, improvementTasks, dispatch,
+}) {
+  const {
+    prepareManagedAppImprovementTask, generateSelfImprovementTaskForType,
+    recordDeferredPerpetualDispatch, applyOnDemandConsent, emitOnDemandEmpty,
+  } = improvementTasks;
+
+  // Resolve dispatch from the claimed record instead of the queue snapshot.
+  const targetApp = request.appId ? apps.find(app => app.id === request.appId) : null;
+  const cardId = cardIdForRequest(request);
+  // Old queued certification work must not silently become an extended audit.
+  if (isLegacyDeepAudit(request.burn?.overrides?.params)) {
+    activity.refusalReason = 'Historical Deep requests are read-only; start a new Deep audit.';
+    await openCard(request, apps);
+    await finishPreflightCard(cardId, { outcome: 'failed', reason: 'deep-audit-historical', note: activity.refusalReason });
+    return;
+  }
+  await openCard(request, apps);
+  // Task types with their own preflight steps ignore the generic prepare step.
+  await reportPreflightStep(cardId, 'prepare');
+
+  const preparationStartedAt = performance.now();
+  const requestedAt = Date.parse(request.requestedAt);
+  const queueWaitMs = Number.isFinite(requestedAt) ? Math.max(0, Date.now() - requestedAt) : null;
+  // A human Run clears the drain brakes before fresh detection. Automated refills inherit them.
+  const userInitiated = await taskScheduleMod.applyOnDemandRunResets(request, targetApp?.id ?? null);
+  const lane = userInitiated ? '' : ' (drain refill)';
+  // Keep the dispatch record from preparation even if addTask returns a different object (#6871).
+  const { task, pendingPerpetualDispatch, skip } = targetApp
+    ? await prepareAppRequestTask({ request, targetApp, state, cardId, lane, reviewStartedApps, taskScheduleMod, prepareManagedAppImprovementTask })
+    : await prepareInstallRequestTask({ request, state, lane, taskScheduleMod, generateSelfImprovementTaskForType });
+
+  applyOnDemandConsent(task);
+  const { canSpawn, addTaskOptions } = dispatch;
+  // Priority 0 capacity checks are committed: the request has already left the queue (#4834).
+  if (task && canSpawn(task)) {
+    const persisted = await persistOrReviveTask(task, request, claim, addTaskOptions, activity);
+    if (persisted.outcome === 'held') {
+      await finishPreflightCard(cardId, { outcome: 'failed', reason: 'existing-task-held',
+        note: 'The existing task could not be resumed. Inspect its hold before trying again.' });
+      return;
+    }
+    if (persisted.outcome === 'duplicate') {
+      await finishPreflightCard(cardId, {
+        outcome: 'nothing-to-do', reason: 'existing-task', note: 'An existing task already owns this request.',
+      });
+    } else {
+      await recordDeferredPerpetualDispatch(pendingPerpetualDispatch, taskScheduleMod);
+      await handOffTask(persisted.spawnTask, cardId, activity, dispatch);
+      if (persisted.outcome === 'revived') {
+        const { revivedTaskId } = persisted;
+        emitLog('info', `🔁 On-demand ${request.taskType} revived blocked task ${revivedTaskId}`, { taskId: revivedTaskId });
+      }
+    }
+  } else if (!task && userInitiated) {
+    // Report why an explicit Run produced nothing. Automated refills converge quietly.
+    await emitOnDemandEmpty({ taskScheduleMod, request, targetApp, taskConfig: schedule.tasks[request.taskType], preflightCardId: cardId, skip });
+  }
+  // Specific outcomes above survive this idempotent close. Deferred dispatch now owns its card.
+  if (!activity.preflightTransferred) await finishPreflightDispatch(cardId);
+  if (userInitiated) {
+    const preparationMs = Math.round(performance.now() - preparationStartedAt);
+    emitLog('info', `On-demand preparation finished: ${request.taskType} (${request.id}) — queue wait ${queueWaitMs ?? 'unknown'}ms, preparation ${preparationMs}ms, ${task ? 'task generated' : 'no task generated'}`, {
+      requestId: request.id,
+      appId: targetApp?.id ?? null,
+      queueWaitMs,
+      preparationMs,
+      taskGenerated: !!task,
+    });
+  }
+}
+
+async function settleClaim(claim, request, { acceptedTaskId, refusalReason }, preparationFailed, taskScheduleMod) {
+  const retry = !!request.cleanupSourceAgentId && !acceptedTaskId
+    && !await taskScheduleMod.isPerpetualParkActive(request.taskType, request.appId).catch(() => false);
+  await settleOnDemandRequest(claim, {
+    taskId: acceptedTaskId,
+    ...(request.cleanupSourceAgentId && { retry }),
+    reason: acceptedTaskId ? null : refusalReason ?? (preparationFailed ? 'Request preparation failed; resume explicitly.' : 'Request produced no task; resume explicitly.'),
+  });
+}
+
 /**
  * Drain the on-demand request queue, generating + persisting a task per request
  * and handing each admitted task to the caller's `adapter.emitSpawn`.
@@ -128,17 +288,9 @@ export async function drainOnDemandRequests(ctx, adapter) {
     addTaskOptions = {},
   } = adapter;
 
-  // Deferred so the static import graph stays acyclic: cosImprovementTasks.js
-  // imports THIS module, and these six helpers are declared there. Deferring to
-  // call time is the same idiom the engines already use for taskSchedule.js.
-  const {
-    prepareManagedAppImprovementTask,
-    generateSelfImprovementTaskForType,
-    recordDeferredPerpetualDispatch,
-    applyOnDemandConsent,
-    drainProgrammaticOnDemandRequests,
-    emitOnDemandEmpty,
-  } = await import('./cos/cosImprovementTasks.js');
+  // cosImprovementTasks.js imports this module. Defer the import to avoid a static cycle.
+  const improvementTasks = await import('./cos/cosImprovementTasks.js');
+  const { drainProgrammaticOnDemandRequests } = improvementTasks;
 
   const taskScheduleMod = await import('./taskSchedule.js');
   await reconcileOnDemandHandoffs();
@@ -167,15 +319,13 @@ export async function drainOnDemandRequests(ctx, adapter) {
     return { schedule };
   }
 
+  const requestContext = {
+    apps, state, schedule, reviewStartedApps, taskScheduleMod, improvementTasks,
+    dispatch: { canSpawn, emitSpawn, deferPreflightDispatch, addTaskOptions },
+  };
   for (const queuedRequest of onDemandRequests) {
-    // This request's programmatic-phase card, or null for the automated origins
-    // that are never carded — `cardIdForRequest` owns that policy, so this
-    // engine and the idle-review steal cannot disagree about who gets a card.
-    // Derived rather than stamped on the request, so every report and close site
-    // below needs no branch of its own: a null id short-circuits each of them
-    // BEFORE it reads the task file, which matters because an automated refill
-    // drain would otherwise pay a cold whole-file parse per request just to
-    // discover it has no card.
+    // Share card eligibility with the idle-review drain. A null id lets card
+    // operations skip task-file reads for automated refills.
     const queuedCardId = cardIdForRequest(queuedRequest);
 
     // Already handled above (and its request cleared) — `onDemandRequests` is
@@ -185,71 +335,29 @@ export async function drainOnDemandRequests(ctx, adapter) {
       continue;
     }
 
-    // Keep waiting requests visible without claiming capacity-deferred work.
-    // Otherwise only the claim winner opens/reports into the card. Repeated
-    // waiting cycles are idempotent: startPreflightCard deduplicates by id.
-    const openCard = async (record = queuedRequest) => {
-      if (!cardIdForRequest(record)) return;
-      await startPreflightCard({
-        requestId: record.id,
-        taskType: record.taskType,
-        appId: record.appId ?? null,
-        appName: apps.find(app => app.id === record.appId)?.name || null,
-        targetPullRequest: record.targetPullRequest ?? null,
-      });
-    };
-
-    // Abandon this request: clear it from the queue and tell the user's card why.
-    // One helper so the log line and the card can never name different reasons —
-    // the same hand-mirroring this module's header exists to eliminate.
-    const dropRequest = async (level, reason, note) => {
-      const durable = queuedRequest.burn || queuedRequest.cleanupSourceAgentId;
-      const handoff = durable ? await claimOnDemandRequest(queuedRequest.id) : null;
-      const claimed = durable ? handoff?.request : await taskScheduleMod.clearOnDemandRequest(queuedRequest.id);
-      if (!claimed) return;
-      if (handoff) await settleOnDemandRequest(handoff, { reason: `${note} Resume explicitly.` });
-      await openCard(claimed);
-      emitLog(level, `On-demand request dropped — ${note}`, { requestId: queuedRequest.id, taskType: queuedRequest.taskType });
-      await finishPreflightCard(cardIdForRequest(claimed), { outcome: 'failed', reason, note });
-    };
-
     if (capacityExhausted()) {
-      await openCard();
+      await openCard(queuedRequest, apps);
       break;
     }
 
     if (!isImprovementEnabled(state)) {
-      await dropRequest('warn', 'improvement-disabled',
+      await dropRequest(queuedRequest, apps, taskScheduleMod, 'warn', 'improvement-disabled',
         'Improvement is turned off for this install. Turn it on in Config → Improve, then run this again.');
       continue;
     }
 
     // Removed tasks never run; only automated requests honor schedule disablement.
     if (!schedule.tasks[queuedRequest.taskType] || (!isManualOnDemandRequest(queuedRequest) && !schedule.tasks[queuedRequest.taskType].enabled)) {
-      await dropRequest('info', 'task-type-disabled',
+      await dropRequest(queuedRequest, apps, taskScheduleMod, 'info', 'task-type-disabled',
         `The scheduled task type '${queuedRequest.taskType}' is disabled or no longer registered.`);
       continue;
     }
 
-    let task = null;
-    // The perpetual drain signature `prepareManagedAppImprovementTask` decided
-    // to record for this task, if any — returned as a plain record rather than
-    // discovered by re-finding the task object, so it survives regardless of
-    // which task-object variant `addTask` below hands back (#6871).
-    let pendingPerpetualDispatch = null;
-    // Why prepare declined to build a task (null when it built one or there was
-    // no managed app) — handed to emitOnDemandEmpty so the toast can say why.
-    let skip = null;
-    // Determine target app (if any)
-    let targetApp = null;
-
-    if (queuedRequest.appId) {
-      targetApp = apps.find(a => a.id === queuedRequest.appId);
-      if (!targetApp) {
-        await dropRequest('warn', 'app-unknown',
-          `App '${queuedRequest.appId}' is no longer active, so this run has nothing to target.`);
-        continue;
-      }
+    const targetApp = queuedRequest.appId ? apps.find(app => app.id === queuedRequest.appId) : null;
+    if (queuedRequest.appId && !targetApp) {
+      await dropRequest(queuedRequest, apps, taskScheduleMod, 'warn', 'app-unknown',
+        `App '${queuedRequest.appId}' is no longer active, so this run has nothing to target.`);
+      continue;
     }
 
     if (queuedRequest.cleanupSourceAgentId) {
@@ -268,7 +376,7 @@ export async function drainOnDemandRequests(ctx, adapter) {
     // can deny while global slots remain, which discarded the prepared task and
     // closed the visible card without ever creating an agent task.
     if (projectCapacityExhausted(targetApp?.id ?? queuedRequest.appId ?? null)) {
-      await openCard();
+      await openCard(queuedRequest, apps);
       emitLog('debug', `On-demand request deferred — per-project agent limit reached`, {
         requestId: queuedRequest.id,
         taskType: queuedRequest.taskType,
@@ -276,159 +384,32 @@ export async function drainOnDemandRequests(ctx, adapter) {
       continue;
     }
 
-    // Both engines can hold this snapshot. Only the atomic removal winner
-    // owns preparation, accounting, and the shared card's terminal outcome.
-    const durable = queuedRequest.burn || queuedRequest.cleanupSourceAgentId;
+    // Only the atomic removal winner owns preparation and the card's outcome.
+    // Start activity before acquisition so the stale-card sweep sees the handoff gap.
+    const activity = {
+      endPreflight: beginPreflightActivity(queuedCardId),
+      acceptedTaskId: null,
+      handoffAttempted: false,
+      preflightTransferred: false,
+      refusalReason: null,
+    };
     let claim = null;
     let request = null;
-    let acceptedTaskId = null;
-    let handoffAttempted = false;
-    let preflightTransferred = false;
     let preparationFailed = false;
-    let refusalReason = null;
-    // Mark the claim attempt before it leaves the schedule queue. This lets
-    // the stale-card sweep distinguish the handoff gap from an orphan.
-    const endPreflight = beginPreflightActivity(queuedCardId);
     try {
-      claim = durable ? await claimOnDemandRequest(queuedRequest.id) : null;
-      request = durable ? claim?.request : await taskScheduleMod.clearOnDemandRequest(queuedRequest.id);
-      if (!request) continue;
-      // Receipts are immutable while queued; resolve dispatch from the claimed
-      // record as well, rather than keeping snapshot objects across ownership.
-      targetApp = request.appId ? apps.find(app => app.id === request.appId) : null;
-      const cardId = cardIdForRequest(request);
-      // Saved invocation parameters are not a new launch boundary. Old queued
-      // certification work must not silently become an extended audit on boot.
-      if (isLegacyDeepAudit(request.burn?.overrides?.params)) {
-        refusalReason = 'Historical Deep requests are read-only; start a new Deep audit.';
-        await openCard(request);
-        await finishPreflightCard(cardId, { outcome: 'failed', reason: 'deep-audit-historical', note: refusalReason });
-        continue;
-      }
-      await openCard(request);
-      // Off the queue and into preparation. A task type with its own preflight
-      // (pr-reviewer) has no `prepare` step and reports its real first step
-      // moments later, so this is a no-op there rather than a competing claim.
-      await reportPreflightStep(cardId, 'prepare');
-
-      const preparationStartedAt = performance.now();
-      const requestedAt = Date.parse(request.requestedAt);
-      const queueWaitMs = Number.isFinite(requestedAt) ? Math.max(0, Date.now() - requestedAt) : null;
-
-      // A HUMAN "Run" re-checks live state (park + convergence signature + dispatch
-      // budget all cleared); an automated refill (origin: 'refill') inherits them,
-      // or the drain has no brakes left. The origin check lives inside
-      // applyOnDemandRunResets so this drain and the refill lane can't drift on it.
-      const userInitiated = await taskScheduleMod.applyOnDemandRunResets(request, targetApp?.id ?? null);
-      const lane = userInitiated ? '' : ' (drain refill)';
-
-      ({ task, pendingPerpetualDispatch, skip } = targetApp
-        ? await prepareAppRequestTask({ request, targetApp, state, cardId, lane, reviewStartedApps, taskScheduleMod, prepareManagedAppImprovementTask })
-        : await prepareInstallRequestTask({ request, state, lane, taskScheduleMod, generateSelfImprovementTaskForType }));
-
-      applyOnDemandConsent(task);
-      // The new-task and revived-twin arms below hand off identically; one helper
-      // keeps the perpetual record, spawn and card transfer in the same order.
-      const handOff = async (spawnTask) => {
-        await recordDeferredPerpetualDispatch(pendingPerpetualDispatch, taskScheduleMod);
-        handoffAttempted = true;
-        emitSpawn(spawnTask);
-        if (cardId && deferPreflightDispatch) {
-          deferPreflightDispatch(spawnTask.id, { cardId, resultTaskId: acceptedTaskId, endPreflight, persisted: true });
-          preflightTransferred = true;
-        } else await finishPreflightDispatch(cardId, acceptedTaskId);
-      };
-      // Priority 0 is a COMMITTED tier: the request is already cleared and the
-      // marker bound, and this branch is the only thing that persists the task, so
-      // a denial would discard the user's "Run". See canSpawnCommitted (#4834).
-      if (task && canSpawn(task)) {
-        // Mark this a MANUAL (on-demand) run so its perpetual drain continues in
-        // the on-demand lane (see perpetualRefillPlan in cos.js). Stamped before
-        // addTask so the blocked-revive branch inherits it via `task.metadata`.
-        // `onDemandRequestMetadata` also carries the request's ORIGIN, which
-        // `perpetualRefillPlan` reads to decide whether the completed run may
-        // continue its drain — and a quota burn's provenance when it is one.
-        task.metadata = { ...(task.metadata || {}), ...onDemandRequestMetadata(request) };
-        if (request.cleanupSourceAgentId) {
-          task.metadata.cleanupRefillSource = request.cleanupSourceAgentId;
-          task.id = `sys-swarm-refill-${request.cleanupSourceAgentId}`;
-        }
-        // `addTaskOptions` carries the dequeue engine's `ignoreTaskId` so a
-        // completion-triggered re-issue is dedup-safe: the perpetual drain
-        // regenerates an identical first-line for the same app, and
-        // `agent:completed` fires before the completing task's updateTask settles
-        // it to `completed` — so without excluding it the re-issued claim is
-        // rejected as a duplicate of the run that just finished and the drain stalls.
-        const persisted = await addTask(task, 'internal', { raw: true, ...addTaskOptions, suppressDequeue: true,
-          ...(request.cleanupSourceAgentId && { idempotencyKey: `swarm-cleanup-refill:${request.cleanupSourceAgentId}` }) });
-        if (persisted?.error) throw new Error(persisted.error);
-        if (!persisted?.duplicate) {
-          acceptedTaskId = persisted?.id || task.id;
-          await handOff(task);
-        } else if (persisted.status === 'blocked' && !request.cleanupSourceAgentId) {
-          // Explicit user Run colliding with a failure-blocked twin (#2614):
-          // revive the existing task instead of silently dropping the Run and
-          // stranding the bound on-demand review marker.
-          const stored = await reviveBlockedTask(persisted.id, { priority: task.priority, metadata: task.metadata }, 'internal', { suppressDequeue: true });
-          if (stored?.error || stored?.statusChanged) {
-            await finishPreflightCard(cardId, { outcome: 'failed', reason: 'existing-task-held',
-              note: 'The existing task could not be resumed. Inspect its hold before trying again.' });
-            continue;
-          }
-          acceptedTaskId = stored?.id || persisted.id;
-          // Deep resumes need the persisted branch pointer and original audit text,
-          // not a freshly rendered snapshot of volatile issue/PR preload data.
-          await handOff(isLegacyDeepAudit(task.metadata) ? stored : { ...task, id: persisted.id });
-          emitLog('info', `🔁 On-demand ${request.taskType} revived blocked task ${persisted.id}`, { taskId: persisted.id });
-        } else if (!claim || quotaBurnProvenance(persisted.metadata).requestId === request.id
-          || (request.cleanupSourceAgentId && persisted.id === task.id)) {
-          acceptedTaskId = persisted.id;
-        }
-        if (persisted?.duplicate && !handoffAttempted) await finishPreflightCard(cardId, {
-          outcome: 'nothing-to-do', reason: 'existing-task', note: 'An existing task already owns this request.',
-        });
-      } else if (!task && userInitiated) {
-        // Explicit user "Run" produced no task — surface WHY (parked / transient /
-        // idle) so the trigger isn't a silent no-op. Because we reset the park
-        // BEFORE the fresh detection above, the outcome classification reflects
-        // THIS check.
-        //
-        // `userInitiated` only: a drain refill ends by converging (that's the point),
-        // and nobody is waiting on it, so toasting "nothing to do" for every automated
-        // hop would turn a healthy overnight drain into a pile of notifications.
-        await emitOnDemandEmpty({ taskScheduleMod, request, targetApp, taskConfig: schedule.tasks[request.taskType], preflightCardId: cardId, skip });
-      }
-      // Every other exit from this iteration (a task that capacity refused, or a
-      // refill with no task) still owes the card a close — a card left open would
-      // keep animating until the orphan sweep reaped it. Already-closed cards are
-      // a no-op, so the specific reason each path recorded above survives.
-      if (!preflightTransferred) await finishPreflightDispatch(cardId);
-      if (userInitiated) {
-        const preparationMs = Math.round(performance.now() - preparationStartedAt);
-        emitLog('info', `On-demand preparation finished: ${request.taskType} (${request.id}) — queue wait ${queueWaitMs ?? 'unknown'}ms, preparation ${preparationMs}ms, ${task ? 'task generated' : 'no task generated'}`, {
-          requestId: request.id,
-          appId: targetApp?.id ?? null,
-          queueWaitMs,
-          preparationMs,
-          taskGenerated: !!task,
-        });
-      }
+      ({ claim, request } = await acquireQueuedRequest(queuedRequest, taskScheduleMod));
+      if (request) await processClaimedRequest(request, claim, activity, requestContext);
     } catch (error) {
       preparationFailed = true;
       if (request) await finishPreflightCard(cardIdForRequest(request), {
         outcome: 'failed', reason: 'preparation-failed',
-        note: handoffAttempted || acceptedTaskId ? 'The handoff did not finish. Inspect the task and activity log before trying again.'
+        note: activity.handoffAttempted || activity.acceptedTaskId ? 'The handoff did not finish. Inspect the task and activity log before trying again.'
           : 'Preparation failed before the handoff completed. Check the activity log and run again.',
       });
       throw error;
     } finally {
-      if (!preflightTransferred) endPreflight();
-      if (claim) {
-        const retry = !!request.cleanupSourceAgentId && !acceptedTaskId
-          && !await taskScheduleMod.isPerpetualParkActive(request.taskType, request.appId).catch(() => false);
-        await settleOnDemandRequest(claim, { taskId: acceptedTaskId, ...(request.cleanupSourceAgentId && { retry }),
-          reason: acceptedTaskId ? null : refusalReason ?? (preparationFailed ? 'Request preparation failed; resume explicitly.' : 'Request produced no task; resume explicitly.') });
-      }
+      if (!activity.preflightTransferred) activity.endPreflight();
+      if (claim) await settleClaim(claim, request, activity, preparationFailed, taskScheduleMod);
     }
   }
 
