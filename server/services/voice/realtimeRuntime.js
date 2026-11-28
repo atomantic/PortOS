@@ -112,7 +112,7 @@ export const ensureRealtimeSidecar = async (realtime = {}, { persona = '', launc
       child.on('error', (err) => {
         clearTimeout(timer);
         if (current === proc) current = null;
-        resolveExited();
+        if (!child.pid) resolveExited();
         reject(realtimeError(`Could not launch realtime voice: ${scrubHomePath(err.message)}`, 503));
       });
       child.once('close', (code) => {
