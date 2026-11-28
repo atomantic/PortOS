@@ -43,11 +43,14 @@ if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
 
-# Optional Ghostty setup
-Write-Host ""
-$setupGhostty = Read-Host "Set up Ghostty terminal themes? (y/N)"
-if ($setupGhostty -match '^[Yy]$') {
-    node scripts/setup-ghostty.js
+# Optional Ghostty setup. Skip when stdin is redirected or the session is
+# non-interactive so automated/CI runs do not block or fail on Read-Host.
+if ([Environment]::UserInteractive -and -not [Console]::IsInputRedirected) {
+    Write-Host ""
+    $setupGhostty = Read-Host "Set up Ghostty terminal themes? (y/N)"
+    if ($setupGhostty -match '^[Yy]$') {
+        node scripts/setup-ghostty.js
+    }
 }
 
 Write-Host ""

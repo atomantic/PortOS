@@ -14,7 +14,7 @@ const sha = (text) => createHash('sha256').update(text).digest('hex');
 // Execute the real shell flow with an isolated PATH: no network, sudo, or real
 // package manager can run. The fake package manager makes zstd discoverable;
 // the fake curl serves a canned archive + sha256sum.txt.
-function run({ installed = false, manager = 'apt-get', uid = '0', fail = false, missingAfter = false,
+function run({ installed = false, manager = 'apt-get', uid = '0', fail = false, staleAptIndex = false, missingAfter = false,
   arch = 'x86_64', curlFails = false, digest = sha(ARCHIVE), noEntry = false, version } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'ollama-install-'));
   const prefix = join(dir, 'prefix');
@@ -29,8 +29,17 @@ function run({ installed = false, manager = 'apt-get', uid = '0', fail = false, 
   bin('uname', `echo ${arch}`);
   bin('curl', `echo "curl $*" >> '${log}'
 ${curlFails ? 'exit 22' : ''}
-out=$3
-case "$4" in
+out=''
+url=''
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -o) out="$2"; shift 2 ;;
+    --connect-timeout|--max-time|--speed-time|--speed-limit|--retry|--retry-delay) shift 2 ;;
+    -*) shift ;;
+    *) url="$1"; shift ;;
+  esac
+done
+case "$url" in
   *sha256sum.txt) ${noEntry ? `echo '${digest}  other.tgz'` : `echo '${digest}  ${asset}'`} > "$out" ;;
   *) printf '%s' '${ARCHIVE}' > "$out" ;;
 esac`);
@@ -41,7 +50,21 @@ got=$(/usr/bin/shasum -a 256 "$name" | cut -d' ' -f1)
   bin('tar', `echo "tar $*" >> '${log}'`);
   bin('sudo', `echo "sudo $*" >> '${log}'\nshift\n"$@"`);
   if (installed) bin('zstd', 'exit 0');
-  if (manager) bin(manager, `echo "${manager} $*" >> '${log}'\n${fail ? 'exit 1' : missingAfter ? ':' : `echo '#!/bin/bash' > '${dir}/zstd'\n/bin/chmod +x '${dir}/zstd'`}`);
+  if (manager) {
+    const managerBody = staleAptIndex
+      ? `echo "${manager} $*" >> '${log}'
+if [ "$1" = "update" ]; then
+  echo updated > '${dir}/apt-updated'
+  exit 0
+fi
+if [ ! -f '${dir}/apt-updated' ]; then
+  exit 100
+fi
+echo '#!/bin/bash' > '${dir}/zstd'
+/bin/chmod +x '${dir}/zstd'`
+      : `echo "${manager} $*" >> '${log}'\n${fail ? 'exit 1' : missingAfter ? ':' : `echo '#!/bin/bash' > '${dir}/zstd'\n/bin/chmod +x '${dir}/zstd'`}`;
+    bin(manager, managerBody);
+  }
   const env = { PATH: dir, OLLAMA_INSTALL_PREFIX: prefix, ...(version ? { OLLAMA_VERSION: version } : {}) };
   const result = spawnSync('/bin/bash', [script], { env, encoding: 'utf8' });
   const calls = readFileSync(log, { encoding: 'utf8', flag: 'a+' });
@@ -119,5 +142,25 @@ describe.skipIf(process.platform === 'win32')('Linux Ollama installation', () =>
     const result = run({ installed: true, curlFails: true });
     expect(result.status).toBe(22);
     expect(result.prefixCreated).toBe(false);
+  });
+
+  it('bounds and retries curl downloads for both the archive and checksum file', () => {
+    const result = run({ installed: true });
+    expect(result.status).toBe(0);
+    const curlLines = result.calls.split('\n').filter((line) => line.startsWith('curl '));
+    expect(curlLines).toHaveLength(2);
+    expect(curlLines[0]).toContain('--connect-timeout 15');
+    expect(curlLines[0]).toContain('--speed-time 60');
+    expect(curlLines[0]).toContain('--speed-limit 1024');
+    expect(curlLines[0]).toContain('--retry 3');
+    expect(curlLines[1]).toContain('--connect-timeout 15');
+    expect(curlLines[1]).toContain('--max-time 60');
+    expect(curlLines[1]).toContain('--retry 3');
+  });
+
+  it('refreshes stale APT indexes once and retries zstd install on failure', () => {
+    const result = run({ manager: 'apt-get', staleAptIndex: true });
+    expect(result.status).toBe(0);
+    expect(result.calls).toContain('apt-get install -y zstd\napt-get update\napt-get install -y zstd\ncurl ');
   });
 });

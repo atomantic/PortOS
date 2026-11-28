@@ -274,6 +274,8 @@ describe('the wrappers do not regrow their own pipeline', () => {
     // The interactive Ghostty prompt is the one setup script the wrapper still owns.
     const setupScripts = [...source.matchAll(/scripts[\\/](setup-[\w-]+\.js)/g)].map(([, name]) => name);
     expect(setupScripts.filter((name) => name !== 'setup-ghostty.js')).toEqual([]);
+    // Skip interactive Read-Host when stdin is redirected or non-interactive (matches setup.sh's `-t 0`).
+    expect(source).toMatch(/if\s*\(\[Environment\]::UserInteractive\s+-and\s+-not\s+\[Console\]::IsInputRedirected\)\s*\{[\s\S]*Read-Host/);
   });
 
   it('setup.sh keeps deferring the setup guide until after its start prompt', () => {
