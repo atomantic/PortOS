@@ -8,7 +8,7 @@ import { checkHealth, query, POOL_CONFIG } from '../lib/db.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { scrubHomePath } from '../lib/homePath.js';
 import { stripAnsi } from '../lib/ansiStrip.js';
-import { resolvePgDumpBinary } from '../lib/pgTools.js';
+import { resolvePgDumpBinary, scrubPgToolOutput } from '../lib/pgTools.js';
 import { resolveBashBinary, toBashPath } from '../lib/bashResolver.js';
 import { resolvePostgresPort } from '../lib/ports.js';
 import { assertDatabaseAdmission, createDatabaseMaintenanceJournal } from '../lib/databaseMaintenanceJournal.js';
@@ -106,13 +106,9 @@ function runCmd(cmd, args, timeout = 120_000, env = process.env, { redactFailure
         stderr = 'Docker resource inspection failed';
       }
       if (exitCode !== 0) {
-        let detail = stripAnsi(stderr || stdout || err.message || '').replace(/\s+/g, ' ').trim();
-        let loggedArgs = args.join(' ');
-        if (pgPassword) {
-          detail = detail.split(pgPassword).join('***');
-          if (pgPassword !== 'portos') loggedArgs = loggedArgs.split(pgPassword).join('***');
-        }
-        console.error(`🗄️ ${cmd} ${scrubHomePath(loggedArgs)} exited ${exitCode}: ${scrubHomePath(detail)}`);
+        const detail = commandDetail({ stderr, stdout: stdout || err.message }, env.PGPASSWORD || pgPassword);
+        const loggedArgs = scrubPgToolOutput(args.join(' '), pgPassword === 'portos' ? undefined : pgPassword);
+        console.error(`🗄️ ${cmd} ${loggedArgs} exited ${exitCode}: ${detail}`);
       }
       resolve({
         stdout: stripAnsi(stdout || ''),
@@ -132,9 +128,9 @@ function runCmd(cmd, args, timeout = 120_000, env = process.env, { redactFailure
 const DIAGNOSTIC_LIMIT = 400;
 
 /** Bounded, single-line, secret-free command diagnostics for an error envelope. */
-function commandDetail(result) {
-  let detail = (result.stderr || result.stdout || '').replace(/\s+/g, ' ').trim();
-  if (pgPassword) detail = detail.split(pgPassword).join('***');
+function commandDetail(result, password = pgPassword) {
+  const detail = scrubPgToolOutput(stripAnsi(result.stderr || result.stdout || ''), password)
+    .replace(/\s+/g, ' ').trim();
   return detail.length > DIAGNOSTIC_LIMIT ? `${detail.slice(0, DIAGNOSTIC_LIMIT)}...` : detail;
 }
 
@@ -402,7 +398,7 @@ export async function importDumpFile(dumpFile, port, env, timeout = 120_000) {
   try {
     return await withDatabaseImport(dumpFile, replay => _importReplayFile(replay, port, env, timeout));
   } catch (err) {
-    return { stdout: '', stderr: err.message, exitCode: 1 };
+    return { stdout: '', stderr: scrubPgToolOutput(err.message, env?.PGPASSWORD || pgPassword), exitCode: 1 };
   }
 }
 
@@ -451,10 +447,6 @@ export function _importReplayFile(dumpFile, port, env, timeout = 120_000) {
       // end-of-script and commits under --single-transaction. An abort never
       // sends it, including when termination could not be confirmed.
       if (!aborting && psql.stdin.writable) psql.stdin.end();
-      if (exitCode !== 0) {
-        const detail = stripAnsi(stderr || stdout || extraDetail || '').replace(/\s+/g, ' ').trim();
-        console.error(`🗄️ psql import exited ${exitCode}: ${detail}`);
-      }
       // Keep the triggering detail (read error, spawn failure, timeout) in the
       // diagnostic the caller surfaces — psql is usually killed before it can
       // write anything, so its stderr alone would report a bare failure.
@@ -463,7 +455,16 @@ export function _importReplayFile(dumpFile, port, env, timeout = 120_000) {
       const stderrOut = detailText && !stderrText.includes(detailText)
         ? [stderrText, detailText].filter(Boolean).join('\n')
         : stderrText;
-      resolve({ stdout: stripAnsi(stdout), stderr: stderrOut, exitCode });
+      const password = env?.PGPASSWORD || pgPassword;
+      const result = {
+        stdout: scrubPgToolOutput(stripAnsi(stdout), password),
+        stderr: scrubPgToolOutput(stderrOut, password),
+        exitCode,
+      };
+      if (exitCode !== 0) {
+        console.error(`🗄️ psql import exited ${exitCode}: ${commandDetail(result, '')}`);
+      }
+      resolve(result);
     };
 
     const timer = setTimeout(() => {
@@ -829,12 +830,12 @@ async function setupNativeDatabaseImpl(io) {
     emitProgress(io, 'error', 'Native setup failed');
     throw new ServerError('Native PostgreSQL setup failed', {
       status: 500,
-      context: { details: result.stderr || result.stdout }
+      context: { details: commandDetail(result, process.env.PGPASSWORD || pgPassword) }
     });
   }
 
   emitProgress(io, 'complete', 'Native PostgreSQL ready');
-  return { success: true, output: result.stdout };
+  return { success: true, output: scrubPgToolOutput(result.stdout, process.env.PGPASSWORD || pgPassword) };
 }
 
 /** Export a specific database backend, or the active backend when omitted. */
@@ -915,8 +916,8 @@ async function fixDatabaseImpl() {
   const result = await runDbScript(['fix']);
   return {
     success: result.exitCode === 0,
-    output: result.stdout,
-    error: result.exitCode !== 0 ? (result.stderr || result.stdout) : undefined
+    output: scrubPgToolOutput(result.stdout, process.env.PGPASSWORD || pgPassword),
+    error: result.exitCode !== 0 ? commandDetail(result, process.env.PGPASSWORD || pgPassword) : undefined
   };
 }
 

@@ -20,13 +20,15 @@ import { access, lstat, mkdir, readdir, stat, unlink, writeFile } from 'fs/promi
 import { randomUUID } from 'node:crypto';
 import { basename, join } from 'path';
 import { PATHS, ensureDir, readJSONFile, atomicWrite, sha256File } from '../lib/fileUtils.js';
+import { stripAnsi } from '../lib/ansiStrip.js';
+import { chmodWithPolicy } from '../lib/fileCore.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { acquireBackupSnapshotCut } from '../lib/backupSnapshotBoundary.js';
 import { backupAssetConsistency } from '../lib/backupAssetOwners.js';
 import { assertDatabaseAdmission } from '../lib/databaseMaintenanceJournal.js';
 import { getEvent } from './eventScheduler.js';
 import { POOL_CONFIG, checkHealth, getServerMajorVersion } from '../lib/db.js';
-import { withPgToolEnv, resolvePgDumpBinary } from '../lib/pgTools.js';
+import { withPgToolEnv, resolvePgDumpBinary, scrubPgToolOutput } from '../lib/pgTools.js';
 import { inspectDatabaseDump, SNAPSHOT_PG_DUMP_FLAGS } from './backupDatabaseDump.js';
 import { emitErrorEvent, ServerError } from '../lib/errorHandler.js';
 import { noteSystemActivity } from './systemActivityNotify.js';
@@ -187,7 +189,7 @@ async function runAdmittedBackup(destPath, io, { excludePaths, disabledDefaultEx
     });
     const timestamp = new Date().toISOString().replace(/:/g, '-').replace(/\..+/, '');
     const snapshotsRoot = join(destPath, 'snapshots', MACHINE_HOST);
-    await ensureDir(snapshotsRoot);
+    await ensureDir(snapshotsRoot, { mode: 0o700, bestEffortMode: true });
     // Inside the single-run guard, so no run of this process can own a marker
     // the sweep is converging.
     await markInterruptedSnapshotsFailed(snapshotsRoot).catch(err => {
@@ -209,7 +211,7 @@ async function runAdmittedBackup(destPath, io, { excludePaths, disabledDefaultEx
         throw err;
       });
       if (!reserved) continue;
-      const created = await mkdir(candidateDir).then(() => true, async err => {
+      const created = await mkdir(candidateDir, { mode: 0o700 }).then(() => true, async err => {
         // Only our exclusive reservation can be released here. The directory
         // may belong to a competing writer and must remain untouched.
         await unlink(candidateMarker);
@@ -223,6 +225,7 @@ async function runAdmittedBackup(destPath, io, { excludePaths, disabledDefaultEx
       break;
     }
     if (!snapshotDir) throw new Error('Unable to reserve a fresh backup snapshot');
+    await ensureDir(snapshotDir, { mode: 0o700, bestEffortMode: true });
     // Both rsync and pg_dump carry this snapshot ID in their argv. Record it
     // before either process can start, including for external destinations.
     permit.identify(snapshotId);
@@ -230,7 +233,7 @@ async function runAdmittedBackup(destPath, io, { excludePaths, disabledDefaultEx
 
     console.log(`💾 Backup starting: snapshot ${snapshotId} (excluding ${effectiveExcludes.length} paths)`);
     emitToOperatorsOn(io, 'backup:started', { snapshotId });
-    await ensureDir(dataDestDir);
+    await ensureDir(dataDestDir, { mode: 0o700, bestEffortMode: true });
     setActiveSnapshotId(snapshotId);
     await writeFile(markerPath(snapshotDir), BACKUP_PROCESS_START_ID);
     dashboardEvents.emit('backup:changed');
@@ -251,6 +254,8 @@ async function runAdmittedBackup(destPath, io, { excludePaths, disabledDefaultEx
       });
       const excludeFlags = effectiveExcludes.flatMap(p => ['--exclude', p]);
       changedFiles = await runRsync(PATHS.data, dataDestDir, excludeFlags, { allowVanishedSources: true });
+      // Archive mode copies the source root's mode onto the destination.
+      await ensureDir(dataDestDir, { mode: 0o700, bestEffortMode: true });
       console.log(`💾 Backup rsync complete: ${changedFiles.length} files changed (exit 0)`);
 
       // A configured-but-failed dump degrades the backup and alerts the user.
@@ -413,6 +418,8 @@ export async function dumpPostgres(outputPath) {
       env: pgEnv
     });
 
+    const diagnostic = (text) => scrubPgToolOutput(stripAnsi(text), pgEnv.PGPASSWORD)
+      .replace(/\s+/g, ' ').trim().slice(0, 2000);
     let stderr = '';
     const watchdog = watchBackupProcess(proc, { label: 'PostgreSQL dump', progressPath: outputPath });
     proc.stderr.on('data', (chunk) => {
@@ -427,12 +434,13 @@ export async function dumpPostgres(outputPath) {
         return discardDump('timeout', timeoutError.message);
       }
       if (code !== 0) {
-        console.warn(`⚠️ pg_dump failed (code ${code}): ${stderr.trim()}`);
+        const detail = diagnostic(stderr);
+        console.warn(`⚠️ pg_dump failed (code ${code}): ${detail}`);
         // A version mismatch is a distinct, actionable failure (install a newer
         // pg_dump) — classify it so the UI can point at the fix instead of the
         // generic "is pg_dump installed / is PG reachable" hint.
         const isMismatch = !satisfies || /server version mismatch|aborting because of server version/i.test(stderr);
-        return discardDump(isMismatch ? 'version_mismatch' : 'dump_error', stderr.trim());
+        return discardDump(isMismatch ? 'version_mismatch' : 'dump_error', detail);
       }
       // Verify: a dump that exits 0 but is empty/truncated is still a failure.
       const info = await stat(outputPath).catch(() => null);
@@ -456,6 +464,12 @@ export async function dumpPostgres(outputPath) {
         return discardDump('dump_incomplete', error);
       }
       const tableCount = inspected.tableCount;
+      // The enclosing private snapshot protects the file while pg_dump writes.
+      try {
+        await chmodWithPolicy(outputPath, 0o600, true);
+      } catch (err) {
+        return rejectPromise(backupFilesystemFailure('dump permissions', err));
+      }
       console.log(`💾 pg_dump complete: ${Math.round(info.size / 1024)}KB, ${tableCount} tables`);
       // Don't return the absolute dump path: this result is persisted into
       // state.pgBackup and surfaced to the client via GET /api/backup/status,
@@ -469,8 +483,9 @@ export async function dumpPostgres(outputPath) {
       if (watchdog.getTimeoutError() || !watchdog.finish()) return;
       // pg_dump not installed — a configured-but-unbacked-up DB is at risk,
       // so this is a failure, not a silent skip.
-      console.warn(`⚠️ pg_dump not available: ${err.message}`);
-      resolvePromise({ status: 'failed', reason: 'pg_dump_missing', error: err.message });
+      const detail = diagnostic(err.message);
+      console.warn(`⚠️ pg_dump not available: ${detail}`);
+      resolvePromise({ status: 'failed', reason: 'pg_dump_missing', error: detail });
     });
   }));
 }
@@ -538,7 +553,7 @@ export async function generateManifest(snapshotDataDir, manifestPath, pgDumpPath
     ...(assetConsistency ? { assetConsistency } : {}),
   };
 
-  await atomicWrite(manifestPath, manifest);
+  await atomicWrite(manifestPath, manifest, { mode: 0o600, bestEffortMode: true });
   console.log(`💾 Backup manifest: ${manifest.fileCount} files`);
   return manifest;
 }

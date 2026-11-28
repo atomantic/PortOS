@@ -2,7 +2,7 @@
 import { testDataRoot, machineHost, fakeProc, flush, overridable, nonOverridable, assertPoolToolSpawn, COMPLETE_DUMP } from './backup.test.fixture.js';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createReadStream, existsSync } from 'fs';
-import { tmpdir } from 'os';
+import { homedir, tmpdir } from 'os';
 import { basename, dirname, join as joinPath, join, resolve } from 'path';
 import { makePathsProxy } from '../lib/mockPathsDataRoot.js';
 import { Readable } from 'node:stream';
@@ -867,6 +867,7 @@ describe('dumpPostgres status classification', () => {
   beforeEach(async () => {
     vi.clearAllMocks();
     ({ dumpPostgres } = await import('./backup.js'));
+    vi.spyOn(fs, 'chmod').mockResolvedValue();
   });
 
   it('returns skipped/not_configured when PG is down and the backend resolved to file (escape hatch)', async () => {
@@ -992,12 +993,12 @@ describe('dumpPostgres status classification', () => {
     spawn.mockReturnValue(proc);
     const p = dumpPostgres('/tmp/x.sql');
     await flush();
-    proc.stderr.emit('data', Buffer.from('FATAL: auth failed'));
+    proc.stderr.emit('data', Buffer.from(`FATAL: auth failed example-secret ${homedir()}/example.log`));
     proc.emit('close', 1);
     const result = await p;
     expect(result.status).toBe('failed');
     expect(result.reason).toBe('dump_error');
-    expect(result.error).toContain('auth failed');
+    expect(result.error).toBe('FATAL: auth failed *** ~/example.log');
   });
 
   it('honors the PORTOS_PGDUMP override outright, even when the server version is known', async () => {

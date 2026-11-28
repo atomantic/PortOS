@@ -5,8 +5,7 @@
  * streaming over the isolated Python runtime.
  */
 
-import { randomUUID } from 'node:crypto';
-import { readFile, unlink } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from '../../lib/childProcess.js';
@@ -66,8 +65,6 @@ export async function synthesizeQwen3(text, opts = {}, signal) {
     : 1.0;
   const seed = Number.isInteger(opts.seed) ? opts.seed : 42;
 
-  const tempOut = join(tmpdir(), `portos-qwen3-${randomUUID()}.wav`);
-
   const args = [
     QWEN3_TTS_RUNNER_SCRIPT,
     '--mode', mode,
@@ -76,7 +73,6 @@ export async function synthesizeQwen3(text, opts = {}, signal) {
     '--seed', String(seed),
     '--model-id', modelId,
     '--models-dir', QWEN3_TTS_MODELS_DIR,
-    '--output-wav', tempOut,
   ];
 
   if (opts.referenceAudio) {
@@ -94,7 +90,10 @@ export async function synthesizeQwen3(text, opts = {}, signal) {
   });
   const t0 = performance.now();
 
+  const tempDir = await mkdtemp(join(tmpdir(), 'portos-qwen3-'));
+  const tempOut = join(tempDir, 'speech.wav');
   try {
+    args.push('--output-wav', tempOut);
     const { stdout } = await new Promise((resolve, reject) => {
       const child = spawn(python, args, safeChildProcessOptions({ timeout: 5 * 60 * 1000, signal }));
       let out = '';
@@ -154,7 +153,7 @@ export async function synthesizeQwen3(text, opts = {}, signal) {
       effectiveControls: result.effectiveControls,
     };
   } finally {
-    await unlink(tempOut).catch(() => {});
+    await rm(tempDir, { recursive: true, force: true }).catch(() => {});
   }
 }
 

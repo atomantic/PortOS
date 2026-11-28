@@ -7,6 +7,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 import express from 'express';
+import { homedir } from 'node:os';
 import { request } from '../lib/testHelper.js';
 
 vi.mock('../lib/paths.js', async (importOriginal) => {
@@ -28,7 +29,8 @@ vi.mock('../lib/bashResolver.js', async (importOriginal) => ({
   resolveBashBinary: vi.fn(() => 'bash'),
 }));
 
-vi.mock('../lib/pgTools.js', () => ({
+vi.mock('../lib/pgTools.js', async (importOriginal) => ({
+  ...await importOriginal(),
   resolvePgDumpBinary: vi.fn(async () => ({ binary: 'pg_dump', satisfies: true })),
 }));
 
@@ -176,6 +178,29 @@ describe('database admin maintenance admission', () => {
 // #10888: db.sh picks start/stop from the mode it loads, which is the ACTIVE
 // backend (inherited env / saved .env). A native request must pin the child to
 // native, and must never touch Docker or the process's own environment.
+it('scrubs database repair output and truncates failures before returning them', async () => {
+  const password = 'fixture-pg-password';
+  vi.stubEnv('PGPASSWORD', password);
+  const logs = vi.spyOn(console, 'error').mockImplementation(() => {});
+  try {
+    mockExecFile([{
+      exitCode: 1,
+      stdout: `Some output from ${homedir()}/example using ${password}`,
+      stderr: `Could not open ${homedir()}/example with ${password} ${'x'.repeat(500)}`,
+    }]);
+
+    const res = await request(makeApp()).post('/api/database/fix').send({});
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ success: false, output: 'Some output from ~/example using ***' });
+    expect(res.body.error).toMatch(/^Could not open ~\/example with \*\*\* x+\.\.\.$/);
+    expect(res.body.error).toHaveLength(403);
+    expect(logs).toHaveBeenCalledWith(expect.stringContaining(res.body.error));
+  } finally {
+    logs.mockRestore();
+    vi.unstubAllEnvs();
+  }
+});
+
 describe('lifecycle command failures (#10889)', () => {
   it.each([
     ['start', 'docker'], ['start', 'native'], ['stop', 'docker'], ['stop', 'native'],

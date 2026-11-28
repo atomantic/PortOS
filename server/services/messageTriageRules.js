@@ -19,7 +19,7 @@ const rulesStoreSchema = z.object({
 const queueWrite = createFileWriteQueue();
 
 async function loadRules() {
-  await ensureDir(PATHS.messages);
+  await ensureDir(PATHS.messages, { mode: 0o700 });
   const { ok, value } = await readJSONFileStrict(RULES_FILE, MISSING_STORE, { logError: false });
   if (ok && value === MISSING_STORE) return { rules: [] };
   if (!ok || !rulesStoreSchema.safeParse(value).success) {
@@ -31,8 +31,7 @@ async function loadRules() {
 }
 
 async function saveRules(data) {
-  await ensureDir(PATHS.messages);
-  await atomicWrite(RULES_FILE, data);
+  await atomicWrite(RULES_FILE, data, { mode: 0o600, dirMode: 0o700 });
 }
 
 /**
