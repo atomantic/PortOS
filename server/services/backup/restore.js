@@ -13,7 +13,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { getAIToolkitInstance } from '../../lib/aiToolkitState.js';
 import { isSafeSubdirFilter } from '../../lib/sharedSchemas.js';
 import { reloadSettings, withLiveSettingsRestore } from '../settings.js';
-import { BRAIN_STORE_SCHEMA_VERSION, invalidateAllCaches as invalidateBrainCaches } from '../brainStorage.js';
+import { BRAIN_STORE_SCHEMA_VERSION, invalidateAllCaches as invalidateBrainCaches, withLiveRestore as withLiveBrainRestore } from '../brainStorage.js';
 import {
   convertRestoredLegacySplitStores, describeLegacySplitStores, hasUnrestorableScopedInbox, snapshotLegacySplitStores,
 } from '../backupLegacyStores.js';
@@ -53,6 +53,8 @@ function describeReconcileFailure(reason) {
   return reason?.code || String(reason);
 }
 
+const touchesDirectory = (scope, dir) => !scope || scope === dir || scope.startsWith(`${dir}/`);
+
 const restoresMediaScope = (subdirFilter) => !subdirFilter || ['images', 'videos', 'video-thumbnails', 'video-history.json', 'media-collections', 'media-collections.json']
   .some(path => subdirFilter === path || subdirFilter.startsWith(`${path}/`));
 
@@ -75,7 +77,7 @@ async function reconcileLiveFileRestore(subdirFilter, ownerRefreshes) {
   const settingsSettled = Promise.allSettled([settingsReload]);
   const refreshes = [
     ...ownerRefreshes.map(({ label, run }) => ({ label, run: () => settingsSettled.then(() => run()) })),
-    ...(!subdirFilter || subdirFilter === 'brain' || subdirFilter.startsWith('brain/')
+    ...(touchesDirectory(subdirFilter, 'brain')
       ? [{ label: 'Brain cache invalidation', run: invalidateBrainCaches }]
       : []),
     { label: 'settings reload', run: () => settingsReload },
@@ -656,6 +658,8 @@ function cachedStoreOwner(path, loadOwner) {
  *   refuses a busy daemon/mind/agent with `COS_RESTORE_BUSY`.
  * - The media registry refuses edits for the whole hold and is acquired after
  *   CoS, so its write fence never outlives a refused CoS restore.
+ * - Journal edits acquire the Brain record queue, which can append to the
+ *   sync log. Bridge commits only read Brain records and journal locations.
  * - Apple Health admission is acquired last, for the same reason: it closes
  *   import/archive admission and drains admitted day cycles (which wait on no
  *   other owner) before the transfer, then reopens after cache invalidation.
@@ -758,6 +762,34 @@ const LIVE_FILE_RESTORE_OWNERS = Object.freeze([
     appliesTo: scope => !scope || scope.toLowerCase() === 'tools' || scope.toLowerCase().startsWith('tools/'),
     hold: async inner => (await import('../tools.js')).withLiveRestore(inner),
   },
+  {
+    name: 'Brain journal',
+    refreshLabel: 'Brain journal locations invalidation',
+    appliesTo: scope => !scope || scope === 'brain' || scope === 'brain/journal-settings.json'
+      || scope === 'brain/journal-obsidian-locations.json' || touchesDirectory(scope, 'brain/journals'),
+    hold: async inner => (await import('../brainJournal.js')).withLiveRestore(inner),
+  },
+  {
+    name: 'Brain memory bridge',
+    refreshLabel: 'Brain memory bridge invalidation',
+    appliesTo: scope => touchesDirectory(scope, 'brain'),
+    hold: async inner => (await import('../brainMemoryBridge.js')).withLiveRestore(inner),
+  },
+  {
+    name: 'Brain storage',
+    appliesTo: scope => touchesDirectory(scope, 'brain'),
+    hold: inner => withLiveBrainRestore(inner),
+  },
+  cachedStoreOwner('brain/sync_log.jsonl', () => import('../brainSyncLog.js')),
+  cachedStoreOwner('history.jsonl', () => import('../history.js')),
+  {
+    name: 'jev heads',
+    refreshLabel: 'jev adopted-head cache invalidation',
+    appliesTo: scope => scope === 'jev' || touchesDirectory(scope, 'jev/heads'),
+    hold: async inner => (await import('../jevHeads.js')).withLiveRestore(inner),
+  },
+  cachedStoreOwner('local-llm/jev-shadow.json', () => import('../jevRouter.js')),
+  cachedStoreOwner('meatspace/daily-log.json', () => import('../meatspace/meatspaceDailyLog.js')),
   cachedStoreOwner('notifications.json', () => import('../notifications.js')),
   cachedStoreOwner('feeds.json', () => import('../feeds.js')),
   cachedStoreOwner('agents/schedules.json', () => import('../automationScheduler.js')),

@@ -125,6 +125,7 @@ vi.mock('./syncCursors.js', () => ({
 // the ACTIVE backend (explicit or auto-detected) when the DB is unreachable.
 vi.mock('./memoryBackend.js', () => ({
   getBackendName: vi.fn(() => null),
+  getBrainMemoryLinks: async legacyMap => legacyMap,
 }));
 
 import { EventEmitter } from 'events';

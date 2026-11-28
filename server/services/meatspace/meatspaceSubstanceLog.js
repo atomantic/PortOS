@@ -15,7 +15,7 @@ export function createSubstanceLog({ key, itemsField, totalField, mlCollection, 
   let cacheRevision = 0;
   const invalidate = () => { averageCache = null; cacheRevision += 1; };
   meatspaceEvents.on('changed', ({ resources }) => {
-    if (resources.includes('alcohol')) invalidate();
+    if (resources.includes(key)) invalidate();
   });
   const recalc = (entry) => {
     entry[key][totalField] = Math.round(entry[key][itemsField].reduce((sum, item) => sum + computeTotal(item), 0) * 100) / 100;

@@ -94,36 +94,47 @@ async function* streamLines(path, start = 0) {
   }
 }
 
+function resetIndex() {
+  offsets = [];
+  loggedOps = new Set();
+  fileSize = 0;
+  pendingNewline = false;
+  indexLoaded = false;
+  lastCompactionFloor = null;
+  // A rebuild (boot, or recovery from a stale index) means the last recorded
+  // compaction pass no longer describes the current file — always run the
+  // next one regardless of what it recorded.
+  appendedSinceCompaction = true;
+}
+
 /**
  * Rebuild `offsets` / `fileSize` / `currentSeq` by streaming the log once.
  * Streaming rather than `readFile` keeps boot off a 2-3x file-size string.
  */
 async function loadIndex() {
-  offsets = [];
-  loggedOps = new Set();
-  fileSize = 0;
-  currentSeq = 0;
-  pendingNewline = false;
-  indexLoaded = true;
-  // A rebuild (boot, or recovery from a stale index) means the last recorded
-  // compaction pass no longer describes the current file — always run the
-  // next one regardless of what it recorded.
-  appendedSinceCompaction = true;
-  if (!existsSync(SYNC_LOG_FILE)) return;
+  resetIndex();
+  if (!existsSync(SYNC_LOG_FILE)) {
+    currentSeq = 0;
+    indexLoaded = true;
+    return;
+  }
 
   let terminatedBytes = 0;
+  let lastSeq = 0;
   for await (const { text, offset, byteLength } of streamLines(SYNC_LOG_FILE)) {
     terminatedBytes = offset + byteLength;
     const entry = safeJSONParse(text, null);
     if (typeof entry?.seq !== 'number') continue;
     offsets.push({ seq: entry.seq, offset });
     trackLoggedOp(entry);
-    currentSeq = entry.seq;
+    lastSeq = entry.seq;
   }
   // Real byte size, not the offset past the last complete line: an unterminated
   // tail still occupies bytes, so the next append lands after it.
   fileSize = (await stat(SYNC_LOG_FILE)).size;
   pendingNewline = fileSize > terminatedBytes;
+  currentSeq = lastSeq;
+  indexLoaded = true;
 }
 
 async function ensureIndex() {
@@ -179,13 +190,12 @@ function firstIndexAfter(sinceSeq) {
  * Load the last sequence number from the JSONL file at startup
  */
 export async function initSyncLog() {
-  await ensureBrainDir();
-  indexLoaded = false;
-  // A fresh process holds no queued retries; a re-init (tests) drops any
-  // left from a previous one, the same way a restart would.
-  pendingAppends = [];
-  await loadIndex();
-  console.log(`🔄 Sync log initialized at seq ${currentSeq} (${offsets.length} entries)`);
+  return withLock(async () => {
+    await ensureBrainDir();
+    pendingAppends = [];
+    await loadIndex();
+    console.log(`🔄 Sync log initialized at seq ${currentSeq} (${offsets.length} entries)`);
+  });
 }
 
 /**
@@ -228,32 +238,33 @@ export async function appendChange(op, type, id, record, originInstanceId) {
  */
 export async function appendChanges(entries, { skipLogged = false } = {}) {
   if (!entries?.length) return [];
-  return withLock(async () => {
-    await ensureBrainDir();
-    await ensureIndex();
-    const startSeq = currentSeq;
-    const results = [];
-    const lines = [];
-    const batchKeys = new Set();
-    let nextSeq = startSeq;
-    for (const { op, type, id, record, originInstanceId } of entries) {
-      if (skipLogged) {
-        const key = opKey({ op, type, id, record });
-        if (key && (loggedOps.has(key) || batchKeys.has(key))) continue;
-        if (key) batchKeys.add(key);
-      }
-      nextSeq++;
-      const entry = { seq: nextSeq, op, type, id, record, originInstanceId, ts: new Date().toISOString() };
-      lines.push({ seq: nextSeq, text: JSON.stringify(entry), entry });
-      results.push(entry);
+  return withLock(() => appendBatch(entries, skipLogged));
+}
+
+async function appendBatch(entries, skipLogged) {
+  await ensureBrainDir();
+  await ensureIndex();
+  const results = [];
+  const lines = [];
+  const batchKeys = new Set();
+  let nextSeq = currentSeq;
+  for (const { op, type, id, record, originInstanceId } of entries) {
+    if (skipLogged) {
+      const key = opKey({ op, type, id, record });
+      if (key && (loggedOps.has(key) || batchKeys.has(key))) continue;
+      if (key) batchKeys.add(key);
     }
-    // Reserve sequence numbers before write to avoid reuse on partial failure
-    // (matches appendChange semantics where currentSeq advances pre-write)
-    if (lines.length === 0) return results;
-    currentSeq = nextSeq;
-    await writeIndexedLines(lines);
-    return results;
-  });
+    nextSeq++;
+    const entry = { seq: nextSeq, op, type, id, record, originInstanceId, ts: new Date().toISOString() };
+    lines.push({ seq: nextSeq, text: JSON.stringify(entry), entry });
+    results.push(entry);
+  }
+  // Reserve sequence numbers before write to avoid reuse on partial failure
+  // (matches appendChange semantics where currentSeq advances pre-write)
+  if (lines.length === 0) return results;
+  currentSeq = nextSeq;
+  await writeIndexedLines(lines);
+  return results;
 }
 
 // Local-write relays whose append failed (#8351). A local brain write must
@@ -283,11 +294,13 @@ function queuePendingAppends(entries, { retried = false } = {}) {
  * batch that fails again goes back on the queue for the next attempt.
  * Resolves to the number of entries written.
  */
-export async function retryPendingAppends() {
+export const retryPendingAppends = () => withLock(retryPendingBatch);
+
+async function retryPendingBatch() {
   if (pendingAppends.length === 0) return 0;
   const batch = pendingAppends;
   pendingAppends = [];
-  return appendChanges(batch, { skipLogged: true }).then(
+  return appendBatch(batch, true).then(
     (written) => {
       console.log(`🔄 Brain sync log retry relayed ${written.length} of ${batch.length} queued entries`);
       return written.length;
@@ -306,20 +319,30 @@ export async function retryPendingAppends() {
  * the user's write. Earlier failures are retried first so local ops mostly keep
  * their order in the log; while those still fail, the new entries queue behind
  * them. Order is not load-bearing — peers and compaction resolve by the LWW
- * clock, never by log position — so concurrent writers are not serialized here.
+ * clock, never by log position. Keep the retry bookkeeping inside the log lock
+ * so a restore cannot leave a pre-restore retry batch in flight.
  */
 export async function appendLocalChanges(entries) {
   if (!entries?.length) return;
-  if (pendingAppends.length > 0) await retryPendingAppends();
-  if (pendingAppends.length > 0) {
-    queuePendingAppends(entries);
-    return;
-  }
-  await appendChanges(entries).catch((err) => {
-    queuePendingAppends(entries);
-    console.error(`❌ Brain sync log append failed (${entries.length} entries queued for retry): ${err.message}`);
+  return withLock(async () => {
+    await retryPendingBatch();
+    if (pendingAppends.length > 0) {
+      queuePendingAppends(entries);
+      return;
+    }
+    await appendBatch(entries, false).catch((err) => {
+      queuePendingAppends(entries);
+      console.error(`❌ Brain sync log append failed (${entries.length} entries queued for retry): ${err.message}`);
+    });
   });
 }
+
+export const withLiveRestore = restore => withLock(() => restore(async () => {
+  pendingAppends = [];
+  // The synchronous sequence getter must advertise the restored head as soon
+  // as restore returns, even if no delta read or append has run yet.
+  await loadIndex();
+}));
 
 /**
  * Get changes since a given sequence number

@@ -85,6 +85,8 @@ subject to the same requirements as the individual stores below.
 | `managed-visitor-credentials.json` | Use this exact path to restore managed visitor credentials. Credential changes wait for the restore to finish. |
 | `cos` | Stop the CoS daemon and Persistent Mind, then finish or stop active agents. Pausing the daemon alone is insufficient. PortOS reloads CoS configuration and runtime state after the transfer. Restart PortOS before using CoS if either reload fails. |
 | `cos/task-schedule.json` | Use this exact path to recover schedules alone. Queued schedule edits continue against the restored file after it has been normalized and the new schedule is published. |
+| `brain` | Brain record and journal writes wait during the transfer. PortOS clears cached journal locations and bridge mappings and rebuilds the sync log index before queued writes resume. |
+| `history.jsonl`, `jev/heads`, `local-llm/jev-shadow.json`, or `meatspace/daily-log.json` | PortOS invalidates the affected caches before queued edits continue, including nicotine and alcohol summaries after a daily-log restore. |
 | `health` or one day under `health/` | Let the restore finish before checking the recovered days. PortOS drains admitted day writes, invalidates its Health caches, and then lets waiting imports continue. |
 | `media-models.json` | Wait for the restore to finish before editing the registry. If the registry reload fails, edits remain unavailable until a successful restore or a restart reloads it. |
 

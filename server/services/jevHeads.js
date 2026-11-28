@@ -40,6 +40,7 @@ import { notifyJevChanged } from './jevEvents.js';
 import { readdir, unlink } from 'fs/promises';
 import { join } from 'path';
 import { atomicWrite, ensureDir, safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
+import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { JEV_MODEL } from '../lib/jev.js';
 import { JEV_DECISION_IDS } from '../lib/jevDecisions.js';
 import { headAdoptionBlocker, isHeadCompatible, jevHeadFileName, jevHeadSlug, parseJevHead } from '../lib/jevHead.js';
@@ -59,9 +60,12 @@ const headPath = (decisionId, options) => join(jevHeadsDir(), jevHeadFileName(de
  * Invalidated by every write path here and by the test seam below.
  */
 let adoptedCache = null;
+const queueHeadWork = createFileWriteQueue();
 
 /** Test seam, mirroring the cache resets on the sibling local-model services. */
 export const resetJevHeadCache = () => { adoptedCache = null; };
+
+export const withLiveRestore = restore => queueHeadWork(() => restore(resetJevHeadCache));
 
 async function readHeadFile(path) {
   const content = await tryReadFile(path);
@@ -81,11 +85,14 @@ async function readHeadFile(path) {
 export async function getAdoptedJevHeadSlug(decisionId) {
   if (!JEV_DECISION_IDS.includes(decisionId)) return null;
   if (adoptedCache?.has(decisionId)) return adoptedCache.get(decisionId);
-  const result = await readHeadFile(headPath(decisionId));
-  const slug = result.ok && isHeadCompatible(result.head, JEV_MODEL) ? jevHeadSlug(decisionId) : null;
-  adoptedCache ??= new Map();
-  adoptedCache.set(decisionId, slug);
-  return slug;
+  return queueHeadWork(async () => {
+    if (adoptedCache?.has(decisionId)) return adoptedCache.get(decisionId);
+    const result = await readHeadFile(headPath(decisionId));
+    const slug = result.ok && isHeadCompatible(result.head, JEV_MODEL) ? jevHeadSlug(decisionId) : null;
+    adoptedCache ??= new Map();
+    adoptedCache.set(decisionId, slug);
+    return slug;
+  });
 }
 
 /**
@@ -130,7 +137,9 @@ export async function describeJevHeads() {
 }
 
 /** Persist a freshly trained head as a CANDIDATE. Never adopts. */
-export async function saveCandidateJevHead(decisionId, raw) {
+export const saveCandidateJevHead = (decisionId, raw) => queueHeadWork(() => saveCandidate(decisionId, raw));
+
+async function saveCandidate(decisionId, raw) {
   if (!JEV_DECISION_IDS.includes(decisionId)) return failure('jev-head-invalid');
   const parsed = parseJevHead(raw);
   if (!parsed.ok) return parsed;
@@ -147,7 +156,9 @@ export async function saveCandidateJevHead(decisionId, raw) {
  * that does not beat both the stock zero-shot classifier and the majority class on the
  * held-out gold set cannot be adopted through any surface; the refusal names the baseline.
  */
-export async function adoptJevHead(decisionId) {
+export const adoptJevHead = decisionId => queueHeadWork(() => adoptCandidate(decisionId));
+
+async function adoptCandidate(decisionId) {
   if (!JEV_DECISION_IDS.includes(decisionId)) return failure('jev-head-invalid');
   const result = await readHeadFile(headPath(decisionId, { candidate: true }));
   if (!result.ok) return result;
@@ -169,7 +180,9 @@ export async function adoptJevHead(decisionId) {
  * Discard an artifact. Discarding the ADOPTED head returns the decision to the stock
  * zero-shot classifier, the state every install ships in.
  */
-export async function discardJevHead(decisionId, { candidate = true } = {}) {
+export const discardJevHead = (decisionId, options) => queueHeadWork(() => discardHead(decisionId, options));
+
+async function discardHead(decisionId, { candidate = true } = {}) {
   if (!JEV_DECISION_IDS.includes(decisionId)) return failure('jev-head-invalid');
   const removed = await unlink(headPath(decisionId, { candidate })).then(() => true, () => false);
   resetJevHeadCache();

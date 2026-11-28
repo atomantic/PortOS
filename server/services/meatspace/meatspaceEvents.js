@@ -5,6 +5,7 @@ export const meatspaceEvents = new EventEmitter();
 const COLLECTION_RESOURCES = {
   profile: ['overview', 'alcohol', 'calendar'],
   alcoholDrinks: ['alcohol'],
+  nicotineEntries: ['nicotine'],
   bodyEntries: ['body'],
   bloodTests: ['blood'],
   epigeneticTests: ['epigenetic'],

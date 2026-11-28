@@ -7,7 +7,7 @@ import { canonicalStringify, isEmptyScalar, isPlainObject } from '../../../lib/o
 import { parseTsMs } from '../../../lib/lwwTimestamp.js';
 import { isTombstoned, mergeTombstones, pruneTombstones } from '../../../lib/tombstones.js';
 import { ROW_TOMBSTONES_KEY, mergeRowCopies, rowLiveStamp } from '../../../lib/meatspaceRowIdentity.js';
-import { DAILY_LOG_TOMBSTONES_KEY, dailyLogEventLiveStamp, queueDailyLogWrite } from '../../meatspace/meatspaceDailyLog.js';
+import { DAILY_LOG_TOMBSTONES_KEY, dailyLogEventLiveStamp, notifyDailyLogChange, queueDailyLogWrite, snapshotDailyLogResources } from '../../meatspace/meatspaceDailyLog.js';
 import { queueConfigWrite, queueHealthWrite } from '../../meatspace/meatspaceWriteQueues.js';
 import { mergeArraysByKey } from '../mergeByKey.js';
 import { computeChecksum } from '../snapshotHelpers.js';
@@ -381,6 +381,7 @@ export async function applyMeatspaceRemote(remoteData) {
         const merged = mergeDailyLogFile(local, remoteFile);
         if (canonicalStringify(merged) === canonicalStringify(local)) return false;
         await atomicWrite(filePath, merged, { mode: 0o600, dirMode: 0o700 });
+        notifyDailyLogChange(snapshotDailyLogResources(local?.entries), merged.entries);
         return true;
       });
       if (written) totalApplied++;

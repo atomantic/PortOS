@@ -60,7 +60,7 @@ const DEFAULT_SETTINGS = {
 const settingsStore = createSettingsStore(SETTINGS_FILE, DEFAULT_SETTINGS);
 
 export const getSettings = settingsStore.get;
-export const updateSettings = settingsStore.update;
+export const updateSettings = patch => storeMutex(() => settingsStore.update(patch));
 
 // ─── Store ─────────────────────────────────────────────────────────────────
 
@@ -74,23 +74,31 @@ const storeMutex = createMutex();
 // the synced journal record (see OBSIDIAN_LOCATIONS_FILE rationale above).
 // Bulk mirrors stage their locations here until one sidecar write at the end.
 const pendingBulkLocations = new Map();
+let locationsRevision = 0;
 let obsidianLocationsCache = null;
 let obsidianLocationsCacheTime = 0;
 const OBSIDIAN_LOCATIONS_CACHE_TTL_MS = 2000;
 
-export function _clearObsidianLocationsCacheForTest() {
+function invalidateObsidianLocations() {
+  locationsRevision += 1;
   pendingBulkLocations.clear();
   obsidianLocationsCache = null;
   obsidianLocationsCacheTime = 0;
 }
+
+export const _clearObsidianLocationsCacheForTest = invalidateObsidianLocations;
+export const withLiveRestore = restore => storeMutex(() => restore(invalidateObsidianLocations));
 
 async function loadObsidianLocations() {
   const nowMs = Date.now();
   if (obsidianLocationsCache && (nowMs - obsidianLocationsCacheTime) < OBSIDIAN_LOCATIONS_CACHE_TTL_MS) {
     return obsidianLocationsCache;
   }
+  const revision = locationsRevision;
   await ensureDir(PATHS.brain, { mode: 0o700 });
-  obsidianLocationsCache = await readJSONFile(OBSIDIAN_LOCATIONS_FILE, {}, { strict: true });
+  const locations = await readJSONFile(OBSIDIAN_LOCATIONS_FILE, {}, { strict: true });
+  if (revision !== locationsRevision) return loadObsidianLocations();
+  obsidianLocationsCache = locations;
   obsidianLocationsCacheTime = Date.now();
   return obsidianLocationsCache;
 }
@@ -492,6 +500,7 @@ export function syncToObsidian({ date }, { force = false, batch = false } = {}) 
 }
 
 async function mirrorJournal(date, { force, batch }, queue) {
+  const revision = locationsRevision;
   // A bulk page or manual request may have captured the day before deletion or
   // recreation. Mirror the live content when this date's turn actually starts.
   const entry = await brainStorage.getById('journals', date);
@@ -509,8 +518,9 @@ async function mirrorJournal(date, { force, batch }, queue) {
   if (!written) return null;
 
   const location = { obsidianPath: notePath, obsidianVaultId: vaultId };
-  queue.location = location;
   await storeMutex(async () => {
+    if (revision !== locationsRevision) return;
+    queue.location = location;
     if (!(await brainStorage.getById('journals', date))) return;
     // A queued deletion or a concurrent bulk pass may have superseded the
     // location the caller saw. Compare against the persisted sidecar.

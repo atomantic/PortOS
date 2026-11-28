@@ -2,11 +2,11 @@
 import { fakeProc, flush, testDataRoot } from './backup.test.fixture.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'fs/promises';
-import { join } from 'path';
+import { dirname, join } from 'path';
 import { createPromptsService } from '../lib/aiToolkit/prompts.js';
 import { setAIToolkitInstance } from '../lib/aiToolkitState.js';
 import { spawn } from '../lib/childProcess.js';
-import { PATHS } from '../lib/fileUtils.js';
+import { PATHS, getDateString } from '../lib/fileUtils.js';
 import { restoreSnapshot } from './backup.js';
 import * as apps from './apps.js';
 import * as notifications from './notifications.js';
@@ -25,6 +25,23 @@ import * as feedbackStore from './feedbackStore.js';
 import * as tasteQuestionnaire from './taste-questionnaire.js';
 import * as taskLearningStore from './taskLearning/store.js';
 import * as tools from './tools.js';
+
+import * as brainStorage from './brainStorage.js';
+import * as brainJournal from './brainJournal.js';
+import * as brainSyncLog from './brainSyncLog.js';
+import { loadBridgeMap } from './brainMemoryBridge.js';
+import * as history from './history.js';
+import * as jevHeads from './jevHeads.js';
+import * as jevRouter from './jevRouter.js';
+import { JEV_LABELS, JEV_MODEL } from '../lib/jev.js';
+import { JEV_HEAD_POOLING, JEV_HEAD_SCHEMA_VERSION, jevHeadFileName } from '../lib/jevHead.js';
+import { getNicotineSummary } from './meatspace/meatspaceNicotine.js';
+import { mutateDailyLog } from './meatspace/meatspaceDailyLog.js';
+
+vi.mock('../lib/jevPaths.js', async importOriginal => ({
+  ...(await importOriginal()),
+  jevHeadsDir: () => join(testDataRoot(), 'jev', 'heads'),
+}));
 
 describe('live file restore caches', () => {
   beforeEach(() => { spawn.mockReset(); });
@@ -91,6 +108,92 @@ describe('live file restore caches', () => {
       expect(agentData.agents).not.toHaveProperty(original);
       expect(scheduleData.schedules).toMatchObject({ [restored]: { runCount: 4 } });
       expect(scheduleData.schedules).not.toHaveProperty(original);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it('invalidates Brain, history, jev and nicotine caches before queued writes resume after a partial restore', async () => {
+    const day = '2026-01-01';
+    const decisionId = 'scope-adherence';
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now());
+    const write = async (name, content) => {
+      const path = join(testDataRoot(), name);
+      await fs.mkdir(dirname(path), { recursive: true });
+      await fs.writeFile(path, typeof content === 'string' ? content : JSON.stringify(content));
+    };
+    const locations = name => ({ [day]: { obsidianPath: name, obsidianVaultId: 'example-vault' } });
+    const historyLine = id => JSON.stringify({ id, action: id }) + '\n';
+    const dailyLog = (date, amount) => ({
+      entries: [{ date, nicotine: { items: [{ product: 'Example', mgPerUnit: amount, count: 1 }], totalMg: amount } }]
+    });
+    const today = getDateString();
+    const counters = observed => ({ schemaVersion: 1, decisions: { [decisionId]: { observed } } });
+    const record = description => ({ id: 'project', description, title: 'Example' });
+    const head = {
+      schemaVersion: JEV_HEAD_SCHEMA_VERSION, decisionId, architecture: 'linear', pooling: JEV_HEAD_POOLING,
+      baseModel: { id: JEV_MODEL.id, repository: JEV_MODEL.repository, revision: JEV_MODEL.revision },
+      hiddenSize: 2, labels: [...JEV_LABELS], layers: [{ weight: [[1, 0], [0, 1], [1, 1]], bias: [0, 0, 0] }],
+      metrics: { trained: 0.71, stockZeroShot: 0.58, majorityClass: 0.52, goldSize: 40, trainSize: 120 },
+      corpusHash: 'deadbeefcafe0001', corpusSources: ['merged-pr'], trainedAt: '2026-01-01T00:00:00.000Z',
+    };
+    try {
+      await Promise.all([
+        write(`brain/journals/${day}/index.json`, { id: day, date: day, content: 'Example' }),
+        write('brain/journal-obsidian-locations.json', locations('Earlier.md')),
+        write('brain/projects/project/index.json', record('earlier')),
+        write('brain/memory-bridge-map.json', { 'projects:project': 'earlier-memory' }),
+        write('history.jsonl', historyLine('earlier')),
+        write('local-llm/jev-shadow.json', counters(1)),
+        write('meatspace/daily-log.json', dailyLog(today, 1)),
+      ]);
+      await brainSyncLog.initSyncLog();
+      await brainSyncLog.appendChange('create', 'projects', 'earlier', { title: 'Earlier' });
+      expect(await brainJournal.getJournal(day)).toMatchObject({ obsidianPath: 'Earlier.md' });
+      expect(await loadBridgeMap()).toEqual({ 'projects:project': 'earlier-memory' });
+      expect((await history.getHistory()).entries).toMatchObject([{ id: 'earlier' }]);
+      expect(await jevHeads.getAdoptedJevHeadSlug(decisionId)).toBeNull();
+      expect((await jevRouter.readJevDecisionStats()).decisions).toMatchObject([{ observed: 1 }]);
+      expect((await getNicotineSummary()).recentEntries).toMatchObject([{ nicotine: { totalMg: 1 } }]);
+
+      const proc = fakeProc();
+      spawn.mockReturnValue(proc);
+      const restore = restoreSnapshot('/dest', 'snap-1', { dryRun: false });
+      const failed = expect(restore).rejects.toThrow(/Some files may already have been overwritten/);
+      await flush();
+      const writes = [
+        brainStorage.update('projects', 'project', { title: 'Edited' }),
+        history.deleteEntry('restored'),
+        jevHeads.adoptJevHead(decisionId),
+        jevRouter.recordJevObservations({ decisionId, kind: 'decided' }),
+        mutateDailyLog(log => log.entries[0].nicotine.totalMg),
+      ];
+      await Promise.all([
+        write('brain/journal-obsidian-locations.json', locations('Restored.md')),
+        write('brain/projects/project/index.json', record('restored')),
+        write('brain/memory-bridge-map.json', { 'projects:project': 'restored-memory' }),
+        write('brain/sync_log.jsonl', JSON.stringify({ seq: 40, op: 'create', type: 'ideas', id: 'restored' }) + '\n'),
+        write('history.jsonl', historyLine('restored')),
+        write(`jev/heads/${jevHeadFileName(decisionId, { candidate: true })}`, head),
+        write('local-llm/jev-shadow.json', counters(10)),
+        write('meatspace/daily-log.json', dailyLog(today, 3)),
+      ]);
+      proc.emit('close', 1);
+      await failed;
+      const [project, deletion, adoption, stats, previousTotal] = await Promise.all(writes);
+      expect(project).toMatchObject({ description: 'restored', title: 'Edited' });
+      expect((await brainSyncLog.getChangesSince(39)).changes).toMatchObject([
+        { seq: 40, id: 'restored' }, { seq: 41, id: 'project' },
+      ]);
+      expect(await brainJournal.getJournal(day)).toMatchObject({ obsidianPath: 'Restored.md' });
+      expect(await loadBridgeMap()).toEqual({ 'projects:project': 'restored-memory' });
+      expect(deletion).toMatchObject({ deleted: true });
+      expect((await history.getHistory()).entries).toEqual([]);
+      expect(adoption.ok).toBe(true);
+      expect(await jevHeads.getAdoptedJevHeadSlug(decisionId)).toBe(decisionId);
+      expect(stats.decisions[decisionId].observed).toBe(11);
+      expect(previousTotal).toBe(3);
+      expect((await getNicotineSummary()).recentEntries).toMatchObject([{ nicotine: { totalMg: 3 } }]);
     } finally {
       clock.mockRestore();
     }

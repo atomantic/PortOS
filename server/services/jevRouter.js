@@ -42,6 +42,7 @@ const shadowStore = () => (store ??= createCachedStore(
 
 /** Test seam, mirroring `resetModelManifestCache` on the sibling store. */
 export const resetJevShadowCache = () => store?.invalidateCache();
+export const withLiveRestore = restore => shadowStore().withLiveRestore(restore);
 
 const emptyCounters = () => ({
   observed: 0, decided: 0, abstained: 0, unavailable: 0, compared: 0, agreed: 0,

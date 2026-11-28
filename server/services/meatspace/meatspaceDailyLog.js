@@ -24,13 +24,28 @@ import { recordTombstone, supersedingTimestamp } from '../../lib/tombstones.js';
 export const DAILY_LOG_FILE = join(PATHS.meatspace, 'daily-log.json');
 
 export const queueDailyLogWrite = createFileWriteQueue();
+export const withLiveRestore = restore => queueDailyLogWrite(() => restore(
+  () => invalidateMeatspace(['overview', 'alcohol', 'nicotine', 'body'])
+));
 
 // Fresh object per call — callers mutate the log they get back (entry push,
 // lastEntryDate stamp) before writing it, so a shared constant would leak state.
 const emptyDailyLog = () => ({ entries: [], lastEntryDate: null });
+const DAILY_LOG_RESOURCES = ['alcohol', 'nicotine', 'body'];
 const resourceSnapshot = (entries, key) => JSON.stringify(
-  entries?.filter(entry => entry[key]).map(entry => ({ date: entry.date, value: entry[key] }))
+  (Array.isArray(entries) ? entries : []).filter(entry => entry?.[key]).map(entry => ({ date: entry.date, value: entry[key] }))
 );
+
+export function snapshotDailyLogResources(entries) {
+  return Object.fromEntries(DAILY_LOG_RESOURCES.map(key => [key, resourceSnapshot(entries, key)]));
+}
+
+export function notifyDailyLogChange(before, after) {
+  const changed = DAILY_LOG_RESOURCES.filter(
+    key => before[key] !== resourceSnapshot(after, key)
+  );
+  invalidateMeatspace(['overview', ...changed]);
+}
 
 /**
  * Read the local `daily-log.json` mirror, without consulting MortalLoom.
@@ -83,8 +98,7 @@ export async function loadMeatspaceDailyLog({ strict = false, label = 'MeatSpace
 export async function mutateDailyLog(mutatorFn, { label = 'MeatSpace' } = {}) {
   return queueDailyLogWrite(async () => {
     const log = await readLocalDailyLog({ strict: true, label });
-    const beforeAlcohol = resourceSnapshot(log.entries, 'alcohol');
-    const beforeBody = resourceSnapshot(log.entries, 'body');
+    const before = snapshotDailyLogResources(log.entries);
     const result = await mutatorFn(log);
     if (result === null) return result;
     if (Array.isArray(log?.entries)) {
@@ -93,11 +107,7 @@ export async function mutateDailyLog(mutatorFn, { label = 'MeatSpace' } = {}) {
     }
     await ensureDir(PATHS.meatspace);
     await atomicWrite(DAILY_LOG_FILE, log, { mode: 0o600, dirMode: 0o700 });
-    invalidateMeatspace([
-      'overview',
-      ...(beforeAlcohol !== resourceSnapshot(log.entries, 'alcohol') ? ['alcohol'] : []),
-      ...(beforeBody !== resourceSnapshot(log.entries, 'body') ? ['body'] : []),
-    ]);
+    notifyDailyLogChange(before, log.entries);
     return result !== undefined ? result : log;
   });
 }
