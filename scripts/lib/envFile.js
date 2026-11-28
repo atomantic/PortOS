@@ -5,7 +5,8 @@
  * Do NOT import from server/lib or any installed package.
  */
 
-import { chmodSync, readFileSync, writeFileSync } from 'fs';
+import { randomBytes } from 'crypto';
+import { chmodSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import envFileParser from './envFile.cjs';
 
@@ -46,7 +47,15 @@ export function upsertEnvKey(filePath, key, value) {
     return [`${key}=${value}${line.endsWith('\r') ? '\r' : ''}`];
   });
   content = replaced ? lines.join('\n') : `${key}=${value}\n${content}`;
-  // Enforce owner-only permissions on .env (holds PGPASSWORD / PRIVACY_VAULT_KEY).
-  writeFileSync(filePath, content, { mode: 0o600 });
-  if (process.platform !== 'win32') chmodSync(filePath, 0o600);
+  // Stage into a fresh 0600 temp file and atomically replace .env so an
+  // existing world-readable inode never receives updated secrets before chmod.
+  const tmpPath = `${filePath}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
+  try {
+    writeFileSync(tmpPath, content, { mode: 0o600 });
+    if (process.platform !== 'win32') chmodSync(tmpPath, 0o600);
+    renameSync(tmpPath, filePath);
+  } catch (err) {
+    try { unlinkSync(tmpPath); } catch { /* best-effort cleanup */ }
+    throw err;
+  }
 }
