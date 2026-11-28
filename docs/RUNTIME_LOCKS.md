@@ -178,7 +178,11 @@ baker to run, with no KDTree fallback.
 
 Use [the installer](../scripts/setup-pixal3d-mps.sh) with the locked wheel
 and source inputs. It rebuilds native extensions and checks imports and MPS.
-Render from the private checkout with `generate_mps.py --device mps
+Install seeds `autotune_cache.json` in the runtime root from the bundled tuning
+data. Repair retains that file. For direct renders, set
+`FLEX_GEMM_AUTOTUNE_CACHE_PATH` to the absolute path of that cache, as PortOS
+does for render launches. Render from the private source snapshot with
+`generate_mps.py --device mps
 --pipeline-type 1024_cascade --steps 4 --seed 7` and check the output with
 [`verify-pixal3d-mps.py`](../scripts/ml/verify-pixal3d-mps.py).
 
