@@ -1,7 +1,9 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { timingSafeEqual } from 'node:crypto';
-import { mockNoPeers, mockTestIdentity } from '../../lib/mockPathsDataRoot.js';
+import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy, mockNoPeers, mockTestIdentity } from '../../lib/mockPathsDataRoot.js';
 import { PORTOS_SCHEMA_VERSIONS } from '../../lib/schemaVersions.js';
+import { sanitizeRecordForWire } from '../../lib/syncWire.js';
+import { getTrack, mergeTracksFromSync } from '../tracks/index.js';
 import { getPeers } from '../instances.js';
 import { getLocalIngredientRefOwnership } from '../catalog/catalogDB.js';
 import { applyRemoteChanges } from '../catalog/catalogSync.js';
@@ -10,6 +12,10 @@ import { diffAssetManifestAgainstLocal, pullMissingAssetsFromPeer } from './peer
 import { RECORD_KINDS } from './recordKinds.js';
 import { applyIncomingPush } from './peerSyncReceive.js';
 import { ERR_SCHEMA_VERSION_AHEAD } from './peerSyncShared.js';
+
+vi.mock('../../lib/fileUtils.js', async (importOriginal) =>
+  makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-linked-track-') }));
+afterAll(cleanupTempDataRoots);
 
 vi.mock('node:crypto', { spy: true });
 vi.mock('../instances.js', () => mockNoPeers({}, { getPeers: vi.fn() }));
@@ -305,7 +311,34 @@ describe('applyIncomingPush linked track binding', () => {
   it('merges a matching track after a not-found result even when the Tracks category is off', async () => {
     RECORD_KINDS.track.load.mockRejectedValue(Object.assign(new Error('Track not found'), { status: 404 }));
     await pushTrack();
-    expect(RECORD_KINDS.track.merge).toHaveBeenCalledExactlyOnceWith([linkedTrack], { source });
+    expect(RECORD_KINDS.track.merge).toHaveBeenCalledExactlyOnceWith([linkedTrack], { source, bundledByPeerId: source.peerId });
+  });
+
+  it('persists the supplying peer and acknowledges only its bundled deletion, including a replay', async () => {
+    RECORD_KINDS.track.load.mockImplementation((id) => getTrack(id, { includeDeleted: true }));
+    RECORD_KINDS.track.merge.mockImplementation(mergeTracksFromSync);
+    const first = { ...linkedTrack, updatedAt: '2026-01-01T00:00:00Z', bundledByPeerId: 'untrusted' };
+    await pushTrack(first);
+    const stored = await getTrack(first.id);
+    expect(stored).toMatchObject({ bundledByPeerId: source.peerId, title: first.title });
+    expect(sanitizeRecordForWire('track', stored)).not.toHaveProperty('bundledByPeerId');
+
+    const update = { ...first, title: 'Revised', updatedAt: '2026-02-01T00:00:00Z' };
+    await pushTrack(update);
+    expect(await getTrack(first.id)).toMatchObject({ title: update.title, bundledByPeerId: source.peerId });
+    const deletedAt = '2026-03-01T00:00:00Z';
+    const tombstone = { ...update, deleted: true, deletedAt, updatedAt: deletedAt };
+    const other = { ...configuredPeer, id: 'other', instanceId: 'peer-b', syncSecret: peerToken + '-other' };
+    vi.mocked(getPeers).mockResolvedValue([configuredPeer, other]);
+    await expect(applyIncomingPush(payload({
+      kind: 'musicVideoProject', record, linkedTrack: tombstone, sourceInstanceId: other.instanceId,
+    }), { peerToken: other.syncSecret })).resolves.toMatchObject({ ackedDeletesUpTo: 0 });
+    expect(await getTrack(first.id)).toMatchObject({ title: update.title, bundledByPeerId: source.peerId });
+
+    await expect(pushTrack(tombstone)).resolves.toMatchObject({ ackedDeletesUpTo: Date.parse(deletedAt) });
+    expect(await getTrack(first.id)).toBeNull();
+    expect(await getTrack(first.id, { includeDeleted: true })).toMatchObject({ deletedAt, bundledByPeerId: source.peerId });
+    await expect(pushTrack(tombstone)).resolves.toMatchObject({ ackedDeletesUpTo: Date.parse(deletedAt) });
   });
 
   it('skips a track ID other than the one referenced by the pushed project', async () => {

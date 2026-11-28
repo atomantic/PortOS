@@ -84,6 +84,21 @@ describe('tracks content hash', () => {
 });
 
 describe('tracks file backend — mergeTracksFromSync (LWW outcomes)', () => {
+  it('revokes bundle ownership on local edits and deletes, and on equal, older or newer direct sync', async () => {
+    const ids = ['edit', 'delete', 'equal', 'older', 'newer'];
+    await file.mergeTracksFromSync(ids.map((id) => track(id)), { bundledByPeerId: 'peer-a' });
+    await file.updateTrack('edit', { title: 'Local edit', bundledByPeerId: 'peer-b' });
+    await file.deleteTrack('delete');
+    for (const [id, updatedAt] of [
+      ['equal', '2026-01-01T00:00:00.000Z'], ['older', '2025-01-01T00:00:00.000Z'], ['newer', '2027-01-01T00:00:00.000Z'],
+    ]) {
+      const direct = track(id, { updatedAt, title: 'Direct', bundledByPeerId: 'untrusted' });
+      expect((await file.mergeTracksFromSync([direct])).applied).toBe(id === 'newer');
+      expect((await file.getTrack(id)).title).toBe(id === 'newer' ? 'Direct' : id);
+    }
+    for (const id of ids) expect(await file.getTrack(id, { includeDeleted: true })).not.toHaveProperty('bundledByPeerId');
+  });
+
   it('inserts, then newer wins / older no-ops', async () => {
     expect(await file.mergeTracksFromSync([track('track-1', { prompt: 'v1', updatedAt: '2026-02-01T00:00:00.000Z' })]))
       .toEqual({ applied: true, count: 1 });

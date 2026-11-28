@@ -584,15 +584,13 @@ describe('peerSync', () => {
       });
       // The project's own merge goes through the record-kind table (#6843),
       // which passes senderSchemaVersions uniformly (harmless — ignored).
-      // The linkedTrack merge is a hand-written hook that still calls with
-      // exactly `{ source }`, unchanged.
       expect(mergeMusicVideoProjectsFromSync).toHaveBeenCalledWith(
         [expect.objectContaining({ id: 'mv-1' })],
         expect.objectContaining({ source: { via: 'peer-push', peerId: 'peer-a' } }),
       );
       expect(mergeTracksFromSync).toHaveBeenCalledWith(
         [linkedTrack],
-        { source: { via: 'peer-push', peerId: 'peer-a' } },
+        { source: { via: 'peer-push', peerId: 'peer-a' }, bundledByPeerId: 'peer-a' },
       );
     });
 
@@ -1078,7 +1076,7 @@ describe('peerSync', () => {
       });
       expect(mergeTracksFromSync).toHaveBeenCalledWith(
         [expect.objectContaining({ id: 'track-16' })],
-        { source: { via: 'peer-push', peerId: 'peer-a' } },
+        { source: { via: 'peer-push', peerId: 'peer-a' }, bundledByPeerId: 'peer-a' },
       );
       expect(result.ackedDeletesUpTo).toBe(Date.parse('2026-04-04T00:00:00Z'));
     });

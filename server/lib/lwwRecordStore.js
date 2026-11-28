@@ -17,7 +17,7 @@ import { atomicWrite, ensureDir, readJSONFile } from './fileUtils.js';
 import { toPgJson } from './pgJson.js';
 import { mirrorTimestamp } from './pgTimestamp.js';
 
-function recordOperations({ kind, idPrefix, labelColumn, logLabel = kind, emoji, build, applyPatch, merge }) {
+function recordOperations({ kind, idPrefix, labelColumn, logLabel = kind, emoji, build, applyPatch, merge, clearOnLocalWrite = [] }) {
   const invalid = () => new ServerError(`Invalid ${kind} payload`, { status: 400, code: 'VALIDATION' });
   const notFound = () => new ServerError(
     `${kind[0].toUpperCase()}${kind.slice(1)} not found`,
@@ -33,19 +33,29 @@ function recordOperations({ kind, idPrefix, labelColumn, logLabel = kind, emoji,
       if (!record || record.deleted) throw notFound();
       const next = applyPatch(record, patch);
       if (!next) throw invalid();
+      for (const field of clearOnLocalWrite) delete next[field];
       return next;
     },
     tombstoneRecord(record) {
       if (!record || record.deleted) throw notFound();
       const now = new Date().toISOString();
-      return { ...record, deleted: true, deletedAt: now, updatedAt: now };
+      const next = { ...record, deleted: true, deletedAt: now, updatedAt: now };
+      for (const field of clearOnLocalWrite) delete next[field];
+      return next;
     },
     logCreation(record) {
       console.log(`${emoji} Created ${logLabel}: ${record.id} (${record[labelColumn]})`);
     },
-    async applySyncRecord(local, remote, source, save) {
-      const { next, inserted, remoteWins, changed } = merge(local, remote);
-      if (!next || (!inserted && (!remoteWins || !changed))) return false;
+    async applySyncRecord(local, remote, options, save) {
+      const { next, inserted, remoteWins, changed } = merge(local, remote, options);
+      if (!next || !changed) return false;
+      // A local winner may shed receiver-only metadata on direct category sync.
+      // Its portable content and common-ancestor hash did not change.
+      if (!inserted && !remoteWins) {
+        await save(next);
+        return false;
+      }
+      const { source = { via: 'sync', peerId: null } } = options;
       // Whole-record LWW treats an identical winner as agreement. Journal
       // actual overwrites before saving and seed a base hash on first insert.
       if (!inserted) await maybeJournalBeforeOverwrite({ kind, id: next.id, local, remote: next, source });
@@ -154,14 +164,16 @@ export function createLwwRecordDbBackend(config) {
       await mutate(id, options, tombstoneRecord);
       return { id };
     },
-    async mergeFromSync(records, { source = { via: 'sync', peerId: null } } = {}) {
+    async mergeFromSync(records, options = {}) {
       if (!Array.isArray(records)) return { applied: false, count: 0 };
       let count = 0;
       for (const remote of records) {
-        const applied = await withTransaction(async (client) => {
+        const run = async (client) => {
           const local = await selectLocked(client, remote?.id);
-          return applySyncRecord(local, remote, source, (next) => save(executor(client), next));
-        });
+          return applySyncRecord(local, remote, options, (next) => save(executor(client), next));
+        };
+        const client = transactionClient(options);
+        const applied = client ? await run(client) : await withTransaction(run);
         if (applied) count += 1;
       }
       await flushBaseHashes();
@@ -239,17 +251,21 @@ export function createLwwRecordFileBackend(config) {
       await mutate(id, tombstoneRecord);
       return { id };
     },
-    async mergeFromSync(records, { source = { via: 'sync', peerId: null } } = {}) {
+    async mergeFromSync(records, options = {}) {
       if (!Array.isArray(records)) return { applied: false, count: 0 };
       const all = await loadAll();
       const byId = new Map(all.map((record) => [record.id, record]));
+      let dirty = false;
       let count = 0;
       for (const remote of records) {
         const local = byId.get(remote?.id) || null;
-        const applied = await applySyncRecord(local, remote, source, (next) => byId.set(next.id, next));
+        const applied = await applySyncRecord(local, remote, options, (next) => {
+          byId.set(next.id, next);
+          dirty = true;
+        });
         if (applied) count += 1;
       }
-      if (count > 0) await saveAll([...byId.values()]);
+      if (dirty) await saveAll([...byId.values()]);
       await flushBaseHashes();
       return { applied: count > 0, count };
     },

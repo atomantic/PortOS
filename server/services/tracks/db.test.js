@@ -12,7 +12,7 @@ import { makePathsProxy, lazyTempDataRoot, cleanupTempDataRoots } from '../../li
 vi.mock('../../lib/fileUtils.js', async (importOriginal) =>
   makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-tracks-db-') }));
 
-import { checkHealth, ensureSchema, query, close } from '../../lib/db.js';
+import { checkHealth, ensureSchema, query, withTransaction, close } from '../../lib/db.js';
 import { requireDbOrSkip } from '../../lib/dbTestGate.js';
 import { contentHashForRecord, flushBaseHashes, __resetBaseHashCacheForTests } from '../../lib/conflictJournal.js';
 
@@ -82,6 +82,19 @@ describe.skipIf(!runDb)('tracks DB adapter round-trip', () => {
     const next = await db.updateTrack(live.id, { prompt: 'warm' });
     expect(next.title).toBe('Live');
     expect(next.prompt).toBe('warm');
+  });
+
+  it('writes provenance inside the owning music transaction and clears it on a direct replay', async () => {
+    const track = { id: 'track-bundled', title: 'Bundled audio', updatedAt: '2026-01-01T00:00:00Z' };
+    await withTransaction(async (client) => {
+      await db.mergeTracksFromSync([track], { bundledByPeerId: 'peer-a', client });
+      expect(await db.getTrack(track.id, { client })).toMatchObject({ bundledByPeerId: 'peer-a' });
+      // An independent reader cannot see the bundle until this transaction commits.
+      expect(await db.getTrack(track.id)).toBeNull();
+    });
+    expect(await db.getTrack(track.id)).toMatchObject({ bundledByPeerId: 'peer-a' });
+    expect(await db.mergeTracksFromSync([track])).toEqual({ applied: false, count: 0 });
+    expect(await db.getTrack(track.id)).not.toHaveProperty('bundledByPeerId');
   });
 
   it('mergeTracksFromSync: newer wins, older loses', async () => {

@@ -129,7 +129,9 @@ export async function deleteTrack(id) {
 
 /** Merge an incoming batch of track records from a peer (LWW, tombstone-aware). */
 export async function mergeTracksFromSync(remoteTracks, options = {}) {
-  return (await selectBackend()).mergeTracksFromSync(remoteTracks, options);
+  return withMusicMutation(async () => (await selectBackend()).mergeTracksFromSync(remoteTracks, {
+    ...options, client: musicMutationClient(),
+  }));
 }
 
 /** Hard-remove track tombstones older than the cutoff (called by tombstone GC). */
