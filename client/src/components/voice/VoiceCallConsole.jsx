@@ -1,8 +1,9 @@
 import { useState } from 'react';
-import { Brain, ChevronDown, ChevronUp, Radio, ScanFace, Trash2, Video } from 'lucide-react';
+import { AudioLines, Brain, ChevronDown, ChevronUp, Radio, ScanFace, Trash2, Video } from 'lucide-react';
 import { voiceModelDisplayName } from '../../../../server/lib/voiceModelCatalog.js';
 import AvatarChannelsPanel from './AvatarChannelsPanel';
 import AvatarRuntimeSettings from './AvatarRuntimeSettings';
+import RealtimeCallPanel from './RealtimeCallPanel';
 import SatPhoneHandset from './SatPhoneHandset';
 import VoiceImageChips from './VoiceImageChips';
 import ChannelBrainPicker from './ChannelBrainPicker';
@@ -14,10 +15,10 @@ import { voiceLlmResidencyBadge } from './voiceLlmResidencyBadge';
 
 
 const TAB_KEY = 'portos.voice.callTab';
-const TABS = ['video', 'brain', 'avatars'];
+const TABS = ['video', 'brain', 'avatars', 'realtime'];
 
 /**
- * Station settings as two compact disclosure chips instead of stacked cards,
+ * Station settings as compact disclosure chips instead of stacked cards,
  * so the handset and log stay above the fold on a phone. Each chip carries its
  * live status and opens one panel at a time; tapping the open chip folds it.
  */
@@ -43,6 +44,7 @@ function StationTabs({ runningAvatar, llmProvider, llmModel, llmResidency, onLlm
     { id: 'video', label: 'Video feed', status: videoStatus, Icon: Video, led: runningAvatar ? 'bg-port-accent shadow-[0_0_6px_rgb(var(--port-accent))]' : 'bg-port-success' },
     { id: 'brain', label: 'Voice brain', status: brainStatus, Icon: Brain, led: residencyBadge?.led },
     { id: 'avatars', label: 'Channels', status: avatarsStatus, Icon: ScanFace },
+    { id: 'realtime', label: 'Realtime voice', status: 'Speech to speech', Icon: AudioLines },
   ];
 
   return (
@@ -85,6 +87,11 @@ function StationTabs({ runningAvatar, llmProvider, llmModel, llmResidency, onLlm
       {tab === 'avatars' && (
         <div id="station-panel-avatars">
           <AvatarChannelsPanel agentDefaults={{ ...agentDefaults, provider: llmProvider, model: llmModel }} />
+        </div>
+      )}
+      {tab === 'realtime' && (
+        <div id="station-panel-realtime">
+          <RealtimeCallPanel compact />
         </div>
       )}
     </div>
