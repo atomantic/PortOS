@@ -3,6 +3,7 @@
 // always-on (left out of TOOL_GROUPS) so "take me to X" works on any turn; the
 // rest gate on UI_INTENT_RE. ui_click runs a destructive-action confirm gate.
 
+import { normalizeLabel } from '../../../lib/navManifest.js';
 import { resolveNavCommand } from '../../../lib/navSearchMetadata.js';
 import { requiresConfirmation, buildPending } from '../confirmGate.js';
 import { UI_KINDS, findUiElement } from './shared.js';
@@ -23,6 +24,7 @@ export const UI_TOOLS = [
     name: 'ui_navigate',
     description:
       'Navigate the UI to a page. Use for "take me to X" / "open X" / "go to X" — including the Daily Log when the user just wants to VIEW it without writing. ' +
+      'For a named Music Video Studio project, pass its title as `musicVideoProject`. This opens the editing workspace directly. Pass page="music video projects" for the project library. ' +
       'Pass `page` as a short name the user would say: tasks, agents, gsd, briefing, calendar, goals, brain, meatspace, memory, messages, settings, shell, instances, wiki, character, health, body, alcohol, daily log, journal, etc. ' +
       'Server resolves fuzzy — "chief of staff tasks", "cos tasks", "task page" all map to tasks. If no match, the error lists valid names. ' +
       'Only prefer daily_log_open over this tool when the user clearly wants to write/dictate ("start", "new", "entry", "make", "dictate"); plain "open my daily log" or "go to the daily log" should use ui_navigate.',
@@ -33,13 +35,32 @@ export const UI_TOOLS = [
           type: 'string',
           description: 'Short page name the user said (e.g. "tasks", "calendar"). Server fuzzy-matches.',
         },
+        musicVideoProject: {
+          type: 'string',
+          description: 'Title of the Music Video Studio project to open, as spoken by the user.',
+        },
         path: {
           type: 'string',
           description: 'Explicit route path starting with / (e.g. "/cos/tasks"). Only when page doesn\'t fit.',
         },
       },
     },
-    execute: async ({ page, path } = {}, ctx = {}) => {
+    execute: async ({ page, path, musicVideoProject } = {}, ctx = {}) => {
+      if (typeof musicVideoProject === 'string') {
+        const title = normalizeLabel(musicVideoProject);
+        const { listProjectNames } = await import('../../musicVideo/projects.js');
+        const matches = title ? (await listProjectNames()).filter(({ name }) => normalizeLabel(name) === title) : [];
+        if (matches.length !== 1) {
+          return matches.length > 1
+            ? { ok: false, summary: 'Several Music Video projects have that title. Open Music Video projects to choose one.' }
+            : { ok: false, summary: 'No Music Video project matches that title.' };
+        }
+        const [project] = matches;
+        const projectPath = `/music-video/${encodeURIComponent(project.id)}`;
+        ctx.sideEffects?.push({ type: 'navigate', path: projectPath });
+        return { ok: true, path: projectPath, summary: `Opened ${project.name}.` };
+      }
+
       let target = null;
       let resolvedKey = null;
 

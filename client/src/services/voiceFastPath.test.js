@@ -237,11 +237,16 @@ describe('resolveTurn', () => {
     expect(d.reason).toMatch(/nano-error/);
   });
 
-  it('skips tier 1 when triggers are disabled', async () => {
-    promptNano.mockResolvedValue('Sure.');
+  it('sends navigation to the server when triggers are disabled', async () => {
     const d = await resolveTurn('go to the pipeline', { ...base, fastPath: { ...base.fastPath, triggers: false } });
-    // No nav match → falls to Nano (this phrase is not an action intent).
-    expect(d.tier).toBe(TIER.NANO);
+    expect(d).toMatchObject({ tier: TIER.SERVER, reason: 'navigation-intent' });
+    expect(promptNano).not.toHaveBeenCalled();
+  });
+
+  it('sends a named music video workspace request to the server for lookup', async () => {
+    const d = await resolveTurn('open my music video North Star', base);
+    expect(d).toMatchObject({ tier: TIER.SERVER, reason: 'navigation-intent' });
+    expect(promptNano).not.toHaveBeenCalled();
   });
 
   it('goes straight to the server when the browser tier is disabled and no trigger matches', async () => {

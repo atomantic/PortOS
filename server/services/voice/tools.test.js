@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 
+const { listMusicVideoProjectNames } = vi.hoisted(() => ({ listMusicVideoProjectNames: vi.fn() }));
+vi.mock('../musicVideo/projects.js', () => ({ listProjectNames: listMusicVideoProjectNames }));
+
 // Stub every external side-effect before importing tools.js so the unit test
 // exercises pure validation/dispatch logic without hitting the filesystem.
 vi.mock('../brain.js', () => ({
@@ -1914,5 +1917,36 @@ describe('ui_navigate raw path fallback', () => {
       expect(result.ok).toBe(false);
       expect(ctx.sideEffects).toEqual([]);
     }
+  });
+});
+
+describe('ui_navigate Music Video projects', () => {
+  it('opens the live workspace for the spoken title, even from another project', async () => {
+    listMusicVideoProjectNames.mockResolvedValue([{ id: 'example-video', name: 'North Star' }]);
+    const ctx = { sideEffects: [], state: { ui: { path: '/music-video/other-project/board' } } };
+    const result = await dispatchTool('ui_navigate', { musicVideoProject: '  NORTH  STAR.  ' }, ctx);
+    expect(result).toMatchObject({ ok: true, path: '/music-video/example-video' });
+    expect(ctx.sideEffects).toEqual([{ type: 'navigate', path: '/music-video/example-video' }]);
+  });
+
+  it.each([
+    { kind: 'missing', projects: [] },
+    { kind: 'ambiguous', projects: [{ id: 'one', name: 'North Star' }, { id: 'two', name: 'North Star' }] },
+  ])(
+    'does not navigate to a fallback page for a $kind title',
+    async ({ projects }) => {
+      listMusicVideoProjectNames.mockResolvedValue(projects);
+      const ctx = { sideEffects: [] };
+      const result = await dispatchTool('ui_navigate', { musicVideoProject: 'North Star', page: 'videos' }, ctx);
+      expect(result.ok).toBe(false);
+      expect(ctx.sideEffects).toEqual([]);
+    },
+  );
+
+  it('opens the project library for an unqualified request', async () => {
+    const ctx = { sideEffects: [] };
+    const result = await dispatchTool('ui_navigate', { page: 'music video projects' }, ctx);
+    expect(result).toMatchObject({ ok: true, path: '/music-video' });
+    expect(ctx.sideEffects).toEqual([{ type: 'navigate', path: '/music-video' }]);
   });
 });

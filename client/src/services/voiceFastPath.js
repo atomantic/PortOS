@@ -199,6 +199,7 @@ export const resolveTurn = async (transcript, {
   }
 
   // Clear action/tool intents need the server tool pipeline — skip Nano.
+  if (NAV_LEAD_IN.test(text)) return { tier: TIER.SERVER, reason: 'navigation-intent' };
   if (isActionIntent(text)) return { tier: TIER.SERVER, reason: 'action-intent' };
   // Capability/meta questions must be answered by the server (Nano doesn't know
   // the CoS tool set and would falsely claim it has none).
