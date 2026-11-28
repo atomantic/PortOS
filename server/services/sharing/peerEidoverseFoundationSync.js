@@ -152,7 +152,7 @@ export function __resetEidoverseFoundationSweepForTests() {
  * re-pull (which lets a LOCAL deletion self-heal) doesn't rewrite `inheritedAt` and churn the ledger.
  *
  * @param {object} peer a peer entry from getPeers()
- * @returns {Promise<{ inherited:number, refused?:number, skipped?:string }>}
+ * @returns {Promise<{ inherited:number, refused?:number, removed?:number, complete?:boolean, skipped?:string }>}
  */
 export async function syncEidoverseFoundationsFromPeer(peer) {
   if (!isPlainObject(peer) || peer.fullSync !== true || !isStr(peer.instanceId)) {
@@ -195,10 +195,11 @@ export async function syncEidoverseFoundationsFromPeer(peer) {
       }
       offeringUnchangedSkips.set(peer.instanceId, 0); // forced re-pull — fall through
     }
+    // Invalidate before applying so both partial reconciliation and a thrown
+    // ledger read leave the next sweep free to retry the same offering.
+    lastOfferingListHash.delete(peer.instanceId);
     const applied = await applyOffering(payload.candidates, payload.tombstones, { peer, localInstanceId });
-        // Remember the offering only once applied: recording the hash after a
-        // `ledger-unavailable` pass would short-circuit later ticks on work that never happened.
-    if (!applied.skipped) lastOfferingListHash.set(peer.instanceId, payload.listHash);
+    if (applied.complete) lastOfferingListHash.set(peer.instanceId, payload.listHash);
     if (applied.inherited > 0) {
       console.log(`📥 peerSync: eidoverse-foundations sweep from ${peerLabel(peer)} — inherited ${applied.inherited} foundation(s)`);
     }
@@ -233,11 +234,12 @@ async function applyOffering(candidates, tombstones, { peer, localInstanceId }) 
   if (!mod?.recordEidoverseFoundationInheritance || !mod?.listEidoverseFoundations || !mod?.applyEidoverseFoundationTombstones) {
     return { inherited: 0, refused: 0, removed: 0, skipped: 'ledger-unavailable' };
   }
+  let complete = true;
   const { removed = 0 } = (await mod.applyEidoverseFoundationTombstones(tombstones, {
     sourceInstanceId: peer.instanceId,
   }).catch((err) => {
-        // Counted as "reaped nothing" and pressed on: the sender keeps advertising the tombstone
-        // until its candidate returns, so a failed retraction retries on the next sweep.
+    // Still try candidates. The sender keeps advertising its tombstones for the next sweep.
+    complete = false;
     console.log(`⚠️ peerSync: eidoverse-foundations retraction from ${peerLabel(peer)} failed: ${err.message}`);
     return null;
   })) || {};
@@ -252,13 +254,14 @@ async function applyOffering(candidates, tombstones, { peer, localInstanceId }) 
       sourceInstanceId: peer.instanceId,
       localInstanceId,
     }).catch((err) => {
+      complete = false;
       console.log(`⚠️ peerSync: eidoverse-foundations inherit from ${peerLabel(peer)} failed: ${err.message}`);
       return null;
     });
     if (result?.outcome === 'inherited') inherited += 1;
-    else refused += 1;
+    else if (result?.outcome === 'refused') refused += 1;
   }
-  return { inherited, refused, removed };
+  return { inherited, refused, removed, complete };
 }
 
 /**
