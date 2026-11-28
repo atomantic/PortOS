@@ -21,7 +21,7 @@ import { PATHS } from '../lib/fileUtils.js';
 import { mergeCodexBoundary, SPEED_LEDGER_FIELDS } from '../lib/usageFields.js';
 import { familyForProvider } from '../lib/provider/providerFamilies.js';
 import { parseCodexRollout } from '../lib/provider/providerTranscriptUsage.js';
-import { codexIdentityHash, codexSessionClaimKey, readCodexAccountingSources } from './codexUsageSources.js';
+import { codexSpeedRepairId, readCodexAccountingSources, resolveCodexBoundary } from './codexUsageSources.js';
 import { addDatedUsageBatch, backupUsageRepairLedger, loadUsage } from './usage.js';
 
 const INDEXING_PASSES = 20;
@@ -47,17 +47,6 @@ function highWaterMap(reconciledRuns) {
     }
   }
   return merged;
-}
-
-function boundaryForSession(session, highWater) {
-  let billed = highWater.get(codexSessionClaimKey(session.id)) || null;
-  for (const [key, counts] of highWater) {
-    const legacyId = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl(?:\.zst)?$/i.exec(key)?.[1];
-    if (session.paths?.includes(key) || (legacyId && codexIdentityHash(legacyId) === session.id)) {
-      billed = mergeCodexBoundary(billed, counts);
-    }
-  }
-  return billed;
 }
 
 function owedSpeed(covered) {
@@ -127,8 +116,8 @@ async function planCodexSpeedRepair({
   }
   for (const session of inventory?.sessions || []) {
     // A first full bill records this id once it has priced the whole session.
-    if (known.has(`codex-speed:v1:${session.id}`)) continue;
-    const billed = boundaryForSession(session, highWater);
+    if (known.has(codexSpeedRepairId(session.id))) continue;
+    const billed = resolveCodexBoundary(session, highWater);
     // No high-water means the base tokens are not in the ledger.
     if (!billed) continue;
     let records = null;
@@ -139,7 +128,7 @@ async function planCodexSpeedRepair({
     }
     const parsed = parseCodexRollout(records, { billedBaseline: billed, includeCoveredSpeed: true });
     for (const slice of unpaidCoveredDays(coveredDays(parsed), billed)) {
-      const repairId = `codex-speed:v1:${session.id}:${slice.day}`;
+      const repairId = codexSpeedRepairId(session.id, slice.day);
       if (known.has(repairId)) continue;
       const owed = owedSpeed(slice);
       if (!owed) continue;

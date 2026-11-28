@@ -1,6 +1,6 @@
 /** Shared usage bucket shapes, count adjustments and daily-to-monthly rollup transforms. */
 import { POLLUTING_KEYS } from './objects.js';
-import { countFields } from './usageReport.js';
+import { USAGE_COUNT_FIELDS } from './usageFields.js';
 
 // Day buckets older than this are rolled up into monthly buckets at load time so
 // dailyActivity (and therefore the in-memory report) stops growing
@@ -109,7 +109,7 @@ export const findEarliestActivityDay = (dailyActivity, monthlyActivity) => {
 
 export const adjustCounts = (bucket, counts, direction) => {
   if (!bucket) return;
-  for (const field of countFields) {
+  for (const field of USAGE_COUNT_FIELDS) {
     const delta = direction * Math.max(0, counts?.[field] || 0);
     // A zero delta must not stamp a new key onto a pre-existing bucket.
     if (!delta && bucket[field] == null) continue;

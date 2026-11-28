@@ -5,7 +5,7 @@ import { homedir } from 'node:os';
 import { join, relative } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import * as zlib from 'node:zlib';
-import { SPEED_LEDGER_FIELDS } from '../lib/modelPricing.js';
+import { mergeCodexBoundary, SPEED_LEDGER_FIELDS } from '../lib/usageFields.js';
 import { isPlainObject as isObject } from '../lib/objects.js';
 import { parseCodexRollout } from '../lib/provider/providerTranscriptUsage.js';
 import { fingerprintRecords, readInventorySource, trimInventoryCache, writeInventorySource } from './codexInventoryCache.js';
@@ -19,6 +19,26 @@ const SOURCE_INVENTORY_ENTRIES = 100_000;
 const decodesInFlight = new Map();
 export const codexSessionClaimKey = id => `codex-session:v1:${id}`;
 export const codexIdentityHash = value => hash(value);
+export const codexSpeedRepairId = (sessionId, day = null) => (
+  day ? `codex-speed:v1:${sessionId}:${day}` : `codex-speed:v1:${sessionId}`
+);
+
+const LEGACY_ROLLOUT_ID_RE = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl(?:\.zst)?$/i;
+
+/**
+ * Resolve a session's merged high-water boundary across its canonical claim key
+ * and any legacy raw-path or rollout-UUID alias entries.
+ */
+export function resolveCodexBoundary(session, highWater, previous = highWater.get(codexSessionClaimKey(session.id))) {
+  let billed = previous ?? null;
+  for (const [key, counts] of highWater) {
+    const legacyId = LEGACY_ROLLOUT_ID_RE.exec(key)?.[1];
+    if (session.paths?.includes(key) || (legacyId && codexIdentityHash(legacyId) === session.id)) {
+      billed = mergeCodexBoundary(billed, counts);
+    }
+  }
+  return billed;
+}
 
 const DAY_MS = 86_400_000;
 const GIB = 1024 * 1024 * 1024;

@@ -302,4 +302,30 @@ describe('Codex accounting inventory', () => {
     expect(sources.isStaleDatePartition(['2020'], null)).toBe(false);
     expect(sources.isStaleDatePartition(['misc'], recent)).toBe(false);
   });
+
+  it('resolves Codex high-water boundaries across canonical, path, and legacy UUID aliases and formats speed repair ids', () => {
+    const rawUuid = '12345678-1234-1234-1234-123456789abc';
+    const sessionId = sources.codexIdentityHash(rawUuid);
+    const session = { id: sessionId, paths: ['/example/.codex/sessions/2026/07/01/rollout-current.jsonl'] };
+
+    expect(sources.resolveCodexBoundary(session, new Map())).toBeNull();
+
+    const highWater = new Map([
+      [sources.codexSessionClaimKey(sessionId), { messages: 2, tokensIn: 100, tokensOut: 20, fastTokensIn: 50 }],
+      ['/example/.codex/sessions/2026/07/01/rollout-current.jsonl', { messages: 3, tokensIn: 150, tokensOut: 10 }],
+      [`/example/.codex/archived_sessions/rollout-2026-07-01-${rawUuid}.jsonl.zst`, { messages: 1, tokensIn: 90, tokensOut: 40, fastTokensOut: 15 }],
+      ['/example/.codex/sessions/2026/07/01/unrelated.jsonl', { messages: 99, tokensIn: 9999, tokensOut: 9999 }],
+    ]);
+    expect(sources.resolveCodexBoundary(session, highWater)).toEqual({
+      messages: 3,
+      tokensIn: 150,
+      tokensOut: 40,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      fastTokensIn: 50,
+      fastTokensOut: 15,
+    });
+    expect(sources.codexSpeedRepairId(sessionId)).toBe(`codex-speed:v1:${sessionId}`);
+    expect(sources.codexSpeedRepairId(sessionId, '2026-07-01')).toBe(`codex-speed:v1:${sessionId}:2026-07-01`);
+  });
 });
