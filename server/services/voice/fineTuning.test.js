@@ -45,7 +45,11 @@ vi.mock('../../lib/childProcess.js', async (importOriginal) => {
 });
 vi.mock('./qwen3TtsRuntime.js', async (importOriginal) => {
   const actual = await importOriginal();
-  return { ...actual, getQwen3RuntimeStatus: async () => runtimeOverride ?? actual.getQwen3RuntimeStatus() };
+  return {
+    ...actual,
+    resolveQwen3Python: async () => runtimeOverride ? '/example/runtime/python' : actual.resolveQwen3Python(),
+    getQwen3RuntimeStatus: async (python) => runtimeOverride ?? actual.getQwen3RuntimeStatus(python),
+  };
 });
 
 const { listActiveRenders } = await import('../renderActivity.js');
@@ -146,7 +150,7 @@ const checkpointFrame = (jobId, step) => ({
 
 const READY_RUNTIME = Object.freeze({
   ok: true,
-  pythonPath: '/scripted/python',
+  pythonPath: '~/runtime/python',
   trainingAdapter: 'qwen-tts-sft-12hz',
   models: { [BASE_MODEL]: { downloaded: true } },
 });
@@ -155,8 +159,9 @@ const READY_RUNTIME = Object.freeze({
 const useScriptedRunner = () => {
   runtimeOverride = READY_RUNTIME;
   let child = null;
-  spawnOverride = (_command, args, options) => {
+  spawnOverride = (command, args, options) => {
     child = createScriptedChild(options);
+    child.command = command;
     child.args = args;
     return child;
   };
@@ -215,6 +220,7 @@ describe('fineTuning', () => {
     expect(startRes).toMatchObject({ jobId: expect.any(String), status: 'running' });
 
     const child = scripted();
+    expect(child.command).toBe('/example/runtime/python');
     // The runner receives the verified model root and a dataset manifest that
     // pairs each transcribed recording with its text.
     const argValue = (flag) => child.args[child.args.indexOf(flag) + 1];
@@ -710,7 +716,7 @@ describe('fineTuning without a training adapter', () => {
   it('refuses to start before creating a job or spawning when inference is ready but training is not', async () => {
     queryMock.mockResolvedValue({ rows: [{ data: PROFILE }] });
     await seedSourceAudio();
-    runtimeOverride = { ok: true, pythonPath: '/scripted/python', trainingAdapter: null };
+    runtimeOverride = { ok: true, pythonPath: '~/runtime/python', trainingAdapter: null };
     spawnOverride = vi.fn();
 
     await expect(startFineTuningJob({ profileId: PROFILE.id, epochs: 2 }))

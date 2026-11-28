@@ -803,6 +803,7 @@ def main() -> int:
     parser.add_argument("--probe", action="store_true", help="Probe runtime and available models")
     parser.add_argument("--models-dir", type=str, help="Directory containing downloaded model weights")
     parser.add_argument("--mode", choices=["design", "clone", "synthesize", "fine-tuned", "fine-tune"], default="synthesize")
+    parser.add_argument("--stdin-json", action="store_true", help="Read private synthesis inputs as JSON from stdin")
     parser.add_argument("--text", type=str, help="Input text for synthesis")
     parser.add_argument("--instructions", type=str, help="Delivery / voice design instructions")
     parser.add_argument("--seed", type=int, default=42, help="RNG seed")
@@ -847,6 +848,20 @@ def main() -> int:
     if not args.output_wav:
         sys.stderr.write("Error: --output-wav is required for synthesis\n")
         return 1
+
+    if args.stdin_json:
+        fields = ("text", "instructions", "reference_transcript")
+        try:
+            # Node writes UTF-8 even when the platform uses a different locale.
+            payload = json.load(sys.stdin.buffer)
+        except (OSError, ValueError):
+            parser.error("Invalid synthesis JSON on stdin")
+        if not isinstance(payload, dict) or any(
+            payload.get(field) is not None and not isinstance(payload[field], str) for field in fields
+        ):
+            parser.error("Synthesis stdin must contain an object with string or null fields")
+        for field in fields:
+            setattr(args, field, payload.get(field))
 
     return run_synthesis(args)
 

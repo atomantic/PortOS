@@ -1,4 +1,6 @@
 import { EventEmitter } from 'node:events';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 vi.mock('../../lib/childProcess.js', () => ({ spawn: vi.fn() }));
 vi.mock('../../lib/processEnv.js', () => ({
@@ -71,6 +73,33 @@ describe('qwen3TtsRuntime', () => {
     expect(spawn.mock.calls[0][1]).toContain('--probe');
     expect(spawn.mock.calls[0][1]).not.toContain('--download');
     expect(status.trainingAdapter).toBeNull();
+  });
+
+  it('redacts home paths from python, model paths, and probe messages', async () => {
+    const modelId = SUPPORTED_QWEN3_MODELS[0].id;
+    const modelPath = join(homedir(), 'example-model');
+    const executable = join(homedir(), 'example-runtime', 'python3');
+    runnerResponse({ ok: false, error: `Missing ${modelPath}`, models: { [modelId]: { path: modelPath } } });
+
+    const status = await getQwen3RuntimeStatus(executable);
+
+    expect(status).toMatchObject({
+      pythonPath: join('~', 'example-runtime', 'python3'),
+      message: `Missing ${join('~', 'example-model')}`,
+      models: { [modelId]: { path: join('~', 'example-model') } },
+    });
+    expect(spawn.mock.calls[0][0]).toBe(executable);
+  });
+
+  it('redacts home paths from probe failures', async () => {
+    const executable = join(homedir(), 'example-runtime', 'python3');
+    runnerResponse({ error: `Could not run ${executable}` }, 1);
+
+    expect(await getQwen3RuntimeStatus(executable)).toMatchObject({
+      ok: false,
+      pythonPath: join('~', 'example-runtime', 'python3'),
+      error: `Qwen3 runtime failed (code 1): Could not run ${join('~', 'example-runtime', 'python3')}`,
+    });
   });
 
   it('keeps training unavailable when inference is ready but the runner names no adapter', async () => {

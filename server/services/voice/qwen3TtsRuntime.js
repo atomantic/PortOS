@@ -12,6 +12,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from '../../lib/childProcess.js';
 import { ServerError } from '../../lib/errorHandler.js';
+import { scrubHomePath } from '../../lib/homePath.js';
 import { PATHS } from '../../lib/paths.js';
 import { safeChildProcessOptions, whichFirst } from '../../lib/processEnv.js';
 
@@ -66,8 +67,9 @@ export async function resolveQwen3Python() {
 /**
  * Probe runtime health, hardware capabilities, and downloaded model checkpoints.
  */
-export async function getQwen3RuntimeStatus() {
-  const python = await resolveQwen3Python();
+export async function getQwen3RuntimeStatus(pythonPath) {
+  // A training caller can probe the exact executable it intends to launch.
+  const python = pythonPath === undefined ? await resolveQwen3Python() : pythonPath;
   const venvPresent = existsSync(QWEN3_TTS_VENV_PYTHON);
 
   if (!python) {
@@ -95,16 +97,16 @@ export async function getQwen3RuntimeStatus() {
       modelsState[model.id] = {
         ...model,
         downloaded: Boolean(probeModel?.downloaded),
-        path: probeModel?.path || null,
+        path: scrubHomePath(probeModel?.path || null),
       };
     }
 
     return {
       ok: data.ok === true,
       installed: data.ok === true,
-      message: data.error || null,
+      message: scrubHomePath(data.error || null),
       venvPresent,
-      pythonPath: python,
+      pythonPath: scrubHomePath(python),
       hardware: {
         device: data.device || 'cpu',
         cuda: Boolean(data.cuda_available),
@@ -123,12 +125,12 @@ export async function getQwen3RuntimeStatus() {
       ok: false,
       installed: false,
       venvPresent,
-      pythonPath: python,
+      pythonPath: scrubHomePath(python),
       hardware: { device: 'cpu', cuda: false, mps: false, vramGb: null },
       models: {},
       supportedModels: SUPPORTED_QWEN3_MODELS,
       trainingAdapter: null,
-      error: err.message,
+      error: scrubHomePath(err.message),
     };
   }
 }
@@ -151,7 +153,7 @@ function runRuntime(pythonPath, args, timeout = 10000) {
           code: failure.code,
         }));
       }
-      reject(new Error(`Qwen3 runtime failed (code ${code}): ${stderr || stdout}`));
+      reject(new Error(`Qwen3 runtime failed (code ${code}): ${failure?.error || stderr || stdout}`));
     });
     child.on('error', reject);
   });

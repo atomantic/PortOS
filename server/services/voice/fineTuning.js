@@ -32,6 +32,7 @@ import {
   QWEN3_TTS_RUNNER_SCRIPT,
   SUPPORTED_QWEN3_MODELS,
   getQwen3RuntimeStatus,
+  resolveQwen3Python,
 } from './qwen3TtsRuntime.js';
 import { trackedRenderMap } from '../renderActivity.js';
 import {
@@ -323,8 +324,9 @@ export async function startFineTuningJob({
 
   // Refuse before a job record or child exists. Inference readiness is not
   // training support; only a runner that names a real adapter may train.
-  const runtime = await getQwen3RuntimeStatus();
-  if (!runtime.ok || !runtime.pythonPath || !runtime.trainingAdapter) {
+  const python = await resolveQwen3Python();
+  const runtime = await getQwen3RuntimeStatus(python);
+  if (!python || !runtime.ok || !runtime.trainingAdapter) {
     throw new ServerError('Qwen3-TTS fine-tuning is unavailable: no supported training adapter is installed', {
       status: 503,
       code: 'QWEN3_TRAINING_UNAVAILABLE',
@@ -345,11 +347,11 @@ export async function startFineTuningJob({
 
   return queueVoiceProfileLifecycle(profileId, async () => {
     const profile = await getVoiceProfileRequired(profileId);
-    return launchFineTuningJob({ profile, validation, runtime, baseModel, epochs, checkpointInterval });
+    return launchFineTuningJob({ profile, validation, python, trainingAdapter: runtime.trainingAdapter, baseModel, epochs, checkpointInterval });
   });
 }
 
-async function launchFineTuningJob({ profile, validation, runtime, baseModel, epochs, checkpointInterval }) {
+async function launchFineTuningJob({ profile, validation, python, trainingAdapter, baseModel, epochs, checkpointInterval }) {
   assertNoRunningJob(profile.id);
   const dataset = buildTrainingDataset(profile, validation.sourceDir);
   const jobId = randomUUID();
@@ -373,7 +375,7 @@ async function launchFineTuningJob({ profile, validation, runtime, baseModel, ep
     checkpoints: [],
     outputDir,
     baseModel,
-    trainingAdapter: runtime.trainingAdapter,
+    trainingAdapter,
     startedAt: new Date().toISOString(),
     completedAt: null,
     error: null,
@@ -407,7 +409,7 @@ async function launchFineTuningJob({ profile, validation, runtime, baseModel, ep
   // exited, and the run must stay busy until the GPU is released.
   let child;
   try {
-    child = spawn(runtime.pythonPath, args, safeChildProcessOptions());
+    child = spawn(python, args, safeChildProcessOptions());
   } catch (err) {
     Object.assign(jobState, { status: 'failed', error: err.message, completedAt: new Date().toISOString() });
     finalizeJob(jobState);
