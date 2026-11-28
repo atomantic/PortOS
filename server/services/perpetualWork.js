@@ -710,7 +710,7 @@ async function fetchTrustedForgeIssues(cfg, repoPath, { issueAuthorFilter = 'sel
  * runs only when the list is non-empty, so an empty queue parks without a
  * wasted branch/PR scan.
  */
-async function detectForgeIssues(forgeKey, app, { issueAuthorFilter = 'self', issueExcludeLabels = [], issueMinAgeMinutes, requireComplete = false, ignoreTaskId = null } = {}, env) {
+async function detectForgeIssues(forgeKey, app, { issueAuthorFilter = 'self', issueExcludeLabels = [], issueMinAgeMinutes, requireComplete = false, ignoreTaskId = null, prefetchedIssues = null } = {}, env) {
   const cfg = FORGE_ISSUE_CONFIG[forgeKey];
   const repoPath = app?.repoPath;
   if (!repoPath) return { actionable: false, count: 0, reason: 'no-repo-path' };
@@ -724,7 +724,17 @@ async function detectForgeIssues(forgeKey, app, { issueAuthorFilter = 'self', is
     actionable: false, count: 0, total, inFlightCount: 0, filteredCount: 0, items: [], reason
   });
 
-  const listing = await fetchTrustedForgeIssues(cfg, repoPath, { issueAuthorFilter }, env);
+  // Callers that already fetched the same trusted issue list (e.g.
+  // developmentWatchdog.inspectApp) can pass it via `prefetchedIssues` to avoid
+  // a duplicate forge issue-list + actor-trust round trip.
+  const listing = prefetchedIssues?.ok && Array.isArray(prefetchedIssues.issues)
+    ? {
+        issues: prefetchedIssues.issues,
+        truncated: Boolean(prefetchedIssues.truncated),
+        authorApplied: false,
+        resolvedEnv: cfg.cli === 'gh' ? await resolveGithubDetectorEnv(repoPath, env) : env,
+      }
+    : await fetchTrustedForgeIssues(cfg, repoPath, { issueAuthorFilter }, env);
   if (listing.transient) return listing.transient;
   const { resolvedEnv } = listing;
   if (listing.parkedOrgOwner) {

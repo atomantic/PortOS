@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-const m = vi.hoisted(() => ({ state: null, tasks: [], prs: [], backlog: [], peers: [], adds: [], updates: [], save: vi.fn(), branch: '', account: 'atomantic', fullName: 'atomantic/example', execOptions: [], nextPrs: null, prReads: 0, prStates: {}, dependencies: [], dependencyOpen: false, execGhFailureOn: null, invalidGhJsonOn: null, issueTruncated: false, readiness: { shouldRun: true }, requests: [], duplicate: false, prepare: vi.fn(), record: vi.fn(), execution: vi.fn(), metadata: vi.fn() }));
+const m = vi.hoisted(() => ({ state: null, tasks: [], prs: [], backlog: [], peers: [], adds: [], updates: [], save: vi.fn(), branch: '', account: 'atomantic', fullName: 'atomantic/example', execOptions: [], nextPrs: null, prReads: 0, prStates: {}, dependencies: [], dependencyOpen: false, execGhFailureOn: null, invalidGhJsonOn: null, issueTruncated: false, readiness: { shouldRun: true }, requests: [], duplicate: false, prepare: vi.fn(), record: vi.fn(), execution: vi.fn(), metadata: vi.fn(), detectCalls: [] }));
 vi.mock('./cos/cosState.js', () => ({ loadState: async () => m.state, saveState: m.save, withStateLock: async fn => fn(), isImprovementEnabled: state => state.config.improvementEnabled }));
 vi.mock('./apps.js', () => ({ getActiveApps: async () => [{ id: 'app', name: 'Example', repoPath: '/example' }] }));
 vi.mock('./cos/cosTaskStore.js', () => ({ getAllTasks: async () => ({ user: { tasks: [] }, cos: { tasks: m.tasks } }), updateTask: async (id, updates, type, options) => {
@@ -17,7 +17,7 @@ vi.mock('./appPullRequests.js', () => ({ listAppPullRequests: async () => {
   m.onPrRead?.(m.prReads);
   return { pullRequests: m.prReads > 1 && m.nextPrs ? m.nextPrs : m.prs, transient: false };
 } }));
-vi.mock('./perpetualWork.js', async importOriginal => ({ ...(await importOriginal()), detectActionableWork: async () => ({ count: m.backlog.length, items: m.backlog }), listConfiguredForgeIssues: async () => ({ ok: true, truncated: m.issueTruncated, issues: m.backlog.map(i => ({ number: Number(i.ref), labels: [], assignees: [] })) }) }));
+vi.mock('./perpetualWork.js', async importOriginal => ({ ...(await importOriginal()), detectActionableWork: async (_type, _app, opts) => { m.detectCalls.push(opts); return { count: m.backlog.length, items: m.backlog }; }, listConfiguredForgeIssues: async () => ({ ok: true, truncated: m.issueTruncated, issues: m.backlog.map(i => ({ number: Number(i.ref), labels: [], assignees: [] })) }) }));
 vi.mock('./cos/cosTaskClaimWork.js', () => ({
   resolveClaimWorkMetadata: (...args) => m.metadata(...args),
 }));
@@ -56,7 +56,7 @@ import { readPersistentMindMaintenanceContext } from './persistent/persistentMin
 beforeEach(() => {
   m.state = { config: { improvementEnabled: true, persistentMindMaintainer: { enabled: true, appIds: ['app'] }, persistentMindCapabilities: { readPortos: true, createTasks: true }, maxConcurrentAgents: 3 }, agents: {} };
   m.tasks = []; m.prs = []; m.backlog = []; m.peers = []; m.adds = []; m.updates = []; m.branch = ''; m.account = 'atomantic'; m.fullName = 'atomantic/example'; m.execOptions = []; m.save.mockClear(); m.nextPrs = null; m.prReads = 0; m.onPrRead = null; m.prStates = {}; m.dependencies = []; m.dependencyOpen = false; m.execGhFailureOn = null; m.accountFailure = null; m.invalidGhJsonOn = null; m.issueTruncated = false;
-  m.readiness = { shouldRun: true }; m.requests = []; m.duplicate = false;
+  m.readiness = { shouldRun: true }; m.requests = []; m.duplicate = false; m.detectCalls = [];
   m.metadata.mockReset().mockResolvedValue({ metadata: {} });
   m.prepare.mockReset().mockResolvedValue({
     task: { description: 'Scheduled batch', metadata: { app: 'app', analysisType: 'claim-issue', claimFlow: true, swarmCount: 6, perpetual: true, provider: 'example-cli', model: 'example-model', effort: 'high' } },
@@ -614,5 +614,22 @@ describe('development watchdog scan bookkeeping', () => {
     for (let i = 0; i < 26; i++) await runDevelopmentWatchdog({ force: true });
     expect(m.state.developmentWatchdog.history).toHaveLength(24);
     expect(m.state.developmentWatchdog.history.at(-1)).toBe(m.state.developmentWatchdog.latest);
+  });
+
+  it('reuses the fetched issue list in detectActionableWork and skips detection on truncated listings', async () => {
+    m.backlog = [{ ref: '42' }];
+    await runDevelopmentWatchdog({ force: true, dryRun: true });
+    expect(m.detectCalls).toHaveLength(1);
+    expect(m.detectCalls[0].prefetchedIssues).toEqual({
+      ok: true,
+      truncated: false,
+      issues: [{ number: 42, labels: [], assignees: [] }],
+    });
+
+    m.detectCalls = [];
+    m.issueTruncated = true;
+    const receipt = await runDevelopmentWatchdog({ force: true, dryRun: true });
+    expect(receipt.apps[0].blockers).toContain('issue-source-incomplete');
+    expect(m.detectCalls).toHaveLength(0);
   });
 });

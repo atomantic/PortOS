@@ -22,6 +22,17 @@ const forgeAccountFor = (target, app) => isUpstreamOwner(target?.fullName) ? UPS
 // watchdog coordinator there would only race the live session.
 const EXTERNAL_AGENT_BRANCH_RE = /^claude\//;
 const PR_QUIET_WINDOW_MS = 2 * 60 * 60 * 1000;
+// Bound concurrent forge CLI lookups per scan so open PRs and follow-ups do
+// not serialize subprocess latency or spawn unbounded child processes.
+const FORGE_LOOKUP_BATCH = 8;
+
+async function mapBatched(items, concurrency, fn) {
+  const results = [];
+  for (let i = 0; i < items.length; i += concurrency) {
+    results.push(...await Promise.all(items.slice(i, i + concurrency).map(fn)));
+  }
+  return results;
+}
 
 function withActiveAgentOwnership(tasks, peerTasks, agents) {
   const allTasks = [...tasks, ...peerTasks];
@@ -92,9 +103,7 @@ async function participatingPeerTasks() {
   let peers;
   try { peers = (await getPeers()).filter(p => p.enabled !== false && p.fullSync === true); }
   catch { return { tasks: [], blockers: [{ source: 'peer-ownership', reason: 'peer-registry-unavailable' }] }; }
-  const tasks = [];
-  const blockers = [];
-  for (const peer of peers) {
+  const outcomes = await Promise.all(peers.map(async peer => {
     try {
       const response = await peerFetch(`${peerBaseUrl(peer)}/api/peer-sync/cos-tasks`, {
         signal: AbortSignal.timeout(10000), maxBytes: 8 * 1024 * 1024,
@@ -103,10 +112,16 @@ async function participatingPeerTasks() {
       const parsed = peerCosTasksSchema.safeParse(await response.json());
       if (!parsed.success || parsed.data.schemaVersion > PLATFORM_SCHEMA_VERSIONS.cosTasks
         || parsed.data.tasks.length >= 50000) throw new Error('incomplete');
-      tasks.push(...parsed.data.tasks);
+      return { tasks: parsed.data.tasks, blocker: null };
     } catch {
-      blockers.push({ source: 'peer-ownership', reason: 'participating-peer-unavailable-or-incomplete', peerId: peer.id });
+      return { tasks: [], blocker: { source: 'peer-ownership', reason: 'participating-peer-unavailable-or-incomplete', peerId: peer.id } };
     }
+  }));
+  const tasks = [];
+  const blockers = [];
+  for (const outcome of outcomes) {
+    if (outcome.blocker) blockers.push(outcome.blocker);
+    else tasks.push(...outcome.tasks);
   }
   return { tasks, blockers };
 }
@@ -134,17 +149,26 @@ async function inspectApp(app, tasks, localReviewTasks = [], activeAgentTaskIds 
   // Every downstream resolver receives the same explicit account pin.
   const pinned = { ...app, forgeAccount: account };
   const { metadata: preview } = await resolveClaimWorkMetadata(pinned, 'claim-issue');
-  const [prs, backlog, branches, issues] = await Promise.all([
+  const [prs, branches, issues] = await Promise.all([
     listAppPullRequests(pinned),
-    detectActionableWork('claim-issue', pinned, { issueAuthorFilter: preview.issueAuthorFilter, issueExcludeLabels: preview.issueExcludeLabels, issueMinAgeMinutes: preview.issueMinAgeMinutes, requireComplete: true }),
     execGit(['ls-remote', '--heads', 'origin'], app.repoPath),
     listConfiguredForgeIssues('gh', pinned, { issueAuthorFilter: preview.issueAuthorFilter, issueExcludeLabels: preview.issueExcludeLabels }, exec.env),
   ]);
   if (!issues.ok || issues.truncated || issues.issues.some(issue => !Number.isInteger(issue.number) || !Array.isArray(issue.labels) || !Array.isArray(issue.assignees))) { row.blockers.push('issue-source-incomplete'); return row; }
-  if (prs.transient || backlog.transient) { row.blockers.push(prs.transient ? prs.reason : backlog.reason); return row; }
+  if (prs.transient) { row.blockers.push(prs.reason); return row; }
+  // Reuse the already-fetched issue listing so claim detection skips a duplicate
+  // `gh issue list` + actor-trust pass on every app inspection.
+  const backlog = await detectActionableWork('claim-issue', pinned, {
+    issueAuthorFilter: preview.issueAuthorFilter,
+    issueExcludeLabels: preview.issueExcludeLabels,
+    issueMinAgeMinutes: preview.issueMinAgeMinutes,
+    requireComplete: true,
+    prefetchedIssues: issues,
+  });
+  if (backlog.transient) { row.blockers.push(backlog.reason); return row; }
   const trust = await createGithubActorTrust({ runGh: (args, timeout) => execGh(args, timeout, exec), host: target.apiHost, repoFullName: target.fullName });
   const active = tasks.filter(task => DEVELOPMENT_ACTIVE_STATUSES.has(task.status));
-  for (const pr of prs.pullRequests) {
+  row.pullRequests = await mapBatched(prs.pullRequests, FORGE_LOOKUP_BATCH, async pr => {
     const owner = active.find(task => sameDevelopmentWork(task, ownershipTask(app, pr)));
     let disposition = 'eligible';
     let unknownReason = 'external-claim-owner-unverified';
@@ -174,9 +198,9 @@ async function inspectApp(app, tasks, localReviewTasks = [], activeAgentTaskIds 
       if (!Number.isFinite(updatedAt)) { disposition = 'unknown'; unknownReason = 'activity-time-unverified'; }
       else if (Date.now() - updatedAt < PR_QUIET_WINDOW_MS) disposition = 'recently-active';
     }
-    row.pullRequests.push({ number: pr.number, headSha: pr.headSha, fingerprint: JSON.stringify([pr.headSha, pr.reviewDecision, pr.mergeStateStatus, pr.checks, pr.labels]), disposition, taskId: owner?.id || null,
-      reason: owner?.metadata?.blockedCategory || (disposition === 'unknown' ? unknownReason : null), url: pr.url, headBranch: pr.headBranch, forkHead: pr.forkHead });
-  }
+    return { number: pr.number, headSha: pr.headSha, fingerprint: JSON.stringify([pr.headSha, pr.reviewDecision, pr.mergeStateStatus, pr.checks, pr.labels]), disposition, taskId: owner?.id || null,
+      reason: owner?.metadata?.blockedCategory || (disposition === 'unknown' ? unknownReason : null), url: pr.url, headBranch: pr.headBranch, forkHead: pr.forkHead };
+  });
   if (localReviewTasks.length) {
     const { getPullRequestState } = await import('./github.js');
     const openNumbers = new Set(row.pullRequests.map(pr => Number(pr.number)));
@@ -184,13 +208,13 @@ async function inspectApp(app, tasks, localReviewTasks = [], activeAgentTaskIds 
       && task.metadata?.app === app.id && !activeAgentTaskIds.has(task.id))
       .map(task => ({ task, number: reviewFollowUpPrNumber(task, target) }))
       .filter(candidate => candidate.number && !openNumbers.has(candidate.number));
-    const states = new Map();
+    const uniqueNumbers = [...new Set(candidates.map(candidate => candidate.number))];
+    const fetchedStates = await mapBatched(uniqueNumbers, FORGE_LOOKUP_BATCH, async number => [
+      number,
+      await getPullRequestState(String(number), { cwd: app.repoPath, env: exec.env }).catch(() => null),
+    ]);
+    const states = new Map(fetchedStates);
     for (const candidate of candidates) {
-      if (!states.has(candidate.number)) {
-        states.set(candidate.number, await getPullRequestState(String(candidate.number), {
-          cwd: app.repoPath, env: exec.env,
-        }).catch(() => null));
-      }
       const state = states.get(candidate.number);
       if (state?.status === 'known' && ['MERGED', 'CLOSED'].includes(state.state)) {
         row.terminalReviewFollowUps.push({ taskId: candidate.task.id, prNumber: candidate.number, prState: state.state, status: candidate.task.status });
@@ -299,9 +323,12 @@ async function dispatch(app, decision) {
   const body = await execGh([decision.kind === 'pr' ? 'pr' : 'issue', 'view', String(item.number), '--repo', target.repoSpec, '--json', 'body'], undefined, exec)
     .then(parseGithubJson).catch(() => null);
   if (!body || typeof body.body !== 'string') return { reason: 'forge-read-failed' };
-  for (const number of parseBlockingIssueNumbers(body.body)) {
-    const dependency = await execGh(['issue', 'view', String(number), '--repo', target.repoSpec, '--json', 'state'], undefined, exec)
-      .then(parseGithubJson).catch(() => null);
+  const blockingNumbers = parseBlockingIssueNumbers(body.body);
+  const dependencies = await mapBatched(blockingNumbers, FORGE_LOOKUP_BATCH, number =>
+    execGh(['issue', 'view', String(number), '--repo', target.repoSpec, '--json', 'state'], undefined, exec)
+      .then(parseGithubJson).catch(() => null),
+  );
+  for (const dependency of dependencies) {
     if (!dependency || typeof dependency.state !== 'string') return { reason: 'dependency-read-failed' };
     if (dependency.state !== 'CLOSED') return { reason: 'open-dependency' };
   }
