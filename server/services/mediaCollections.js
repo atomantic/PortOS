@@ -37,9 +37,9 @@ export {
   updateCollection,
 } from './mediaCollections/collectionEdits.js';
 export {
-  CATALOG_TYPE_COLLECTIONS, EXTERNAL_COLLECTION_ID, commissionCollectionId,
+  AVATAR_COLLECTION_ID, CATALOG_TYPE_COLLECTIONS, EXTERNAL_COLLECTION_ID, commissionCollectionId,
   commissionCollectionNameFor, findCollectionBySeriesId, findCollectionByUniverseId,
-  findOrCreateCatalogTypeCollection, findOrCreateCollectionByName,
+  findOrCreateAvatarCollection, findOrCreateCatalogTypeCollection, findOrCreateCollectionByName,
   findOrCreateCommissionCollection, findOrCreateCompositionsCollection, findOrCreateDeckCollection,
   findOrCreateExternalCollection, findOrCreateFableLoomCollection, findOrCreateMoodBoardCollection,
   findOrCreateMusicVideoCollection, findOrCreateSeriesCollection, findOrCreateSpriteCollection,

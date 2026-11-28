@@ -20,6 +20,7 @@ vi.mock('./avatarInstall.js', () => ({
   installAvatar,
 }));
 vi.mock('./avatarWorker.js', () => ({
+  DEFAULT_PORTRAIT_KEY: 'default',
   avatarError: message => new Error(message),
   openAvatarWorker,
 }));

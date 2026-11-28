@@ -17,7 +17,10 @@ const avatarTarget = /^\d{1,5}$/.test(process.env.PORTOS_TEST_AVATAR_PORT ?? '')
 const avatarWav = avatarTarget && process.env.PORTOS_TEST_AVATAR_WAV ? readFileSync(process.env.PORTOS_TEST_AVATAR_WAV) : null;
 const root = fileURLToPath(new URL('../..', import.meta.url));
 const config = {
-  enabled: true, stt: { engine: 'whisper' }, llm: { provider: 'fixture', model: 'fixture-model' },
+  // Trigger-tier navigation answers a typed "open voice call" locally with spoken TTS, which
+  // drives the speech avatar path without the server voice pipeline.
+  enabled: true, stt: { engine: 'whisper' },
+  llm: { provider: 'fixture', model: 'fixture-model', fastPath: { enabled: true, triggers: true } },
   tts: { engine: 'piper', piper: { voice: 'fixture-voice' } },
 };
 function sampleWave() {
@@ -71,6 +74,11 @@ function stubApi(page, enabled = true, avatar = {}) {
       '/api/notifications': { notifications: [], count: 0 },
       '/api/voice/config': { ...config, enabled },
       '/api/voice/avatar/status': avatar.status ?? { supported: true, installed: true, phase: 'running' },
+      '/api/voice/avatar/library': {
+        collectionId: 'avatars', collectionName: 'Avatars', avatars: [], active: 0,
+        channels: Array.from({ length: 6 }, () => ({ label: '', avatar: null })),
+      },
+      '/api/palette/manifest': { nav: [{ id: 'nav.settings.voice-call', path: '/voice/call', label: 'Voice Call' }] },
       '/api/voice/status': { services: {} },
       '/api/local-llm/conversational-gemma/status': { supported: true, llamaInstalled: false, ggufExists: false, running: false, phase: 'idle' },
       '/api/providers': { providers: [{ id: 'fixture', name: 'Test provider', type: 'api', models: ['fixture-model', 'fixture-alternate'] }] },
@@ -78,6 +86,12 @@ function stubApi(page, enabled = true, avatar = {}) {
     };
     return route.fulfill({ json: responses[path] || {} });
   });
+}
+
+// Speak one assistant line: a typed navigation turn the trigger tier answers out loud.
+async function speakLine(page) {
+  await page.getByRole('textbox', { name: 'Message to the voice assistant' }).fill('open voice call');
+  await page.getByRole('button', { name: 'Send', exact: true }).click();
 }
 
 describe.skipIf(!chrome)('Voice Call console in Chrome', () => {
@@ -189,8 +203,8 @@ describe.skipIf(!chrome)('Voice Call console in Chrome', () => {
         if (req.url().endsWith('/api/voice/avatar/frames') || req.url().endsWith('/api/voice/avatar/idle')) requests.push(req.url());
       });
       const speech = page.waitForRequest(req => req.url().endsWith('/api/voice/public/synthesize'));
-      await page.getByRole('button', { name: 'Play sample' }).click();
-      expect((await speech).postDataJSON().text).toContain('PortOS radio check');
+      await speakLine(page);
+      expect((await speech).postDataJSON().text).toContain('Opening Voice Call');
       await page.getByText('Speaking', { exact: true }).waitFor();
       expect(requests).toEqual([]);
       expect(await page.locator('canvas[width="512"]').isVisible()).toBe(false);
@@ -239,7 +253,14 @@ describe.skipIf(!chrome)('Voice Call console in Chrome', () => {
       ]);
       return request;
     }
-    async function playSampleWithoutAvatar(phase) {
+    async function speakAndWaitForPost(path, phase) {
+      const [request] = await Promise.all([
+        waitForPost(path, phase),
+        step(`a spoken reply ${phase}`, () => speakLine(page)),
+      ]);
+      return request;
+    }
+    async function speakWithoutAvatar(phase) {
       const requests = [];
       const recordAvatarRequest = req => {
         if (req.url().endsWith('/api/voice/avatar/frames') || req.url().endsWith('/api/voice/avatar/idle')) requests.push(req.url());
@@ -247,7 +268,7 @@ describe.skipIf(!chrome)('Voice Call console in Chrome', () => {
       page.on('request', recordAvatarRequest);
       try {
         await step(`Speaking ${phase} with the canvas hidden`, async () => {
-          await button('Play sample').click();
+          await speakLine(page);
           await status('Speaking').waitFor();
           expect(requests).toEqual([]);
           expect(await canvas.isVisible()).toBe(false);
@@ -255,7 +276,7 @@ describe.skipIf(!chrome)('Voice Call console in Chrome', () => {
       } finally {
         page.off('request', recordAvatarRequest);
       }
-      await step(`Interrupt to end the sample ${phase}`, () => button('Interrupt').click());
+      await step(`Interrupt to end the reply ${phase}`, () => button('Interrupt').click());
     }
     const canvas = page.locator('canvas[width="512"]');
     try {
@@ -270,9 +291,9 @@ describe.skipIf(!chrome)('Voice Call console in Chrome', () => {
       });
       const noFrames = page.getByText('No avatar frames arrived.', { exact: false });
       if (!avatarTarget) {
-        await clickAndWaitForPost('Play sample', '/api/voice/avatar/frames', 'with the renderer unavailable');
+        await speakAndWaitForPost('/api/voice/avatar/frames', 'with the renderer unavailable');
         await step('the No avatar frames arrived warning', () => noFrames.waitFor());
-        await step('Interrupt to end the unavailable-renderer sample', async () => {
+        await step('Interrupt to end the unavailable-renderer reply', async () => {
           await button('Interrupt').click();
           expect(await canvas.isVisible()).toBe(false);
         });
@@ -285,7 +306,7 @@ describe.skipIf(!chrome)('Voice Call console in Chrome', () => {
         ctx.fillRect(0, 0, 2, 2);
         return tile.toDataURL('image/jpeg').split(',')[1];
       }));
-      const request = await clickAndWaitForPost('Play sample', '/api/voice/avatar/frames', 'with speech frames available');
+      const request = await speakAndWaitForPost('/api/voice/avatar/frames', 'with speech frames available');
       expect(request.postDataBuffer().subarray(0, 4).toString()).toBe('RIFF');
       await step('a visible canvas painted with speech frames', async () => {
         await canvas.waitFor({ state: 'visible' });
@@ -305,7 +326,7 @@ describe.skipIf(!chrome)('Voice Call console in Chrome', () => {
         await page.emulateMedia({ reducedMotion: 'reduce' });
         await canvas.waitFor({ state: 'hidden' });
       });
-      await playSampleWithoutAvatar('with reduced motion enabled');
+      await speakWithoutAvatar('with reduced motion enabled');
       await Promise.all([
         waitForPost('/api/voice/avatar/idle', 'after restoring motion'),
         step('motion preferences to be restored', () => page.emulateMedia({ reducedMotion: 'no-preference' })),
@@ -320,7 +341,7 @@ describe.skipIf(!chrome)('Voice Call console in Chrome', () => {
           await status('Still portrait').waitFor();
           await canvas.waitFor({ state: 'hidden' });
         });
-        await playSampleWithoutAvatar('after runtime Stop');
+        await speakWithoutAvatar('after runtime Stop');
       }
     } finally {
       await page.close();
@@ -373,9 +394,10 @@ describe.skipIf(!chrome)('Voice Call console in Chrome', () => {
           return box.left >= frame.left && box.right <= frame.right;
         });
       })).toBe(true);
-      await consoleView.getByRole('button', { name: 'Avatar', exact: true }).click();
-      expect(await consoleView.getByRole('img', { name: 'Radio operator portrait' }).count()).toBe(0);
-      expect(await consoleView.getByRole('button', { name: 'Avatar', exact: true }).getAttribute('aria-pressed')).toBe('false');
+      // The portrait is always on; the transceiver offers channels instead of an audio-only toggle.
+      await consoleView.getByRole('img', { name: 'Radio operator portrait' }).waitFor();
+      expect(await consoleView.getByRole('button', { name: /^Avatar$|Play sample/ }).count()).toBe(0);
+      await consoleView.getByRole('list', { name: 'Transceiver channels' }).waitFor();
       await page.getByRole('button', { name: 'Model & voice settings' }).click();
       await page.getByLabel('LLM model', { exact: true }).waitFor();
       const model = page.getByLabel('LLM model', { exact: true });

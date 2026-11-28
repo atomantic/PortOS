@@ -10,6 +10,9 @@ const maxSpeakFrames = 400;
 const maxIdleFrames = 1500;
 const speakTimeoutMs = 35_000;
 const idleStallTimeoutMs = 15_000;
+const portraitTimeoutMs = 20_000;
+// The portrait the worker launched with (the bundled call portrait).
+export const DEFAULT_PORTRAIT_KEY = 'default';
 
 export function openAvatarWorker(python, onClose, launch = spawn) {
   const child = launch('/usr/bin/sandbox-exec', ['-p', denyNetwork, python, '-uB', avatarScript('stream'), avatarWeights, avatarPortrait],
@@ -18,6 +21,9 @@ export function openAvatarWorker(python, onClose, launch = spawn) {
   let ready = false;
   let expectedStop = false;
   let startError;
+  let portraitKey = DEFAULT_PORTRAIT_KEY;
+  // A portrait the model refused keeps the previous face instead of failing every render.
+  let refusedPortraitKey = null;
   const send = (message) => child.stdin.write(JSON.stringify(message) + '\n');
   const terminate = () => child.kill('SIGKILL');
   const armTimer = (entry, timeoutMs) => {
@@ -77,10 +83,13 @@ export function openAvatarWorker(python, onClose, launch = spawn) {
           if (active.kind === 'idle') armTimer(active, idleStallTimeoutMs);
           active.onFrame({ index: event.index, timeMs: event.timeMs, jpeg: event.jpeg });
         } else if (event.type === 'done' || event.type === 'cancelled') {
+          if (active.kind === 'portrait' && event.type === 'done') portraitKey = active.portraitKey;
           cleanupRender();
         } else if (event.type === 'error') {
           cleanupRender(avatarError(
-            active.kind === 'idle' ? 'AvatarForcing could not animate idle frames.' : 'AvatarForcing could not animate this audio.',
+            active.kind === 'idle' ? 'AvatarForcing could not animate idle frames.'
+              : active.kind === 'portrait' ? 'AvatarForcing could not load this avatar portrait.'
+                : 'AvatarForcing could not animate this audio.',
             422,
           ));
         }
@@ -90,12 +99,13 @@ export function openAvatarWorker(python, onClose, launch = spawn) {
     }
   });
 
-  const startRender = ({ kind, maxFrames, timeoutMs, command, onFrame, signal }) => {
+  const startRender = ({ kind, maxFrames, timeoutMs, command, onFrame, signal, portraitKey: nextPortrait }) => {
     const { promise, resolve, reject } = Promise.withResolvers();
     const id = randomUUID();
     const entry = {
       id, kind, maxFrames, promise, resolve, reject, signal, onFrame,
       next: 0, preempted: false, cancelSent: false, timer: null, cancelTimer: null, abort: null,
+      portraitKey: nextPortrait,
     };
     entry.abort = () => cancelActive(entry);
     armTimer(entry, timeoutMs);
@@ -105,23 +115,52 @@ export function openAvatarWorker(python, onClose, launch = spawn) {
     return promise;
   };
 
+  // Swap the face the model animates before a render, while nothing else is active.
+  // `portrait` is { key, load } where load() resolves a 512px JPEG Buffer, or null for
+  // the launch portrait. Returns false when another render claimed the worker meanwhile.
+  const portraitCurrent = (portrait) => !portrait || portrait.key === portraitKey || portrait.key === refusedPortraitKey;
+  const ensurePortrait = async (portrait, signal) => {
+    if (portraitCurrent(portrait)) return true;
+    const jpeg = portrait.key === DEFAULT_PORTRAIT_KEY ? null : await portrait.load();
+    const key = jpeg ? portrait.key : DEFAULT_PORTRAIT_KEY;
+    if (active || signal.aborted || !ready) return false;
+    if (key === portraitKey) return true;
+    await startRender({
+      kind: 'portrait',
+      maxFrames: 0,
+      timeoutMs: portraitTimeoutMs,
+      command: { type: 'portrait', jpeg: jpeg ? jpeg.toString('base64') : null },
+      onFrame: () => {},
+      signal,
+      portraitKey: key,
+    }).catch((error) => {
+      if (error?.status !== 422) throw error;
+      refusedPortraitKey = portrait.key;
+    });
+    return true;
+  };
+
   return {
     warmed,
+    get portraitKey() { return portraitKey; },
     stop() { expectedStop = true; terminate(); },
-    async render(wav, { onFrame, signal }) {
-      // Preempt continuous idle or wait for an already-aborted turn to unwind,
-      // never waiting on another tab's live speech request.
-      while (active && (active.signal.aborted || active.kind === 'idle')) {
-        const current = active;
-        if (current.kind === 'idle') {
-          current.preempted = true;
-          cancelActive(current);
+    async render(wav, { onFrame, signal, portrait }) {
+      for (;;) {
+        // Preempt continuous idle or wait for an already-aborted turn (or a portrait
+        // swap) to unwind, never waiting on another tab's live speech request.
+        while (active && (active.signal.aborted || active.kind === 'idle' || active.kind === 'portrait')) {
+          const current = active;
+          if (current.kind === 'idle') {
+            current.preempted = true;
+            cancelActive(current);
+          }
+          await current.promise.catch(() => {});
         }
-        await current.promise.catch(() => {});
+        if (!ready) throw avatarError('Start AvatarForcing before animating.', 503);
+        if (active) throw avatarError('AvatarForcing is already animating.');
+        if (signal.aborted) return;
+        if (portraitCurrent(portrait) || await ensurePortrait(portrait, signal)) break;
       }
-      if (!ready) throw avatarError('Start AvatarForcing before animating.', 503);
-      if (active) throw avatarError('AvatarForcing is already animating.');
-      if (signal.aborted) return;
       await startRender({
         kind: 'speak',
         maxFrames: maxSpeakFrames,
@@ -131,17 +170,23 @@ export function openAvatarWorker(python, onClose, launch = spawn) {
         signal,
       });
     },
-    async renderIdle({ stage = 'idle', onFrame, signal }) {
+    async renderIdle({ stage = 'idle', onFrame, signal, portrait }) {
       if (!ready) throw avatarError('Start AvatarForcing before animating.', 503);
       if (signal.aborted) return;
       if (active?.kind === 'speak') return;
-      while (active?.kind === 'idle') {
+      while (active?.kind === 'idle' || active?.kind === 'portrait') {
         const current = active;
-        current.preempted = true;
-        cancelActive(current);
+        if (current.kind === 'idle') {
+          current.preempted = true;
+          cancelActive(current);
+        }
         await current.promise.catch(() => {});
       }
       if (!ready || signal.aborted || active) return;
+      if (!portraitCurrent(portrait)) {
+        if (!await ensurePortrait(portrait, signal)) return;
+        if (!ready || signal.aborted || active) return;
+      }
       await startRender({
         kind: 'idle',
         maxFrames: maxIdleFrames,

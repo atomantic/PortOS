@@ -16,7 +16,7 @@ import numpy as np
 from PIL import Image
 
 from motion import FRAMES_PER_SECOND, IDLE_STAGE_PARAMS, SAMPLE_RATE
-from render import frames, idle_frames, prepare, prepare_silence, read_wave
+from render import frames, idle_frames, prepare, prepare_silence, read_wave, with_portrait
 
 # More than enough for a short mono TTS sentence; refuse over-sized messages
 # without reading an unbounded line into memory.
@@ -75,6 +75,8 @@ class PipeProtocol:
                     continue
                 if kind == "speak" and isinstance(item.get("wav"), str):
                     payload = item["wav"]
+                elif kind == "portrait" and (item.get("jpeg") is None or isinstance(item.get("jpeg"), str)):
+                    payload = item.get("jpeg")
                 elif kind == "idle":
                     stage = item.get("stage", "idle")
                     if not isinstance(stage, str) or stage not in IDLE_STAGE_PARAMS:
@@ -82,7 +84,7 @@ class PipeProtocol:
                         continue
                     payload = stage
                 else:
-                    self.send("error", id=request, message="Expected a speak, idle, or cancel request")
+                    self.send("error", id=request, message="Expected a speak, idle, portrait, or cancel request")
                     continue
                 with self.lock:
                     busy = self.active is not None
@@ -107,10 +109,30 @@ def encode_jpeg(frame):
     return base64.b64encode(output.getvalue()).decode("ascii")
 
 
-def output_request(protocol, kind, request, stopped, payload, prepared, silence_window, worker_state, args):
+def swap_portrait(protocol, request, payload, worker_state, args):
+    """Animate a new face: None restores the launch portrait. Always completes as done, even
+    if a cancel raced it, because the swap itself is not interruptible."""
+    try:
+        source = args.portrait if payload is None else io.BytesIO(base64.b64decode(payload, validate=True))
+        worker_state["prepared"] = with_portrait(worker_state["prepared"], source, args)
+        # Rolling motion history belongs to the previous face.
+        worker_state["context"] = None
+        protocol.finish(request, False)
+    except (ValueError, RuntimeError, OSError) as error:
+        print(f"Avatar portrait failed: {error}", file=sys.stderr, flush=True)
+        with protocol.lock:
+            protocol.active = None
+        protocol.send("error", id=request, message="Avatar portrait could not be loaded")
+
+
+def output_request(protocol, kind, request, stopped, payload, silence_window, worker_state, args):
     def save_context(context):
         worker_state["context"] = context
 
+    if kind == "portrait":
+        swap_portrait(protocol, request, payload, worker_state, args)
+        return
+    prepared = worker_state["prepared"]
     try:
         seq = 0
         seed = worker_state["seed"]
@@ -176,7 +198,7 @@ def main():
     with contextlib.redirect_stdout(sys.stderr):
         prepared = prepare(args)
         silence_window = prepare_silence(prepared, args)
-        worker_state = {"context": None, "seed": args.seed}
+        worker_state = {"context": None, "seed": args.seed, "prepared": prepared}
         # Warm the graphics and speech graphs with synthetic silence before
         # advertising the worker as ready, seeding the initial rolling history.
         warmup = np.zeros(SAMPLE_RATE * 2, dtype=np.float32)
@@ -186,7 +208,7 @@ def main():
         reader = threading.Thread(target=protocol.read, daemon=True)
         reader.start()
         while request := protocol.pending.get():
-            output_request(protocol, *request, prepared, silence_window, worker_state, args)
+            output_request(protocol, *request, silence_window, worker_state, args)
         reader.join()
 
 

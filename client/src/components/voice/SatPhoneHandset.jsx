@@ -1,4 +1,6 @@
 import { useState } from 'react';
+import { saveAvatarChannels } from '../../services/apiVoiceAvatar';
+import { activeChannelOf, useAvatarLibrary } from './useAvatarLibrary';
 import { SatPhoneFaceplate, SatPhoneSetup, SatPhoneSpeaker } from './SatPhoneFaceplate';
 import SatPhoneViewfinder from './SatPhoneViewfinder';
 import { SatPhoneActionKeys, SatPhoneTalkPaddle, SatPhoneTelemetry } from './SatPhoneControls';
@@ -9,7 +11,9 @@ import SatPhoneConversation from './SatPhoneConversation';
  *
  * Shared between the bottom-left floating voice agent (`variant="floating"`)
  * and the dedicated full-page Voice Call station (`variant="page"`). Every
- * indicator, dial, paddle, and key maps to real voice/audio functionality.
+ * indicator, dial, paddle, and key maps to real voice/audio functionality. The
+ * channel key steps through the transceiver channels; each channel wears an
+ * avatar from the shared Avatars collection on the viewfinder.
  */
 export default function SatPhoneHandset({
   variant = 'floating',
@@ -28,14 +32,11 @@ export default function SatPhoneHandset({
   onMode,
   onInterrupt,
   onEnd,
-  onSample,
   onClear,
   voiceLabel,
   llmProvider,
   llmModel,
   onLlmSaved,
-  avatar,
-  onToggleAvatar,
   avatarData,
   avatarError,
   onUpdateAvatarData,
@@ -62,6 +63,12 @@ export default function SatPhoneHandset({
   onMinimizeMobile,
 }) {
   const [showFloatingAvatarSetup, setShowFloatingAvatarSetup] = useState(false);
+  const { data: library, updateData: updateLibrary } = useAvatarLibrary();
+  const channel = activeChannelOf(library);
+  const channelCount = library?.channels?.length ?? 0;
+  const nextChannel = channelCount > 1
+    ? () => saveAvatarChannels({ active: ((channel?.index ?? 0) + 1) % channelCount }).then(updateLibrary).catch(() => {})
+    : undefined;
   const isFloating = variant === 'floating';
   const caption = interimTranscript || history.at(-1)?.text;
   const liveAttr = capturing ? 'tx' : (stage === 'speaking' || stage === 'thinking') ? 'rx' : 'idle';
@@ -97,7 +104,6 @@ export default function SatPhoneHandset({
           isFloating={isFloating}
           stage={stage}
           capturing={capturing}
-          avatar={avatar}
           runningAvatar={runningAvatar}
           avatarData={avatarData}
           showAvatarSetup={showFloatingAvatarSetup}
@@ -121,7 +127,8 @@ export default function SatPhoneHandset({
 
         <div className="flex items-stretch gap-1.5 min-w-0">
           <SatPhoneViewfinder
-            avatar={avatar}
+            avatarFilename={channel?.avatar ?? null}
+            channel={channel}
             runningAvatar={runningAvatar}
             stage={stage}
             capturing={capturing}
@@ -143,9 +150,9 @@ export default function SatPhoneHandset({
           handsFree={handsFree}
           canChangeMicMode={canChangeMicMode}
           onMode={onMode}
-          onSample={onSample}
-          avatar={avatar}
-          onToggleAvatar={onToggleAvatar}
+          channel={channel}
+          channelCount={channelCount}
+          onNextChannel={nextChannel}
           volume={volume}
           muted={muted}
           voiceLabel={voiceLabel}
@@ -164,7 +171,6 @@ export default function SatPhoneHandset({
           onToggleMute={onToggleMute}
           visionEnabled={visionEnabled}
           onToggleVision={onToggleVision}
-          onSample={onSample}
           onInterrupt={onInterrupt}
           onEnd={onEnd}
         />
@@ -177,14 +183,12 @@ export default function SatPhoneHandset({
 
         {isFloating && (
           <SatPhoneConversation
-            stage={stage}
             history={history}
             scrollRef={scrollRef}
             interimTranscript={interimTranscript}
             draft={draft}
             onDraft={onDraft}
             onSend={onSend}
-            onSample={onSample}
             onClear={onClear}
             collapsed={collapsed}
             onToggleCollapsed={onToggleCollapsed}

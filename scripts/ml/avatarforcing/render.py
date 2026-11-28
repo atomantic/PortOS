@@ -80,6 +80,18 @@ def decode_blocks(blocks, appearance, identity, pyramid, frame_batch, cancelled)
 
 
 @torch.inference_mode()
+def with_portrait(prepared, source, args):
+    """Re-encode the identity the model animates from another portrait, reusing the loaded weights."""
+    appearance, motion, model, _, _, _ = prepared
+    dtype = torch.float16 if args.half else torch.float32
+    identity, pyramid = encode(tensor_image(source, args.device).to(dtype), appearance)
+    initial_motion = project_motion(identity, appearance)
+    if not identity.isfinite().all().item():
+        raise ValueError("Portrait produced a nonfinite identity")
+    return appearance, motion, model, identity, pyramid, initial_motion
+
+
+@torch.inference_mode()
 def prepare_silence(prepared, args):
     _, motion, model, _, _, _ = prepared
     zeros = torch.zeros((1, SAMPLE_RATE * WINDOW // FRAMES_PER_SECOND), dtype=torch.float32, device=args.device)

@@ -1,12 +1,10 @@
 import { useState } from 'react';
-import { Play, Radio, Send, Settings2, Trash2 } from 'lucide-react';
+import { Radio, Send, Settings2, Trash2 } from 'lucide-react';
+import AvatarChannelsPanel from './AvatarChannelsPanel';
 import AvatarRuntimeSettings from './AvatarRuntimeSettings';
 import SatPhoneHandset from './SatPhoneHandset';
 import VoiceLlmQuickPicker from './VoiceLlmQuickPicker';
 import { useAvatarRuntime } from './useAvatarRuntime';
-import { safeReadStorage, safeWriteStorage } from '../../lib/safeStorage';
-
-const DISPLAY_KEY = 'portos.voice.callDisplay';
 
 function StationTelemetry({
   voiceLabel,
@@ -14,13 +12,12 @@ function StationTelemetry({
   handsFree,
   volume,
   muted,
-  avatar,
   runningAvatar,
   showAvatarSettings,
   onToggleAvatarSettings,
 }) {
   const captureMode = !canChangeMicMode ? 'Web Speech' : handsFree ? 'Hands-free (VOX)' : 'Push-to-talk';
-  const avatarStatus = !avatar ? 'Audio only' : runningAvatar ? 'AvatarForcing live' : 'Still portrait';
+  const avatarStatus = runningAvatar ? 'AvatarForcing live' : 'Still portrait';
 
   return (
     <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
@@ -43,13 +40,13 @@ function StationTelemetry({
             <span
               aria-hidden="true"
               className={`h-1.5 w-1.5 shrink-0 rounded-full ${
-                runningAvatar ? 'bg-port-accent shadow-[0_0_6px_rgb(var(--port-accent))]' : avatar ? 'bg-port-success' : 'bg-port-text-muted'
+                runningAvatar ? 'bg-port-accent shadow-[0_0_6px_rgb(var(--port-accent))]' : 'bg-port-success'
               }`}
             />
             <span className="truncate" title={avatarStatus}>{avatarStatus}</span>
           </p>
         </div>
-        {avatar && runningAvatar && (
+        {runningAvatar && (
           <button
             type="button"
             onClick={onToggleAvatarSettings}
@@ -72,19 +69,13 @@ function StationTelemetry({
 
 export default function VoiceCallConsole({
   stage, history, scrollRef, interimTranscript, capturing, handsFree, canChangeMicMode,
-  hotkey, draft, onDraft, onSend, onMic, onMode, onInterrupt, onEnd, onSample, onClear,
+  hotkey, draft, onDraft, onSend, onMic, onMode, onInterrupt, onEnd, onClear,
   voiceLabel, llmProvider, llmModel, onLlmSaved, volume = 0.85, muted = false, onVolumeChange, onToggleMute,
   sfxEnabled = true, onToggleSfx, signalLevel = 0, visionEnabled = false, onToggleVision,
 }) {
-  const [avatar, setAvatar] = useState(() => safeReadStorage(DISPLAY_KEY) !== 'audio');
   const [showAvatarSettings, setShowAvatarSettings] = useState(false);
-  const { data, error, updateData, refetch } = useAvatarRuntime(avatar);
+  const { data, error, updateData, refetch } = useAvatarRuntime();
   const runningAvatar = Boolean(!error && data?.supported && data.phase === 'running');
-
-  const toggleAvatar = () => {
-    safeWriteStorage(DISPLAY_KEY, avatar ? 'audio' : 'avatar');
-    setAvatar(!avatar);
-  };
 
   return (
     <section
@@ -111,14 +102,11 @@ export default function VoiceCallConsole({
           onMode={onMode}
           onInterrupt={onInterrupt}
           onEnd={onEnd}
-          onSample={onSample}
           onClear={onClear}
           voiceLabel={voiceLabel}
           llmProvider={llmProvider}
           llmModel={llmModel}
           onLlmSaved={onLlmSaved}
-          avatar={avatar}
-          onToggleAvatar={toggleAvatar}
           avatarData={data}
           avatarError={error}
           onUpdateAvatarData={updateData}
@@ -144,22 +132,19 @@ export default function VoiceCallConsole({
           handsFree={handsFree}
           volume={volume}
           muted={muted}
-          avatar={avatar}
           runningAvatar={runningAvatar}
           showAvatarSettings={showAvatarSettings}
           onToggleAvatarSettings={() => setShowAvatarSettings((prev) => !prev)}
         />
 
-        {avatar && (
-          <AvatarRuntimeSettings
-            data={data}
-            error={error}
-            updateData={updateData}
-            refetch={refetch}
-            open={showAvatarSettings}
-            onToggleOpen={setShowAvatarSettings}
-          />
-        )}
+        <AvatarRuntimeSettings
+          data={data}
+          error={error}
+          updateData={updateData}
+          refetch={refetch}
+          open={showAvatarSettings}
+          onToggleOpen={setShowAvatarSettings}
+        />
 
         <VoiceLlmQuickPicker
           provider={llmProvider}
@@ -183,15 +168,6 @@ export default function VoiceCallConsole({
             </div>
 
             <div className="flex flex-wrap items-center gap-1.5">
-              <button
-                type="button"
-                onClick={onSample}
-                disabled={stage !== 'idle'}
-                className="satphone-key inline-flex min-h-11 items-center gap-1.5 rounded-lg border px-3 font-mono text-xs font-semibold uppercase tracking-wider disabled:opacity-45"
-              >
-                <Play size={13} aria-hidden="true" />
-                Play sample
-              </button>
               {history.length > 0 && onClear && (
                 <button
                   type="button"
@@ -218,7 +194,7 @@ export default function VoiceCallConsole({
             >
               {history.length === 0 && !interimTranscript && (
                 <p className="opacity-65">
-                  Channel quiet. Press the TALK paddle on the handset, run Play sample, or transmit a message below.
+                  Channel quiet. Press the TALK paddle on the handset or transmit a message below.
                 </p>
               )}
               {history.map((turn, i) => (
@@ -268,6 +244,8 @@ export default function VoiceCallConsole({
             </button>
           </form>
         </section>
+
+        <AvatarChannelsPanel />
       </div>
     </section>
   );

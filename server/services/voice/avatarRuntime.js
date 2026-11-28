@@ -2,7 +2,7 @@
 import { readFile, rm } from 'node:fs/promises';
 import { release } from 'node:os';
 import { avatarBundle, avatarFilesPresent, avatarMarker, avatarPython, avatarRoot, installAvatar } from './avatarInstall.js';
-import { avatarError, openAvatarWorker } from './avatarWorker.js';
+import { DEFAULT_PORTRAIT_KEY, avatarError, openAvatarWorker } from './avatarWorker.js';
 import { isHostShuttingDown } from '../../lib/hostShutdown.js';
 import { emitToOperators } from '../socketIo.js';
 
@@ -107,12 +107,28 @@ export async function manageAvatar(action) {
   }
 }
 
-export function renderAvatar(wav, options) {
-  if (!worker || phase !== 'running') throw avatarError('Start AvatarForcing before animating.', 503);
-  return worker.render(wav, options);
+// The face the active transceiver channel wears; an unreadable assignment keeps the default.
+// Loaded on first render: the library pulls settings and media collections, which the
+// runtime's install/start/stop lifecycle never needs.
+async function activePortrait() {
+  const { getActiveAvatarFilename, loadAvatarPortrait } = await import('./avatarLibrary.js');
+  const filename = await getActiveAvatarFilename().catch(() => null);
+  return filename ? { key: filename, load: () => loadAvatarPortrait(filename) } : { key: DEFAULT_PORTRAIT_KEY };
 }
 
-export function renderAvatarIdle(options) {
+function runningWorker() {
   if (!worker || phase !== 'running') throw avatarError('Start AvatarForcing before animating.', 503);
-  return worker.renderIdle(options);
+  return worker;
+}
+
+export async function renderAvatar(wav, options) {
+  runningWorker();
+  const portrait = await activePortrait();
+  return runningWorker().render(wav, { ...options, portrait });
+}
+
+export async function renderAvatarIdle(options) {
+  runningWorker();
+  const portrait = await activePortrait();
+  return runningWorker().renderIdle({ ...options, portrait });
 }

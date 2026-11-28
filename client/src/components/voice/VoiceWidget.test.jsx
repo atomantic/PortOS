@@ -120,6 +120,14 @@ vi.mock('../../services/apiProviders', () => ({
 }));
 vi.mock('../../services/apiVoiceAvatar', () => ({
   fetchVoiceAvatar: vi.fn(async () => ({ supported: false })),
+  fetchAvatarLibrary: vi.fn(async () => ({
+    collectionId: 'avatars', collectionName: 'Avatars', avatars: [], active: 0,
+    channels: Array.from({ length: 6 }, () => ({ label: '', avatar: null })),
+  })),
+  saveAvatarChannels: vi.fn(async ({ active }) => ({
+    collectionId: 'avatars', collectionName: 'Avatars', avatars: [], active,
+    channels: Array.from({ length: 6 }, (_, i) => ({ label: i === 1 ? 'Scout' : '', avatar: null })),
+  })),
 }));
 vi.mock('../ui/Toast', () => ({ default: mocks.toast }));
 vi.mock('./useVoiceUiSync', () => ({
@@ -139,6 +147,7 @@ import VoiceWidgetGate, { useVoiceConsole } from './VoiceWidgetGate';
 import VoiceToggleButton from './VoiceToggleButton';
 import SidebarContext from '../SidebarContext';
 import * as voiceClientMock from '../../services/voiceClient';
+import { saveAvatarChannels } from '../../services/apiVoiceAvatar';
 import { ENGAGE_EVENT, DISENGAGE_EVENT } from '../../services/voiceVisibility';
 
 const HIDDEN_KEY = 'portos.voice.hidden';
@@ -287,17 +296,20 @@ describe('Voice Call console', () => {
     expect(voiceClientMock.startContinuous).toHaveBeenCalledTimes(1);
     expect(ui.getByText('Mic open', { selector: '[role="status"]' })).toBeInTheDocument();
 
-    fireEvent.change(ui.getByRole('textbox'), { target: { value: 'Hello' } });
+    fireEvent.change(ui.getByRole('textbox', { name: 'Message to the voice assistant' }), { target: { value: 'Hello' } });
     fireEvent.click(ui.getByRole('button', { name: 'Send', exact: true }));
     expect(voiceClientMock.sendText).toHaveBeenCalledWith('Hello');
     expect(voiceClientMock.prepareVoicePlayback).toHaveBeenCalledTimes(2);
     act(() => mocks.events.get('voice:llm:delta')?.({ delta: 'Hi back' }));
     expect(ui.getByRole('log')).toHaveTextContent('Hi back');
 
-    const avatar = ui.getByRole('button', { name: 'Avatar' });
-    expect(avatar).toHaveAttribute('aria-pressed', 'true');
-    fireEvent.click(avatar);
-    expect(avatar).toHaveAttribute('aria-pressed', 'false');
+    // The transceiver has no audio-only toggle or radio-check sample; its channel key
+    // steps to the next channel's avatar.
+    expect(ui.queryByRole('button', { name: /avatar portrait|audio-only/i })).not.toBeInTheDocument();
+    expect(ui.queryByRole('button', { name: /play sample|radio check/i })).not.toBeInTheDocument();
+    fireEvent.click(ui.getByRole('button', { name: 'Channel 1, Channel 1. Switch to the next channel' }));
+    expect(saveAvatarChannels).toHaveBeenCalledWith({ active: 1 });
+    expect(await ui.findByRole('button', { name: 'Channel 2, Scout. Switch to the next channel' })).toBeInTheDocument();
 
     fireEvent.click(ui.getByRole('button', { name: 'End' }));
     expect(voiceClientMock.disposeCaptureOwner).toHaveBeenCalledTimes(1);

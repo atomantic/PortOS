@@ -99,3 +99,65 @@ it('streams continuous idle frames and preempts idle immediately when speech arr
     worker.stop();
   }
 });
+
+it('swaps the animated portrait before a render only when the channel face changes', async () => {
+  const { worker, messages, send } = workerFixture();
+  try {
+    await worker.warmed;
+    const jpeg = Buffer.from('face-jpeg');
+    const load = vi.fn(async () => jpeg);
+    const portrait = { key: 'face.png', load };
+    const idle = worker.renderIdle({ stage: 'idle', onFrame: vi.fn(), signal: new AbortController().signal, portrait });
+    await vi.waitFor(() => expect(messages[0]).toMatchObject({ type: 'portrait', jpeg: jpeg.toString('base64') }));
+    send({ type: 'done', id: messages[0].id });
+    await vi.waitFor(() => expect(messages[1]).toMatchObject({ type: 'idle', stage: 'idle' }));
+    expect(worker.portraitKey).toBe('face.png');
+    send({ type: 'done', id: messages[1].id });
+    await idle;
+
+    // Same face: no reload, the speech request goes straight out.
+    const speak = worker.render(Buffer.from('speech'), { onFrame: vi.fn(), signal: new AbortController().signal, portrait });
+    expect(messages[2].type).toBe('speak');
+    send({ type: 'done', id: messages[2].id });
+    await speak;
+    expect(load).toHaveBeenCalledTimes(1);
+
+    // The default face restores the launch portrait without loading anything.
+    const back = worker.renderIdle({ stage: 'idle', onFrame: vi.fn(), signal: new AbortController().signal, portrait: { key: 'default' } });
+    await vi.waitFor(() => expect(messages[3]).toMatchObject({ type: 'portrait', jpeg: null }));
+    send({ type: 'done', id: messages[3].id });
+    await vi.waitFor(() => expect(messages[4]?.type).toBe('idle'));
+    send({ type: 'done', id: messages[4].id });
+    await back;
+    expect(worker.portraitKey).toBe('default');
+  } finally {
+    worker.stop();
+  }
+});
+
+it('keeps animating the current face when the model refuses a portrait', async () => {
+  const { worker, messages, send } = workerFixture();
+  try {
+    await worker.warmed;
+    const portrait = { key: 'broken.png', load: vi.fn(async () => Buffer.from('not-a-face')) };
+    const onFrame = vi.fn();
+    const speak = worker.render(Buffer.from('speech'), { onFrame, signal: new AbortController().signal, portrait });
+    await vi.waitFor(() => expect(messages[0]?.type).toBe('portrait'));
+    send({ type: 'error', id: messages[0].id });
+    await vi.waitFor(() => expect(messages[1]?.type).toBe('speak'));
+    send({ type: 'frame', id: messages[1].id, index: 0, timeMs: 0, jpeg: 'speech0' });
+    send({ type: 'done', id: messages[1].id });
+    await speak;
+    expect(onFrame).toHaveBeenCalledOnce();
+    expect(worker.portraitKey).toBe('default');
+
+    // A refused face is not retried on every request.
+    const again = worker.render(Buffer.from('speech'), { onFrame: vi.fn(), signal: new AbortController().signal, portrait });
+    expect(messages[2].type).toBe('speak');
+    send({ type: 'done', id: messages[2].id });
+    await again;
+    expect(portrait.load).toHaveBeenCalledOnce();
+  } finally {
+    worker.stop();
+  }
+});
