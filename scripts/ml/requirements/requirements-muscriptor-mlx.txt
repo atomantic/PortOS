@@ -1,6 +1,15 @@
 # MuScriptor (Apple Silicon) runtime: direct pins for ~/.portos/venv-muscriptor.
-# Installed only from requirements-muscriptor-mlx.lock.txt, which pins and
-# hashes every transitive package. After editing this file, regenerate the lock
-# with the command in the lock header.
-muscriptor==0.4.0
+# Install from the hash locks. Regeneration: docs/RUNTIME_LOCKS.md#muscriptor.
+# Resolve these inference dependencies independently of MuScriptor's metadata.
+beat-this>=1.1
+einops>=0.4
 huggingface-hub[hf_xet]==2.4.0
+mido>=1.3
+numpy>=2
+packaging>=20.0
+safetensors>=0.4
+soundfile>=0.14.0
+torch==2.15.0
+
+# Hash-pin this wheel with --no-deps to omit MuScriptor's web server and CLI.
+muscriptor==0.4.0

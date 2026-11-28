@@ -1561,6 +1561,29 @@ ${section}`;
   });
 });
 
+it.each(['mlx', 'cuda-linux', 'cuda-windows'])('MuScriptor %s locks inference without the web server or CLI', (target) => {
+  const lock = readFileSync(join(REQUIREMENTS_DIR, `requirements-muscriptor-${target}.lock.txt`), 'utf8');
+  const blocks = lock.match(/^[\w.-]+==[^\n]+\n(?:[ \t]+[^\n]*\n?)*/gm) ?? [];
+  const names = blocks.map((block) => block.split('==', 1)[0].toLowerCase().replace(/[_.-]+/g, '-'));
+  for (const name of [
+    'fastapi', 'starlette', 'uvicorn', 'uvloop', 'httptools', 'watchfiles', 'websockets',
+    'python-dotenv', 'python-multipart', 'pydantic', 'pydantic-core', 'annotated-types',
+    'typing-inspection', 'opentelemetry-api', 'httpx', 'httpcore', 'typer', 'annotated-doc',
+    'rich', 'markdown-it-py', 'mdurl', 'pygments', 'shellingham',
+  ]) {
+    expect(names).not.toContain(name);
+  }
+  for (const name of [
+    'muscriptor', 'beat-this', 'einops', 'mido', 'numpy', 'packaging', 'safetensors', 'soundfile',
+    'torch', 'torchaudio', 'rotary-embedding-torch', 'soxr', 'huggingface-hub', 'hf-xet', 'httpx2', 'httpcore2',
+  ]) {
+    expect(names).toContain(name);
+  }
+  const muscriptor = blocks.find((block) => block.startsWith('muscriptor=='));
+  expect(muscriptor).toMatch(/^muscriptor==0\.4\.0\s/);
+  for (const block of blocks) expect(block).toMatch(/--hash=sha256:[0-9a-f]{64}/);
+});
+
 describe('MuScriptor Apple Silicon install is hash-pinned', () => {
   const lock = readFileSync(join(REQUIREMENTS_DIR, 'requirements-muscriptor-mlx.lock.txt'), 'utf8');
   const section = source.slice(source.indexOf('INSTALL_MUSCRIPTOR" == "1"'), source.indexOf('INSTALL_FLUX2="${'));
