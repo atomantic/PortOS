@@ -23,7 +23,13 @@ function fixture() {
   mkdirSync(bin);
   const executable = (name, source) => writeFileSync(join(bin, name), source, { mode: 0o755 });
   executable('uname', '#!/bin/sh\nif [ "$1" = -s ]; then echo Darwin; else echo arm64; fi\n');
-  executable('git', '#!/bin/sh\nif [ "$1" = archive ]; then exec tar -cf - -T /dev/null; fi\necho 0be9e69a729432323dfb60a418801e5e9e7a1437\n');
+  executable('git', `#!/bin/sh
+if [ "$1" = archive ]; then
+  if [ -n "$NATIVE_ARCHIVE" ]; then exec cat "$NATIVE_ARCHIVE"; fi
+  exec tar -cf - -T /dev/null
+fi
+echo 0be9e69a729432323dfb60a418801e5e9e7a1437
+`);
   executable('xcrun', '#!/bin/sh\nexit 0\n');
   executable('python', `#!${process.execPath}
 const fs = require('node:fs');
@@ -38,9 +44,16 @@ if (args[0] === '-m' && args[1] === 'venv') {
 if (args[2] === 'download' && process.env.MOGE_ARCHIVE) {
   fs.copyFileSync(process.env.MOGE_ARCHIVE, args.at(-1) + '/synthetic-revision');
 }
-if (args[0] === '-' && args[3]?.endsWith('/patch-moge-metadata.py') && process.env.REAL_PYTHON) {
-  const result = require('node:child_process').spawnSync(process.env.REAL_PYTHON, args, {
-    input: fs.readFileSync(0), stdio: ['pipe', 'inherit', 'inherit'],
+let pythonArgs;
+if (args[0] === '-' && args[3]?.endsWith('/patch-moge-metadata.py') && process.env.MOGE_ARCHIVE) pythonArgs = args;
+if (process.env.NATIVE_ARCHIVE) {
+  if (args[0] === '-' && args[1] === '.venv/portos-source') pythonArgs = args;
+  if (args.includes('-e') && args.at(-1).endsWith('/mtlgemm')) pythonArgs = [args.at(-1) + '/setup.py'];
+}
+if (pythonArgs && process.env.REAL_PYTHON) {
+  const result = require('node:child_process').spawnSync(process.env.REAL_PYTHON, pythonArgs, {
+    input: pythonArgs[0] === '-' ? fs.readFileSync(0) : undefined,
+    stdio: ['pipe', 'inherit', 'inherit'],
   });
   if (result.error) throw result.error;
   process.exitCode = result.status ?? 1;
@@ -101,6 +114,55 @@ describe.skipIf(process.platform === 'win32')('Pixal3D Metal install/Repair boun
     expect(existsSync(join(f.root, '.venv', 'old-python-3.10'))).toBe(false);
     expect(readFileSync(join(f.root, 'extern', 'mtlmesh', 'setup.py'), 'utf8')).toBe('stale native source');
     expect(readFileSync(join(f.root, 'model.safetensors'), 'utf8')).toBe('synthetic retained asset');
+  });
+
+  it('seeds FlexGEMM tuning on Install and keeps measured tuning on Repair', () => {
+    const f = fixture();
+    const source = join(f.root, 'pinned-source');
+    const bundled = '{"bundled":{}}\n';
+    for (const pkg of ['mtlmesh', 'mtlgemm', 'mtlbvh', 'mtldiffrast', 'o_voxel']) {
+      const dir = join(source, 'extern', pkg);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'setup.py'), 'flags = "-std=c++17"\n');
+    }
+    // Model the two pinned setup.py hooks without importing or compiling Metal.
+    const cacheHook = quote => `    os.makedirs(os.path.expanduser("~/.flex_gemm"), exist_ok=True)
+    cache_src = os.path.join(ROOT, "autotune_cache.json")
+    if os.path.exists(cache_src):
+        shutil.copyfile(cache_src, os.path.expanduser(${quote}~/.flex_gemm/autotune_cache.json${quote}))
+`;
+    const mtlGemm = join(source, 'extern', 'mtlgemm');
+    writeFileSync(join(mtlGemm, 'setup.py'), `import os, shutil
+ROOT = os.path.dirname(os.path.abspath(__file__))
+flags = "-std=c++17"
+if True:
+${cacheHook('"')}else:
+${cacheHook("'")}`);
+    writeFileSync(join(mtlGemm, 'autotune_cache.json'), bundled);
+    const archive = join(f.root, 'native.tar');
+    execFileSync('tar', ['-cf', archive, '-C', source, 'extern']);
+    const home = join(f.root, 'home');
+    mkdirSync(join(home, '.flex_gemm'), { recursive: true });
+    const sharedCache = join(home, '.flex_gemm', 'autotune_cache.json');
+    const shared = Buffer.from('{"shared":{}}\n');
+    const measured = Buffer.from('{"measured":{}}\n');
+    writeFileSync(sharedCache, shared);
+    const localCache = join(f.root, 'autotune_cache.json');
+    const env = {
+      HOME: home,
+      REAL_PYTHON: 'python3',
+      NATIVE_ARCHIVE: archive,
+      FLEX_GEMM_AUTOTUNE_CACHE_PATH: sharedCache,
+    };
+    rmSync(join(f.root, '.venv'), { recursive: true });
+    f.run(env);
+    expect(readFileSync(localCache, 'utf8')).toBe(bundled);
+    expect(readFileSync(sharedCache)).toEqual(shared);
+
+    writeFileSync(localCache, measured);
+    f.run(env);
+    expect(readFileSync(localCache)).toEqual(measured);
+    expect(readFileSync(sharedCache)).toEqual(shared);
   });
 
   it('stages an extensionless MoGe archive and aligns its metadata with the locked CLI runtime', () => {

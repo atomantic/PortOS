@@ -90,15 +90,37 @@ PORTOS_SOURCE=.venv/portos-source
 mkdir -p "$PORTOS_SOURCE"
 git archive --format=tar "$REVISION" | tar -xf - -C "$PORTOS_SOURCE"
 
-# Torch 2.15 headers require C++20. Patch only the private build sources.
+# Match the render environment. Keep tuning outside the venv rebuilt by Repair.
+export FLEX_GEMM_AUTOTUNE_CACHE_PATH="$(pwd -P)/autotune_cache.json"
+
+# Patch only the private build sources. Torch 2.15 headers require C++20.
 "$VPY" - "$PORTOS_SOURCE" <<'PY'
 from pathlib import Path
 import sys
+
 for package in ('mtlmesh', 'mtlgemm', 'mtlbvh', 'mtldiffrast', 'o_voxel'):
     setup = Path(sys.argv[1]) / 'extern' / package / 'setup.py'
     source = setup.read_text()
     assert '-std=c++17' in source, f'Unexpected build flags in {package}'
-    setup.write_text(source.replace('-std=c++17', '-std=c++20'))
+    source = source.replace('-std=c++17', '-std=c++20')
+    if package == 'mtlgemm':
+        # Both build branches run their cache hook during packaging. Seed only
+        # from bundled data and use exclusive creation to preserve measured tuning.
+        for quote in ('"', "'"):
+            upstream = f'''    os.makedirs(os.path.expanduser("~/.flex_gemm"), exist_ok=True)
+    cache_src = os.path.join(ROOT, "autotune_cache.json")
+    if os.path.exists(cache_src):
+        shutil.copyfile(cache_src, os.path.expanduser({quote}~/.flex_gemm/autotune_cache.json{quote}))'''
+            if source.count(upstream) != 1:
+                raise SystemExit('Unexpected FlexGEMM autotune cache hook')
+            source = source.replace(upstream, '''    cache_src = os.path.join(ROOT, "autotune_cache.json")
+    if os.path.exists(cache_src):
+        try:
+            with open(cache_src, "rb") as bundled, open(os.environ["FLEX_GEMM_AUTOTUNE_CACHE_PATH"], "xb") as local:
+                shutil.copyfileobj(bundled, local)
+        except FileExistsError:
+            pass''')
+    setup.write_text(source)
 PY
 
 for package in mtlmesh mtlgemm mtlbvh mtldiffrast o_voxel natten-mps; do
