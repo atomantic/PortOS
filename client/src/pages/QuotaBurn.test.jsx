@@ -1133,6 +1133,27 @@ describe('QuotaBurn per-invocation overrides', () => {
     expect(screen.getByText(/claude-code · claude-opus-4/)).toBeInTheDocument();
   });
 
+  it('filters step providers using shared familyForProvider rather than id substring matching', async () => {
+    getQuotaBurn.mockResolvedValue({ config: claudeConfig(NO_OVERRIDES), status });
+    getQuotaBurnCatalog.mockResolvedValue({
+      ...claudeProviders,
+      providers: [
+        ...claudeProviders.providers,
+        { id: 'claude-via-opencode', name: 'Claude via OpenCode', type: 'cli', command: 'opencode' },
+        { id: 'claude-ollama', name: 'Claude Ollama', type: 'cli', command: 'claude', ollamaBacked: true },
+      ],
+    });
+    const user = userEvent.setup();
+    renderPage('/devtools/quota-burn/claude');
+    await user.click(await screen.findByLabelText('Expand step 1'));
+
+    const providerSelect = await screen.findByLabelText('Provider');
+    const values = [...providerSelect.options].map((option) => option.value);
+    expect(values).toContain('claude-code');
+    expect(values).not.toContain('claude-via-opencode');
+    expect(values).not.toContain('claude-ollama');
+  });
+
   it('shows a programmatic task\'s run parameters read-only, with no agent options', async () => {
     // PortOS executes these itself against its own records — there is no agent,
     // so worktree/PR/simplify are meaningless, and the parameters are per-type

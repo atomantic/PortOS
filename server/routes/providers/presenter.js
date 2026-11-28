@@ -15,38 +15,13 @@ import {
 import { htmlPagesProviderCapability } from '../../lib/provider/htmlPagesProvider.js';
 import { isMtplxOpenCodeCli } from '../../lib/opencodeConfig.js';
 import { buildTuiShellLaunch } from '../../lib/tuiShellLaunch.js';
-import { isMaskedEnvVar } from '../../lib/credentialEnvVars.js';
+import { sanitizeProvider } from '../../lib/provider/sanitizeProvider.js';
 import { presetDerivable, presetKind } from '../../lib/provider/providerPresets.js';
 import { canReviewImages } from '../../lib/imageReviewProviders.js';
 import {
   captureSystemCapabilities,
   withProviderHardwareCompatibility,
 } from '../../lib/systemCapabilities.js';
-
-/**
- * Sanitize a provider object for client responses.
- * Strips apiKey (replaces with hasApiKey boolean) and redacts secretEnvVars
- * values. An explicitly empty secret value stays empty so the client can
- * distinguish "configured but blank" from an unknown redacted value when it
- * paints provider readiness.
- */
-const sanitizeProvider = (provider) => {
-  if (!provider) return provider;
-  const { apiKey, envVars, secretEnvVars, ...rest } = provider;
-  const sanitized = {
-    ...rest,
-    hasApiKey: Boolean(apiKey),
-    envVars: envVars ? { ...envVars } : {},
-    secretEnvVars: secretEnvVars || []
-  };
-  // Redact secret-listed AND credential-named env vars (Secret box may be off)
-  for (const key of Object.keys(sanitized.envVars)) {
-    if (isMaskedEnvVar(key, secretEnvVars)) {
-      sanitized.envVars[key] = sanitized.envVars[key] === '' ? '' : '***';
-    }
-  }
-  return sanitized;
-};
 
 /**
  * Decorate a TUI provider with its launch command preview so the card can

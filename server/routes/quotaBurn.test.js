@@ -51,14 +51,14 @@ vi.mock('../services/autonomousJobs/store.js', () => ({
   syncSkillTemplatesFromSample: vi.fn(async () => {}),
 }));
 vi.mock('../services/apps.js', () => ({ getActiveApps: vi.fn() }));
-vi.mock('../services/provider/providers.js', () => ({ listProviders: vi.fn() }));
+vi.mock('../services/provider/providers.js', () => ({ listSelectableProviders: vi.fn() }));
 
 import { clearQuotaBurnJobCompletion } from '../services/quotaBurnCompletions.js';
 import { convertLegacyQuotaBurnPatch } from '../services/quotaBurnConversion.js';
 import { getQuotaBurnConfig, saveQuotaBurnConfig } from '../services/quotaBurnStore.js';
 import { getQuotaBurnStatus, runQuotaBurnCycle } from '../services/quotaBurnRunner.js';
 import { getActiveApps } from '../services/apps.js';
-import { listProviders } from '../services/provider/providers.js';
+import { listSelectableProviders } from '../services/provider/providers.js';
 import quotaBurnRoutes from './quotaBurn.js';
 
 const buildApp = (address = '127.0.0.1') => {
@@ -84,7 +84,14 @@ beforeEach(() => {
     status: { running: false, families: [], runs: [] },
   });
   getActiveApps.mockResolvedValue([{ id: 'a1', name: 'App One', secret: 'do-not-leak' }]);
-  listProviders.mockResolvedValue([{ id: 'claude-code', name: 'Claude Code', type: 'cli' }]);
+  listSelectableProviders.mockResolvedValue([{
+    id: 'claude-code',
+    name: 'Claude Code',
+    type: 'cli',
+    apiKey: 'example-secret-key',
+    envVars: { ANTHROPIC_API_KEY: 'example-env-secret', CUSTOM_FLAG: '1' },
+    secretEnvVars: ['CUSTOM_FLAG'],
+  }]);
 });
 
 describe('GET /api/quota-burn', () => {
@@ -112,13 +119,22 @@ describe('GET /api/quota-burn', () => {
 });
 
 describe('GET /api/quota-burn/catalog', () => {
-  it('projects apps and providers, and nothing an app record should not leak', async () => {
+  it('projects apps and sanitized selectable providers, redacting apiKey and secret envVars', async () => {
     const res = await request(buildApp()).get('/api/quota-burn/catalog');
     expect(res.status).toBe(200);
+    expect(listSelectableProviders).toHaveBeenCalledTimes(1);
     expect(res.body).toEqual({
       apps: [{ id: 'a1', name: 'App One' }],
-      providers: [{ id: 'claude-code', name: 'Claude Code', type: 'cli' }],
+      providers: [{
+        id: 'claude-code',
+        name: 'Claude Code',
+        type: 'cli',
+        hasApiKey: true,
+        envVars: { ANTHROPIC_API_KEY: '***', CUSTOM_FLAG: '***' },
+        secretEnvVars: ['CUSTOM_FLAG'],
+      }],
     });
+    expect(res.body.providers[0]).not.toHaveProperty('apiKey');
   });
 
   it('no longer serves the legacy job catalog or the prompt presets', async () => {
@@ -130,7 +146,7 @@ describe('GET /api/quota-burn/catalog', () => {
   });
 
   it('still renders when the provider list is unavailable', async () => {
-    listProviders.mockRejectedValue(new Error('store down'));
+    listSelectableProviders.mockRejectedValue(new Error('store down'));
     const res = await request(buildApp()).get('/api/quota-burn/catalog');
     expect(res.status).toBe(200);
     expect(res.body.providers).toEqual([]);
