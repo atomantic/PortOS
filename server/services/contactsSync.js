@@ -425,16 +425,19 @@ async function writeSyncState(state) {
 // ---------------------------------------------------------------------------
 
 /**
- * Setup check — discover DBs and attempt a read of the first one. Never throws.
+ * Discover and read every AddressBook SQLite database once, probing the largest
+ * source first for a clear Full Disk Access signal. Shared by `checkSetup` and
+ * `doRunSync` so a full sync never opens and parses the same SQLite files twice
+ * (or three times for the largest source) synchronously on the event loop.
  */
-export async function checkSetup() {
+async function scanAddressBookSources() {
   const root = addressBookRoot();
   let paths = [];
   try {
     paths = discoverAddressBookPaths(root);
   } catch (err) {
     const fullDiskAccessRequired = isPermissionError(err);
-    return scrubSyncValue({
+    return {
       ok: false,
       root,
       error: err?.message || 'Failed to scan AddressBook directory',
@@ -442,16 +445,16 @@ export async function checkSetup() {
       ...(fullDiskAccessRequired
         ? await fullDiskAccessDetails()
         : { remediation: `Could not scan ${root}: ${err?.message || 'unknown error'}` }),
-    });
+    };
   }
   if (paths.length === 0) {
-    return scrubSyncValue({
+    return {
       ok: false,
       root,
       paths: [],
       error: 'No AddressBook-v22.abcddb found',
       remediation: `No Contacts databases under ${root}. Open the macOS Contacts app at least once, or check CONTACTS_AB_ROOT.`,
-    });
+    };
   }
   // Probe the largest source for a real permission signal.
   let best = { path: paths[0], n: 0 };
@@ -463,31 +466,50 @@ export async function checkSetup() {
   }
   const probe = readAddressBookDb(best.path);
   if (!probe.ok) {
-    return scrubSyncValue({
+    return {
       ok: false,
       root,
       paths,
       error: probe.error,
       fullDiskAccessRequired: probe.permission,
       ...(probe.permission ? await fullDiskAccessDetails() : { remediation: probe.error }),
-    });
+    };
   }
-  // Count across all sources (cheap open).
+  const lists = [];
+  const errors = [];
   let totalRaw = 0;
-  let sourcesOk = 0;
   for (const p of paths) {
-    const r = readAddressBookDb(p);
+    const r = p === best.path ? probe : readAddressBookDb(p);
     if (r.ok) {
-      sourcesOk += 1;
+      lists.push(r.contacts);
       totalRaw += r.contacts.length;
+    } else {
+      errors.push({ path: p, error: r.error });
     }
   }
-  return scrubSyncValue({
+  return {
     ok: true,
     root,
     paths,
-    sourceCount: sourcesOk,
+    sourceCount: lists.length,
     rawContactRows: totalRaw,
+    lists,
+    errors,
+  };
+}
+
+/**
+ * Setup check — discover DBs and attempt a read of the first one. Never throws.
+ */
+export async function checkSetup() {
+  const scan = await scanAddressBookSources();
+  if (!scan.ok) return scrubSyncValue(scan);
+  return scrubSyncValue({
+    ok: true,
+    root: scan.root,
+    paths: scan.paths,
+    sourceCount: scan.sourceCount,
+    rawContactRows: scan.rawContactRows,
   });
 }
 
@@ -502,25 +524,19 @@ export async function runSync() {
 }
 
 async function doRunSync() {
-  const setup = await checkSetup();
-  if (!setup.ok) {
+  const scan = await scanAddressBookSources();
+  if (!scan.ok) {
     const result = {
       ok: false,
-      error: setup.error,
-      fullDiskAccessRequired: setup.fullDiskAccessRequired,
-      remediation: setup.remediation,
+      error: scan.error,
+      fullDiskAccessRequired: scan.fullDiskAccessRequired,
+      remediation: scan.remediation,
     };
     await writeSyncState({ lastRunAt: new Date().toISOString(), lastResult: result });
     return result;
   }
 
-  const lists = [];
-  const errors = [];
-  for (const p of setup.paths || []) {
-    const r = readAddressBookDb(p);
-    if (r.ok) lists.push(r.contacts);
-    else errors.push({ path: p, error: r.error });
-  }
+  const { lists, errors } = scan;
   const contacts = mergeContacts(lists);
   const cache = await writeContactCache(contacts, { sourceCount: lists.length });
   const result = {
