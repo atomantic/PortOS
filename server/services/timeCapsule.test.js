@@ -231,16 +231,42 @@ describe('genome capture', () => {
   });
 
   it('stripGenomeFromSnapshots scrubs genetic fields, updates index metadata, and is idempotent', async () => {
-    writeTwinJson('identity.json', { name: 'Example Twin' });
+    const derivedAt = '2026-01-02T00:00:00.000Z';
+    const behavioralData = { preferredWakeTime: '06:30' };
+    const personality = { status: 'complete', label: 'Personality', updatedAt: derivedAt };
+    writeTwinJson('identity.json', {
+      name: 'Example Twin',
+      sections: {
+        genome: { status: 'complete', label: 'Genome', markerCount: 1, updatedAt: derivedAt },
+        longevity: { status: 'complete', label: 'Longevity', markerCount: 2, adjustedLifeExpectancy: 85, confidence: 0.75 },
+        personality
+      }
+    });
     writeTwinJson('chronotype.json', {
-      type: 'morning',
+      type: 'intermediate',
+      confidence: 0.6,
+      scores: { genetic: 1, behavioral: -1, composite: 0 },
       geneticMarkers: { mtnr1b: { rsid: 'rs4753426', genotype: 'GG', status: 'concern' } },
       caffeineMarkers: { cyp1a2: { rsid: 'rs762551', genotype: 'AA', status: 'beneficial' } },
-      behavioralData: { preferredWakeTime: '06:30' }
+      behavioralData,
+      recommendations: {
+        wakeTime: '07:00',
+        mealNote: 'MTNR1B variant — earlier meals may improve glucose response',
+        caffeineNote: 'CYP1A2 fast metabolizer',
+        lastMealCutoff: '19:00',
+        caffeineCutoff: '16:00'
+      },
+      derivedAt
     });
     writeTwinJson('longevity.json', {
       longevityMarkers: { foxo3a: { rsid: 'rs2802292', genotype: 'GG', status: 'beneficial' } },
-      cardiovascularMarkers: { cad9p21: { rsid: 'rs1333049', genotype: 'CC', status: 'concern' } }
+      cardiovascularMarkers: { cad9p21: { rsid: 'rs1333049', genotype: 'CC', status: 'concern' } },
+      longevityScore: 1,
+      cardiovascularRisk: 0.5,
+      lifeExpectancy: { baseline: 78.5, adjusted: 81.5, longevityAdjustment: 5, cardiovascularAdjustment: -2 },
+      timeHorizons: { yearsRemaining: 55 },
+      confidence: 0.75,
+      derivedAt
     });
     writeTwinJson('goals.json', {
       birthDate: '2000-01-01',
@@ -252,23 +278,59 @@ describe('genome capture', () => {
 
     const snap = await createSnapshot('pre-delete');
     const beforeHash = snap.dataHash;
-    const beforeSize = snap.sizeBytes;
 
     await expect(stripGenomeFromSnapshots()).resolves.toEqual({ updated: 1 });
 
     const after = await getSnapshot(snap.id);
     expect(after.data['genome.json']).toBeUndefined();
-    expect(after.data['chronotype.json'].geneticMarkers).toEqual({});
-    expect(after.data['chronotype.json'].caffeineMarkers).toEqual({});
-    expect(after.data['chronotype.json'].behavioralData).toEqual({ preferredWakeTime: '06:30' });
-    expect(after.data['longevity.json'].longevityMarkers).toEqual({});
-    expect(after.data['longevity.json'].cardiovascularMarkers).toEqual({});
-    expect(after.data['goals.json'].lifeExpectancy).toBeNull();
-    expect(after.data['goals.json'].timeHorizons).toBeNull();
-    expect(after.data['goals.json'].goals).toEqual([{ id: 'g1', title: 'Read more' }]);
+    expect(after.data['chronotype.json']).toEqual({
+      type: 'morning',
+      confidence: 0.3,
+      scores: { genetic: 0, behavioral: -1, composite: -1 },
+      geneticMarkers: {},
+      caffeineMarkers: {},
+      behavioralData,
+      recommendations: {
+        wakeTime: '06:00',
+        sleepTime: '22:00',
+        peakFocusStart: '08:00',
+        peakFocusEnd: '12:00',
+        exerciseWindow: '06:30-08:00',
+        windDownStart: '20:30',
+        caffeineCutoff: '14:00',
+        caffeineNote: 'Typical metabolism — moderate afternoon cutoff',
+        lastMealCutoff: '20:30',
+        mealNote: 'Standard meal timing recommendation'
+      },
+      derivedAt
+    });
+    expect(after.data['longevity.json']).toEqual({
+      longevityMarkers: {},
+      cardiovascularMarkers: {},
+      longevityScore: 0,
+      cardiovascularRisk: 0,
+      lifeExpectancy: { baseline: 78.5, adjusted: 78.5, longevityAdjustment: 0, cardiovascularAdjustment: 0 },
+      timeHorizons: null,
+      confidence: 0,
+      derivedAt
+    });
+    expect(after.data['identity.json']).toEqual({
+      name: 'Example Twin',
+      sections: {
+        genome: { status: 'unavailable', label: 'Genome', updatedAt: null },
+        longevity: { status: 'unavailable', label: 'Longevity', updatedAt: null },
+        personality
+      }
+    });
+    expect(after.data['goals.json']).toEqual({
+      birthDate: '2000-01-01',
+      goals: [{ id: 'g1', title: 'Read more' }],
+      lifeExpectancy: null,
+      timeHorizons: null
+    });
     expect(after.summary.genomeMarkers).toBe(0);
     expect(after.dataHash).not.toBe(beforeHash);
-    expect(after.sizeBytes).toBeLessThan(beforeSize);
+    expect(after.sizeBytes).toBe(Buffer.byteLength(JSON.stringify(after.data)));
 
     const [indexed] = await listSnapshots();
     expect(indexed.summary.genomeMarkers).toBe(0);
@@ -276,6 +338,27 @@ describe('genome capture', () => {
     expect(indexed.sizeBytes).toBe(after.sizeBytes);
 
     // Second pass is a no-op.
+    await expect(stripGenomeFromSnapshots()).resolves.toEqual({ updated: 0 });
+  });
+
+  it('scrubs derived fields from snapshots whose genome and marker maps were already cleared', async () => {
+    const behavioralData = { preferredWakeTime: '06:30', preferredSleepTime: 2200 };
+    writeTwinJson('chronotype.json', {
+      geneticMarkers: {},
+      caffeineMarkers: {},
+      behavioralData,
+      scores: { genetic: 1, behavioral: -1, composite: 0 }
+    });
+    const snap = await createSnapshot('previously scrubbed');
+    expect(snap.summary.genomeMarkers).toBe(0);
+
+    await expect(stripGenomeFromSnapshots()).resolves.toEqual({ updated: 1 });
+
+    const after = await getSnapshot(snap.id);
+    expect(after.data['chronotype.json']).toMatchObject({
+      behavioralData,
+      scores: { genetic: 0, behavioral: -1, composite: -1 }
+    });
     await expect(stripGenomeFromSnapshots()).resolves.toEqual({ updated: 0 });
   });
 
