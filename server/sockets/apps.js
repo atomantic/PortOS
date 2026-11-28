@@ -266,8 +266,17 @@ export const registerAppHandlers = (socket, io) => {
           emitToOperatorsOn(io, 'app:deploy:error', { appId: app.id, ...runId, message: result.error });
           return;
         }
-        emitToOperatorsOn(io, 'app:deploy:complete', { appId: app.id, ...runId, success: result.success, code: result.code });
-        if (result.success) outcome = 'completion';
+        const { success, code, cancelled, timedOut, error } = result;
+        emitToOperatorsOn(io, 'app:deploy:complete', {
+          appId: app.id,
+          ...runId,
+          success,
+          code,
+          cancelled: Boolean(cancelled),
+          timedOut: Boolean(timedOut),
+          ...(error ? { error } : {}),
+        });
+        outcome = success ? 'completion' : cancelled ? 'cancellation' : 'failure';
       });
     } catch (err) {
       const message = err?.message ?? String(err);

@@ -18,7 +18,7 @@ const FLAG_OPTIONS = [
 const PLATFORM_FLAGS = new Set(['--ios', '--macos', '--watch', '--all']);
 
 export default function DeployPanel({ appId, appName }) {
-  const { output, isDeploying, error, result, startDeploy, clearDeploy } = useAppDeploy(appId);
+  const { output, isDeploying, isCancelling, error, result, startDeploy, cancelDeploy, clearDeploy } = useAppDeploy(appId);
   const [popover, setPopover] = useState(null);
   const [selectedFlags, setSelectedFlags] = useState([]);
   const [dismissed, setDismissed] = useState(false);
@@ -26,6 +26,11 @@ export default function DeployPanel({ appId, appName }) {
   const rafRef = useRef(null);
   const hasState = isDeploying || output.length > 0 || error || result;
   const isOpen = hasState && !dismissed;
+  let resultMessage;
+  if (result?.success) resultMessage = 'Deploy completed successfully';
+  else if (result?.cancelled) resultMessage = 'Deploy cancelled';
+  else if (result?.timedOut) resultMessage = 'Deploy timed out';
+  else if (result) resultMessage = `Deploy failed (exit code ${result.code})`;
 
   const deployRef = useRef(null);
   const optionsRef = useRef(null);
@@ -213,20 +218,32 @@ export default function DeployPanel({ appId, appName }) {
           panelClassName="bg-port-bg border border-port-border rounded-xl shadow-2xl flex flex-col"
           ariaLabelledBy="deploy-panel-title"
         >
-          <div className="flex items-center justify-between px-4 py-3 border-b border-port-border">
+          <div className="flex flex-wrap items-center justify-between gap-x-2 px-4 py-3 border-b border-port-border">
             <div className="flex items-center gap-2">
               <Rocket size={16} className="text-port-accent-2" />
-              <span id="deploy-panel-title" className="text-sm font-medium text-white">Deploy: {appName}</span>
+              <span id="deploy-panel-title" className="min-w-0 wrap-anywhere text-sm font-medium text-white">Deploy: {appName}</span>
               {isDeploying && <BrailleSpinner text="" className="text-xs text-port-accent-2" />}
             </div>
-            <button
-              onClick={handleClose}
-              className="flex items-center justify-center min-h-[44px] min-w-[44px] text-gray-400 hover:text-white transition-colors"
-              title={isDeploying ? 'Hide (deploy keeps running)' : 'Close'}
-              aria-label={isDeploying ? 'Hide deploy output' : 'Close deploy panel'}
-            >
-              <X size={16} />
-            </button>
+            <div className="ml-auto flex items-center gap-2">
+              {isDeploying && (
+                <button
+                  type="button"
+                  onClick={cancelDeploy}
+                  disabled={isCancelling}
+                  className="min-h-11 rounded-lg border border-port-error/40 px-3 py-1 text-xs text-port-error hover:bg-port-error/10 disabled:opacity-60"
+                >
+                  {isCancelling ? 'Cancelling…' : 'Cancel deploy'}
+                </button>
+              )}
+              <button
+                onClick={handleClose}
+                className="flex items-center justify-center min-h-[44px] min-w-[44px] text-gray-400 hover:text-white transition-colors"
+                title={isDeploying ? 'Hide (deploy keeps running)' : 'Close'}
+                aria-label={isDeploying ? 'Hide deploy output' : 'Close deploy panel'}
+              >
+                <X size={16} />
+              </button>
+            </div>
           </div>
 
           <div
@@ -245,12 +262,12 @@ export default function DeployPanel({ appId, appName }) {
                 {line.text}
               </div>
             ))}
-            {error && <div role="alert" className="text-port-error mt-2 whitespace-pre-wrap break-words">Error: {error}</div>}
+            {error && error !== resultMessage && <div role="alert" className="text-port-error mt-2 whitespace-pre-wrap break-words">Error: {error}</div>}
           </div>
 
           {result && (
-            <div className={`px-4 py-2 border-t border-port-border text-xs ${result.success ? 'text-port-success' : 'text-port-error'}`}>
-              {result.success ? 'Deploy completed successfully' : `Deploy failed (exit code ${result.code})`}
+            <div role="status" className={`px-4 py-2 border-t border-port-border text-xs ${result.success ? 'text-port-success' : 'text-port-error'}`}>
+              {resultMessage}
             </div>
           )}
         </Modal>

@@ -3,11 +3,19 @@ import { act, renderHook } from '@testing-library/react';
 
 const socketHandlers = new Map();
 const emitted = [];
+const cancellationRequests = [];
+const socketState = { connected: true };
 vi.mock('../../services/socket', () => ({
   default: {
     on: (event, fn) => { socketHandlers.set(event, fn); },
     off: (event, fn) => { if (socketHandlers.get(event) === fn) socketHandlers.delete(event); },
     emit: (event, payload) => { emitted.push({ event, payload }); },
+    get connected() { return socketState.connected; },
+    volatile: {
+      timeout: () => ({
+        emit: (event, payload, callback) => { cancellationRequests.push({ event, payload, callback }); },
+      }),
+    },
   },
 }));
 
@@ -25,6 +33,8 @@ describe('useAppDeploy', () => {
   beforeEach(() => {
     socketHandlers.clear();
     emitted.length = 0;
+    cancellationRequests.length = 0;
+    socketState.connected = true;
   });
 
   it('reattaches on mount when the registry lists a live deploy for the app', () => {
@@ -295,6 +305,97 @@ describe('useAppDeploy', () => {
     active(liveDeploy('app-a', 1000, [step('old')]));
     fire('app:deploy:output', { appId: 'app-a', startedAt: 2000, text: 'new\n', stream: 'stdout', timestamp: 3 });
     expect(result.current.output.map(o => o.text)).toEqual(['new\n']);
+  });
+
+  it('requests cancellation once and waits for the deploy to finish after acceptance', () => {
+    const { result } = renderHook(() => useAppDeploy('app-a'));
+    active(liveDeploy());
+    act(() => {
+      result.current.cancelDeploy();
+      result.current.cancelDeploy();
+    });
+    expect(cancellationRequests).toEqual([{
+      event: 'app:deploy:cancel', payload: { appId: 'app-a' }, callback: expect.any(Function),
+    }]);
+    expect(result.current.isCancelling).toBe(true);
+    act(() => cancellationRequests[0].callback(null, { ok: true }));
+    expect(result.current.isCancelling).toBe(true);
+    expect(result.current.isDeploying).toBe(true);
+
+    fire('app:deploy:complete', {
+      appId: 'app-a', startedAt: 1000, success: false, cancelled: true, code: -1, error: 'Deploy cancelled',
+    });
+    expect(result.current.isCancelling).toBe(false);
+    expect(result.current.isDeploying).toBe(false);
+    expect(result.current.result).toMatchObject({ cancelled: true });
+    expect(result.current.error).toBe('Deploy cancelled');
+  });
+
+  it.each([
+    { code: 'HOST_CONTROL_REQUIRED', message: 'Host control is required' },
+    { code: 'DEPLOY_CANCEL_FAILED', message: 'Could not cancel deploy' },
+    { code: 'NO_ACTIVE_DEPLOY', message: 'No active deploy to cancel' },
+  ])('surfaces a $code rejection and leaves the run live', ({ code, message }) => {
+    const { result } = renderHook(() => useAppDeploy('app-a'));
+    active(liveDeploy());
+    act(() => result.current.cancelDeploy());
+    act(() => cancellationRequests[0].callback(null, { ok: false, code, message }));
+    expect(result.current.error).toBe(message);
+    expect(result.current.isCancelling).toBe(false);
+    expect(result.current.isDeploying).toBe(true);
+
+    act(() => result.current.cancelDeploy());
+    expect(result.current.isCancelling).toBe(true);
+    expect(result.current.error).toBeNull();
+    expect(cancellationRequests).toHaveLength(2);
+  });
+
+  it('keeps a live deploy retryable when an acknowledgement is lost and avoids queuing while disconnected', () => {
+    const { result } = renderHook(() => useAppDeploy('app-a'));
+    active(liveDeploy());
+    act(() => result.current.cancelDeploy());
+    act(() => cancellationRequests[0].callback(new Error('operation has timed out')));
+    expect(result.current.error).toBe('Could not confirm deploy cancellation');
+    expect(result.current.isCancelling).toBe(false);
+    expect(result.current.isDeploying).toBe(true);
+
+    socketState.connected = false;
+    act(() => result.current.cancelDeploy());
+    expect(result.current.error).toBe('Reconnect to cancel this deploy');
+    expect(cancellationRequests).toHaveLength(1);
+  });
+
+  it('ignores a cancellation rejection after the deploy has already settled', () => {
+    const { result } = renderHook(() => useAppDeploy('app-a'));
+    active(liveDeploy());
+    act(() => result.current.cancelDeploy());
+    fire('app:deploy:complete', { appId: 'app-a', startedAt: 1000, success: true, code: 0 });
+    act(() => cancellationRequests[0].callback(null, { ok: false, code: 'NO_ACTIVE_DEPLOY', message: 'No active deploy to cancel' }));
+    expect(result.current.isCancelling).toBe(false);
+    expect(result.current.error).toBeNull();
+  });
+
+  it('does not apply a cancellation acknowledgement after switching apps', () => {
+    const { result, rerender } = renderHook(({ appId }) => useAppDeploy(appId), { initialProps: { appId: 'app-a' } });
+    active(liveDeploy());
+    act(() => result.current.cancelDeploy());
+    rerender({ appId: 'app-b' });
+    expect(result.current.isCancelling).toBe(false);
+
+    active(liveDeploy('app-b'));
+    act(() => result.current.cancelDeploy());
+    act(() => cancellationRequests[0].callback(null, { ok: false, code: 'DEPLOY_CANCEL_FAILED', message: 'Could not cancel deploy' }));
+    expect(result.current.isCancelling).toBe(true);
+    expect(result.current.error).toBeNull();
+  });
+
+  it('preserves a streamed terminal error when the following completion omits its reason', () => {
+    const { result } = renderHook(() => useAppDeploy('app-a'));
+    active(liveDeploy());
+    fire('app:deploy:error', { appId: 'app-a', startedAt: 1000, message: 'Deploy timed out' });
+    fire('app:deploy:complete', { appId: 'app-a', startedAt: 1000, success: false, code: -1 });
+    expect(result.current.error).toBe('Deploy timed out');
+    expect(result.current.isDeploying).toBe(false);
   });
 
   it('stops listening on unmount', () => {

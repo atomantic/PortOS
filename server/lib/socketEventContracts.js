@@ -9,6 +9,7 @@ import { zodToOpenApiSchema } from './apiContractSchemas.js';
 import { generatedPreviewPlaybackSchema } from './generatedPreviewPlaybackSchema.js';
 import {
   appDeployCancelSchema,
+  appDeployCompleteSchema,
   appDeploySchema,
   appStandardizeSchema,
   appUpdateSchema,
@@ -670,6 +671,11 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
   'fableloom:shots:run': loomRunSnapshot(false),
   'app:deploy': input(appDeploySchema, 'Deploy a managed app with allowlisted flags.'),
   'app:deploy:cancel': input(appDeployCancelSchema, 'Request cancellation of an active deploy. The acknowledgement reports acceptance or an error code.'),
+  'app:deploy:complete': {
+    direction: 'server-to-client',
+    summary: 'Terminal outcome of a managed app deploy, including explicit cancellation and timeout flags.',
+    payloadSchema: zodToOpenApiSchema(appDeployCompleteSchema),
+  },
   'app:standardize': input(appStandardizeSchema, 'Standardize one registered app.'),
   'app:update': input(appUpdateSchema, 'Run the update lifecycle for one registered app.'),
   'detect:start': input(detectStartSchema, 'Start streamed application detection.'),

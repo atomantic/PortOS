@@ -23,7 +23,7 @@ describe('deployApp environment', () => {
     await Promise.resolve();
     expect(finished).toBe(false);
     child.emit('close', 0);
-    await expect(pending).resolves.toEqual({ success: false, code: -1 });
+    await expect(pending).resolves.toEqual({ success: false, code: -1, cancelled: false, timedOut: false, error: 'kill failed' });
   });
   it('does not hand server secrets to deploy.sh', async () => {
     vi.stubEnv('PRIVACY_VAULT_KEY', 'vault');
@@ -50,9 +50,9 @@ describe('deployApp environment', () => {
 
 describe.skipIf(IS_WIN32)('deployApp teardown', () => {
   it.each([
-    { action: 'times out', reason: 'Deploy timed out', advance: 600_000 },
-    { action: 'is cancelled', reason: 'Deploy cancelled', advance: 0 },
-  ])('releases the deploy when it $action even with stalled pipes', async ({ reason, advance }) => {
+    { action: 'times out', reason: 'Deploy timed out', advance: 600_000, cancelled: false, timedOut: true },
+    { action: 'is cancelled', reason: 'Deploy cancelled', advance: 0, cancelled: true, timedOut: false },
+  ])('reports and releases a deploy when it $action even with stalled pipes', async ({ reason, advance, cancelled, timedOut }) => {
     vi.useFakeTimers();
     const groupSignal = vi.spyOn(process, 'kill').mockReturnValue(true);
     onTestFinished(() => {
@@ -60,12 +60,15 @@ describe.skipIf(IS_WIN32)('deployApp teardown', () => {
       vi.useRealTimers();
     });
 
-    const app = { id: 'example-app', repoPath: '/repo/example-app' };
+    const app = { id: 'example-app', name: 'Example App', repoPath: '/repo/example-app' };
     const child = new EventEmitter();
     Object.assign(child, { pid: 1234, stdout: new EventEmitter(), stderr: new EventEmitter() });
     mockSpawn.mockReturnValueOnce(child);
     const emit = vi.fn();
-    const pending = deployApp(app, ['--ios'], emit);
+    const pending = runDeployFlow(app.id, ['--ios'], {
+      resolveApp: () => app, checkScript: () => true, onOutput: emit,
+    });
+    await Promise.resolve();
     expect(mockSpawn).toHaveBeenLastCalledWith(expect.any(String), ['deploy.sh', '--ios'],
       expect.objectContaining({ detached: true }));
     child.stdout.emit('data', `discard${'a'.repeat(MAX_OUTPUT_BYTES)}`);
@@ -80,7 +83,7 @@ describe.skipIf(IS_WIN32)('deployApp teardown', () => {
     expect(isDeploying(app.repoPath)).toBe(true);
 
     await vi.advanceTimersByTimeAsync(10_000);
-    await expect(pending).resolves.toEqual({ success: false, code: -1 });
+    await expect(pending).resolves.toEqual({ ok: true, success: false, code: -1, cancelled, timedOut, error: reason });
     expect(groupSignal).toHaveBeenCalledWith(-child.pid, 'SIGKILL');
     expect(emit).toHaveBeenCalledWith('output', { stream: 'stdout', text: 'a'.repeat(MAX_OUTPUT_BYTES) });
     expect(emit).toHaveBeenCalledWith('status', { phase: 'complete', success: false, code: -1, message: reason });
@@ -94,7 +97,7 @@ describe.skipIf(IS_WIN32)('deployApp teardown', () => {
     child.emit('close', null);
     expect(isDeploying(app.repoPath)).toBe(true);
     nextChild.emit('close', 0);
-    await expect(retry).resolves.toEqual({ success: true, code: 0 });
+    await expect(retry).resolves.toEqual({ success: true, code: 0, cancelled: false, timedOut: false });
   });
 });
 
