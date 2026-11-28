@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -14,6 +15,11 @@ import {
   validateScan,
   verifyRun,
 } from './runtime-image-security.js';
+
+vi.mock('node:child_process', async (importOriginal) => ({
+  ...await importOriginal(),
+  execFileSync: vi.fn(),
+}));
 
 const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
 const workflow = read('.github/workflows/runtime-image-security.yml');
@@ -220,6 +226,17 @@ describe('uncovered inputs are reported, never faked', () => {
     expect(UNAVAILABLE_TARGETS.map((t) => t.recipe)).toEqual(['docker/eidoverse-video/Dockerfile']);
     rmSync(join(out, '..'), { recursive: true, force: true });
   });
+});
+
+it.each([
+  [{ PORTOS_SUPERCOLLIDER_BUILDX_CACHE_FROM: '/restored-cache' }, ['buildx', 'build', '--load', '--cache-from', 'type=local,src=/restored-cache']],
+  [{ PORTOS_SUPERCOLLIDER_BUILDX_CACHE_TO: '/new-cache' }, ['buildx', 'build', '--load', '--cache-to', 'type=local,dest=/new-cache,mode=max']],
+  [{}, ['build']],
+])('uses the SuperCollider build cache paths from the CLI environment (%j)', (env, expectedArgv) => {
+  expect(runCli(['build', 'supercollider'], env)).toBe(0);
+  const [docker, argv] = vi.mocked(execFileSync).mock.lastCall;
+  expect(docker).toBe('docker');
+  expect(argv.slice(0, argv.indexOf('--tag'))).toEqual(expectedArgv);
 });
 
 describe('workflow contract', () => {

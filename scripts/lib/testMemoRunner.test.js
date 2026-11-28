@@ -1125,10 +1125,12 @@ describe('planTestMemo and recordTestMemo', () => {
     slices.forEach((slice, i) => {
       const browserCount = slice.filter((file) => CLIENT_BROWSER_SHARD_OWNERS[file]).length;
       expect(browserCount).toBeGreaterThanOrEqual(5);
-      expect(browserCount).toBeLessThanOrEqual(6);
+      expect(browserCount).toBeLessThanOrEqual(i === 0 ? 7 : 6);
       const hashed = vitestShardSlice(files, shardOptions(i + 1)).filter((file) => !CLIENT_BROWSER_SHARD_OWNERS[file]);
       expect(slice.filter((file) => !CLIENT_BROWSER_SHARD_OWNERS[file])).toEqual(hashed);
     });
+    expect(slices[0]).toContain('client/src/components/ui/ConfirmModal.browser.test.js');
+    expect(slices[3]).toContain('client/src/pages/VoiceCall.browser.test.js');
     const heavy = ['SceneClipCoverageLayout', 'MediaLightbox', 'PageLayout', 'SceneCard']
       .map((name) => CLIENT_BROWSER_SHARD_OWNERS[browser.find((file) => file.endsWith(`/${name}.browser.test.js`))]);
     expect(heavy).not.toContain(undefined);

@@ -923,11 +923,11 @@ describe('ci.yml shard wiring', () => {
     const steps = body.split(/^ {6}- name: /m).slice(1);
     const names = steps.map(step => step.split('\n')[0]);
     expect(names).toEqual([
-      'Restore the test memo', 'Check remaining DB tests', 'Provision test database (portos_test)',
+      'Restore the test memo', 'Check remaining DB tests', 'Restore server Vitest transforms', 'Provision test database (portos_test)',
       'Install PostgreSQL client and audio verification tools', 'Restore a real pg_dump into a scratch database',
       'Run DB-backed tests (portos_test)', 'Save the test memo',
     ]);
-    const [memo, plan, provision, tools, restore, run, save] = steps;
+    const [memo, plan, cache, provision, tools, restore, run, save] = steps;
     expect(memo).toContain('uses: ./.github/actions/test-memo');
     expect(memo).toContain('partition: db');
     expect(CI_JOBS.database).toMatch(/key: test-memo-[^\n]*-db-\$\{\{ github\.run_id \}\}/);
@@ -942,7 +942,10 @@ describe('ci.yml shard wiring', () => {
     }
     const liveRestore = 'fromJSON(needs.impact.outputs.plan).db_live_restore';
     const dbGate = `if: fromJSON(steps.db-plan.outputs.remaining) > 0 || ${liveRestore}\n`;
-    for (const step of [provision, tools, run]) expect(step).toContain(dbGate);
+    const cacheAction = 'uses: ./.github/actions/server-vitest-cache';
+    expect(cache).toContain(cacheAction);
+    expect(body.indexOf(cacheAction)).toBe(body.lastIndexOf(cacheAction));
+    for (const step of [cache, provision, tools, run]) expect(step).toContain(dbGate);
     expect(restore).toContain(`if: ${liveRestore}\n`);
     expect(save).toContain('key: ${{ steps.test-memo.outputs.key }}');
     expect(body).toContain("steps.db-tests.outcome == 'success' && github.event_name != 'pull_request'");

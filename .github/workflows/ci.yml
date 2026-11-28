@@ -479,7 +479,6 @@ jobs:
           persist-credentials: false
 
       - uses: ./.github/actions/setup-server
-      - uses: ./.github/actions/server-vitest-cache
 
       # The Postgres schema is not visible to a cache key; scripts/lib/testMemo.js
       # lists the tracked files that build it as db base inputs.
@@ -498,6 +497,10 @@ jobs:
           CI_TEST_MODE: full
           PORTOS_CI_PREPLANNED_RUN: ${{ runner.temp }}/portos-db-run.json
         run: node scripts/run-ci-tests.js db --check-remaining
+
+      - name: Restore server Vitest transforms
+        uses: ./.github/actions/server-vitest-cache
+        if: fromJSON(steps.db-plan.outputs.remaining) > 0 || fromJSON(needs.impact.outputs.plan).db_live_restore
 
       - name: Provision test database (portos_test)
         if: fromJSON(steps.db-plan.outputs.remaining) > 0 || fromJSON(needs.impact.outputs.plan).db_live_restore
