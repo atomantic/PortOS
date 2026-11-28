@@ -443,6 +443,7 @@ describe('scheduled audit measurement workflow', () => {
   it('calibrates audit instructions for whole-slice scoring and below-target re-verification', () => {
     const instructions = auditQualityInstructions('code-quality');
     expect(instructions).toContain(`Check \`audit-slice-history\` FIRST for any slice that scored below ${QUALITY_HEALTHY_THRESHOLD} whose filed issues or fix PRs have landed in the checkout`);
+    expect(instructions).toContain('still completing the cheap Step 1 signal scan so the run qualifies as `broad` and supersedes the older slice');
     expect(instructions).toContain('Scope a new rotation to a cohesive feature or subsystem slice');
     expect(instructions).toContain('A finding that led you to choose the slice is only one part of that evidence.');
     expect(instructions).toContain('For a clean slice with worstSeverity 0, score 90–95.');

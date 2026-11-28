@@ -543,4 +543,41 @@ describe('live file restore caches', () => {
       tools.invalidateCache();
     }
   });
+
+  it('drains an in-flight taste answer write and queues a concurrent one without deadlocking live restore', async () => {
+    const tastePath = join(PATHS.digitalTwin, 'taste-profile.json');
+    const nowIso = new Date().toISOString();
+    await fs.mkdir(PATHS.digitalTwin, { recursive: true });
+    await fs.writeFile(tastePath, JSON.stringify({
+      version: '1.0.0', createdAt: nowIso, updatedAt: nowIso, profileSummary: 'before-summary',
+      lastSessionAt: null, sections: {},
+    }));
+    tasteQuestionnaire.invalidateCache();
+
+    // Start a taste answer publication right as a live restore starts: both
+    // acquire backup lease -> taste queue -> metaMutex in the same order, so
+    // the in-flight answer drains cleanly before the snapshot cut closes.
+    const proc = fakeProc();
+    spawn.mockReturnValue(proc);
+    const inFlightAnswer = tasteQuestionnaire.submitAnswer('food', 'food-core-1', 'Smoky and spicy');
+    const pendingRestore = restoreSnapshot('/dest', 'snap-1', { dryRun: false, subdirFilter: 'digital-twin' });
+
+    await expect(inFlightAnswer).resolves.toMatchObject({ section: 'food', questionId: 'food-core-1' });
+    await flush();
+
+    // Queue a second answer while restore holds the snapshot cut and locks.
+    const queuedAnswer = tasteQuestionnaire.submitAnswer('food', 'food-core-2', 'Improvisational cooking');
+    await fs.writeFile(tastePath, JSON.stringify({
+      version: '1.0.0', createdAt: nowIso, updatedAt: nowIso, profileSummary: 'restored-summary',
+      lastSessionAt: null, sections: {},
+    }));
+    proc.emit('close', 0);
+
+    await pendingRestore;
+    await expect(queuedAnswer).resolves.toMatchObject({ section: 'food', questionId: 'food-core-2', totalResponses: 1 });
+    const stored = JSON.parse(await fs.readFile(tastePath, 'utf8'));
+    expect(stored.profileSummary).toBe('restored-summary');
+    expect(stored.sections.food.responses.map(r => r.questionId)).toEqual(['food-core-2']);
+    tasteQuestionnaire.invalidateCache();
+  });
 });

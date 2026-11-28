@@ -628,7 +628,9 @@ export async function submitAnswer(sectionId, questionId, answer, { source, gene
   const config = TASTE_SECTIONS[sectionId];
   if (!config) throw new Error(`Unknown taste section: ${sectionId}`);
 
-  const { sectionStatus, totalResponses } = await mutateTasteProfile(async (profile) => {
+  // Acquire the backup asset publication lease outside the taste profile queue so
+  // the lock order (backup lease → taste queue → meta lock) matches live restore.
+  const { sectionStatus, totalResponses } = await withBackupAssetPublication(() => mutateTasteProfile(async (profile) => {
     if (!profile.sections[sectionId]) {
       profile.sections[sectionId] = { status: 'pending', responses: [], summary: null };
     }
@@ -664,7 +666,7 @@ export async function submitAnswer(sectionId, questionId, answer, { source, gene
     await appendToAestheticsDoc(sectionId, config, questionId, answer);
 
     return { sectionStatus: section.status, totalResponses: section.responses.length };
-  });
+  }));
 
   console.log(`🎨 Taste answer submitted: ${sectionId}/${questionId} (${totalResponses} responses)`);
 
@@ -849,14 +851,15 @@ ${allTranscripts}
 
   // Phase 2: save only if no section's answers changed during the provider call.
   // A stale result is rejected before either the profile or the derived
-  // AESTHETICS.md is touched.
-  await mutateTasteProfile(async (profile) => {
+  // AESTHETICS.md is touched. Hold the backup asset publication lease outside
+  // the taste queue so the lock order matches live restore.
+  await withBackupAssetPublication(() => mutateTasteProfile(async (profile) => {
     if (overallFingerprint(profile) !== fingerprint) throw staleSummaryError('Some');
     profile.profileSummary = summary;
     await writeTasteProfile(profile);
     // Also write to AESTHETICS.md as the definitive profile
     await writeAestheticsDocument(summary, sectionsWithResponses(profile));
-  });
+  }));
 
   digitalTwinEvents.emit('taste:profile-updated', { summary });
   console.log(`🎨 Overall taste profile generated`);
@@ -1079,8 +1082,9 @@ function findQuestionDef(sectionId, questionId) {
 }
 
 // Peer sync replaces a document body whose peer stamp is strictly newer, so every
-// AESTHETICS.md write must stamp its meta entry in the same meta-locked section
-// (lock order: taste queue → backup lease → meta lock; sync takes the taste
+// AESTHETICS.md write must stamp its meta entry in the same meta-locked section.
+// Callers hold the backup lease outside the taste queue, matching live restore
+// (lock order: backup lease → taste queue → meta lock; sync takes the taste
 // queue outside the meta lock).
 //
 // The taste-profile write already committed before this helper runs. Publication
@@ -1089,7 +1093,7 @@ function findQuestionDef(sectionId, questionId) {
 // stays on the persisted record because loadMeta returns that object and
 // saveMeta replaces it only after the write lands. A retry then appends the
 // already-saved answer once onto the restored document.
-const publishAestheticsDoc = (write) => withBackupAssetPublication(() => withMetaLock(async () => {
+const publishAestheticsDoc = (write) => withMetaLock(async () => {
   const targetPath = join(DIGITAL_TWIN_DIR, AESTHETICS_DOC);
   const previousContent = await readAestheticsBytes(targetPath);
   const wrote = await write();
@@ -1101,7 +1105,7 @@ const publishAestheticsDoc = (write) => withBackupAssetPublication(() => withMet
     if (wrote) await restoreAestheticsBytes(targetPath, previousContent);
     throw err;
   }
-}));
+});
 
 async function readAestheticsBytes(targetPath) {
   try {
