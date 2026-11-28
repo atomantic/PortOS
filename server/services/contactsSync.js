@@ -437,7 +437,7 @@ async function scanAddressBookSources() {
     paths = discoverAddressBookPaths(root);
   } catch (err) {
     const fullDiskAccessRequired = isPermissionError(err);
-    return {
+    return scrubSyncValue({
       ok: false,
       root,
       error: err?.message || 'Failed to scan AddressBook directory',
@@ -445,16 +445,16 @@ async function scanAddressBookSources() {
       ...(fullDiskAccessRequired
         ? await fullDiskAccessDetails()
         : { remediation: `Could not scan ${root}: ${err?.message || 'unknown error'}` }),
-    };
+    });
   }
   if (paths.length === 0) {
-    return {
+    return scrubSyncValue({
       ok: false,
       root,
       paths: [],
       error: 'No AddressBook-v22.abcddb found',
       remediation: `No Contacts databases under ${root}. Open the macOS Contacts app at least once, or check CONTACTS_AB_ROOT.`,
-    };
+    });
   }
   // Probe the largest source for a real permission signal.
   let best = { path: paths[0], n: 0 };
@@ -466,14 +466,14 @@ async function scanAddressBookSources() {
   }
   const probe = readAddressBookDb(best.path);
   if (!probe.ok) {
-    return {
+    return scrubSyncValue({
       ok: false,
       root,
       paths,
       error: probe.error,
       fullDiskAccessRequired: probe.permission,
       ...(probe.permission ? await fullDiskAccessDetails() : { remediation: probe.error }),
-    };
+    });
   }
   const lists = [];
   const errors = [];
