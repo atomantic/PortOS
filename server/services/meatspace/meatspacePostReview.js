@@ -68,8 +68,8 @@ async function loadReviewSchedule() {
 }
 
 async function saveReviewSchedule(schedule) {
-  await ensureDir(MEATSPACE_DIR);
-  await atomicWrite(REVIEW_SCHEDULE_FILE, { skills: schedule.skills || {} });
+  await ensureDir(MEATSPACE_DIR, { mode: 0o700 });
+  await atomicWrite(REVIEW_SCHEDULE_FILE, { skills: schedule.skills || {} }, { mode: 0o600, dirMode: 0o700 });
 }
 
 // =============================================================================

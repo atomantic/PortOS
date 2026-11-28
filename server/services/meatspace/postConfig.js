@@ -145,7 +145,7 @@ const DEFAULT_CONFIG = {
 };
 
 async function ensureMeatspaceDir() {
-  await ensureDir(MEATSPACE_DIR);
+  await ensureDir(MEATSPACE_DIR, { mode: 0o700 });
 }
 
 export async function getPostConfig() {
@@ -191,7 +191,7 @@ async function applyPostConfigUpdate(updates) {
     merged.goals = { ...updates.goals };
   }
   await ensureMeatspaceDir();
-  await atomicWrite(CONFIG_FILE, merged);
+  await atomicWrite(CONFIG_FILE, merged, { mode: 0o600, dirMode: 0o700 });
   console.log(`🧪 POST config updated`);
   // Emit AFTER the write succeeds so a subscriber (reminder rescheduler, etc.)
   // never reacts to a config change that didn't actually persist. `updates` is

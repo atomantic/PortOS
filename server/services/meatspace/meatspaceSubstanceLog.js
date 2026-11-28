@@ -179,8 +179,8 @@ export function createSubstanceLog({ key, itemsField, totalField, mlCollection, 
     return data;
   }
   async function saveButtons(data) {
-    await ensureDir(PATHS.meatspace);
-    await atomicWrite(buttonsFile, data);
+    await ensureDir(PATHS.meatspace, { mode: 0o700 });
+    await atomicWrite(buttonsFile, data, { mode: 0o600, dirMode: 0o700 });
   }
   async function getButtons() { return (await loadButtons())[customButtons.field] || []; }
   const addButton = (input) => withButtonsLock(async () => {
