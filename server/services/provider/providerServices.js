@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { ServerError } from '../../lib/errorHandler.js';
-import { probeOpenAiModels } from '../../lib/openAiModelsProbe.js';
+import { probeOpenAiModels, probeOpenAiModelsWithVersionFallback } from '../../lib/openAiModelsProbe.js';
 import { nextConnectionCatalog, sanitizeCatalogError } from '../../lib/provider/providerGraphRecords.js';
 import {
   allocateServiceSlug,
@@ -88,7 +88,7 @@ async function listByProbe(connection, definition, { env, probe }) {
   }
 
   const result = openai
-    ? await probe(openai, { apiKey, timeoutMs: CATALOG_PROBE_TIMEOUT_MS })
+    ? await probeOpenAiModelsWithVersionFallback(openai, { apiKey, timeoutMs: CATALOG_PROBE_TIMEOUT_MS }, probe)
     // The Anthropic API lists at `/v1/models` under its own header pair.
     : await probe(`${anthropic.replace(/\/+$/, '')}/v1`, {
       timeoutMs: CATALOG_PROBE_TIMEOUT_MS,
