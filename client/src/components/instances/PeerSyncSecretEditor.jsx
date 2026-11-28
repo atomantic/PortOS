@@ -52,7 +52,7 @@ export default function PeerSyncSecretEditor({ peer, onRefresh }) {
           type="button"
           onClick={pair}
           disabled={pairing || !hasPassword}
-          className="text-port-accent underline disabled:opacity-50 disabled:cursor-not-allowed"
+          className="inline-flex items-center rounded border border-port-accent/40 bg-port-accent/10 px-2.5 py-1 text-xs text-port-accent hover:bg-port-accent/20 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-port-accent pointer-coarse:min-h-11 pointer-coarse:px-3 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           title={!hasPassword ? 'Save this peer’s instance password first' : undefined}
         >
           {pairing
