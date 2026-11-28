@@ -2,7 +2,7 @@
 
 import { join } from 'path';
 import { existsSync } from 'fs';
-import { link } from 'fs/promises';
+import { link, stat } from 'fs/promises';
 import { pipeline } from 'node:stream/promises';
 import { createHash, randomUUID } from 'node:crypto';
 import { PATHS, atomicWrite, ensureDir, sha256File, createWriteStreamGuarded, unlinkGuarded } from '../../lib/fileUtils.js';
@@ -53,18 +53,25 @@ import {
 // `row.thumbnail` rode the wire from a peer, so it goes through
 // `sanitizeAssetFilename` before it can become a path segment.
 function createVideoThumbnailLookup() {
+  let cachedStamp = null;
   let byFilenamePromise = null;
+  const videoHistoryStamp = () => stat(join(PATHS.data, 'video-history.json'))
+    .then((info) => `${info.mtimeMs}:${info.size}:${info.ino}:${info.ctimeMs}`, () => 'missing');
   return async (filename) => {
-    byFilenamePromise ??= readVideoHistoryRows()
-      .then((rows) => {
-        const map = new Map();
-        for (const row of rows) {
-          if (!isStr(row?.filename) || map.has(row.filename)) continue;
-          map.set(row.filename, isStr(row?.thumbnail) ? sanitizeAssetFilename(row.thumbnail) : null);
-        }
-        return map;
-      })
-      .catch(() => new Map());
+    const stamp = await videoHistoryStamp();
+    if (!byFilenamePromise || stamp !== cachedStamp) {
+      cachedStamp = stamp;
+      byFilenamePromise = readVideoHistoryRows()
+        .then((rows) => {
+          const map = new Map();
+          for (const row of rows) {
+            if (!isStr(row?.filename) || map.has(row.filename)) continue;
+            map.set(row.filename, isStr(row?.thumbnail) ? sanitizeAssetFilename(row.thumbnail) : null);
+          }
+          return map;
+        })
+        .catch(() => new Map());
+    }
     return (await byFilenamePromise).get(filename) ?? null;
   };
 }

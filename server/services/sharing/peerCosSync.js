@@ -360,10 +360,9 @@ export async function syncCosHistoryFromPeer(peer) {
         } else {
           await publish();
         }
-        // A resolved download does not prove publication. Re-diff only `missing`
-        // before the index commit, while the same lease protects landed bytes,
-        // avoiding a full-manifest re-stat when only a small delta was pulled.
-        const stillMissing = await diffCosHistoryManifestAgainstLocal(missing);
+        // A resolved download does not prove publication. Re-diff before the
+        // index commit, while the same lease still protects landed bytes.
+        const stillMissing = await diffCosHistoryManifestAgainstLocal(manifest.entries);
         const pulled = missing.length - stillMissing.length;
         if (stillMissing.length === 0) {
           if (await reconcileCosHistoryIndex(manifest.entries)) {
