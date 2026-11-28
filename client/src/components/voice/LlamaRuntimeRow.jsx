@@ -51,10 +51,21 @@ export default function LlamaRuntimeRow() {
   };
 
   const toggleAutoStart = () => run('auto', async () => {
-    const result = await setLlamaServerAutoStart(!status?.autoStart, { silent: true });
-    if (!mountedRef.current) return;
-    if (result?.status) setStatus(result.status);
-    if (result?.started) toast.success('llama.cpp started');
+    try {
+      const result = await setLlamaServerAutoStart(!status?.autoStart, { silent: true });
+      if (!mountedRef.current) return;
+      if (result?.status) setStatus(result.status);
+      if (result?.started) toast.success('llama.cpp started');
+    } catch (err) {
+      // The server persists autoStart before attempting to start llama-server;
+      // refresh status so the switch reflects the saved setting even if startup fails.
+      if (mountedRef.current) {
+        await getLlamaServerStatus({ silent: true })
+          .then((next) => { if (mountedRef.current) setStatus(next); })
+          .catch(() => {});
+      }
+      throw err;
+    }
   });
 
   const start = () => run('start', async () => {
