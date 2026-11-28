@@ -184,6 +184,8 @@ export default function VoiceCallConsole({
           visionEnabled={visionEnabled}
           onToggleVision={onToggleVision}
           onOpenBrain={openBrainTab}
+          brainExpanded={stationTab === 'brain'}
+          brainControlsId="station-panel-brain"
           onTuneChannel={tuneChannel}
           images={images}
         />
@@ -260,7 +262,7 @@ export default function VoiceCallConsole({
               className="space-y-2.5 break-words font-mono text-xs leading-relaxed sm:text-sm"
             >
               {!hasRows && !interimTranscript && (
-                <p className="opacity-65">
+                <p className="text-port-text-muted">
                   Channel quiet. Press TALK or type on the handset.
                 </p>
               )}

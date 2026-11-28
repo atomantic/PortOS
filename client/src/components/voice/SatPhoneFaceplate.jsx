@@ -37,6 +37,7 @@ export function SatPhoneFaceplate({
   runningAvatar,
   avatarData,
   showSetup,
+  setupControlsId,
   onToggleSetup,
   onCompactMode,
   onMinimizeMobile,
@@ -74,6 +75,7 @@ export function SatPhoneFaceplate({
               type="button"
               onClick={onToggleSetup}
               aria-expanded={showSetup}
+              aria-controls={showSetup && setupControlsId ? setupControlsId : undefined}
               aria-label="Voice setup"
               title="Voice brain & realtime setup"
               className={`${utilityBtn} ${showSetup ? 'text-port-accent border-port-accent/40' : ''}`}
@@ -140,6 +142,7 @@ const SETUP_TABS = [
  * realtime call or resets a form.
  */
 export function SatPhoneSetup({
+  id,
   llmProvider,
   llmModel,
   llmResidency = null,
@@ -153,7 +156,7 @@ export function SatPhoneSetup({
   const choose = (id) => { safeWriteStorage(SETUP_TAB_KEY, id); setTab(id); };
   const shown = (id) => !tabbed || tab === id;
   return (
-    <div className="space-y-2">
+    <div id={id} className="space-y-2">
       {tabbed && (
         <TabPills tabs={SETUP_TABS} activeTab={tab} onChange={choose} size="xs" stretch ariaLabel="Voice setup" controlsIdPrefix="satphone" />
       )}

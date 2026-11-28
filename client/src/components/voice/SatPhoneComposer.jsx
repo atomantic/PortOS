@@ -37,7 +37,7 @@ export default function SatPhoneComposer({ draft, onDraft, onSend, inputRef, ima
           placeholder="Transmit text…"
           aria-label="Message to the voice assistant"
           enterKeyHint="send"
-          className="min-h-9 pointer-coarse:min-h-11 min-w-0 flex-1 rounded-lg border border-port-border bg-port-bg px-2.5 py-2 font-mono text-xs text-port-text placeholder:text-port-text-muted focus:border-port-accent focus:outline-none"
+          className="min-h-9 pointer-coarse:min-h-11 min-w-0 flex-1 rounded-lg border border-port-border bg-port-bg px-2.5 py-2 font-mono text-xs text-port-text placeholder:text-port-text-muted focus:border-port-accent"
         />
         <button
           type="submit"

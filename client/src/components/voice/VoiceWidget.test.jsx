@@ -662,19 +662,29 @@ describe('VoiceWidget sat-phone visual mode & bottom-left placement', () => {
     expect(ui.queryByRole('button', { name: 'SFX' })).not.toBeInTheDocument();
     expect(ui.queryByRole('button', { name: 'End' })).not.toBeInTheDocument();
 
-    // Interactive LCD opens the Voice setup tray directly, and speech speed steps persist tts.rate.
-    fireEvent.click(ui.getByRole('button', { name: /Open voice brain settings/ }));
-    expect(ui.getByRole('button', { name: 'Voice setup' })).toHaveAttribute('aria-expanded', 'true');
+    // Interactive LCD opens the Voice setup tray directly and exposes disclosure state, and speech speed steps persist tts.rate.
+    const lcdBtn = ui.getByRole('button', { name: /Open voice brain settings/ });
+    expect(lcdBtn).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(lcdBtn);
+    const setupBtn = ui.getByRole('button', { name: 'Voice setup' });
+    expect(setupBtn).toHaveAttribute('aria-expanded', 'true');
+    expect(lcdBtn).toHaveAttribute('aria-expanded', 'true');
+    const setupPanelId = setupBtn.getAttribute('aria-controls');
+    expect(setupPanelId).toBeTruthy();
+    expect(widget.querySelector(`[id="${setupPanelId}"]`)).not.toBeNull();
     const speedBtn = ui.getByRole('button', { name: /Speech speed 1\.0×/ });
     fireEvent.click(speedBtn);
     expect(updateVoiceConfig).toHaveBeenCalledWith({ tts: { rate: 1.25 } }, { silent: true });
     expect(ui.getByRole('button', { name: /Speech speed 1\.25×/ })).toBeInTheDocument();
 
-    // Enabling screen vision reveals the live PiP preview over the viewfinder.
+    // Enabling screen vision reveals the live PiP preview over the viewfinder without flipping the toggle label.
     voiceClientMock.enableVisionCapture.mockResolvedValueOnce(true);
+    const visionBtn = ui.getByRole('button', { name: 'Screen vision for voice' });
+    expect(visionBtn).toHaveAttribute('aria-pressed', 'false');
     await act(async () => {
-      fireEvent.click(ui.getByRole('button', { name: 'Enable screen vision for voice' }));
+      fireEvent.click(visionBtn);
     });
+    expect(visionBtn).toHaveAttribute('aria-pressed', 'true');
     expect(ui.getByRole('button', { name: /Screen vision active/ })).toBeInTheDocument();
 
     // Switching to compact bar hides the handset and saves the preference in localStorage

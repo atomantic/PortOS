@@ -8,7 +8,7 @@ import ConversationalGemmaNotice from '../settings/voice/ConversationalGemmaNoti
 import FastVoiceModelNotice from './FastVoiceModelNotice';
 import LlamaRuntimeRow, { isManagedLlamaProvider } from './LlamaRuntimeRow';
 
-export const VOICE_LLM_SELECT_CLS = 'min-h-10 pointer-coarse:min-h-11 w-full min-w-0 rounded-lg border border-port-border bg-port-bg px-2.5 py-1.5 font-mono text-xs text-port-text focus:border-port-accent focus:outline-none disabled:opacity-50';
+export const VOICE_LLM_SELECT_CLS = 'min-h-10 pointer-coarse:min-h-11 w-full min-w-0 rounded-lg border border-port-border bg-port-bg px-2.5 py-1.5 font-mono text-xs text-port-text focus:border-port-accent disabled:opacity-50';
 const LABEL_CLS = 'block font-mono text-[10px] uppercase tracking-wider text-port-text-muted';
 
 /**

@@ -152,10 +152,11 @@ export default function VoicePicker({
     <div className="flex items-center gap-1.5 min-w-0">
       <select
         id={id}
+        aria-label={compact ? label : undefined}
         value={catalogValue || ''}
         onChange={(e) => onChange?.(e.target.value || null)}
         disabled={disabled || loading}
-        className="flex-1 min-w-0 px-1.5 py-0.5 text-xs bg-port-bg border border-port-border rounded text-white disabled:opacity-50"
+        className="flex-1 min-w-0 px-1.5 py-0.5 text-xs bg-port-bg border border-port-border rounded text-port-text disabled:opacity-50"
       >
         <option value="">{loading ? 'Loading voices…' : placeholder}</option>
         {/* Preserve a previously-saved voiceId that no longer appears in the
@@ -190,9 +191,9 @@ export default function VoicePicker({
         disabled={!value || previewing || disabled}
         title={value ? `Audition ${value}` : 'Pick a voice to audition'}
         aria-label={value ? `Audition ${value}` : 'Audition voice'}
-        className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center shrink-0 p-1 rounded text-gray-400 hover:text-port-accent disabled:opacity-30 disabled:cursor-not-allowed"
+        className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center shrink-0 p-1 rounded text-port-text-muted hover:text-port-accent disabled:opacity-30 disabled:cursor-not-allowed"
       >
-        {previewing ? <Loader2 size={12} className="animate-spin" /> : <Play size={12} />}
+        {previewing ? <Loader2 size={12} aria-hidden="true" className="animate-spin" /> : <Play size={12} aria-hidden="true" />}
       </button>
     </div>
   );
@@ -201,11 +202,11 @@ export default function VoicePicker({
     return (
       <div className="space-y-0.5">
         {!compact ? (
-          <label htmlFor={id} className="block text-[10px] uppercase tracking-wider text-gray-500">
+          <label htmlFor={id} className="block text-[10px] uppercase tracking-wider text-port-text-muted">
             {label}
           </label>
         ) : null}
-        <p className="text-[10px] text-port-error">{loadError}</p>
+        <p role="alert" className="text-[10px] text-port-error-text">{loadError}</p>
       </div>
     );
   }
@@ -214,7 +215,7 @@ export default function VoicePicker({
 
   return (
     <div className="space-y-0.5">
-      <label htmlFor={id} className="block text-[10px] uppercase tracking-wider text-gray-500">
+      <label htmlFor={id} className="block text-[10px] uppercase tracking-wider text-port-text-muted">
         {label}
       </label>
       {select}

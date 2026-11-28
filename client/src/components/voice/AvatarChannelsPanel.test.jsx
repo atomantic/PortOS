@@ -197,7 +197,7 @@ it('adds a gallery image and removes an avatar after an inline confirmation', as
   await waitFor(() => expect(addAvatarToLibrary).toHaveBeenCalledWith('gallery.png'));
   expect(await screen.findByRole('heading', { name: 'Avatars (2)' })).toBeInTheDocument();
 
-  fireEvent.click(screen.getAllByRole('button', { name: 'Remove avatar from the collection' })[0]);
+  fireEvent.click(screen.getByRole('button', { name: 'Remove avatar 1 from the collection' }));
   expect(removeAvatarFromLibrary).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
   await waitFor(() => expect(removeAvatarFromLibrary).toHaveBeenCalledWith('face.png'));
@@ -219,7 +219,7 @@ it('guards against duplicate avatar generation submits and keeps confirmation op
   resolveGen({ jobId: 'job-2' });
   await screen.findByRole('button', { name: 'job job-2' });
 
-  fireEvent.click(screen.getAllByRole('button', { name: 'Remove avatar from the collection' })[0]);
+  fireEvent.click(screen.getByRole('button', { name: 'Remove avatar 1 from the collection' }));
   fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
   await waitFor(() => expect(removeAvatarFromLibrary).toHaveBeenCalledWith('face.png'));
   expect(screen.getByRole('button', { name: 'Remove' })).toBeInTheDocument();

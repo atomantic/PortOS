@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import { saveAvatarChannels } from '../../services/apiVoiceAvatar';
 import { activeChannelOf, channelLlm, channelVoiceLabel, useAvatarLibrary } from './useAvatarLibrary';
 import { SatPhoneFaceplate, SatPhoneSetup, SatPhoneSpeaker } from './SatPhoneFaceplate';
@@ -58,6 +58,8 @@ export default function SatPhoneHandset({
   visionEnabled = false,
   onToggleVision,
   onOpenBrain,
+  brainExpanded,
+  brainControlsId,
   onTuneChannel,
   // { pending, attachFiles, remove } — images queued for the next turn.
   images,
@@ -73,6 +75,7 @@ export default function SatPhoneHandset({
   onMinimizeMobile,
 }) {
   const [showFloatingSetup, setShowFloatingSetup] = useState(false);
+  const floatingSetupId = useId();
   const { data: library, updateData: updateLibrary } = useAvatarLibrary();
   const channel = activeChannelOf(library);
   const channels = library?.channels ?? [];
@@ -116,6 +119,7 @@ export default function SatPhoneHandset({
           runningAvatar={runningAvatar}
           avatarData={avatarData}
           showSetup={showFloatingSetup}
+          setupControlsId={floatingSetupId}
           onToggleSetup={() => setShowFloatingSetup((value) => !value)}
           onCompactMode={onCompactMode}
           onMinimizeMobile={onMinimizeMobile}
@@ -124,6 +128,7 @@ export default function SatPhoneHandset({
 
         {isFloating && showFloatingSetup && (
           <SatPhoneSetup
+            id={floatingSetupId}
             llmProvider={llmProvider}
             llmModel={llmModel}
             llmResidency={residency}
@@ -160,6 +165,8 @@ export default function SatPhoneHandset({
           onSelectChannel={selectChannel}
           onTuneChannel={handleTuneChannel}
           onOpenBrain={handleOpenBrain}
+          brainExpanded={isFloating ? showFloatingSetup : brainExpanded}
+          brainControlsId={isFloating ? floatingSetupId : brainControlsId}
           volume={volume}
           muted={muted}
           voiceLabel={channelVoiceLabel(channel, voiceLabel)}
