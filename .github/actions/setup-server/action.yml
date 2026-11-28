@@ -11,14 +11,8 @@ runs:
       uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
       with:
         node-version: 26.x
-        cache: npm
-        cache-dependency-path: server/package-lock.json
+        package-manager-cache: false
 
-    # setup-node's npm cache only preserves ~/.npm, the tarball cache: a clean
-    # install still wipes and repopulates a 570 MB node_modules on every job
-    # that runs this action. Cache the installed tree instead and skip the
-    # install on a hit.
-    #
     # No restore-keys. The install below is skipped on a hit, so a near-miss
     # restore would silently ship a node_modules built from a different
     # lockfile. Exact key or nothing. package.json is in the hash alongside
@@ -46,13 +40,10 @@ runs:
     # explicit mark; this reads it back.
     #
     # `continue-on-error` on purpose: a bad entry must not wedge every PR
-    # until a human clears the cache by hand. It fails, the two steps below
-    # see a non-success outcome, and the job builds the tree it needs. It does
-    # not *replace* the bad entry — cache keys are immutable and actions/cache
-    # skips the save on an exact hit — so that entry keeps costing each run a
-    # reinstall until the key moves or it ages out. That is precisely the
-    # pre-cache cost: the worst case degrades to the old behaviour, never to a
-    # red repo.
+    # until a human clears the cache by hand. On failure, the job builds the
+    # tree it needs. It does not *replace* the bad entry — cache keys are
+    # immutable and actions/cache skips the save on an exact hit. Each run
+    # reinstalls until the key changes or the cache entry expires.
     #
     # `outcome != 'success'` covers all three cases in one expression: on a
     # cache miss this step is skipped (outcome `skipped`), on a hit it is
@@ -63,6 +54,34 @@ runs:
       continue-on-error: true
       shell: bash
       run: node scripts/trusted-rebuild-stamp.js check server
+
+    - name: Locate the server npm cache
+      id: server-npm-cache
+      if: steps.server-modules-usable.outcome != 'success'
+      working-directory: server
+      shell: bash
+      run: |
+        cache_path=$(npm config get cache)
+        # Native npm on Windows can leave a trailing carriage return.
+        printf 'path=%s\n' "${cache_path%$'\r'}" >> "$GITHUB_OUTPUT"
+
+    # Pull requests only restore package downloads because their caches are
+    # scoped to the PR merge ref.
+    - name: Restore server npm downloads
+      if: steps.server-modules-usable.outcome != 'success' && github.event_name == 'pull_request'
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ steps.server-npm-cache.outputs.path }}
+        key: npm-cache-server-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('server/package-lock.json') }}
+        restore-keys: npm-cache-server-${{ runner.os }}-${{ runner.arch }}-
+
+    - name: Cache server npm downloads
+      if: steps.server-modules-usable.outcome != 'success' && github.event_name != 'pull_request'
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ steps.server-npm-cache.outputs.path }}
+        key: npm-cache-server-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('server/package-lock.json') }}
+        restore-keys: npm-cache-server-${{ runner.os }}-${{ runner.arch }}-
 
     - name: Install server dependencies
       if: steps.server-modules-usable.outcome != 'success'

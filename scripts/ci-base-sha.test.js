@@ -309,6 +309,56 @@ describe('ci.yml server node_modules cache', () => {
   });
 });
 
+describe('ci.yml npm download caches', () => {
+  const jobs = readCiJobs();
+
+  it.each([
+    ['server', 'Check the restored node_modules was rebuilt', "steps.server-modules-usable.outcome != 'success'"],
+    ['client', 'Cache client node_modules', "steps.client-modules.outputs.cache-hit != 'true'"],
+  ])('caches %s downloads only when the job installs dependencies', (workspace, treeCheck, installCondition) => {
+    const installers = Object.entries(jobs).filter(([, body]) => body.includes(`npm ci --prefix ${workspace}`));
+    expect(installers.length).toBeGreaterThan(0);
+    const prefix = `npm-cache-${workspace}-\${{ runner.os }}-\${{ runner.arch }}-`;
+    const key = prefix + `\${{ hashFiles('${workspace}/package-lock.json') }}`;
+
+    for (const [id, body] of installers) {
+      const steps = body.split(/^ {6}- /m);
+      const installIndex = steps.findIndex(step => step.startsWith(`name: Install ${workspace} dependencies\n`));
+      const treeCheckIndex = steps.findIndex(step => step.startsWith(`name: ${treeCheck}\n`));
+      expect(treeCheckIndex, id).toBeGreaterThanOrEqual(0);
+      expect(steps[installIndex], id).toContain(`\n        if: ${installCondition}\n`);
+
+      const setupNodeSteps = steps.filter(step => step.startsWith('name: Use Node.js 26.x\n'));
+      expect(setupNodeSteps.length, id).toBeGreaterThan(0);
+      for (const step of setupNodeSteps) {
+        expect(step, id).toContain('\n          package-manager-cache: false\n');
+        expect(step, id).not.toMatch(/\n {10}(?:cache|cache-dependency-path):/);
+      }
+
+      const lookupIndex = steps.findIndex(step => step.startsWith(`name: Locate the ${workspace} npm cache\n`));
+      expect(lookupIndex, id).toBeGreaterThan(treeCheckIndex);
+      expect(steps[lookupIndex], id).toContain(`\n        if: ${installCondition}\n`);
+      expect(steps[lookupIndex], id).toContain(`\n        working-directory: ${workspace}\n`);
+      expect(steps[lookupIndex], id).toContain('npm config get cache');
+
+      const cacheSteps = steps.filter(step => step.includes(`\n          key: npm-cache-${workspace}-`));
+      expect(cacheSteps, id).toHaveLength(2);
+      const [restore, restoreAndSave] = cacheSteps;
+      expect(restore, id).toContain(`\n        if: ${installCondition} && github.event_name == 'pull_request'\n`);
+      expect(restore, id).toContain('\n        uses: actions/cache/restore@');
+      expect(restoreAndSave, id).toContain(`\n        if: ${installCondition} && github.event_name != 'pull_request'\n`);
+      expect(restoreAndSave, id).toContain('\n        uses: actions/cache@');
+      for (const step of cacheSteps) {
+        expect(steps.indexOf(step), id).toBeGreaterThan(lookupIndex);
+        expect(steps.indexOf(step), id).toBeLessThan(installIndex);
+        expect(step, id).toContain(`\n          path: \${{ steps.${workspace}-npm-cache.outputs.path }}\n`);
+        expect(step, id).toContain(`\n          key: ${key}\n`);
+        expect(step, id).toContain(`\n          restore-keys: ${prefix}\n`);
+      }
+    }
+  });
+});
+
 describe('ci.yml sidecar dependencies', () => {
   it('uses server dependencies for Autofixer tests and checks server syntax in the impact job', () => {
     const jobs = workflowJobs(WORKFLOW);
