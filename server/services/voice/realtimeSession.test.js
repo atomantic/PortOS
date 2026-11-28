@@ -159,6 +159,20 @@ describe('openRealtimeCall', () => {
     expect(onClose).toHaveBeenCalledWith('sidecar-closed');
     expect(emit).toHaveBeenCalledWith('voice:realtime:state', { active: false, reason: 'sidecar-closed' });
   });
+
+  it('does not emit a synthetic delegate result after the call has closed', async () => {
+    let finishDelegate;
+    const runDelegate = vi.fn(() => new Promise((resolve) => { finishDelegate = resolve; }));
+    const { ws, emit, call } = await open({ runDelegate });
+    ws.text({ type: 'delegate', call_id: 'c3', task: 'Check status' });
+    await vi.waitFor(() => expect(runDelegate).toHaveBeenCalledWith('Check status'));
+    call.close();
+    finishDelegate('');
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(emit).not.toHaveBeenCalledWith('voice:realtime:result', expect.anything());
+    expect(ws.sent).toEqual([]);
+  });
 });
 
 describe('realtimePersona', () => {

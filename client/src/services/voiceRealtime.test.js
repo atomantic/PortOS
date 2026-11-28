@@ -24,6 +24,12 @@ describe('realtime PCM helpers', () => {
     new DataView(bytes.buffer).setInt16(1, 16384, true);
     expect(Array.from(pcm16ToFloat(bytes.subarray(1)))).toEqual([0.5, 0, 0]);
   });
+
+  it('returns empty samples for missing or unsupported payloads', () => {
+    expect(pcm16ToFloat(null)).toHaveLength(0);
+    expect(pcm16ToFloat(undefined)).toHaveLength(0);
+    expect(pcm16ToFloat({})).toHaveLength(0);
+  });
 });
 
 describe('startRealtimeCall', () => {

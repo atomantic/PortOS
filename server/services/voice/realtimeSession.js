@@ -112,9 +112,10 @@ export const openRealtimeCall = async ({
     } catch (err) {
       output = `That failed: ${err.message}`;
     }
+    if (closed) return;
     output = String(output).slice(0, MAX_RESULT_CHARS);
     emit('voice:realtime:result', { callId, task: text, text: output });
-    if (!closed && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'tool_result', call_id: callId, output }));
+    if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'tool_result', call_id: callId, output }));
   };
 
   ws.on('message', (data, isBinary) => {
