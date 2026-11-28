@@ -1,3 +1,4 @@
+# Bounded #20473 regeneration: uv 0.13.7; cutoff 2026-11-07T00:00:00Z; removed training-only peft; retained versions and hashes unchanged.
 # Bounded #17571 regeneration: uv 0.13.7; cutoff 2026-11-07T00:00:00Z; dropped unimported training, TensorBoard, plotting and ModelScope packages; every retained version and hash unchanged.
 # Bounded #16047 regeneration: cutoff 2026-11-07T00:00:00Z; Transformers 5.22.2 only; retained companion versions and artifact hashes.
 # Bounded #15988 regeneration: uv 0.13.7; cutoff 2026-11-06T00:00:00Z; complete closure constrained to retained pins.
@@ -1094,9 +1095,6 @@ numpy==2.4.6 \
 packaging==26.3 \
     --hash=sha256:94edc256424af38762eb31306eed28beb9f0efc50a8837492c9d6fd6004aed79 \
     --hash=sha256:d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c
-peft==0.21.2 \
-    --hash=sha256:106ab6077ff72c54d21577f9af5970e34bac7582cb14209f7b2b511e322a4eae \
-    --hash=sha256:b803ccfb3f3f316004d850284306687833a2235ea278fb56abc856203456142e
 pillow==13.0.0 \
     --hash=sha256:02464da86f561f410e13b061ec37c3068a9cb557a095494157742d07b3c24a27 \
     --hash=sha256:04a63720f79e22fd54d897c233a68314c50ca0603360f54ce2bd5db8f0f43782 \

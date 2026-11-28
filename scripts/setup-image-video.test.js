@@ -2144,6 +2144,7 @@ describe.each(['windows', 'linux'])('ACE-Step %s Install/Repair', (target) => {
     const pins = requirements.map((line) => line.replace(/\s*\\$/, ''));
     for (const pin of direct) expect(pins).toContain(pin);
     expect(lock).not.toMatch(/git\+|^[\w.-]+\s*@/m);
+    expect(lock).not.toMatch(/^peft==/m);
     expect(lock).toMatch(/^setuptools==/m);
     expect(lock).toMatch(/^wheel==/m);
     const build = readFileSync(join(REQUIREMENTS_DIR, 'requirements-acestep-mlx-build.lock.txt'), 'utf8');
@@ -2172,6 +2173,8 @@ describe.each(['windows', 'linux'])('ACE-Step %s Install/Repair', (target) => {
     const localInstalls = commands.filter((line) => line.startsWith('uv pip install'));
     expect(localInstalls).toHaveLength(2);
     for (const line of localInstalls) expect(line).toContain('--no-deps --no-build-isolation');
+    expect(commands.filter((line) => line.includes(' archive --format=zip '))).toHaveLength(2);
+    expect(commands.filter((line) => /^python - .*requirements-acestep-cuda\.txt$/.test(line))).toHaveLength(2);
     expect(install.commands()).not.toMatch(/--upgrade|git\+|python -m pip/);
     expect(install.commands()).toContain('from acestep.pipeline_ace_step import ACEStepPipeline');
   });
