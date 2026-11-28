@@ -276,7 +276,9 @@ export async function processManifest(bucketId, manifestFilename) {
   // Unlike the truly-missing case this will never self-resolve via sync, so we
   // advance the cursor (no infinite pending loop) and emit a clear signal. The
   // user must restore the deleted universe to import the N deferred items.
-  if (collectionTombstonedUniverse) {
+  // A failed record insert can leave the universe tombstoned until retry, so
+  // give the record failure precedence over skipping the collection.
+  if (collectionTombstonedUniverse && !outcome.recordImportFailures?.length) {
     await markProcessed(bucketId, manifestFilename, manifest.id);
     sharingEvents.emit('manifest-processed', { bucketId, manifestId: manifest.id, manifestFilename, outcome });
     console.error(`⚠️ sharing: bucket=${bucket.name} manifest=${manifest.id} kind=${manifest.kind} collectionUniverse=${collectionTombstonedUniverse} is deleted locally — ${outcome.collectionItemsDeferred ?? 0} item(s) skipped; restore universe to import`);
@@ -284,7 +286,7 @@ export async function processManifest(bucketId, manifestFilename) {
   }
   // Each row is checked once for "is this still pending?", assigned onto
   // `outcome.<key>` once, and formatted into the `⏳ sharing:` log line once —
-  // rather than the same eleven conditions repeated across a trigger check,
+  // rather than repeating the conditions across a trigger check,
   // an assignment block, and a log-suffix template (#6845).
   const PENDING_SIGNALS = [
     { key: 'pendingAssets', value: assetCopy.missing, label: 'waitingForAssets', format: 'count', alwaysLog: true },
@@ -296,6 +298,7 @@ export async function processManifest(bucketId, manifestFilename) {
     { key: 'pendingLegacyCanonUniverses', value: outcome?.legacyCanonPendingUniverses || null, label: 'waitingForLegacyCanonUniverses', format: 'list' },
     { key: 'pendingLegacyCanonFailures', value: outcome?.legacyCanonPendingFailures || null, label: 'legacyCanonFailures', format: 'list' },
     { key: 'pendingRecordImportFailures', value: outcome?.recordImportFailures || null, label: 'recordImportFailures', format: 'list' },
+    { key: 'pendingCollectionMergeFailures', value: outcome?.collectionMergeFailures || null, label: 'collectionMergeFailures', format: 'list' },
     { key: 'pendingReviewMergeFailures', value: outcome?.reviewMergeFailures || null, label: 'reviewMergeFailures', format: 'list' },
     { key: 'pendingOutlineMergeFailures', value: outcome?.outlineMergeFailures || null, label: 'outlineMergeFailures', format: 'list' },
   ];
