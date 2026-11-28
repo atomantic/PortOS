@@ -18,9 +18,11 @@ vi.mock('./tts.js', () => ({
 }));
 const streamChatMock = vi.fn();
 const resolveLlmEndpointMock = vi.fn(async () => ({ apiBase: 'http://127.0.0.1:11434/v1' }));
+const markWarmingMock = vi.fn();
 vi.mock('./llm.js', () => ({
   streamChat: (...args) => streamChatMock(...args),
   resolveLlmEndpoint: (...args) => resolveLlmEndpointMock(...args),
+  markVoiceLlmWarming: (...args) => markWarmingMock(...args),
 }));
 vi.mock('./echo.js', () => ({ isEchoOfRecentTts: () => false, rememberTtsSentence: () => {} }));
 vi.mock('../brainJournal.js', () => ({ appendJournal: vi.fn(), getToday: vi.fn(async () => '2026-05-12') }));
@@ -119,6 +121,36 @@ describe('runTurn — turn message assembly', () => {
       expect(await warmPromptPrefix({ reason: 'test' })).toMatchObject({ warmed: false, reason: 'recent' });
       expect(streamChatMock).not.toHaveBeenCalled();
       voiceTools.enabled = false;
+    });
+
+    it('shows a cold model as loading for the length of the warm-up, even when it fails', async () => {
+      const release = vi.fn();
+      markWarmingMock.mockReset();
+      markWarmingMock.mockReturnValue(release);
+      streamChatMock.mockReset();
+      streamChatMock.mockImplementation(async (_messages, opts) => {
+        opts.onModelLoading({ model: 'model-a' });
+        expect(release).not.toHaveBeenCalled();
+        throw new Error('model server offline');
+      });
+      await expect(warmPromptPrefix({ reason: 'cold-test' })).rejects.toThrow('model server offline');
+      expect(markWarmingMock).toHaveBeenCalledTimes(1);
+      expect(markWarmingMock.mock.calls[0][1]).toBe('model-a');
+      expect(release).toHaveBeenCalledTimes(1);
+    });
+
+    it('still loads the model when tool lists are chosen per turn', async () => {
+      voiceTools.enabled = true;
+      voiceTools.trimByIntent = true;
+      streamChatMock.mockReset();
+      streamChatMock.mockResolvedValue({ text: '', toolCalls: [] });
+      // Step past the dedupe window of the earlier warm-up of the same prompt.
+      const now = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 60_000);
+      expect(await warmPromptPrefix({ reason: 'per-turn-test' })).toMatchObject({ warmed: true });
+      now.mockRestore();
+      expect(streamChatMock.mock.calls[0][1].tools).toBeUndefined();
+      voiceTools.enabled = false;
+      voiceTools.trimByIntent = false;
     });
 
     it('skips hosted providers so a warm-up is never billed', async () => {

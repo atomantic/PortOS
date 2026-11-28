@@ -22,6 +22,7 @@ vi.mock('../services/voice/llm.js', async (importActual) => ({
   ...(await importActual()),
   readVoiceLlmResidency: vi.fn(),
 }));
+vi.mock('../services/voice/pipeline.js', () => ({ warmPromptPrefix: vi.fn() }));
 vi.mock('../services/voice/health.js', () => ({
   checkAll: vi.fn(),
   invalidateHealthCache: vi.fn(),
@@ -89,6 +90,7 @@ const config = await import('../services/voice/config.js');
 const llm = await import('../services/voice/llm.js');
 const channelAgent = await import('../services/voice/channelAgent.js');
 const health = await import('../services/voice/health.js');
+const pipeline = await import('../services/voice/pipeline.js');
 const bootstrap = await import('../services/voice/bootstrap.js');
 const tts = await import('../services/voice/tts.js');
 const voiceProfiles = await import('../services/voice/profiles.js');
@@ -308,6 +310,24 @@ describe('Voice Routes', () => {
       expect(fineTuning.getFineTuningJobStatus).not.toHaveBeenCalled();
     });
 
+  });
+
+  describe('POST /api/voice/llm/preload', () => {
+    it('starts the warm-up and answers without waiting for the load', async () => {
+      let finish;
+      pipeline.warmPromptPrefix.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+      const res = await request(buildApp()).post('/api/voice/llm/preload').send({});
+      expect(res.status).toBe(202);
+      expect(res.body).toEqual({ preloading: true });
+      await vi.waitFor(() => expect(pipeline.warmPromptPrefix).toHaveBeenCalledWith({ reason: 'pick' }));
+      finish({ warmed: true });
+    });
+
+    it('answers even when the load fails, and refuses unknown body keys', async () => {
+      pipeline.warmPromptPrefix.mockRejectedValue(new Error('model server offline'));
+      expect((await request(buildApp()).post('/api/voice/llm/preload').send({})).status).toBe(202);
+      expect((await request(buildApp()).post('/api/voice/llm/preload').send({ model: 'x' })).status).toBe(400);
+    });
   });
 
   describe('GET /api/voice/llm/residency', () => {

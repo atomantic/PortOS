@@ -16,6 +16,7 @@ import { TTS_ENGINE_CONFIG_KEYS } from '../lib/voiceEngines.js';
 import {
   voicePiperFetchBodySchema,
   facetimeActionSchema,
+  voiceLlmPreloadSchema,
   voiceConfigPatchSchema,
   voiceProfileListSchema,
   promotePresetProfileSchema,
@@ -139,6 +140,19 @@ router.get('/llm/residency', asyncHandler(async (req, res) => {
   validateRequest(emptyQuerySchema, req.query);
   const { llm } = await getAgentVoiceConfig();
   res.json(await readVoiceLlmResidency({ provider: llm?.provider, model: llm?.model }));
+}));
+
+// POST /api/voice/llm/preload — load the on-air Voice LLM now (picking a model is the user's
+// action) so the first reply skips the cold load. Local backends only; the
+// warm-up skips hosted providers. Answers at once: the residency badge
+// follows the load, and a failed load leaves the model to load on first reply.
+router.post('/llm/preload', asyncHandler(async (req, res) => {
+  validateRequest(voiceLlmPreloadSchema, req.body || {});
+  import('../services/voice/pipeline.js')
+    .then(({ warmPromptPrefix }) => warmPromptPrefix({ reason: 'pick' }))
+    .then((result) => { if (!result.warmed) console.log(`🎙️ voice.llm.preload skipped: ${result.reason}`); })
+    .catch((err) => console.log(`⚠️ voice.llm.preload failed, model loads on first reply: ${err.message}`));
+  res.status(202).json({ preloading: true });
 }));
 
 router.get('/facetime/status', asyncHandler(async (_req, res) => {

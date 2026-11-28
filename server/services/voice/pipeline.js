@@ -8,7 +8,7 @@
 
 import { transcribe } from './stt.js';
 import { createTurnTtsSpeaker, emitSyntheticReply } from './turnTtsSpeaker.js';
-import { streamChat, resolveLlmEndpoint } from './llm.js';
+import { streamChat, resolveLlmEndpoint, markVoiceLlmWarming } from './llm.js';
 import { getAgentVoiceConfig } from './channelAgent.js';
 import { getTurnToolSpecs, getToolSpecs, resolveTurnIntent, dispatchTool, getAllToolNames, UI_KINDS } from './tools.js';
 import { isEchoOfRecentTts } from './echo.js';
@@ -734,23 +734,27 @@ export const warmPromptPrefix = async ({ reason = 'call' } = {}) => {
   const cfg = await getAgentVoiceConfig();
   if (!cfg?.enabled) return { warmed: false, reason: 'voice-disabled' };
   const toolsEnabled = !!cfg.llm.tools?.enabled;
-  if (toolsEnabled && cfg.llm.tools?.trimByIntent === true) return { warmed: false, reason: 'per-turn-tools' };
   const { apiBase } = await resolveLlmEndpoint(cfg.llm.provider);
   let host = '';
   try { host = new URL(apiBase).hostname; } catch { host = ''; }
   if (!LOOPBACK_HOSTS.has(host)) return { warmed: false, reason: 'not-local' };
 
   const messages = [{ role: 'system', content: buildSystemPrompt(cfg) }];
-  const tools = toolsEnabled ? filterToolSpecs(getToolSpecs(), cfg) : undefined;
+  // Per-turn tool lists have no shared prefix past the persona, but the
+  // request still loads the model.
+  const perTurnTools = toolsEnabled && cfg.llm.tools?.trimByIntent === true;
+  const tools = toolsEnabled && !perTurnTools ? filterToolSpecs(getToolSpecs(), cfg) : undefined;
   const key = JSON.stringify([cfg.llm.provider, cfg.llm.model, messages, tools]);
   if (lastPrefixWarm.key === key && (lastPrefixWarm.pending || Date.now() - lastPrefixWarm.at < PREFIX_WARM_DEDUPE_MS)) {
     return { warmed: false, reason: 'recent' };
   }
   const started = Date.now();
-  // onModelLoading opts into the cold-load timeout: at call start the model
-  // may still have to load before the prefill can run.
+  // onModelLoading opts into the cold-load timeout (the model may still have
+  // to load before the prefill can run) and shows the load in the status badge.
+  let releaseLoading = null;
   const pending = streamChat(messages, {
-    provider: cfg.llm.provider, model: cfg.llm.model, tools, maxTokens: 1, tag: `warm:${reason}`, onModelLoading: () => {},
+    provider: cfg.llm.provider, model: cfg.llm.model, tools, maxTokens: 1, tag: `warm:${reason}`,
+    onModelLoading: ({ model }) => { releaseLoading = markVoiceLlmWarming(cfg.llm.provider, model); },
   });
   lastPrefixWarm = { key, at: started, pending };
   try {
@@ -759,6 +763,7 @@ export const warmPromptPrefix = async ({ reason = 'call' } = {}) => {
     return { warmed: true, ms: Date.now() - started };
   } finally {
     lastPrefixWarm = { key, at: Date.now(), pending: null };
+    releaseLoading?.();
   }
 };
 

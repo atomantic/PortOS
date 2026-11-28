@@ -54,6 +54,7 @@ const loomRunSnapshot = (production) => Object.freeze({
 export const SOCKET_EVENT_CONTRACTS = Object.freeze({
   'voice:avatar:changed': { direction: 'server-to-client', summary: 'Invalidate the machine-local Voice Call avatar runtime status; no payload.' },
   'voice:avatar:library:changed': { direction: 'server-to-client', summary: 'Invalidate the Voice Call avatar library (Avatars collection and channel assignments); no payload.' },
+  'voice:llm:residency:changed': { direction: 'server-to-client', summary: 'Invalidate the Voice LLM residency badge when a warm-up starts or finishes loading the model; no payload.' },
   'voice:conversationalGemma:changed': { direction: 'server-to-client', summary: 'Invalidate the machine-local Conversational Gemma 4 31B llama.cpp setup status; no payload.' },
   'generated-preview:playback': input(generatedPreviewPlaybackSchema, 'Calibrate or control an advertised cooperative document preview; audio remains in the client.'),
   'generated-preview:playback-state': {

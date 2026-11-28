@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   getProviders: vi.fn(),
   refreshProviderModels: vi.fn(),
   updateVoiceConfig: vi.fn(),
+  preloadVoiceLlm: vi.fn(),
   getLlamaServerStatus: vi.fn(),
   startLlamaServer: vi.fn(),
   setLlamaServerAutoStart: vi.fn(),
@@ -15,7 +16,7 @@ vi.mock('../../services/apiProviders', () => ({
   getProviders: mocks.getProviders,
   refreshProviderModels: mocks.refreshProviderModels,
 }));
-vi.mock('../../services/apiVoice', () => ({ updateVoiceConfig: mocks.updateVoiceConfig }));
+vi.mock('../../services/apiVoice', () => ({ updateVoiceConfig: mocks.updateVoiceConfig, preloadVoiceLlm: mocks.preloadVoiceLlm }));
 vi.mock('../../services/apiLocalLlm', () => ({
   getLlamaServerStatus: mocks.getLlamaServerStatus,
   startLlamaServer: mocks.startLlamaServer,
@@ -48,6 +49,7 @@ describe('VoiceLlmQuickPicker', () => {
     vi.clearAllMocks();
     mocks.getProviders.mockResolvedValue({ providers: PROVIDERS });
     mocks.updateVoiceConfig.mockResolvedValue({});
+    mocks.preloadVoiceLlm.mockResolvedValue({ preloading: true });
     mocks.getLlamaServerStatus.mockResolvedValue({ installed: true, running: false, autoStart: false, savedLaunch: SAVED_LAUNCH });
   });
 
@@ -64,6 +66,20 @@ describe('VoiceLlmQuickPicker', () => {
       { silent: true },
     ));
     expect(onSaved).toHaveBeenCalledWith({ provider: 'llama-server', model: 'auto' });
+    expect(mocks.preloadVoiceLlm).toHaveBeenCalledWith({ silent: true });
+  });
+
+  it('keeps a saved pick when loading the new model fails', async () => {
+    mocks.preloadVoiceLlm.mockRejectedValue(new Error('model server offline'));
+    const onSaved = vi.fn();
+    renderPicker({ provider: 'lmstudio', model: 'model-a', onSaved });
+    const providerSelect = await screen.findByRole('combobox', { name: 'Voice LLM provider' });
+    await within(providerSelect).findByRole('option', { name: 'llama.cpp (local)' });
+
+    fireEvent.change(providerSelect, { target: { value: 'llama-server' } });
+
+    await waitFor(() => expect(onSaved).toHaveBeenCalledWith({ provider: 'llama-server', model: 'auto' }));
+    expect(mocks.preloadVoiceLlm).toHaveBeenCalled();
   });
 
   it('shows no llama.cpp controls for another provider', async () => {
