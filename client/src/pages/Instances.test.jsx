@@ -318,7 +318,16 @@ describe('PeerCard host and credential button touch targets', () => {
       expect(btn.className).toMatch(/pointer-coarse:px-2/);
       expect(btn.className).toMatch(/pointer-coarse:inline-flex/);
       expect(btn.className).toMatch(/pointer-coarse:items-center/);
+      expect(btn.className).toMatch(/\bborder\b/);
+      expect(btn.className).not.toMatch(/\bunderline\b/);
     }
+
+    // Header actions look like bordered buttons with distinct Sync vs Probe icons
+    const syncBtn = screen.getByRole('button', { name: 'Sync now' });
+    const probeBtn = screen.getByRole('button', { name: 'Probe now' });
+    expect(syncBtn.className).toMatch(/\bborder\b/);
+    expect(probeBtn.className).toMatch(/\bborder\b/);
+    expect(syncBtn.querySelector('svg')?.innerHTML).not.toBe(probeBtn.querySelector('svg')?.innerHTML);
 
     // Entering edit credential mode renders remove button with coarse touch classes
     fireEvent.click(editCredBtn);

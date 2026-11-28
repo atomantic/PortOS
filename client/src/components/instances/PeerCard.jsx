@@ -336,28 +336,30 @@ export function PeerCard({ peer, onRefresh, syncStatus, tailnetInfo, parityRepor
             </div>
           )}
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5">
           <button
             type="button"
             onClick={handleSync}
             disabled={syncing || peer.status !== 'online'}
-            className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-500 hover:text-port-accent transition-colors disabled:opacity-40 disabled:hover:text-gray-500"
+            className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 rounded-lg border border-port-border/70 bg-port-bg/40 text-gray-400 hover:text-port-accent hover:border-port-accent/50 hover:bg-port-bg focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-port-accent transition-colors disabled:opacity-40 disabled:hover:text-gray-400 disabled:hover:border-port-border/70"
             title={peer.status === 'online' ? 'Sync now' : 'Peer offline — cannot sync'}
             aria-label={peer.status === 'online' ? 'Sync now' : 'Peer offline — cannot sync'}
           >
             <RefreshCcw size={14} className={syncing ? 'animate-spin text-port-accent' : ''} />
           </button>
           <button
+            type="button"
             onClick={handleProbe}
             disabled={probing}
-            className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-500 hover:text-white transition-colors disabled:opacity-50"
+            className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 rounded-lg border border-port-border/70 bg-port-bg/40 text-gray-400 hover:text-white hover:border-port-border hover:bg-port-bg focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-port-accent transition-colors disabled:opacity-50"
             title="Probe now" aria-label="Probe now"
           >
-            <RefreshCw size={14} className={probing ? 'animate-spin' : ''} />
+            <Activity size={14} className={probing ? 'animate-pulse text-port-accent' : ''} />
           </button>
           <button
+            type="button"
             onClick={handleToggle}
-            className={`min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 transition-colors text-xs font-mono ${peer.enabled ? 'text-port-success hover:text-port-success/80' : 'text-gray-600 hover:text-white'}`}
+            className={`min-h-[44px] min-w-[44px] inline-flex items-center justify-center px-2 py-1.5 rounded-lg border bg-port-bg/40 hover:bg-port-bg focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-port-accent transition-colors text-xs font-mono ${peer.enabled ? 'border-port-success/40 text-port-success hover:border-port-success/70' : 'border-port-border/70 text-gray-500 hover:text-white hover:border-port-border'}`}
             title={peer.enabled ? 'Disable polling' : 'Enable polling'}
             aria-label={peer.enabled ? 'ON, disable polling' : 'OFF, enable polling'}
           >
@@ -378,8 +380,9 @@ export function PeerCard({ peer, onRefresh, syncStatus, tailnetInfo, parityRepor
             />
           ) : (
             <button
+              type="button"
               onClick={() => setConfirmRemove(true)}
-              className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-600 hover:text-port-error transition-colors"
+              className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 rounded-lg border border-port-border/70 bg-port-bg/40 text-gray-500 hover:text-port-error hover:border-port-error/50 hover:bg-port-bg focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-port-accent transition-colors"
               title="Remove peer" aria-label="Remove peer"
             >
               <Trash2 size={14} />
