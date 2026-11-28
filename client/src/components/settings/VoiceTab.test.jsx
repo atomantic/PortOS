@@ -563,4 +563,19 @@ describe('VoiceTab fast-path and footer refresh', () => {
     expect(toast.error).not.toHaveBeenCalled();
   });
 
+  it('defaults transceiver SFX to on in Voice settings and persists toggling it off', async () => {
+    localStorage.clear();
+    render(<MemoryRouter><VoiceTab /></MemoryRouter>);
+    const sfx = await screen.findByLabelText(/Transceiver sound effects \(SFX\)/);
+    expect(sfx).toBeChecked();
+
+    fireEvent.click(sfx);
+    expect(sfx).not.toBeChecked();
+    expect(localStorage.getItem('portos.voice.sfx')).toBe('0');
+
+    fireEvent.click(sfx);
+    expect(sfx).toBeChecked();
+    expect(localStorage.getItem('portos.voice.sfx')).toBe('1');
+  });
+
 });

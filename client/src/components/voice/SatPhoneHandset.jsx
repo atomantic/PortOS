@@ -7,7 +7,8 @@ import { SatPhoneActionKeys, SatPhoneTelemetry } from './SatPhoneControls';
 import SatPhoneConversation from './SatPhoneConversation';
 import SatPhoneComposer from './SatPhoneComposer';
 import useVoiceLlmResidency from '../../hooks/useVoiceLlmResidency';
-import useRealtimeConnecting from './useRealtimeConnecting';
+import { useRealtimeCallState } from './useRealtimeConnecting';
+import { stopActiveRealtimeCalls } from '../../services/voiceRealtime';
 
 /**
  * Video-enabled Satellite Phone / Tactical Transceiver Handset.
@@ -50,11 +51,14 @@ export default function SatPhoneHandset({
   muted,
   onVolumeChange,
   onToggleMute,
-  sfxEnabled,
-  onToggleSfx,
+  ttsRate = 1,
+  onTtsRateChange,
   signalLevel = 0,
+  signalSpectrum = null,
   visionEnabled = false,
   onToggleVision,
+  onOpenBrain,
+  onTuneChannel,
   // { pending, attachFiles, remove } — images queued for the next turn.
   images,
   isVoiceOutputTab = true,
@@ -71,16 +75,28 @@ export default function SatPhoneHandset({
   const [showFloatingSetup, setShowFloatingSetup] = useState(false);
   const { data: library, updateData: updateLibrary } = useAvatarLibrary();
   const channel = activeChannelOf(library);
-  const channelCount = library?.channels?.length ?? 0;
+  const channels = library?.channels ?? [];
   // The telemetry shows what the on-air channel's agent actually runs.
   const onAirLlm = channelLlm(channel, llmProvider, llmModel);
-  const nextChannel = channelCount > 1
-    ? () => saveAvatarChannels({ active: ((channel?.index ?? 0) + 1) % channelCount }).then(updateLibrary).catch(() => {})
-    : undefined;
+  const selectChannel = (index) =>
+    saveAvatarChannels({ active: index }).then(updateLibrary).catch(() => {});
   const isFloating = variant === 'floating';
+  const handleOpenBrain = isFloating
+    ? () => setShowFloatingSetup((value) => !value)
+    : onOpenBrain;
+  const handleTuneChannel = isFloating
+    ? (index) => {
+      if (index !== (channel?.index ?? 0)) selectChannel(index);
+      setShowFloatingSetup(true);
+    }
+    : onTuneChannel;
   const ownResidency = useVoiceLlmResidency({ provider: onAirLlm.provider, model: onAirLlm.model, stage, enabled: llmResidency === undefined });
   const residency = llmResidency === undefined ? ownResidency : llmResidency;
-  const realtimeConnecting = useRealtimeConnecting();
+  const { active: realtimeActive, connecting: realtimeConnecting } = useRealtimeCallState();
+  const handleEndRealtime = () => {
+    stopActiveRealtimeCalls();
+    onEnd?.();
+  };
   const onAirAgentName = channel?.agent?.name?.trim() || agentName?.trim() || channel?.label?.trim() || '';
   const liveAttr = capturing ? 'tx' : (stage === 'speaking' || stage === 'thinking' || stage === 'loading') ? 'rx' : 'idle';
 
@@ -123,6 +139,10 @@ export default function SatPhoneHandset({
           connecting={avatarData?.phase === 'starting' || realtimeConnecting}
           stage={stage}
           capturing={capturing}
+          signalLevel={signalLevel}
+          muted={muted}
+          visionEnabled={visionEnabled}
+          onToggleVision={onToggleVision}
         />
 
         <SatPhoneTelemetry
@@ -134,9 +154,12 @@ export default function SatPhoneHandset({
           hotkey={hotkey}
           onMic={onMic}
           onMode={onMode}
-          channel={channel}
-          channelCount={channelCount}
-          onNextChannel={nextChannel}
+          channels={channels}
+          activeChannelIndex={channel?.index ?? 0}
+          globalAgentName={agentName}
+          onSelectChannel={selectChannel}
+          onTuneChannel={handleTuneChannel}
+          onOpenBrain={handleOpenBrain}
           volume={volume}
           muted={muted}
           voiceLabel={channelVoiceLabel(channel, voiceLabel)}
@@ -144,20 +167,22 @@ export default function SatPhoneHandset({
           llmModel={onAirLlm.model}
           llmResidency={residency}
           signalLevel={signalLevel}
+          signalSpectrum={signalSpectrum}
           onVolumeChange={onVolumeChange}
           onToggleMute={onToggleMute}
         />
 
         <SatPhoneActionKeys
           stage={stage}
-          sfxEnabled={sfxEnabled}
-          onToggleSfx={onToggleSfx}
+          realtimeActive={realtimeActive}
           muted={muted}
           onToggleMute={onToggleMute}
+          ttsRate={ttsRate}
+          onTtsRateChange={onTtsRateChange}
           visionEnabled={visionEnabled}
           onToggleVision={onToggleVision}
           onInterrupt={onInterrupt}
-          onEnd={onEnd}
+          onEnd={handleEndRealtime}
         />
 
         {/* Page handset: type without scrolling to the log below. The floating

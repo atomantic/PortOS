@@ -86,6 +86,8 @@ vi.mock('../../services/voiceClient', () => ({
   enableVisionCapture: vi.fn(),
   disableVisionCapture: vi.fn(),
   isVisionCaptureEnabled: vi.fn(() => false),
+  getVisionStream: vi.fn(() => null),
+  onVisionFrameCaptured: vi.fn(() => vi.fn()),
   onVisionCaptureEnded: vi.fn(() => vi.fn()),
   speakSynthesized: mocks.speakSynthesized,
   onVoiceOutputPrimary: vi.fn((handler) => { handler(false); return vi.fn(); }),
@@ -97,6 +99,7 @@ vi.mock('../../services/voiceClient', () => ({
   setVoiceMuted: vi.fn(),
   onVoiceAudioPrefs: vi.fn((handler) => { handler({ volume: 0.85, muted: false }); return vi.fn(); }),
   getVoiceOutputLevel: vi.fn(() => 0),
+  getVoiceOutputSpectrum: vi.fn(() => null),
 }));
 
 vi.mock('../../services/voiceFastPath', () => ({

@@ -91,6 +91,8 @@ vi.mock('../../services/voiceClient', () => ({
   enableVisionCapture: vi.fn(),
   disableVisionCapture: vi.fn(),
   isVisionCaptureEnabled: vi.fn(() => false),
+  getVisionStream: vi.fn(() => null),
+  onVisionFrameCaptured: vi.fn(() => vi.fn()),
   onVisionCaptureEnded: vi.fn(() => vi.fn()),
   speakSynthesized: mocks.speakSynthesized,
   onVoiceOutputPrimary: vi.fn((handler) => { handler(true); return vi.fn(); }),
@@ -101,6 +103,7 @@ vi.mock('../../services/voiceClient', () => ({
   setVoiceMuted: vi.fn(),
   onVoiceAudioPrefs: vi.fn((handler) => { handler({ volume: 0.85, muted: false }); return vi.fn(); }),
   getVoiceOutputLevel: vi.fn(() => 0),
+  getVoiceOutputSpectrum: vi.fn(() => null),
 }));
 
 vi.mock('../../services/voiceFastPath', () => ({
@@ -111,6 +114,7 @@ vi.mock('../../services/voiceFastPath', () => ({
 
 vi.mock('../../services/browserLlm', () => ({ warmNano: vi.fn() }));
 vi.mock('../../services/apiPalette', () => ({ getPaletteManifest: vi.fn() }));
+vi.mock('../../services/apiPipeline', () => ({ listPipelineTtsVoices: vi.fn(async () => ({ voices: [] })) }));
 vi.mock('../../services/apiVoice', () => ({
   getVoiceConfig: mocks.getVoiceConfig,
   updateVoiceConfig: vi.fn(async (patch) => ({ config: patch })),
@@ -152,7 +156,9 @@ import VoiceToggleButton from './VoiceToggleButton';
 import SidebarContext from '../SidebarContext';
 import * as voiceClientMock from '../../services/voiceClient';
 import { saveAvatarChannels } from '../../services/apiVoiceAvatar';
+import { updateVoiceConfig } from '../../services/apiVoice';
 import { ENGAGE_EVENT, DISENGAGE_EVENT } from '../../services/voiceVisibility';
+import { REALTIME_ACTIVE_EVENT } from '../../services/voiceRealtime';
 
 const HIDDEN_KEY = 'portos.voice.hidden';
 const VISUAL_MODE_KEY = 'portos.voice.visualMode';
@@ -554,22 +560,39 @@ describe('Voice Call console', () => {
     expect(ui.getByText('Thinking', { selector: '[role="status"]' })).toBeInTheDocument();
     expect(ui.getByRole('log')).toHaveTextContent('Hi back');
 
-    // The transceiver has no audio-only toggle or radio-check sample; its channel key
-    // steps to the next channel's avatar.
+    // The transceiver has no audio-only toggle or radio-check sample; its 6-channel
+    // avatar strip lets the user switch directly to any channel.
     expect(ui.queryByRole('button', { name: /avatar portrait|audio-only/i })).not.toBeInTheDocument();
     expect(ui.queryByRole('button', { name: /play sample|radio check/i })).not.toBeInTheDocument();
-    fireEvent.click(ui.getByRole('button', { name: 'Channel 1, Channel 1. Switch to the next channel' }));
+    const channelStrip = ui.getByRole('group', { name: 'Channel selector' });
+    expect(within(channelStrip).getAllByRole('button')).toHaveLength(6);
+    expect(within(channelStrip).getByRole('button', { name: 'Channel 1' })).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(within(channelStrip).getByRole('button', { name: 'Channel 2' }));
     expect(saveAvatarChannels).toHaveBeenCalledWith({ active: 1 });
-    expect(await ui.findByRole('button', { name: 'Channel 2, Scout. Switch to the next channel' })).toBeInTheDocument();
+    expect(await within(channelStrip).findByRole('button', { name: 'Channel 2, Scout' })).toHaveAttribute('aria-pressed', 'true');
 
+    // Double-clicking a channel tile on /voice/call jumps to the Channels tab with that channel's editor open.
+    fireEvent.doubleClick(within(channelStrip).getByRole('button', { name: 'Channel 2, Scout' }));
+    expect(await ui.findByRole('group', { name: 'Agent for channel 2' })).toBeInTheDocument();
+
+    // End button only appears during an active realtime call, not in regular voice mode.
+    expect(ui.queryByRole('button', { name: 'End' })).not.toBeInTheDocument();
+    act(() => {
+      window.dispatchEvent(new CustomEvent(REALTIME_ACTIVE_EVENT, { detail: { active: true, connecting: false } }));
+    });
+    expect(ui.getByRole('button', { name: 'End' })).toBeInTheDocument();
     fireEvent.click(ui.getByRole('button', { name: 'End' }));
-    expect(voiceClientMock.disposeCaptureOwner).toHaveBeenCalledTimes(1);
+    expect(voiceClientMock.disposeCaptureOwner).toHaveBeenCalledTimes(2);
     expect(voiceClientMock.interrupt).toHaveBeenCalled();
     expect(ui.getByText('Standby', { selector: '[role="status"]' })).toBeInTheDocument();
+    act(() => {
+      window.dispatchEvent(new CustomEvent(REALTIME_ACTIVE_EVENT, { detail: { active: false, connecting: false } }));
+    });
+    expect(ui.queryByRole('button', { name: 'End' })).not.toBeInTheDocument();
 
     fireEvent.click(ui.getByRole('button', { name: 'Open mic' }));
     rerender(<VoiceWidgetGate><main /></VoiceWidgetGate>);
-    expect(voiceClientMock.disposeCaptureOwner).toHaveBeenCalledTimes(2);
+    expect(voiceClientMock.disposeCaptureOwner).toHaveBeenCalledTimes(3);
     expect(screen.queryByRole('region', { name: 'PortOS call console' })).not.toBeInTheDocument();
   });
 });
@@ -631,16 +654,28 @@ describe('VoiceWidget sat-phone visual mode & bottom-left placement', () => {
     expect(ui.getByRole('slider', { name: 'Output volume' })).toBeInTheDocument();
     expect(ui.getByRole('link', { name: 'Open full-page Voice Call' })).toHaveAttribute('href', '/voice/call');
 
-    // Real controls wire through to voiceClient & localStorage
+    // Real controls wire through to voiceClient; SFX lives in Settings → Voice, and End is hidden outside realtime calls.
     fireEvent.keyDown(ui.getByRole('slider', { name: 'Output volume' }), { key: 'ArrowUp' });
     expect(voiceClientMock.setVoiceVolume).toHaveBeenCalledWith(0.9);
     fireEvent.click(ui.getByRole('button', { name: 'Mute' }));
     expect(voiceClientMock.setVoiceMuted).toHaveBeenCalledWith(true);
-    const sfx = ui.getByRole('button', { name: 'SFX' });
-    expect(sfx).toHaveAttribute('aria-pressed', 'true');
-    fireEvent.click(sfx);
-    expect(sfx).toHaveAttribute('aria-pressed', 'false');
-    expect(localStorage.getItem('portos.voice.sfx')).toBe('0');
+    expect(ui.queryByRole('button', { name: 'SFX' })).not.toBeInTheDocument();
+    expect(ui.queryByRole('button', { name: 'End' })).not.toBeInTheDocument();
+
+    // Interactive LCD opens the Voice setup tray directly, and speech speed steps persist tts.rate.
+    fireEvent.click(ui.getByRole('button', { name: /Open voice brain settings/ }));
+    expect(ui.getByRole('button', { name: 'Voice setup' })).toHaveAttribute('aria-expanded', 'true');
+    const speedBtn = ui.getByRole('button', { name: /Speech speed 1\.0×/ });
+    fireEvent.click(speedBtn);
+    expect(updateVoiceConfig).toHaveBeenCalledWith({ tts: { rate: 1.25 } }, { silent: true });
+    expect(ui.getByRole('button', { name: /Speech speed 1\.25×/ })).toBeInTheDocument();
+
+    // Enabling screen vision reveals the live PiP preview over the viewfinder.
+    voiceClientMock.enableVisionCapture.mockResolvedValueOnce(true);
+    await act(async () => {
+      fireEvent.click(ui.getByRole('button', { name: 'Enable screen vision for voice' }));
+    });
+    expect(ui.getByRole('button', { name: /Screen vision active/ })).toBeInTheDocument();
 
     // Switching to compact bar hides the handset and saves the preference in localStorage
     fireEvent.click(ui.getByRole('button', { name: 'Switch to compact voice bar' }));

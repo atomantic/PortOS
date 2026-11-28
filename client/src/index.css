@@ -2183,12 +2183,46 @@ html[data-port-theme-mode="day"] .satphone-chassis[data-live="rx"] {
   box-shadow:
     inset 0 2px 8px rgb(0 0 0 / 0.5),
     0 1px 0 rgb(255 255 255 / 0.08);
+  transition: border-color 140ms ease, box-shadow 140ms ease;
+}
+
+.satphone-bezel[data-audio-state="tx"] {
+  border-color: rgb(var(--port-accent-2) / calc(0.45 + var(--satphone-glow, 0) * 0.55));
+  box-shadow:
+    inset 0 2px 8px rgb(0 0 0 / 0.45),
+    0 0 calc(8px + var(--satphone-glow, 0) * 16px) -2px rgb(var(--port-accent-2) / calc(0.28 + var(--satphone-glow, 0) * 0.5));
+}
+
+.satphone-bezel[data-audio-state="rx"] {
+  border-color: rgb(var(--port-accent) / calc(0.45 + var(--satphone-glow, 0) * 0.55));
+  box-shadow:
+    inset 0 2px 8px rgb(0 0 0 / 0.45),
+    0 0 calc(8px + var(--satphone-glow, 0) * 16px) -2px rgb(var(--port-accent) / calc(0.28 + var(--satphone-glow, 0) * 0.5));
+}
+
+.satphone-bezel[data-audio-state="thinking"] {
+  border-color: rgb(var(--port-warning) / 0.7);
+  box-shadow:
+    inset 0 2px 8px rgb(0 0 0 / 0.45),
+    0 0 14px -3px rgb(var(--port-warning) / 0.35);
 }
 
 html[data-port-theme-mode="day"] .satphone-bezel {
   box-shadow:
     inset 0 2px 6px rgb(15 23 42 / 0.14),
     0 1px 0 rgb(255 255 255 / 0.85);
+}
+
+html[data-port-theme-mode="day"] .satphone-bezel[data-audio-state="tx"] {
+  box-shadow:
+    inset 0 2px 6px rgb(15 23 42 / 0.12),
+    0 0 calc(6px + var(--satphone-glow, 0) * 12px) -2px rgb(var(--port-accent-2) / calc(0.24 + var(--satphone-glow, 0) * 0.4));
+}
+
+html[data-port-theme-mode="day"] .satphone-bezel[data-audio-state="rx"] {
+  box-shadow:
+    inset 0 2px 6px rgb(15 23 42 / 0.12),
+    0 0 calc(6px + var(--satphone-glow, 0) * 12px) -2px rgb(var(--port-accent) / calc(0.24 + var(--satphone-glow, 0) * 0.4));
 }
 
 /* A bright band rolling down the pixelated portrait while a call connects. */
@@ -2335,8 +2369,12 @@ html[data-port-theme-mode="day"] .satphone-key[data-active="true"] {
   border-color: rgb(var(--port-accent-2));
 }
 
-.satphone-paddle:active:not(:disabled) {
+.satphone-paddle:active:not(:disabled),
+.satphone-paddle[data-hotkey-down="true"]:not(:disabled) {
   transform: translateY(1px);
+  box-shadow:
+    inset 0 1px 2px rgb(0 0 0 / 0.35),
+    0 1px 0 rgb(0 0 0 / 0.35);
 }
 
 .satphone-paddle[aria-pressed="true"] {
@@ -2412,5 +2450,8 @@ html[data-port-theme-mode="day"] .satphone-log-well {
 @media (prefers-reduced-motion: reduce) {
   .satphone-connecting-sweep {
     display: none;
+  }
+  .satphone-bezel {
+    transition: none;
   }
 }
