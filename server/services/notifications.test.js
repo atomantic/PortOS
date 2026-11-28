@@ -232,6 +232,16 @@ describe('notifications', () => {
       expect(result.metadata).toEqual({})
     })
 
+    it('keeps failed notification writes invisible to deduplicating producers', async () => {
+      const type = NOTIFICATION_TYPES.YOUTUBE_COMMENT
+      const notification = { type, title: 'New YouTube comment', metadata: { commentKey: 'example-key' } }
+      atomicWrite.mockRejectedValueOnce(new Error('write failed'))
+      await expect(addNotification(notification)).rejects.toThrow('write failed')
+      await expect(exists(type, 'commentKey', 'example-key')).resolves.toBe(false)
+      await addNotification(notification)
+      await expect(exists(type, 'commentKey', 'example-key')).resolves.toBe(true)
+    })
+
     it('should emit events when notification added', async () => {
       const addedSpy = vi.fn()
       const countSpy = vi.fn()

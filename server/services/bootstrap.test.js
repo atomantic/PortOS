@@ -193,6 +193,7 @@ vi.mock('./imessageScheduler.js', () => ({ startImessageScheduler: asyncNoop }))
 vi.mock('./signalScheduler.js', () => ({ startSignalScheduler: asyncNoop }));
 vi.mock('./spotifyScheduler.js', () => ({ startSpotifyScheduler: asyncNoop }));
 vi.mock('./youtubeScheduler.js', () => ({ startYoutubeScheduler: asyncNoop }));
+vi.mock('./youtubeCommentWatcher.js', () => ({ startYoutubeCommentWatcher: asyncNoop }));
 vi.mock('./stackerNewsScheduler.js', () => ({ reconcileStackerNewsSchedulers: asyncNoop }));
 vi.mock('./activityDigestScheduler.js', () => ({ startActivityDigestScheduler: noop }));
 vi.mock('./twinEnrichmentScheduler.js', () => ({ startTwinEnrichmentScheduler: noop }));
