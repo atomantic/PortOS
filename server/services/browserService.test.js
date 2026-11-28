@@ -884,6 +884,58 @@ describe('navigateToUrlPinned tab ownership (closeAfterRead)', () => {
     })).rejects.toThrow(/refusing to ingest/);
     expect(fake.closed).toEqual(fake.opened);
   });
+
+  it('fails closed promptly when the CDP websocket closes mid-navigation or evaluation', async () => {
+    let port = 0;
+    const closedTabs = [];
+    const server = createServer((req, res) => {
+      const path = req.url || '';
+      if (req.method === 'PUT' && path.startsWith('/json/new')) {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ id: 'tab-close', webSocketDebuggerUrl: `ws://127.0.0.1:${port}/devtools/page/tab-close` }));
+        return;
+      }
+      if (path.startsWith('/json/close/')) {
+        closedTabs.push(decodeURIComponent(path.slice('/json/close/'.length)));
+        res.writeHead(200, { 'content-type': 'text/plain' });
+        res.end('ok');
+        return;
+      }
+      res.writeHead(404);
+      res.end('');
+    });
+    const wss = new WebSocketServer({ server });
+    wss.on('connection', (ws) => {
+      ws.on('message', () => ws.close());
+    });
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    port = server.address().port;
+    fake = { port, stop: () => new Promise((resolve) => { wss.close(() => server.close(resolve)); }) };
+
+    const service = await importServicePointedAtFake();
+    const start = Date.now();
+    await expect(service.navigateToUrlPinned('https://ex.com/a', {
+      verifyRemoteIp: () => true,
+      navigateTimeoutMs: 5000,
+    })).rejects.toThrow(/CDP websocket closed during navigation/);
+    expect(Date.now() - start).toBeLessThan(2000);
+    expect(closedTabs).toEqual(['tab-close']);
+
+    const evalStart = Date.now();
+    const result = await service.evaluateOnPage(
+      { webSocketDebuggerUrl: `ws://127.0.0.1:${port}/devtools/page/tab-close` },
+      'document.title',
+      { timeout: 5000 },
+    );
+    expect(result).toBeNull();
+    expect(Date.now() - evalStart).toBeLessThan(2000);
+
+    const session = await service.openCdpSession(`ws://127.0.0.1:${port}/devtools/page/tab-close`, { commandTimeoutMs: 5000 });
+    const sendStart = Date.now();
+    await expect(session.send('Runtime.evaluate', { expression: '1' })).rejects.toThrow(/CDP session closed/);
+    expect(Date.now() - sendStart).toBeLessThan(2000);
+    session.close();
+  });
 });
 
 describe('read-only browser observation', () => {

@@ -302,28 +302,41 @@ export async function evaluateOnPage(page, expression, { timeout = CDP_EVALUATE_
 
   return new Promise((resolve) => {
     const ws = new WebSocket(wsUrl);
-    const timer = setTimeout(() => { ws.close(); resolve(null); }, timeout);
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try { ws.close(); } catch {}
+      resolve(value);
+    };
+    const timer = setTimeout(() => finish(null), timeout);
 
     ws.on('open', () => {
-      ws.send(JSON.stringify({
-        id: 1,
-        method: 'Runtime.evaluate',
-        params: { expression, returnByValue: true, awaitPromise: true }
-      }));
+      try {
+        ws.send(JSON.stringify({
+          id: 1,
+          method: 'Runtime.evaluate',
+          params: { expression, returnByValue: true, awaitPromise: true }
+        }), (err) => {
+          if (err) finish(null);
+        });
+      } catch {
+        finish(null);
+      }
     });
 
     ws.on('message', (data) => {
       const msg = safeJSONParse(data.toString(), null, { context: 'cdp-ws' });
       if (!msg || msg.id !== 1) return;
-      clearTimeout(timer);
-      ws.close();
-      if (msg.error || msg.result?.exceptionDetails) return resolve(null);
+      if (msg.error || msg.result?.exceptionDetails) return finish(null);
       // A vault password the model-blind fill typed into this browser must not
       // echo back through a later DOM read (#17397).
-      resolve(scrubEphemeralSecretsDeep(msg.result?.result?.value ?? null));
+      finish(scrubEphemeralSecretsDeep(msg.result?.result?.value ?? null));
     });
 
-    ws.on('error', () => { clearTimeout(timer); ws.close(); resolve(null); });
+    ws.on('error', () => finish(null));
+    ws.on('close', () => finish(null));
   });
 }
 
@@ -360,19 +373,47 @@ export async function openCdpSession(webSocketDebuggerUrl, { commandTimeoutMs = 
     if (msg.method) for (const fn of listeners.get(msg.method) ?? []) fn(msg.params ?? {});
   });
   ws.on('close', () => { closed = true; failPending(new Error('CDP session closed')); });
+  ws.on('error', () => { closed = true; failPending(new Error('CDP session failed')); });
   await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => { ws.terminate(); reject(new Error('CDP session open timed out')); }, commandTimeoutMs);
-    ws.once('open', () => { clearTimeout(timer); resolve(); });
-    ws.on('error', () => { clearTimeout(timer); reject(new Error('CDP session failed')); });
+    let settled = false;
+    const settle = (fn, arg) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      ws.off('open', onOpen);
+      ws.off('error', onError);
+      ws.off('close', onClose);
+      fn(arg);
+    };
+    const onOpen = () => settle(resolve);
+    const onError = () => settle(reject, new Error('CDP session failed'));
+    const onClose = () => settle(reject, new Error('CDP session closed'));
+    const timer = setTimeout(() => { ws.terminate(); settle(reject, new Error('CDP session open timed out')); }, commandTimeoutMs);
+    ws.once('open', onOpen);
+    ws.once('error', onError);
+    ws.once('close', onClose);
   });
   return {
     send(method, params = {}) {
       if (closed) return Promise.reject(new Error('CDP session closed'));
       const id = nextId++;
       return new Promise((resolve, reject) => {
-        const timer = setTimeout(() => { pending.delete(id); reject(new Error(`CDP ${method} timed out`)); }, commandTimeoutMs);
+        const failSend = (error) => {
+          const entry = pending.get(id);
+          if (!entry) return;
+          pending.delete(id);
+          clearTimeout(entry.timer);
+          reject(error);
+        };
+        const timer = setTimeout(() => failSend(new Error(`CDP ${method} timed out`)), commandTimeoutMs);
         pending.set(id, { method, resolve, reject, timer });
-        ws.send(JSON.stringify({ id, method, params }));
+        try {
+          ws.send(JSON.stringify({ id, method, params }), (err) => {
+            if (err) failSend(new Error(`CDP ${method} send failed`));
+          });
+        } catch {
+          failSend(new Error(`CDP ${method} send failed`));
+        }
       });
     },
     on(method, fn) {
@@ -869,11 +910,17 @@ async function readPinnedTarget(target, url, {
       }
       phase = 'read';
       evalTimer = setTimeout(() => finish({ ok: false, reason: 'DOM read timed out' }), evaluateTimeoutMs);
-      ws.send(JSON.stringify({
-        id: READ_ID,
-        method: 'Runtime.evaluate',
-        params: { expression: evaluateExpression, returnByValue: true, awaitPromise: true },
-      }));
+      try {
+        ws.send(JSON.stringify({
+          id: READ_ID,
+          method: 'Runtime.evaluate',
+          params: { expression: evaluateExpression, returnByValue: true, awaitPromise: true },
+        }), (err) => {
+          if (err) finish({ ok: false, reason: 'CDP websocket error during DOM read' });
+        });
+      } catch {
+        finish({ ok: false, reason: 'CDP websocket error during DOM read' });
+      }
     };
 
     ws.on('open', async () => {
@@ -929,6 +976,7 @@ async function readPinnedTarget(target, url, {
       }
     });
     ws.on('error', () => finish({ ok: false, reason: 'CDP websocket error during navigation' }));
+    ws.on('close', () => finish({ ok: false, reason: 'CDP websocket closed during navigation' }));
   });
 
   if (!result.ok) {
