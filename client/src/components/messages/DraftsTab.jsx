@@ -103,6 +103,9 @@ export default function DraftsTab({ accounts }) {
   const [loadError, setLoadError] = useState(null);
   const sendingRef = useRef(new Set());
   const [sendingIds, setSendingIds] = useState(new Set());
+  const approvingRef = useRef(new Set());
+  const [approvingIds, setApprovingIds] = useState(new Set());
+  const draftsRequestRef = useRef(0);
   const [copiedId, setCopiedId] = useState(null);
   const [editingId, setEditingId] = useState(null);
   const [editForm, setEditForm] = useState({ to: '', cc: '', subject: '', body: '' });
@@ -122,13 +125,17 @@ export default function DraftsTab({ accounts }) {
   };
 
   const fetchDrafts = useCallback(async () => {
+    const request = ++draftsRequestRef.current;
     setLoading(true);
     // A failed read keeps whatever drafts are already shown and surfaces an error row;
     // it must not read as "No drafts".
     const data = await getMessageDrafts({}, { silent: true }).catch((err) => {
-      setLoadError(err instanceof Error ? err : new Error('Request failed'));
+      if (request === draftsRequestRef.current) {
+        setLoadError(err instanceof Error ? err : new Error('Request failed'));
+      }
       return null;
     });
+    if (request !== draftsRequestRef.current) return;
     if (data) {
       setDrafts(data);
       setLoadError(null);
@@ -138,6 +145,7 @@ export default function DraftsTab({ accounts }) {
 
   useEffect(() => {
     fetchDrafts();
+    return () => { draftsRequestRef.current += 1; };
   }, [fetchDrafts]);
 
   useEffect(() => {
@@ -149,7 +157,13 @@ export default function DraftsTab({ accounts }) {
   }, [fetchDrafts]);
 
   const handleApprove = async (id) => {
-    const result = await approveMessageDraft(id).catch(() => null);
+    if (approvingRef.current.has(id)) return;
+    approvingRef.current.add(id);
+    setApprovingIds(new Set(approvingRef.current));
+    const result = await approveMessageDraft(id).catch(() => null).finally(() => {
+      approvingRef.current.delete(id);
+      setApprovingIds(new Set(approvingRef.current));
+    });
     if (!result) return;
     setDrafts(prev => prev.map(d => d.id === id ? result : d));
     toast.success('Draft approved');
@@ -335,7 +349,8 @@ export default function DraftsTab({ accounts }) {
                 {APPROVABLE_DRAFT_STATUSES.includes(draft.status) && !isCopyOnly(draft) && editingId !== draft.id && (
                   <button
                     onClick={() => handleApprove(draft.id)}
-                    disabled={needsTeamsRecipient(draft)}
+                    disabled={approvingIds.has(draft.id) || needsTeamsRecipient(draft)}
+                    aria-busy={approvingIds.has(draft.id)}
                     className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-400 hover:text-port-success transition-colors disabled:opacity-50"
                     title="Approve" aria-label="Approve"
                   >

@@ -524,4 +524,42 @@ describe('DraftsTab live refresh', () => {
     await waitFor(() => expect(getMessageDrafts).toHaveBeenCalledTimes(2));
     expect(screen.getByText('First')).toBeInTheDocument();
   });
+
+  it('ignores a stale out-of-order fetch response after a newer live refresh resolves', async () => {
+    const first = Promise.withResolvers();
+    const second = Promise.withResolvers();
+    getMessageDrafts
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
+
+    render(<DraftsTab accounts={[]} />);
+    await waitFor(() => expect(getMessageDrafts).toHaveBeenCalledTimes(1));
+
+    await act(async () => { socketMock.handlers.get('messages:draft:sent').forEach((fn) => fn()); });
+    await waitFor(() => expect(getMessageDrafts).toHaveBeenCalledTimes(2));
+
+    await act(async () => second.resolve([{ id: 'd1', status: 'sent', subject: 'Sent draft' }]));
+    expect(screen.getByText('sent')).toBeInTheDocument();
+
+    await act(async () => first.resolve([{ id: 'd1', status: 'approved', subject: 'Stale draft' }]));
+    expect(screen.getByText('sent')).toBeInTheDocument();
+    expect(screen.queryByText('Stale draft')).not.toBeInTheDocument();
+  });
+
+  it('prevents duplicate approve requests while approval is in flight', async () => {
+    const pending = Promise.withResolvers();
+    const draft = { id: 'd1', status: 'draft', sendVia: 'api', subject: 'Pending approve', body: 'Hello' };
+    getMessageDrafts.mockResolvedValueOnce([draft]);
+    approveMessageDraft.mockReturnValueOnce(pending.promise);
+
+    render(<DraftsTab accounts={[]} />);
+    const approveBtn = await screen.findByRole('button', { name: 'Approve' });
+    fireEvent.click(approveBtn);
+    fireEvent.click(approveBtn);
+    expect(approveMessageDraft).toHaveBeenCalledTimes(1);
+    expect(approveBtn).toBeDisabled();
+
+    await act(async () => pending.resolve({ ...draft, status: 'approved' }));
+    expect(await screen.findByText('approved')).toBeInTheDocument();
+  });
 });

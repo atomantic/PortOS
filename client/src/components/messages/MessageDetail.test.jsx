@@ -364,3 +364,51 @@ describe('MessageDetail refresh ordering', () => {
     expect(api.getMessageThread).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('MessageDetail async action and AI reply lifetime guards', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.getMessageThread.mockResolvedValue({ messages: [] });
+  });
+
+  it('does not call onBack when an archive action resolves after unmount', async () => {
+    const pending = Promise.withResolvers();
+    api.executeMessageAction.mockReturnValueOnce(pending.promise);
+    const onBack = vi.fn();
+    const { unmount } = render(
+      <MessageDetail
+        message={baseMessage}
+        accounts={[{ id: 'acct-1', name: 'Personal', type: 'outlook' }]}
+        onBack={onBack}
+      />,
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'Archive' }));
+    expect(api.executeMessageAction).toHaveBeenCalledTimes(1);
+    unmount();
+    await act(async () => pending.resolve({ success: true }));
+    expect(onBack).not.toHaveBeenCalled();
+  });
+
+  it('drops a late AI reply and resets reply composer state when switching messages', async () => {
+    const pending = Promise.withResolvers();
+    api.generateMessageDraft.mockReturnValueOnce(pending.promise);
+    const accounts = [{ id: 'acct-1', name: 'Personal', type: 'outlook' }];
+    const { rerender } = renderMessage(baseMessage, accounts);
+
+    await userEvent.click(screen.getByRole('button', { name: 'AI Reply' }));
+    expect(api.generateMessageDraft).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <MessageDetail
+        message={{ ...baseMessage, id: 'msg-2', subject: 'Second message' }}
+        accounts={accounts}
+        onBack={() => {}}
+      />,
+    );
+    expect(screen.getByRole('button', { name: 'AI Reply' })).toBeEnabled();
+
+    await act(async () => pending.resolve({ id: 'draft-from-msg-1', body: 'Stale reply for msg 1' }));
+    expect(screen.queryByRole('textbox', { name: 'Reply message body' })).not.toBeInTheDocument();
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+});
