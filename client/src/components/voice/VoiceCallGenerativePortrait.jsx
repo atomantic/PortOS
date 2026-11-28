@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import portraitUrl from './call-portrait.webp';
+import MediaImage from '../MediaImage';
+import { avatarImageSrc } from './useAvatarLibrary';
 import { bindVoiceOutputVisualizer } from '../../services/voiceClient';
 import { streamVoiceAvatar, streamVoiceAvatarIdle } from '../../services/apiVoiceAvatar';
 
@@ -76,7 +78,7 @@ function animateWav(canvas, wav, { stopForReducedMotion, keepFrameOnStop, onPain
   };
 }
 
-export default function VoiceCallGenerativePortrait({ running, fill = false, stage = 'idle' }) {
+export default function VoiceCallGenerativePortrait({ running, fill = false, stage = 'idle', avatarFilename = null }) {
   const canvas = useRef(null);
   const idleStage = normalizeIdleStage(stage);
   const idleStageRef = useRef(idleStage);
@@ -271,7 +273,9 @@ export default function VoiceCallGenerativePortrait({ running, fill = false, sta
 
   return <div className={fill ? 'w-full max-w-full' : 'w-[min(64vw,15rem)] max-w-full'}>
     <div className={`relative aspect-square overflow-hidden bg-port-card ${fill ? 'w-full' : 'rounded-lg shadow-lg'}`}>
-      <img src={portraitUrl} alt="Radio operator portrait" className="block size-full object-cover" />
+      {avatarFilename
+        ? <MediaImage src={avatarImageSrc(avatarFilename)} fallbackSrc={portraitUrl} alt="Channel avatar portrait" className="block size-full object-cover" />
+        : <img src={portraitUrl} alt="Radio operator portrait" className="block size-full object-cover" />}
       <canvas ref={canvas} role="presentation" width={512} height={512} style={{ visibility: 'hidden' }} className="pointer-events-none absolute inset-0 size-full motion-reduce:invisible!" />
     </div>
     {running && unavailable && <p role="status" className="px-2 pt-1.5 pb-1 text-center font-mono text-[11px] text-port-text-muted">

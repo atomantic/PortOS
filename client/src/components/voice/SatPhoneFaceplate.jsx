@@ -1,5 +1,5 @@
 import { Link } from 'react-router';
-import { EyeOff, Maximize2, PanelBottomClose, SlidersHorizontal, Volume2, VolumeX, X } from 'lucide-react';
+import { EyeOff, Maximize2, PanelBottomClose, ScanFace, SlidersHorizontal, Volume2, VolumeX, X } from 'lucide-react';
 import AvatarRuntimeSettings from './AvatarRuntimeSettings';
 import VoiceLlmQuickPicker from './VoiceLlmQuickPicker';
 
@@ -41,7 +41,6 @@ export function SatPhoneFaceplate({
   isFloating,
   stage,
   capturing,
-  avatar,
   runningAvatar,
   avatarData,
   showAvatarSetup,
@@ -50,13 +49,11 @@ export function SatPhoneFaceplate({
   onMinimizeMobile,
   onHideWidget,
 }) {
-  const linkLedState = !avatar
-    ? 'off'
-    : runningAvatar
-      ? 'accent'
-      : (avatarData?.phase === 'starting' || avatarData?.phase === 'installing')
-        ? 'warn'
-        : 'on';
+  const linkLedState = runningAvatar
+    ? 'accent'
+    : (avatarData?.phase === 'starting' || avatarData?.phase === 'installing')
+      ? 'warn'
+      : 'on';
 
   const rxLedState = stage === 'speaking' ? 'rx' : stage === 'thinking' ? 'warn' : 'off';
 
@@ -168,6 +165,13 @@ export function SatPhoneSetup({
         updateData={onUpdateAvatarData}
         refetch={onRefetchAvatar}
       />
+      <Link
+        to="/voice/call"
+        className="satphone-key inline-flex min-h-11 w-full items-center justify-center gap-1.5 rounded-lg border px-3 font-mono text-[10px] font-semibold uppercase tracking-wider"
+      >
+        <ScanFace size={12} aria-hidden="true" />
+        Avatars & channels
+      </Link>
     </div>
   );
 }

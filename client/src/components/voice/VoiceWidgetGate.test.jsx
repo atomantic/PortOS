@@ -114,6 +114,11 @@ vi.mock('../../services/apiProviders', () => ({
 }));
 vi.mock('../../services/apiVoiceAvatar', () => ({
   fetchVoiceAvatar: vi.fn(async () => ({ supported: false })),
+  fetchAvatarLibrary: vi.fn(async () => ({
+    collectionId: 'avatars', collectionName: 'Avatars', avatars: [], active: 0,
+    channels: Array.from({ length: 6 }, () => ({ label: '', avatar: null })),
+  })),
+  saveAvatarChannels: vi.fn(),
 }));
 vi.mock('../ui/Toast', () => ({ default: mocks.toast }));
 vi.mock('./useVoiceUiSync', () => ({

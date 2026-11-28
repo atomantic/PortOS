@@ -1,42 +1,47 @@
 import { useState } from 'react';
-import { Brain, ChevronDown, ChevronUp, Play, Radio, Trash2, Video } from 'lucide-react';
+import { Brain, ChevronDown, ChevronUp, Radio, ScanFace, Trash2, Video } from 'lucide-react';
 import { voiceModelDisplayName } from '../../../../server/lib/voiceModelCatalog.js';
+import AvatarChannelsPanel from './AvatarChannelsPanel';
 import AvatarRuntimeSettings from './AvatarRuntimeSettings';
 import SatPhoneHandset from './SatPhoneHandset';
 import VoiceLlmQuickPicker from './VoiceLlmQuickPicker';
 import { useAvatarRuntime } from './useAvatarRuntime';
+import { activeChannelOf, useAvatarLibrary } from './useAvatarLibrary';
 import { safeReadStorage, safeWriteStorage } from '../../lib/safeStorage';
 
-const DISPLAY_KEY = 'portos.voice.callDisplay';
 
 const TAB_KEY = 'portos.voice.callTab';
-const TABS = ['video', 'brain'];
+const TABS = ['video', 'brain', 'avatars'];
 
 /**
  * Station settings as two compact disclosure chips instead of stacked cards,
  * so the handset and log stay above the fold on a phone. Each chip carries its
  * live status and opens one panel at a time; tapping the open chip folds it.
  */
-function StationTabs({ avatar, runningAvatar, llmProvider, llmModel, onLlmSaved, avatarData, avatarError, onUpdateAvatarData, onRefetchAvatar }) {
+function StationTabs({ runningAvatar, llmProvider, llmModel, onLlmSaved, avatarData, avatarError, onUpdateAvatarData, onRefetchAvatar }) {
   const [tab, setTab] = useState(() => {
     const saved = safeReadStorage(TAB_KEY);
     return saved === 'none' ? null : TABS.includes(saved) ? saved : 'video';
   });
+  const { data: library } = useAvatarLibrary();
   const choose = (next) => {
     const value = tab === next ? null : next;
     safeWriteStorage(TAB_KEY, value || 'none');
     setTab(value);
   };
-  const videoStatus = !avatar ? 'Audio only' : runningAvatar ? 'Live' : 'Still portrait';
+  const videoStatus = runningAvatar ? 'Live' : 'Still portrait';
+  const channel = activeChannelOf(library);
+  const avatarsStatus = channel ? `CH${channel.index + 1} on air` : 'Channels';
   const brainStatus = llmModel && llmModel !== 'auto' ? voiceModelDisplayName(llmModel) : `${llmProvider || 'lmstudio'} (auto)`;
   const tabs = [
-    { id: 'video', label: 'Video feed', status: videoStatus, Icon: Video, led: runningAvatar ? 'bg-port-accent shadow-[0_0_6px_rgb(var(--port-accent))]' : avatar ? 'bg-port-success' : 'bg-port-text-muted' },
+    { id: 'video', label: 'Video feed', status: videoStatus, Icon: Video, led: runningAvatar ? 'bg-port-accent shadow-[0_0_6px_rgb(var(--port-accent))]' : 'bg-port-success' },
     { id: 'brain', label: 'Voice brain', status: brainStatus, Icon: Brain },
+    { id: 'avatars', label: 'Avatars', status: avatarsStatus, Icon: ScanFace },
   ];
 
   return (
     <div className="flex min-w-0 flex-col gap-2">
-      <div role="group" aria-label="Station settings" className="grid grid-cols-2 gap-2">
+      <div role="group" aria-label="Station settings" className="grid grid-cols-[repeat(auto-fit,minmax(8.5rem,1fr))] gap-2">
         {tabs.map(({ id, label, status, Icon, led }) => (
           <button
             key={id}
@@ -63,18 +68,17 @@ function StationTabs({ avatar, runningAvatar, llmProvider, llmModel, onLlmSaved,
 
       {tab === 'video' && (
         <div id="station-panel-video">
-          {avatar ? (
-            <AvatarRuntimeSettings data={avatarData} error={avatarError} updateData={onUpdateAvatarData} refetch={onRefetchAvatar} compact />
-          ) : (
-            <p className="rounded-xl border border-port-border bg-port-card px-3 py-2.5 text-xs text-port-text-muted">
-              Audio only. Turn on Avatar on the handset to use the video feed.
-            </p>
-          )}
+          <AvatarRuntimeSettings data={avatarData} error={avatarError} updateData={onUpdateAvatarData} refetch={onRefetchAvatar} compact />
         </div>
       )}
       {tab === 'brain' && (
         <div id="station-panel-brain">
           <VoiceLlmQuickPicker compact provider={llmProvider} model={llmModel} onSaved={onLlmSaved} />
+        </div>
+      )}
+      {tab === 'avatars' && (
+        <div id="station-panel-avatars">
+          <AvatarChannelsPanel />
         </div>
       )}
     </div>
@@ -83,18 +87,12 @@ function StationTabs({ avatar, runningAvatar, llmProvider, llmModel, onLlmSaved,
 
 export default function VoiceCallConsole({
   stage, history, scrollRef, interimTranscript, capturing, handsFree, canChangeMicMode,
-  hotkey, draft, onDraft, onSend, onMic, onMode, onInterrupt, onEnd, onSample, onClear,
+  hotkey, draft, onDraft, onSend, onMic, onMode, onInterrupt, onEnd, onClear,
   voiceLabel, llmProvider, llmModel, onLlmSaved, volume = 0.85, muted = false, onVolumeChange, onToggleMute,
   sfxEnabled = true, onToggleSfx, signalLevel = 0, visionEnabled = false, onToggleVision,
 }) {
-  const [avatar, setAvatar] = useState(() => safeReadStorage(DISPLAY_KEY) !== 'audio');
-  const { data, error, updateData, refetch } = useAvatarRuntime(avatar);
+  const { data, error, updateData, refetch } = useAvatarRuntime();
   const runningAvatar = Boolean(!error && data?.supported && data.phase === 'running');
-
-  const toggleAvatar = () => {
-    safeWriteStorage(DISPLAY_KEY, avatar ? 'audio' : 'avatar');
-    setAvatar(!avatar);
-  };
 
   return (
     <section
@@ -121,14 +119,11 @@ export default function VoiceCallConsole({
           onMode={onMode}
           onInterrupt={onInterrupt}
           onEnd={onEnd}
-          onSample={onSample}
           onClear={onClear}
           voiceLabel={voiceLabel}
           llmProvider={llmProvider}
           llmModel={llmModel}
           onLlmSaved={onLlmSaved}
-          avatar={avatar}
-          onToggleAvatar={toggleAvatar}
           avatarData={data}
           avatarError={error}
           onUpdateAvatarData={updateData}
@@ -149,7 +144,6 @@ export default function VoiceCallConsole({
       {/* Right column: station settings tabs + transmission log */}
       <div className="flex min-w-0 flex-col gap-4">
         <StationTabs
-          avatar={avatar}
           runningAvatar={runningAvatar}
           llmProvider={llmProvider}
           llmModel={llmModel}
@@ -176,15 +170,6 @@ export default function VoiceCallConsole({
             </div>
 
             <div className="flex flex-wrap items-center gap-1.5">
-              <button
-                type="button"
-                onClick={onSample}
-                disabled={stage !== 'idle'}
-                className="satphone-key inline-flex min-h-11 items-center gap-1.5 rounded-lg border px-3 font-mono text-xs font-semibold uppercase tracking-wider disabled:opacity-45"
-              >
-                <Play size={13} aria-hidden="true" />
-                Play sample
-              </button>
               {history.length > 0 && onClear && (
                 <button
                   type="button"
@@ -211,7 +196,7 @@ export default function VoiceCallConsole({
             >
               {history.length === 0 && !interimTranscript && (
                 <p className="opacity-65">
-                  Channel quiet. Press the TALK paddle, run Play sample, or type on the handset.
+                  Channel quiet. Press the TALK paddle or type on the handset.
                 </p>
               )}
               {history.map((turn, i) => (

@@ -1,15 +1,13 @@
-import { ChevronDown, ChevronUp, Play, Trash2 } from 'lucide-react';
+import { ChevronDown, ChevronUp, Trash2 } from 'lucide-react';
 import SatPhoneComposer from './SatPhoneComposer';
 
 export default function SatPhoneConversation({
-  stage,
   history,
   scrollRef,
   interimTranscript,
   draft,
   onDraft,
   onSend,
-  onSample,
   onClear,
   collapsed,
   onToggleCollapsed,
@@ -24,16 +22,6 @@ export default function SatPhoneConversation({
             Transmission log
           </span>
           <div className="flex items-center gap-1">
-            <button
-              type="button"
-              onClick={onSample}
-              disabled={stage !== 'idle'}
-              title="Play radio-check sample"
-              className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 pointer-coarse:min-h-11 font-mono text-[9px] uppercase tracking-wider text-port-accent-text hover:bg-port-accent/15 disabled:opacity-40"
-            >
-              <Play size={9} aria-hidden="true" />
-              Radio check
-            </button>
             {history.length > 0 && onClear && (
               <button
                 type="button"

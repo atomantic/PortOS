@@ -47,3 +47,15 @@ export async function streamVoiceAvatarIdle({ stage = 'idle', signal, onFrame })
   });
   await readAvatarFrameStream(response, onFrame);
 }
+
+// The shared Avatars collection plus this install's transceiver channel assignments.
+export const fetchAvatarLibrary = options => request('/voice/avatar/library', { signal: options?.signal, silent: true });
+export const addAvatarToLibrary = (filename, options = {}) => request('/voice/avatar/library', {
+  method: 'POST', body: JSON.stringify({ filename }), ...options,
+});
+export const removeAvatarFromLibrary = (filename, options = {}) => request(`/voice/avatar/library/${encodeURIComponent(filename)}`, {
+  method: 'DELETE', ...options,
+});
+export const saveAvatarChannels = (patch, options = {}) => request('/voice/avatar/channels', {
+  method: 'PUT', body: JSON.stringify(patch), ...options,
+});

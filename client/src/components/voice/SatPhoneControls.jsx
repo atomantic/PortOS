@@ -1,5 +1,5 @@
 import {
-  Mic, MicOff, Monitor, MonitorOff, PhoneOff, Play, Radio, ScanFace, Square, Volume2, VolumeX,
+  Mic, MicOff, Monitor, MonitorOff, PhoneOff, Radio, ScanFace, Square, Volume2, VolumeX,
 } from 'lucide-react';
 import SatPhoneRotaryDial from './SatPhoneRotaryDial';
 import { voiceModelDisplayName } from '../../../../server/lib/voiceModelCatalog.js';
@@ -106,9 +106,9 @@ export function SatPhoneTelemetry({
   handsFree,
   canChangeMicMode,
   onMode,
-  onSample,
-  avatar,
-  onToggleAvatar,
+  channel,
+  channelCount = 0,
+  onNextChannel,
   volume,
   muted,
   voiceLabel,
@@ -123,15 +123,19 @@ export function SatPhoneTelemetry({
     ? voiceModelDisplayName(llmModel)
     : (llmProvider ? `${llmProvider} · auto` : null);
   const lcdSubline = [voiceLabel || 'Saved voice', llmDisplay].filter(Boolean).join(' · ');
+  const channelNumber = (channel?.index ?? 0) + 1;
+  const channelName = channel?.label || `Channel ${channelNumber}`;
 
   return (
     <div className="flex items-center gap-2.5 min-w-0">
       <div className="flex flex-1 flex-col gap-1.5 min-w-0">
-        {/* Digital LCD readout — real telemetry only, no fake channel changer */}
+        {/* Digital LCD readout — real telemetry; the channel picks the avatar on the viewfinder */}
         <div className="satphone-lcd flex items-center justify-between gap-2 rounded-lg border px-2.5 py-2 min-w-0">
           <div className="flex flex-col gap-0.5 min-w-0">
             <div className="flex items-center gap-1.5 font-mono text-[10px] font-bold uppercase tracking-wider">
               <span className="text-port-accent">{modeBadge}</span>
+              <span className="opacity-40" aria-hidden="true">/</span>
+              <span>{`CH${channelNumber}`}</span>
               <span className="opacity-40" aria-hidden="true">/</span>
               <span className={muted ? 'text-port-error-text' : ''}>
                 {muted ? 'MUTE' : `${Math.round(volume * 100)}%`}
@@ -144,9 +148,9 @@ export function SatPhoneTelemetry({
           <SignalMeter level={signalLevel} stage={stage} muted={muted} />
         </div>
 
-        {/* Dual mode keys beneath LCD: Mic mode (VOX/PTT) + Avatar toggle */}
-        <div className="grid grid-cols-2 gap-1.5">
-          {canChangeMicMode ? (
+        {/* Mode keys beneath LCD: Mic mode (VOX/PTT) + channel changer */}
+        <div className={`grid gap-1.5 ${canChangeMicMode ? 'grid-cols-2' : 'grid-cols-1'}`}>
+          {canChangeMicMode && (
             <button
               type="button"
               onClick={onMode}
@@ -159,29 +163,18 @@ export function SatPhoneTelemetry({
             >
               {isFloating ? (handsFree ? 'hands-free' : 'push-to-talk') : 'Hands-free'}
             </button>
-          ) : (
-            <button
-              type="button"
-              onClick={onSample}
-              disabled={stage !== 'idle'}
-              title="Play a radio-check voice sample"
-              className={keyBase}
-            >
-              <Play size={12} aria-hidden="true" />
-              Play sample
-            </button>
           )}
           <button
             type="button"
-            onClick={onToggleAvatar}
-            aria-pressed={avatar}
-            data-active={avatar ? 'true' : 'false'}
-            title={avatar ? 'Switch to audio-only mode' : 'Show avatar portrait'}
-            className={keyBase}
+            onClick={onNextChannel}
+            disabled={!onNextChannel || channelCount < 2}
+            aria-label={`Channel ${channelNumber}, ${channelName}. Switch to the next channel`}
+            title={`CH${channelNumber} · ${channelName} — click for the next channel's avatar`}
+            className={`${keyBase} min-w-0`}
           >
-            <ScanFace size={13} aria-hidden="true" />
-            Avatar
-            <span aria-hidden="true" className="opacity-70">{avatar ? 'on' : 'off'}</span>
+            <ScanFace size={13} aria-hidden="true" className="shrink-0" />
+            <span className="shrink-0">{`CH${channelNumber}`}</span>
+            <span aria-hidden="true" className="truncate opacity-70 normal-case">{channelName}</span>
           </button>
         </div>
       </div>
@@ -206,13 +199,12 @@ export function SatPhoneActionKeys({
   onToggleMute,
   visionEnabled,
   onToggleVision,
-  onSample,
   onInterrupt,
   onEnd,
 }) {
   return (
     <>
-      <div className="grid grid-cols-2 min-[340px]:grid-cols-4 gap-1.5">
+      <div className={`grid gap-1.5 ${onToggleVision ? 'grid-cols-2 min-[340px]:grid-cols-4' : 'grid-cols-3'}`}>
         <button
           type="button"
           onClick={onToggleSfx}
@@ -239,7 +231,7 @@ export function SatPhoneActionKeys({
           {muted ? 'Unmute' : 'Mute'}
         </button>
 
-        {onToggleVision ? (
+        {onToggleVision && (
           <button
             type="button"
             onClick={onToggleVision}
@@ -253,17 +245,6 @@ export function SatPhoneActionKeys({
           >
             {visionEnabled ? <Monitor size={12} aria-hidden="true" /> : <MonitorOff size={12} aria-hidden="true" />}
             Vision
-          </button>
-        ) : (
-          <button
-            type="button"
-            onClick={onSample}
-            disabled={stage !== 'idle'}
-            title="Play a radio-check voice sample"
-            className={keyBase}
-          >
-            <Play size={12} aria-hidden="true" />
-            Play sample
           </button>
         )}
 

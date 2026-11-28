@@ -56,7 +56,7 @@ export default function AvatarRuntimeSettings({ data, error, updateData, refetch
       {running && <button type="button" className={button} aria-expanded={showControls}
         onClick={() => setShowControls(!showControls)}>{showControls ? 'Hide avatar settings' : 'Avatar settings'}</button>}
     </div>
-    {!running && <p className="text-xs text-port-text-muted">Calls and Play sample still work with a still portrait.</p>}
+    {!running && <p className="text-xs text-port-text-muted">Calls still work with a still portrait.</p>}
     {(error || !data) && <p role="status" className="text-xs">{error ? 'Could not load avatar status.' : 'Checking avatar runtime…'}</p>}
     {error && <button type="button" className={button} onClick={refetch}>Retry status</button>}
     {data && !data.supported && <p className="text-xs text-port-text-muted">This runtime needs an Apple Silicon host running macOS 26 or later.</p>}

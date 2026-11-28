@@ -112,3 +112,18 @@ class StreamProtocolTest(unittest.TestCase):
         self.assertEqual(item[3], "thinking")
         events = [json.loads(line) for line in outgoing.getvalue().splitlines() if line]
         self.assertEqual(events, [{"type": "error", "id": "idle_bad", "message": "Invalid idle stage"}])
+
+    def test_pipe_protocol_queues_portrait_swaps_and_rejects_bad_payloads(self):
+        from stream import PipeProtocol
+        lines = "\n".join([
+            json.dumps({"type": "portrait", "id": "face_1", "jpeg": "AAAA"}),
+            json.dumps({"type": "portrait", "id": "face_bad", "jpeg": 7}),
+        ]) + "\n"
+        outgoing = io.StringIO()
+        protocol = PipeProtocol(io.BytesIO(lines.encode("utf-8")), outgoing)
+        protocol.read()
+        item = protocol.pending.get()
+        self.assertEqual((item[0], item[1], item[3]), ("portrait", "face_1", "AAAA"))
+        events = [json.loads(line) for line in outgoing.getvalue().splitlines() if line]
+        self.assertEqual(events, [{"type": "error", "id": "face_bad",
+                                   "message": "Expected a speak, idle, portrait, or cancel request"}])

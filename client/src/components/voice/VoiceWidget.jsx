@@ -49,7 +49,6 @@ import { safeReadStorage, safeWriteStorage } from '../../lib/safeStorage';
 const QUIET_MIC_THRESHOLD = 0.02;
 
 const HANDS_FREE_KEY = 'portos.voice.handsFree';
-const DISPLAY_KEY = 'portos.voice.callDisplay';
 
 const STAGE = {
   idle: { icon: Mic, label: '', tone: 'text-gray-300' },
@@ -120,7 +119,6 @@ export default function VoiceWidget({ config, claimHeld, consoleHost }) {
   });
   const [hidden, setHidden] = useState(readVoiceHidden);
   const [visualMode, setVisualMode] = useState(readVoiceVisualMode);
-  const [floatingAvatar, setFloatingAvatar] = useState(() => safeReadStorage(DISPLAY_KEY) !== 'audio');
   const [audioPrefs, setAudioPrefs] = useState(() => ({
     volume: typeof getVoiceVolume === 'function' ? getVoiceVolume() : 0.85,
     muted: typeof isVoiceMuted === 'function' ? isVoiceMuted() : false,
@@ -393,7 +391,7 @@ export default function VoiceWidget({ config, claimHeld, consoleHost }) {
     error: floatingAvatarError,
     updateData: updateFloatingAvatarData,
     refetch: refetchFloatingAvatar,
-  } = useAvatarRuntime(floatingFullVisible && floatingAvatar);
+  } = useAvatarRuntime(floatingFullVisible);
   const runningFloatingAvatar = Boolean(!floatingAvatarError && floatingAvatarData?.supported && floatingAvatarData.phase === 'running');
 
   // Auto-scroll to bottom on new content
@@ -706,15 +704,6 @@ export default function VoiceWidget({ config, claimHeld, consoleHost }) {
     if (next) playRadioCue('click', { volume: audioPrefs.volume, muted: audioPrefs.muted, enabled: true });
   }, [sfxEnabled, audioPrefs.volume, audioPrefs.muted]);
 
-  const handleToggleFloatingAvatar = useCallback(() => {
-    playRadioCue('click', { volume: audioPrefs.volume, muted: audioPrefs.muted, enabled: sfxEnabled });
-    setFloatingAvatar((prev) => {
-      const next = !prev;
-      safeWriteStorage(DISPLAY_KEY, next ? 'avatar' : 'audio');
-      return next;
-    });
-  }, [audioPrefs.volume, audioPrefs.muted, sfxEnabled]);
-
   const handleSetVisualMode = useCallback((nextMode) => {
     playRadioCue('click', { volume: audioPrefs.volume, muted: audioPrefs.muted, enabled: sfxEnabled });
     writeVoiceVisualMode(nextMode);
@@ -885,52 +874,18 @@ export default function VoiceWidget({ config, claimHeld, consoleHost }) {
     (next === 'input' ? inputRef : fabRef).current?.focus();
   }, [expanded]);
 
-  const sampleRef = useRef(null);
-  const stopSample = useCallback(() => {
-    const sample = sampleRef.current;
-    if (!sample) return false;
-    sampleRef.current = null;
-    sample.abort();
-    return true;
-  }, []);
-  const playCallSample = async () => {
-    if (stage !== 'idle' || sampleRef.current) return;
-    prepareVoicePlayback();
-    const sample = new AbortController();
-    sampleRef.current = sample;
-    setStage('thinking');
-    try {
-      const queued = await speakSynthesized('PortOS radio check. One, two, three. How do you read me?', {
-        ...ttsRef.current, signal: sample.signal, animate: true,
-      });
-      if (!queued || sampleRef.current !== sample) return;
-      setStage('speaking');
-      await whenPlaybackDrained();
-    } catch (err) {
-      if (sampleRef.current === sample) toast.error(`Voice sample: ${err.message}`);
-    } finally {
-      if (sampleRef.current === sample) {
-        sampleRef.current = null;
-        setStage('idle');
-      }
-    }
-  };
-
   const sendFromConsole = () => {
     if (!draft.trim()) return;
-    if (stopSample()) interrupt();
     prepareVoicePlayback();
     handleSend();
   };
 
   const toggleConsoleMic = () => {
-    if (stopSample()) interrupt();
     prepareVoicePlayback();
     toggleCapture();
   };
 
   const endCall = useCallback(() => {
-    stopSample();
     turnGenerationRef.current += 1;
     engageSeqRef.current += 1;
     pendingEngageRef.current = false;
@@ -940,9 +895,7 @@ export default function VoiceWidget({ config, claimHeld, consoleHost }) {
     interrupt();
     setInterimTranscript('');
     setStage('idle');
-  }, [stopSample]);
-
-  useEffect(() => () => { stopSample(); }, [stopSample]);
+  }, []);
 
   // Leaving the dedicated call console stops its microphone and cancels
   // playback; switching surfaces never mounts a second capture engine.
@@ -969,9 +922,8 @@ export default function VoiceWidget({ config, claimHeld, consoleHost }) {
         onSend={sendFromConsole}
         onMic={toggleConsoleMic}
         onMode={toggleHandsFree}
-        onInterrupt={() => (sampleRef.current ? endCall() : interrupt())}
+        onInterrupt={interrupt}
         onEnd={endCall}
-        onSample={playCallSample}
         onClear={handleClear}
         voiceLabel={tts?.voice || tts?.engine}
         llmProvider={activeLlmProvider}
@@ -1068,16 +1020,13 @@ export default function VoiceWidget({ config, claimHeld, consoleHost }) {
             onSend={sendFromConsole}
             onMic={toggleConsoleMic}
             onMode={toggleHandsFree}
-            onInterrupt={() => (sampleRef.current ? endCall() : interrupt())}
+            onInterrupt={interrupt}
             onEnd={endCall}
-            onSample={playCallSample}
             onClear={handleClear}
             voiceLabel={tts?.voice || tts?.engine}
             llmProvider={activeLlmProvider}
             llmModel={activeLlmModel}
             onLlmSaved={setLlmOverride}
-            avatar={floatingAvatar}
-            onToggleAvatar={handleToggleFloatingAvatar}
             avatarData={floatingAvatarData}
             avatarError={floatingAvatarError}
             onUpdateAvatarData={updateFloatingAvatarData}

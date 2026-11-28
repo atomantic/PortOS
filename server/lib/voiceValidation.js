@@ -5,7 +5,7 @@
  */
 
 import { z } from 'zod';
-import { nonEmptyString } from './sharedSchemas.js';
+import { mediaFilenameSchema, nonEmptyString } from './sharedSchemas.js';
 import { MAX_AVATAR_WAV_BYTES } from './uploadLimits.js';
 import { HHMM_RE } from './timezone.js';
 import { TTS_ENGINE_IDS } from './voiceEngines.js';
@@ -25,6 +25,21 @@ export const voiceAvatarWaveSchema = z.custom(wav => Buffer.isBuffer(wav) && wav
 export const voiceAvatarIdleSchema = z.object({
   stage: z.enum(['idle', 'listening', 'thinking']).default('idle'),
 }).strict();
+
+/** Voice Call transceiver channels; each can wear one avatar from the Avatars collection. */
+export const AVATAR_CHANNEL_COUNT = 6;
+export const AVATAR_CHANNEL_LABEL_MAX = 24;
+
+export const voiceAvatarChannelsSchema = z.object({
+  active: z.number().int().min(0).max(AVATAR_CHANNEL_COUNT - 1).optional(),
+  channels: z.array(z.object({
+    label: z.string().trim().max(AVATAR_CHANNEL_LABEL_MAX),
+    avatar: mediaFilenameSchema.nullable(),
+  }).strict()).length(AVATAR_CHANNEL_COUNT).optional(),
+}).strict().refine((body) => body.active !== undefined || body.channels !== undefined, 'Send active or channels');
+
+export const voiceAvatarAddSchema = z.object({ filename: mediaFilenameSchema }).strict();
+export const voiceAvatarFilenameParamsSchema = z.object({ filename: mediaFilenameSchema }).strict();
 
 export const facetimeActionSchema = z.object({}).strict();
 

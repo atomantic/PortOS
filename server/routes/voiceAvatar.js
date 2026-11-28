@@ -1,10 +1,16 @@
-// Host-control endpoints for the optional local Voice Call avatar and its frame stream.
+// Host-control endpoints for the optional local Voice Call avatar, its frame stream, and the
+// avatar library (the shared Avatars collection plus this install's channel assignments).
 import express, { Router } from 'express';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import { getAvatarStatus, manageAvatar, renderAvatar, renderAvatarIdle } from '../services/voice/avatarRuntime.js';
 import { MAX_AVATAR_WAV_BYTES } from '../lib/uploadLimits.js';
-import { voiceAvatarCommandSchema, voiceAvatarIdleSchema, voiceAvatarWaveSchema } from '../lib/voiceValidation.js';
+import {
+  voiceAvatarAddSchema, voiceAvatarChannelsSchema, voiceAvatarCommandSchema, voiceAvatarFilenameParamsSchema,
+  voiceAvatarIdleSchema, voiceAvatarWaveSchema,
+} from '../lib/voiceValidation.js';
+import { emptyQuerySchema } from '../lib/queryValidation.js';
+import { addAvatar, getAvatarLibrary, removeAvatar, updateAvatarChannels } from '../services/voice/avatarLibrary.js';
 import { avatarError } from '../services/voice/avatarWorker.js';
 
 function streamFrames(res, run) {
@@ -37,6 +43,24 @@ router.post('/runtime', asyncHandler(async (req, res) => {
     throw avatarError('Accept the checkpoint terms before downloading the model.', 400);
   }
   res.json(await manageAvatar(action));
+}));
+router.get('/library', asyncHandler(async (req, res) => {
+  validateRequest(emptyQuerySchema, req.query);
+  res.json(await getAvatarLibrary());
+}));
+router.post('/library', asyncHandler(async (req, res) => {
+  validateRequest(emptyQuerySchema, req.query);
+  const { filename } = validateRequest(voiceAvatarAddSchema, req.body);
+  res.json(await addAvatar(filename));
+}));
+router.delete('/library/:filename', asyncHandler(async (req, res) => {
+  validateRequest(emptyQuerySchema, req.query);
+  const { filename } = validateRequest(voiceAvatarFilenameParamsSchema, req.params);
+  res.json(await removeAvatar(filename));
+}));
+router.put('/channels', asyncHandler(async (req, res) => {
+  validateRequest(emptyQuerySchema, req.query);
+  res.json(await updateAvatarChannels(validateRequest(voiceAvatarChannelsSchema, req.body)));
 }));
 router.post('/frames', express.raw({ type: 'audio/wav', limit: MAX_AVATAR_WAV_BYTES, inflate: false }), asyncHandler(async (req, res) => {
   const wav = validateRequest(voiceAvatarWaveSchema, req.body);

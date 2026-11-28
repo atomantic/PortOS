@@ -1,4 +1,3 @@
-import { AudioLines } from 'lucide-react';
 import VoiceCallGenerativePortrait from './VoiceCallGenerativePortrait';
 
 const STATUS_LABELS = {
@@ -11,42 +10,27 @@ const STATUS_LABELS = {
 };
 
 export default function SatPhoneViewfinder({
-  avatar,
+  avatarFilename = null,
+  channel,
   runningAvatar,
   stage,
   capturing,
   caption,
 }) {
   const statusText = STATUS_LABELS[stage] || STATUS_LABELS.idle;
-  const screenBadge = !avatar
-    ? 'AUDIO ONLY'
-    : runningAvatar
-      ? 'AVATAR LIVE'
-      : 'PORTRAIT';
+  const channelBadge = `CH${(channel?.index ?? 0) + 1}`;
+  const screenBadge = `${channelBadge} · ${runningAvatar ? 'AVATAR LIVE' : 'PORTRAIT'}`;
 
   return (
     <div className="satphone-bezel relative isolate flex-1 min-w-0 overflow-hidden rounded-xl border">
-      {avatar ? (
-        <VoiceCallGenerativePortrait
-          key={runningAvatar ? 'animated' : 'still'}
-          running={runningAvatar}
-          stage={stage}
-          fill
-        />
-      ) : (
-        <div className="flex aspect-square w-full flex-col items-center justify-center gap-2 bg-port-bg p-4">
-          <div className="relative flex h-20 w-20 items-center justify-center rounded-full border border-port-accent/40 bg-port-accent/10">
-            <AudioLines
-              aria-hidden="true"
-              size={36}
-              className={`text-port-accent ${capturing || stage === 'speaking' ? 'animate-pulse' : ''}`}
-            />
-          </div>
-          <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-port-text-muted">
-            Audio-only link
-          </span>
-        </div>
-      )}
+      {/* Remount per face so a channel change restarts the idle stream on the new portrait. */}
+      <VoiceCallGenerativePortrait
+        key={`${runningAvatar ? 'animated' : 'still'}:${avatarFilename || 'default'}`}
+        running={runningAvatar}
+        stage={stage}
+        avatarFilename={avatarFilename}
+        fill
+      />
 
       {/* Subtle CRT/OLED scanlines (disabled under reduced-motion) */}
       <div aria-hidden="true" className="satphone-scanlines pointer-events-none absolute inset-0" />
