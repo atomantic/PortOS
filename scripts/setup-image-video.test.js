@@ -1559,6 +1559,17 @@ ${section}`;
     expect(result.stdout).not.toContain('venv ready');
     if (failure.INSTALL_EXIT) expect(result.calls).not.toContain('from mlx_audio.music');
   });
+
+  it('omits unused sounddevice, miniaudio, cffi, scipy, sentencepiece, and jinja2 packages from the MiniMax Music 3 MLX lock', () => {
+    const lock = readFileSync(join(REQUIREMENTS_DIR, 'requirements-minimax-music3-mlx.lock.txt'), 'utf8');
+    const names = new Set(Array.from(lock.matchAll(/^([a-z0-9][a-z0-9._-]*)==/gim), ([, name]) => name.toLowerCase()));
+    for (const omitted of ['sounddevice', 'cffi', 'pycparser', 'miniaudio', 'scipy', 'sentencepiece', 'jinja2', 'markupsafe']) {
+      expect(names.has(omitted), omitted).toBe(false);
+    }
+    for (const kept of ['mlx-audio', 'mlx', 'mlx-metal', 'numpy', 'transformers', 'huggingface-hub', 'tokenizers', 'safetensors']) {
+      expect(names.has(kept), kept).toBe(true);
+    }
+  });
 });
 
 it.each(['mlx', 'cuda-linux', 'cuda-windows'])('MuScriptor %s locks inference without the web server or CLI', (target) => {
