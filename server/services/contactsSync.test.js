@@ -238,6 +238,38 @@ describe('contactsSync cache security and erasure (#18130)', () => {
     const secondClear = await clearContactCache();
     expect(secondClear).toEqual({ ok: true, cleared: true, cacheRemoved: false, stateRemoved: false });
   });
+
+  it('reads each AddressBook SQLite database only once during checkSetup and runSync', async () => {
+    const rootDb = join(abRoot, 'AddressBook-v22.abcddb');
+    const sourceDir = join(abRoot, 'Sources', 'source-a');
+    mkdirSync(sourceDir, { recursive: true });
+    const sourceDb = join(sourceDir, 'AddressBook-v22.abcddb');
+    createFakeAddressBookDb(rootDb, [
+      { pk: 1, uniqueId: 'u-1', firstName: 'Jane', lastName: 'Doe', phones: ['+1 555 010 1234'] },
+    ]);
+    createFakeAddressBookDb(sourceDb, [
+      { pk: 1, uniqueId: 'u-2', firstName: 'John', lastName: 'Smith', emails: ['john@example.com'] },
+      { pk: 2, uniqueId: 'u-3', firstName: 'Alex', lastName: 'Ng', emails: ['alex@example.com'] },
+    ]);
+
+    const closeSpy = vi.spyOn(DatabaseSync.prototype, 'close');
+    try {
+      const setup = await checkSetup();
+      expect(setup.ok).toBe(true);
+      expect(setup.sourceCount).toBe(2);
+      expect(setup.rawContactRows).toBe(3);
+      expect(closeSpy).toHaveBeenCalledTimes(2);
+
+      closeSpy.mockClear();
+      const sync = await runSync();
+      expect(sync.ok).toBe(true);
+      expect(sync.contactCount).toBe(3);
+      expect(sync.sourceCount).toBe(2);
+      expect(closeSpy).toHaveBeenCalledTimes(2);
+    } finally {
+      closeSpy.mockRestore();
+    }
+  });
 });
 
 describe('contactsSync.getStatus (#18279)', () => {
