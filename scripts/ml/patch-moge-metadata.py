@@ -16,10 +16,11 @@ def replace_once(text, before, after):
 
 
 def patch_text(text):
+    # The Metal source lock's utils3d archive declares version 1.3.
     text = replace_once(
         text,
         'utils3d @ git+https://github.com/EasternJournalist/utils3d.git@3fab839f0be9931dac7c8488eb0e1600c236e183',
-        'utils3d==0.0.2',
+        'utils3d==1.3',
     )
     text = replace_once(
         text,

@@ -1,10 +1,9 @@
 # Pixal3D Metal wheel closure: CPython 3.13, Apple Silicon, macOS 26+.
-# Direct inputs are requirements-pixal3d-mps.txt. Generated with hash-verified uv 0.13.7.
-# Cutoff 2026-11-20T00:00:00Z (three days before 2026-11-23). 76 distributions; OSV querybatch 0 matches.
-# Regenerate from the repository root:
+# Generated with hash-verified uv 0.13.7; cutoff 2026-11-25T00:00:00Z.
+# Seed the output with this lock to preserve unrelated versions. Regenerate from the repository root:
 # MACOSX_DEPLOYMENT_TARGET=26.0 uv --no-config pip compile scripts/ml/requirements/requirements-pixal3d-mps.txt \
 #   --python-version 3.13 --python-platform aarch64-apple-darwin \
-#   --generate-hashes --only-binary :all: --exclude-newer 2026-11-20T00:00:00Z \
+#   --generate-hashes --only-binary :all: --exclude-newer 2026-11-25T00:00:00Z \
 #   --no-header --no-annotate -o scripts/ml/requirements/requirements-pixal3d-mps.lock.txt
 accelerate==1.15.0 \
     --hash=sha256:5654f8c5eaa0d4fa68b33e287a97765da6849bf6d51dcac874e73fbbddfb6134 \
@@ -277,6 +276,9 @@ diffusers==0.42.1 \
 easydict==1.13 \
     --hash=sha256:6b787daf4dcaf6377b4ad9403a5cee5a86adbc0ca9a5bcf5410e9902002aeac2 \
     --hash=sha256:b1135dedbc41c8010e2bc1f77ec9744c7faa42bce1a1c87416791449d6c87780
+einops==0.8.2 \
+    --hash=sha256:54058201ac7087911181bfec4af6091bb59380360f069276601256a76af08193 \
+    --hash=sha256:609da665570e5e265e27283aab09e7f279ade90c4f01bcfca111f3d3e13f2827
 fast-simplification==0.2.0 \
     --hash=sha256:15c844cb7d3b6ab0408ff0dc5f31d1264254d0d335a3149e55e9b377ff3615bd \
     --hash=sha256:327421879656f3a4cd34b8869a3b2c86cf4dcc6fd100b9d5dee8f57aaeaf80d7 \
@@ -456,18 +458,6 @@ huggingface-hub==2.4.0 \
 idna==3.20 \
     --hash=sha256:a7db850025b95ded1eae8a46181a1a6c56c92c96f0e2b005d9ff8dc0210cab44 \
     --hash=sha256:ab7ae7122974553370f0bdb919e1a960b2cd1bc1ef0276416d896db81c14582c
-imageio==2.37.3 \
-    --hash=sha256:46f5bb8522cd421c0f5ae104d8268f569d856b29eb1a13b92829d1970f32c9f0 \
-    --hash=sha256:bbb37efbfc4c400fcd534b367b91fcd66d5da639aaa138034431a1c5e0a41451
-imageio-ffmpeg==0.8.1 \
-    --hash=sha256:050d6850601c3b3890bd2b28306f3b842b3daea390a561101174375a1c460bda \
-    --hash=sha256:0b7079e63dc34f97e43db5a5b7b9efb85edc1c6623313e0a4a17ebc7c2ce7a51 \
-    --hash=sha256:4f1213a47d9c3e819d5953671bc45d133a7d3a00c40a2934a9b1356933bee4e9 \
-    --hash=sha256:5636d691e36e5274b13fe38182b1f627b2e35dcecc63944012c2470f9484fc45 \
-    --hash=sha256:9538a10e598257263b5de1a1c1b86e7603417bc219245b1e279b452e5e48cc20 \
-    --hash=sha256:9e5162fa482c3c45a6703b2223947d15c37730e63b048d64937fa80243aa5a0c \
-    --hash=sha256:f27ca4cb85e2d4946deedbce1a81245dfd942a2bcf94b53676fb3956aa95bf1b \
-    --hash=sha256:fad3176f859b25869e60a8ed79957d4e3ed74a97a95e5f0cdcb91455f6c6d00e
 importlib-metadata==10.2.0 \
     --hash=sha256:9413a2029fd9ca5669d27f1386071bbfe3c7ebca0545692ec975088241fe1d79 \
     --hash=sha256:c7a4bf1c7479601f6b8e437cfc14f4f77028ba62a8f34ae95cd93d9774dfba51

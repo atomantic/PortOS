@@ -9,6 +9,13 @@ const script = fileURLToPath(new URL('./setup-pixal3d-mps.sh', import.meta.url))
 const roots = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
+it.each(['txt', 'lock.txt'])('keeps the required CLI and native dependencies in the Pixal3D Metal %s manifest', extension => {
+  const requirements = readFileSync(new URL(`./ml/requirements/requirements-pixal3d-mps.${extension}`, import.meta.url), 'utf8');
+  expect(requirements).not.toMatch(/^imageio(?:-ffmpeg)?==/m);
+  expect(requirements).toMatch(/^einops==/m);
+  expect(requirements).toMatch(/^kornia==/m);
+});
+
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), 'pixal install '));
   roots.push(root);
@@ -27,6 +34,16 @@ if (args[0] === '-m' && args[1] === 'venv') {
   fs.mkdirSync('.venv/bin', {recursive:true});
   fs.copyFileSync(process.argv[1], '.venv/bin/python');
   fs.chmodSync('.venv/bin/python', 0o755);
+}
+if (args[2] === 'download' && process.env.MOGE_ARCHIVE) {
+  fs.copyFileSync(process.env.MOGE_ARCHIVE, args.at(-1) + '/synthetic-revision');
+}
+if (args[0] === '-' && args[3]?.endsWith('/patch-moge-metadata.py') && process.env.REAL_PYTHON) {
+  const result = require('node:child_process').spawnSync(process.env.REAL_PYTHON, args, {
+    input: fs.readFileSync(0), stdio: ['pipe', 'inherit', 'inherit'],
+  });
+  if (result.error) throw result.error;
+  process.exitCode = result.status ?? 1;
 }
 if (process.env.FAIL_LOCK === '1' && args.some(a => a.endsWith('requirements-pixal3d-mps.lock.txt'))) process.exit(1);
 `);
@@ -71,7 +88,7 @@ describe.skipIf(process.platform === 'win32')('Pixal3D Metal install/Repair boun
     expect(installs[0].at(-1)).toMatch(/requirements-pixal3d-mps\.lock\.txt$/);
     expect(installs[1]).toEqual(expect.arrayContaining(['--require-hashes', '--no-deps', '--no-build-isolation']));
     expect(installs[1].at(-1)).toMatch(/sources-without-moge\.txt$/);
-    expect(installs[2]).toEqual(expect.arrayContaining(['download', '--require-hashes', '--no-deps']));
+    expect(installs[2]).toEqual(expect.arrayContaining(['download', '--require-hashes', '--no-deps', '--no-build-isolation']));
     expect(installs[2]).toEqual(expect.arrayContaining([expect.stringMatching(/moge-requirement\.txt$/)]));
     expect(installs[3]).toEqual(expect.arrayContaining(['--no-deps', '--no-build-isolation', '--no-cache-dir']));
     expect(installs[3].at(-1)).toBe('.venv/moge-src/pkg');
@@ -86,9 +103,10 @@ describe.skipIf(process.platform === 'win32')('Pixal3D Metal install/Repair boun
     expect(readFileSync(join(f.root, 'model.safetensors'), 'utf8')).toBe('synthetic retained asset');
   });
 
-  it('patches MoGe metadata off Gradio and the duplicate OpenCV wheel', () => {
-    const root = mkdtempSync(join(tmpdir(), 'moge meta '));
-    roots.push(root);
+  it('stages an extensionless MoGe archive and aligns its metadata with the locked CLI runtime', () => {
+    const f = fixture();
+    const sourceRoot = join(f.root, 'moge-source');
+    mkdirSync(sourceRoot);
     const source = [
       'utils3d @ git+https://github.com/EasternJournalist/utils3d.git@3fab839f0be9931dac7c8488eb0e1600c236e183',
       'pipeline @ git+https://github.com/EasternJournalist/pipeline.git@866f059d2a05cde05e4a52211ec5051fd5f276d6',
@@ -96,13 +114,15 @@ describe.skipIf(process.platform === 'win32')('Pixal3D Metal install/Repair boun
       '"opencv-python"',
       '',
     ].join('\n');
-    writeFileSync(join(root, 'pyproject.toml'), source);
+    writeFileSync(join(sourceRoot, 'pyproject.toml'), source);
+    const archive = join(f.root, 'archive.tar.gz');
+    execFileSync('tar', ['-czf', archive, '-C', f.root, 'moge-source']);
     const python = ['python3.13', 'python3'].find((name) => {
       try { execFileSync(name, ['-c', 'print(1)'], { stdio: 'pipe' }); return true; } catch { return false; }
     });
-    execFileSync(python, [fileURLToPath(new URL('./ml/patch-moge-metadata.py', import.meta.url)), root], { stdio: 'pipe' });
-    const patched = readFileSync(join(root, 'pyproject.toml'), 'utf8');
-    expect(patched).toContain('utils3d==0.0.2');
+    f.run({ REAL_PYTHON: python, MOGE_ARCHIVE: archive });
+    const patched = readFileSync(join(f.root, '.venv', 'moge-src', 'pkg', 'pyproject.toml'), 'utf8');
+    expect(patched).toContain('utils3d==1.3');
     expect(patched).toContain('pipeline==1.0.0');
     expect(patched).toContain('"opencv-python-headless"');
     expect(patched).not.toContain('gradio');
