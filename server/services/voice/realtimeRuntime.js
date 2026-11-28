@@ -37,6 +37,19 @@ export const describeInstall = (realtime = {}) => {
 
 let current = null; // { child, port, token, key, ready: Promise, exited: Promise, idleTimer }
 let pendingStop = null;
+const stopListeners = new Set();
+
+/** Subscribe to sidecar shutdowns (e.g. Voice disabled during reconcile) to cancel pending/active calls. */
+export const onRealtimeSidecarStop = (listener) => {
+  stopListeners.add(listener);
+  return () => stopListeners.delete(listener);
+};
+
+const notifyStopListeners = (reason) => {
+  for (const listener of [...stopListeners]) {
+    try { listener(reason); } catch { /* listener cleanup must not block shutdown */ }
+  }
+};
 
 const trackPendingStop = (proc, { escalate = false } = {}) => {
   const waitExit = new Promise((resolve) => {
@@ -61,9 +74,10 @@ const trackPendingStop = (proc, { escalate = false } = {}) => {
 };
 
 const stopCurrent = (reason = 'stop') => {
+  if (reason === 'shutdown' || reason === 'disabled') notifyStopListeners(reason);
   const proc = current;
   current = null;
-  if (!proc) return Promise.resolve();
+  if (!proc) return pendingStop || Promise.resolve();
   clearTimeout(proc.idleTimer);
   console.log(`🗣️ voice.realtime.stop reason=${reason}`);
   proc.child.kill('SIGTERM');
@@ -147,7 +161,7 @@ export const scheduleRealtimeIdleStop = (ms = IDLE_STOP_MS) => {
   current.idleTimer.unref?.();
 };
 
-export const stopRealtimeSidecar = () => stopCurrent('shutdown');
+export const stopRealtimeSidecar = (reason = 'shutdown') => stopCurrent(reason);
 
 export const realtimeStatus = (realtime = {}) => {
   const install = describeInstall(realtime);

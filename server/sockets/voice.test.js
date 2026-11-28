@@ -1598,6 +1598,44 @@ describe('realtime speech-to-speech voice call', () => {
     await socket.fire('voice:realtime:start');
     expect(openRealtimeCall).toHaveBeenCalledTimes(2);
   });
+
+  it('closes an active realtime call and emits inactive state when sidecar stop-on-disable fires', async () => {
+    const { stopRealtimeSidecar } = await import('../services/voice/realtimeRuntime.js');
+    openRealtimeCall.mockReset();
+    const session = makeSession();
+    openRealtimeCall.mockResolvedValue(session);
+    const socket = makeLocalSocket();
+    registerVoiceHandlers(socket);
+    await socket.fire('voice:realtime:start');
+    await stopRealtimeSidecar('disabled');
+
+    expect(session.close).toHaveBeenCalledTimes(1);
+    expect(socket.emitted.at(-1)).toEqual({
+      event: 'voice:realtime:state',
+      payload: { active: false, reason: 'disabled', error: 'Realtime voice is turned off in Voice settings.' },
+    });
+  });
+
+  it('closes a realtime call and emits inactive state when sidecar stop-on-disable fires', async () => {
+    const { stopRealtimeSidecar } = await import('../services/voice/realtimeRuntime.js');
+    openRealtimeCall.mockReset();
+    const session = makeSession();
+    let resolveOpen;
+    openRealtimeCall.mockImplementation(() => new Promise((resolve) => { resolveOpen = resolve; }));
+    const socket = makeLocalSocket();
+    registerVoiceHandlers(socket);
+    const starting = socket.fire('voice:realtime:start');
+    await vi.waitFor(() => expect(resolveOpen).toBeTypeOf('function'));
+    await stopRealtimeSidecar('disabled');
+    resolveOpen(session);
+    await starting;
+
+    expect(session.close).toHaveBeenCalledTimes(1);
+    expect(socket.emitted.at(-1)).toEqual({
+      event: 'voice:realtime:state',
+      payload: { active: false, reason: 'disabled', error: 'Realtime voice is turned off in Voice settings.' },
+    });
+  });
 });
 
 describe('voice:realtime:start host-control boundary', () => {
