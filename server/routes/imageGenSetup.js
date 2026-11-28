@@ -16,6 +16,7 @@ import {
   venvSchema,
   installSchema,
   installQuerySchema,
+  flux2QuerySchema,
   flux3RuntimeQuerySchema,
   mossRuntimeQuerySchema,
 } from '../lib/imageGenSetupValidation.js';
@@ -142,7 +143,7 @@ let flux2InstallInFlight = null;
 // re-derives hardware compatibility for the whole registry on every call, and
 // these endpoints are polled by the Image Gen page.
 function requestedModel(req) {
-  const modelId = typeof req.query?.modelId === 'string' ? req.query.modelId : '';
+  const { modelId } = validateRequest(flux2QuerySchema, req.query);
   if (!modelId) return null;
   return getImageModels().find((candidate) => candidate.id === modelId) || null;
 }
@@ -184,6 +185,7 @@ const sendFlux2Status = async (req, res) => res.json(await flux2Status(req));
 router.get('/flux2-install', asyncHandler(sendFlux2Status));
 
 router.post('/flux2-install', asyncHandler(async (req, res) => {
+  const model = requestedModel(req);
   const { send, safeEnd } = openSseStream(res);
   let clientGone = false;
   let installLog = null;
@@ -203,7 +205,7 @@ router.post('/flux2-install', asyncHandler(async (req, res) => {
   // model's own class must all import. A half-broken venv (binary present,
   // packages missing from a killed mid-install) or one whose diffusers predates
   // the selected model's pipeline needs the install, not "nothing to do".
-  if (await isFlux2InstallSatisfied(pipelineClassOf(requestedModel(req)))) {
+  if (await isFlux2InstallSatisfied(pipelineClassOf(model))) {
     send({ type: 'stage', stage: 'verify', message: 'FLUX.2 venv already installed.' });
     send({ type: 'complete', message: 'Already installed — nothing to do.' });
     return safeEnd();

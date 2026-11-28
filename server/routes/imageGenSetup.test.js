@@ -100,6 +100,26 @@ describe('POST /api/image-gen/setup/install query validation', () => {
   });
 });
 
+describe('FLUX.2 setup query validation', () => {
+  it('400s on a repeated modelId key on GET and POST endpoints before opening SSE', async () => {
+    for (const [method, path] of [
+      ['get', '/api/image-gen/setup/flux2-status?modelId=a&modelId=b'],
+      ['get', '/api/image-gen/setup/flux2-install?modelId=a&modelId=b'],
+      ['post', '/api/image-gen/setup/flux2-install?modelId=a&modelId=b'],
+    ]) {
+      const res = await request(local())[method](path);
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe('VALIDATION_ERROR');
+    }
+  });
+
+  it('accepts a valid scalar modelId on GET /flux2-status', async () => {
+    const res = await request(local()).get('/api/image-gen/setup/flux2-status?modelId=flux2-klein-4b');
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveProperty('venvInstalled', true);
+  });
+});
+
 describe('/api/image-gen/setup/* interpreter admission (#9015)', () => {
   beforeEach(() => {
     vi.clearAllMocks();

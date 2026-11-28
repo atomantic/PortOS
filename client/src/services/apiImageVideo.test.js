@@ -121,3 +121,33 @@ describe('buildFormData', () => {
     expect(fd.getAll('visualProfileOverride')).toEqual([JSON.stringify(profile)]);
   });
 });
+
+describe('image-gen setup fetch wrappers', () => {
+  it('throws structured API errors on 401/non-OK responses', async () => {
+    const { checkImageGenSetup, detectImageGenPython, createImageGenVenv } = await import('./apiImageVideo.js');
+    const mockJsonResponse = (status, body) => ({
+      ok: status >= 200 && status < 300,
+      status,
+      json: async () => body,
+    });
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    try {
+      fetchSpy.mockResolvedValueOnce(mockJsonResponse(401, { error: 'Auth required', code: 'AUTH_REQUIRED' }));
+      await expect(checkImageGenSetup({ pythonPath: 'python3' })).rejects.toMatchObject({
+        message: 'Auth required', status: 401, code: 'AUTH_REQUIRED',
+      });
+
+      fetchSpy.mockResolvedValueOnce(mockJsonResponse(401, { error: 'Auth required', code: 'AUTH_REQUIRED' }));
+      await expect(detectImageGenPython()).rejects.toMatchObject({
+        message: 'Auth required', status: 401, code: 'AUTH_REQUIRED',
+      });
+
+      fetchSpy.mockResolvedValueOnce(mockJsonResponse(403, { error: 'Host control required', code: 'HOST_CONTROL_FORBIDDEN' }));
+      await expect(createImageGenVenv()).rejects.toMatchObject({
+        message: 'Host control required', status: 403, code: 'HOST_CONTROL_FORBIDDEN',
+      });
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+});
