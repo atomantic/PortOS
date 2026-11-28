@@ -540,6 +540,13 @@ export const registerVoiceHandlers = (socket) => {
 
   const emitCallState = (snapshot) => {
     socket.emit('voice:call:state', snapshot);
+    // A call just started (placed, or answered): prefill the persona and tool
+    // prompt while it rings so the caller's first turn starts from the cache.
+    if (snapshot?.state === 'dialing' || snapshot?.state === 'connected') {
+      import('../services/voice/pipeline.js')
+        .then(({ warmPromptPrefix }) => warmPromptPrefix({ reason: 'call' }))
+        .catch((err) => console.error(`❌ voice call: prompt warm-up failed: ${err.message}`));
+    }
     // 'listening' is the first state the poll reaches once the helper reports a
     // connected call. The line is consumed only on a delivery that succeeded,
     // so the repeated state emits this broadcast produces retry a failed line

@@ -1,11 +1,13 @@
 // Voice Chief-of-Staff tool orchestrator. The tool DEFINITIONS live in the
 // per-domain modules under ./tools/ (brain, meatspace, goals, system, dailylog,
 // ui, ask, vision, ambient, timer, media, pipeline, code, catalog). This file
-// assembles them into the single TOOLS registry, wires per-turn intent filtering
-// (TOOL_GROUPS + GROUP_INTENT), and exposes the stable public API consumed by
-// the voice pipeline (pipeline.js) and the ⌘K command palette (routes/palette.js):
-//   getToolSpecs, getToolSpecsForIntent, getAllToolNames, getToolMetadata,
-//   classifyIntent, dispatchTool, UI_KINDS, UI_INTENT_RE, UI_FILL_INTENT_RE.
+// assembles them into the single TOOLS registry, wires intent classification
+// and the optional per-turn tool trimming (TOOL_GROUPS + GROUP_INTENT), and
+// exposes the stable public API consumed by the voice pipeline (pipeline.js)
+// and the ⌘K command palette (routes/palette.js):
+//   getToolSpecs, getToolSpecsForIntent, getTurnToolSpecs, getAllToolNames,
+//   getToolMetadata, classifyIntent, resolveTurnIntent, dispatchTool,
+//   UI_KINDS, UI_INTENT_RE, UI_FILL_INTENT_RE.
 // Add a new tool by adding it to its domain module's tool array (and, if it
 // should be intent-gated, mapping its name in TOOL_GROUPS to a GROUP_INTENT key).
 
@@ -207,23 +209,44 @@ export const classifyIntent = (userText) => {
   return active;
 };
 
-export const getToolSpecsForIntent = (userText) => {
-  if (!userText) return { specs: getToolSpecs(), activeGroups: new Set() };
-  // Form-fill turns ("put Y in the body") may use verbs not in UI_INTENT_RE,
-  // so compose a fresh group set: classifier result ∪ {ui, if form-fill}.
-  // Mutating classifyIntent's returned set would conflate "classified" with
-  // "overridden", which matters when the caller inspects activeGroups.
+// Groups the turn activates, plus whether it is a form-fill turn ("put Y in
+// the body"). Form-fill phrasings may use verbs outside UI_INTENT_RE, so the
+// result is a fresh set: classifier result plus `ui` when it is a fill.
+// Mutating classifyIntent's returned set would conflate "classified" with
+// "overridden", which matters when the caller inspects activeGroups.
+export const resolveTurnIntent = (userText) => {
   const classified = classifyIntent(userText);
-  const suppressCapture = UI_FILL_INTENT_RE.test(userText);
-  const activeGroups = suppressCapture ? new Set([...classified, 'ui']) : classified;
+  const formFill = !!userText && UI_FILL_INTENT_RE.test(userText);
+  return { activeGroups: formFill ? new Set([...classified, 'ui']) : classified, formFill };
+};
+
+// Trimmed spec list for small tool-use models (qwen3-4b etc.) that choke on
+// the full ~40-tool list. Cuts it to ~8-12 per turn, but the list changes
+// with each utterance, and most chat templates render tools ahead of the
+// conversation, so every change makes the backend re-process the tool block
+// and the whole history. Voice only uses this when llm.tools.trimByIntent is on.
+export const getToolSpecsForIntent = (userText) => {
+  if (!userText) return { specs: getToolSpecs(), activeGroups: new Set(), formFill: false };
+  const { activeGroups, formFill } = resolveTurnIntent(userText);
   const specs = TOOLS
     .filter((t) => {
-      if (suppressCapture && (t.name === 'brain_capture' || t.name === 'daily_log_append')) return false;
+      if (formFill && (t.name === 'brain_capture' || t.name === 'daily_log_append')) return false;
       const group = TOOL_GROUPS[t.name];
       return !group || activeGroups.has(group);
     })
     .map(toSpec);
-  return { specs, activeGroups };
+  return { specs, activeGroups, formFill };
+};
+
+// Default per-turn specs: every tool in registry order, the same list on every
+// turn, so the prompt prefix (persona + tool schemas + history) stays
+// byte-identical and the backend's prompt cache carries across turns and
+// calls. Intent still drives the UI summary and the form-fill hint, which go
+// after the history where a per-turn change costs nothing.
+export const getTurnToolSpecs = (userText, { trimByIntent = false } = {}) => {
+  if (trimByIntent) return getToolSpecsForIntent(userText);
+  const { activeGroups, formFill } = userText ? resolveTurnIntent(userText) : { activeGroups: new Set(), formFill: false };
+  return { specs: getToolSpecs(), activeGroups, formFill };
 };
 
 export const dispatchTool = async (name, args, ctx) => {

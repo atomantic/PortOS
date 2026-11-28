@@ -113,6 +113,10 @@ export const VOICE_DEFAULTS = Object.freeze({
     tools: {
       enabled: false,
       maxIterations: 3,
+      // Send only the tools the utterance looks like it needs. Helps small
+      // tool-use models, but the tool list then changes between turns, which
+      // stops the backend from reusing its prompt cache for the history.
+      trimByIntent: false,
     },
     // Code-agent delegation — lets the voice CoS hand a coding task to a
     // CLI/TUI agent (Claude Code, Codex, Antigravity) via the CoS task system.

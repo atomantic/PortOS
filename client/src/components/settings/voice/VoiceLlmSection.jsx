@@ -211,6 +211,23 @@ export default function VoiceLlmSection({ cfg, patch, inputCls, traitsSyncRef })
         </div>
       </label>
 
+      {cfg.llm.tools?.enabled === true && (
+        <label className="flex items-start gap-3 cursor-pointer md:col-span-2">
+          <input
+            type="checkbox"
+            checked={cfg.llm.tools?.trimByIntent === true}
+            onChange={(e) => patch('llm.tools.trimByIntent', e.target.checked)}
+            className="w-4 h-4 mt-0.5 shrink-0"
+          />
+          <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-baseline gap-x-3 gap-y-0.5 min-w-0 flex-1">
+            <span className="text-sm text-white">Send only the tools each request needs</span>
+            <span className="text-xs text-gray-500">
+              For small models that get confused by the full tool list. Slower replies on larger models, because a changing tool list makes the model re-read the whole conversation every turn.
+            </span>
+          </div>
+        </label>
+      )}
+
       <label className="flex items-start gap-3 cursor-pointer md:col-span-2">
         <input
           type="checkbox"
