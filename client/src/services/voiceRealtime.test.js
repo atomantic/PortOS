@@ -277,6 +277,29 @@ describe('startRealtimeCall', () => {
     handle.stop();
   });
 
+  it('stops an older reply still playing ahead of the reply an onset or the Interrupt button names', async () => {
+    const handle = await startRealtimeCall();
+    const out = contexts[1];
+    const audio = socketListeners.get('voice:realtime:audio');
+    const cuts = () => socketMock.emit.mock.calls.filter(([ev]) => ev === 'voice:realtime:cut').map(([, data]) => data);
+    // A follow-up (c2) queues behind the tail of c1, which is still playing.
+    audio({ pcm: new Int16Array(24000).buffer, sampleRate: 24000, replyId: 'c1' });
+    audio({ pcm: new Int16Array(24000).buffer, sampleRate: 24000, replyId: 'c2' });
+    out.currentTime = 0.53;
+    socketListeners.get('voice:realtime:onset')({ replyId: 'c2' });
+    expect(scheduledSources.every((src) => src.stop.mock.calls.length === 1)).toBe(true);
+    expect(cuts()).toEqual([{ replyId: 'c1', playedS: 0.5 }, { replyId: 'c2', playedS: 0 }]);
+    // The same holds for the Interrupt button: every reply it stops reports what was heard of it.
+    audio({ pcm: new Int16Array(24000).buffer, sampleRate: 24000, replyId: 'c3' });
+    audio({ pcm: new Int16Array(24000).buffer, sampleRate: 24000, replyId: 'c4' });
+    out.currentTime = 1.03;
+    handle.interrupt();
+    expect(scheduledSources.every((src) => src.stop.mock.calls.length === 1)).toBe(true);
+    expect(cuts().slice(2)).toEqual([{ replyId: 'c3', playedS: 0.47 }]);
+    expect(socketMock.emit).toHaveBeenLastCalledWith('voice:realtime:interrupt', { replyId: 'c4', playedS: 0 });
+    handle.stop();
+  });
+
   it('releases mic tracks and AudioContexts if AudioWorkletNode construction fails', async () => {
     workletNodeError = new Error('worklet node failed');
     await expect(startRealtimeCall()).rejects.toThrow('worklet node failed');

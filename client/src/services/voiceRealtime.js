@@ -251,12 +251,22 @@ export const startRealtimeCall = async (handlers = {}) => {
     stopReply(rec);
     if (rec.id) socket.emit('voice:realtime:cut', { replyId: rec.id, playedS: heard });
   };
+  // Stop this reply and any older one still playing ahead of it (a follow-up can queue behind a reply's tail), never a
+  // newer one. Replies are kept in arrival order.
+  const cutThrough = (rec) => {
+    for (const older of replies.values()) {
+      if (older === rec) break;
+      if (isAudible(older)) cutReply(older);
+    }
+    if (rec.clips.length || rec.held) cutReply(rec);
+    else stopReply(rec);
+  };
   const onInterrupt = (data) => {
     const id = data?.replyId;
     if (typeof id !== 'string' || !id) { stopAll(); return; }
     const rec = replies.get(id);
-    if (rec && !rec.stopped && (rec.clips.length || rec.held)) cutReply(rec);
-    else stopReply(replyFor(id)); // an interrupt for a reply not heard yet: drop any audio of it that still arrives
+    if (!rec) stopReply(replyFor(id)); // a reply not heard yet: drop any audio of it that still arrives
+    else if (!rec.stopped) cutThrough(rec);
   };
   // The user started speaking after the voice finished generating this reply. Stop it only if it is still playing here,
   // so finished playback is never cut and an older reply's onset never touches a newer one.
@@ -264,7 +274,7 @@ export const startRealtimeCall = async (handlers = {}) => {
     const rec = typeof data?.replyId === 'string' ? replies.get(data.replyId) : undefined;
     if (!rec || !isAudible(rec)) return;
     markVoiceTiming('rt.onset stops reply still playing');
-    cutReply(rec);
+    cutThrough(rec);
   };
 
   let stopped = false;
@@ -349,11 +359,12 @@ export const startRealtimeCall = async (handlers = {}) => {
   return {
     stop: () => teardown({ emitStop: true }),
     interrupt() {
-      // The newest reply still playing is the one the user heard being cut.
-      const rec = [...replies.values()].reverse().find(isAudible);
-      const heard = rec?.id ? { replyId: rec.id, playedS: playedS(rec) } : {};
+      // Every reply still playing is cut; the newest one rides the interrupt, older ones report what was heard of them.
+      const heard = [...replies.values()].filter((rec) => rec.id && isAudible(rec)).map((rec) => ({ replyId: rec.id, playedS: playedS(rec) }));
       stopAll();
-      socket.emit('voice:realtime:interrupt', heard);
+      const newest = heard.pop();
+      for (const older of heard) socket.emit('voice:realtime:cut', older);
+      socket.emit('voice:realtime:interrupt', newest ?? {});
     },
   };
 };
