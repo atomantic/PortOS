@@ -8,14 +8,14 @@
     "npm": ">=11.11.0"
   },
   "scripts": {
-    "dev": "vite --configLoader runner --host 0.0.0.0 --port 5554",
+    "dev": "vite --configLoader native --host 0.0.0.0 --port 5554",
     "build": "node ../scripts/publish-client-build.js",
     "build:analyze": "node ../scripts/publish-client-build.js --analyze",
     "lint": "biome lint --error-on-warnings src",
-    "preview": "vite preview --configLoader runner",
-    "test": "vitest run --configLoader runner",
-    "test:ci": "vitest run --silent=passed-only --reporter=default --reporter=github-actions --configLoader runner",
-    "test:watch": "vitest --configLoader runner"
+    "preview": "vite preview --configLoader native",
+    "test": "vitest run --configLoader native",
+    "test:ci": "vitest run --silent=passed-only --reporter=default --reporter=github-actions --configLoader native",
+    "test:watch": "vitest --configLoader native"
   },
   "dependencies": {
     "@react-three/fiber": "9.8.2",

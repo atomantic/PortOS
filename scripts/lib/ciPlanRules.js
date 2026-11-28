@@ -69,12 +69,12 @@ const FULL_TRIGGER_RULES = [
   // it on the Windows install too.
   { re: /(?:^|\/)\.npmrc$/, reason: 'npm configuration changed', windowsRelevant: true },
   { re: /^server\/vitest\.config(?:\.db)?\.js$/, reason: 'test runner configuration changed', windowsRelevant: true },
-  // windows-server uses the server runner; client configuration still gets the
-  // complete primary plan; native inputs in the same diff still select Windows.
+  // Client-only changes get the complete primary plan. If a native input also
+  // selects Windows, that job verifies the client configs alongside its server checks.
   { re: /^client\/vitest\.config\.js$/, reason: 'client test runner configuration changed', windowsRelevant: false },
   { re: /^scripts\/vitestCiPool(?:\.test)?\.js$/, reason: 'test runner pool configuration changed', windowsRelevant: true },
   { re: /^server\/vitest\.setup\.js$/, reason: 'server test setup changed', windowsRelevant: true },
-  // Client-only: windows-server never loads the client setup file.
+  // Client-only: this input does not schedule the Windows job on its own.
   { re: /^client\/src\/test\/setup\.js$/, reason: 'client test setup changed', windowsRelevant: false },
   // Biome configs and their enforced GritQL plugins.
   // The .grit files carry real enforced rules — notably the crypto.randomUUID ban —
@@ -138,6 +138,9 @@ export const WINDOWS_RISK_RULES = [
 // Windows. Full, scheduled and release plans retain this same native set.
 export const WINDOWS_CONTRACT_TESTS = [
   'scripts/ci-test-diagnostics.test.js',
+  // Native config imports and direct Node launches, including DB collection without writes.
+  'scripts/lib/browserTestProfiles.test.js',
+  'scripts/lib/workspaceTests.test.js',
   'scripts/update-headless-recovery.test.js',
   'scripts/update-submodules.test.js',
   // Launch, prompt transport, executable discovery and environment/cwd safety.
@@ -612,7 +615,7 @@ const WORKSPACE_CACHE_SERVER_INPUTS = new Set([
 ]);
 const WORKSPACE_CACHE_CLIENT_INPUTS = new Set([
   'ecosystem.config.cjs', 'client/package.json', 'client/package-lock.json',
-  'client/vite.config.js', 'lib/viteBuildEnv.js', 'client/vite.chunkGroups.js',
+  'client/vite.config.js', 'lib/viteBuildEnv.js', 'client/vite.bundleReport.js', 'client/vite.chunkGroups.js',
   'client/vitest.config.js', 'client/src/test/timeouts.js',
   'scripts/dev-start.js', 'scripts/publish-client-build.js',
   'scripts/lib/envFile.cjs', 'scripts/lib/databaseSettings.cjs',
@@ -731,7 +734,7 @@ export function fullTriggersFor(changed, dependencyChanges) {
         const scopedToWindows = windowsRelevant === 'dependencies' || (windowsRelevant === true && /(?:^|\/)\.npmrc$/.test(path));
         if (!scopedToWindows) return { path, reason, windowsRelevant };
         if (!windowsInstalls(path)) {
-          dependencyVerdicts.push(`${path} does not select Windows native contracts: the Windows job does not install that workspace`);
+          dependencyVerdicts.push(`${path} does not select Windows native contracts: dependency changes in this workspace do not schedule the Windows job`);
           return { path, reason, windowsRelevant: false };
         }
         if (windowsRelevant === true) return { path, reason, windowsRelevant };

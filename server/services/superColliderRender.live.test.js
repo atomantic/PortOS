@@ -4,7 +4,7 @@
  * where `npm run setup:supercollider -- --yes` has passed and each case starts a
  * container:
  *
- *   cd server && PORTOS_SUPERCOLLIDER_LIVE=1 npx vitest run services/superColliderRender.live.test.js
+ *   cd server && PORTOS_SUPERCOLLIDER_LIVE=1 npx vitest run --configLoader native services/superColliderRender.live.test.js
  *
  * With the flag set, an unready runtime FAILS (it never silently skips), so a
  * green run is evidence. Record the platform it ran on in epic #9407.

@@ -28,7 +28,7 @@ function fixture(host, name, body, configSource, loader) {
 // The negative control reproduces the old writer, rather than falsifying the
 // liveness probe. Both cases execute the real workspace config and native sweep.
 describe.skipIf(process.platform === 'win32')('sibling configuration sweep', () => {
-  for (const loader of ['default', 'runner']) {
+  for (const loader of ['default', 'native']) {
     for (const legacyEstimate of [false, true]) {
       owned.it(`${loader} loader ${legacyEstimate ? 'reproduces live-worker rejection with the legacy clock estimate' : 'preserves a live worker across a config-time clock offset'}`, async ({ signal }) => {
         const host = mkdtempSync(join(tmpdir(), 'vss-'));
@@ -90,7 +90,7 @@ describe.skipIf(process.platform === 'win32')('sibling configuration sweep', () 
             observed.rootAfterSweep = existsSync(mark.root);
             writeFileSync(${JSON.stringify(observations)}, JSON.stringify(observed));
             export default (await import(${JSON.stringify(config)})).default;
-          `, 'runner');
+          `, 'native');
           secondClosed = runFixtureToCompletion(second, 30000, { signal: controller.signal });
           secondResult = await secondClosed;
           expect(secondResult.error).toBeUndefined();

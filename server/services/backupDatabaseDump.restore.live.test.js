@@ -10,7 +10,7 @@
  * The hosted DB job runs this explicitly, outside the test memo, so a missing
  * Docker engine, image or psql fails rather than skipping into a cached pass:
  *
- *   cd server && PORTOS_DB_RESTORE_LIVE=1 npx vitest run services/backupDatabaseDump.restore.live.test.js
+ *   cd server && PORTOS_DB_RESTORE_LIVE=1 npx vitest run --configLoader native services/backupDatabaseDump.restore.live.test.js
  *
  * Locally, `.env` selects the install's Postgres (PGMODE), and the image must
  * already be pulled: the container runs with --pull=never.

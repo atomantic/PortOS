@@ -830,7 +830,7 @@ describe('path-gated single-purpose jobs', () => {
     // The Docker containment live suite (#12844) is planner-gated the same way.
     expect(jobs['docker-containment-live']).toContain('if: fromJSON(needs.impact.outputs.plan).docker_containment_live\n');
     expect(jobs['docker-containment-live']).toContain("PORTOS_DOCKER_CONTAINMENT_LIVE: '1'");
-    expect(jobs['docker-containment-live']).toContain(`vitest run ${DOCKER_CONTAINMENT_LIVE_ENTRIES[0].replace('server/', '')}`);
+    expect(jobs['docker-containment-live']).toContain(`vitest run --configLoader native ${DOCKER_CONTAINMENT_LIVE_ENTRIES[0].replace('server/', '')}`);
     expect(jobs.gate).toMatch(/needs: \[[^\]]*\bdocker-containment-live\b/);
     expect(jobs.gate).toContain('CI_GATE_RESULT_DOCKER_CONTAINMENT_LIVE: ${{ needs.docker-containment-live.result }}');
   });

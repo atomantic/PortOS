@@ -35,7 +35,7 @@ describe('Vite build output directory', () => {
       await build({
         root,
         configFile: resolve(CLIENT_DIR, 'vite.config.js'),
-        configLoader: 'runner',
+        configLoader: 'native',
         logLevel: 'error',
         build: { outDir },
       });
