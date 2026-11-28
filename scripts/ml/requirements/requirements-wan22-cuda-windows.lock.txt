@@ -1,3 +1,4 @@
+# Bounded #20394 regeneration: uv 0.13.7; cutoff 2026-11-25T00:00:00Z; removed torchvision only.
 # Bounded #16047 regeneration: cutoff 2026-11-07T00:00:00Z; Transformers 5.22.2 only; retained companion versions and artifact hashes.
 # Bounded #15988 regeneration: uv 0.13.7; cutoff 2026-11-06T00:00:00Z; complete closure constrained to retained pins.
 # Historical baseline documentation follows; older dates below predate this bounded regeneration.
@@ -937,31 +938,6 @@ torch==2.14.1+cu126 \
     --hash=sha256:e6e82966ed173fbf9535f2e7e6a572e91b29e583667decd242c7c93e8de96ad8 \
     --hash=sha256:eb7564fdaccd2920ed78b4e3c08ca4a180fcaf5d4b3ce3068b1968bce4f5834b \
     --hash=sha256:f3ec1126a975ac573f691e8cf1001051a96a14f8d27a75365f56173d801424d7
-torchvision==0.29.1+cu126 \
-    --hash=sha256:00ec6517420091214edd608e40d82ff6c0357d1a24399dde27ed64ca3a66e022 \
-    --hash=sha256:22ee849cc8558d167409ab886c56ee7d730a423debdd20a9679e14e1e2f43845 \
-    --hash=sha256:2e2903457776e6e1c4a5e04bca2545f008849410758e91cd7cf4d44962b8f7c6 \
-    --hash=sha256:3a827403f7fe07d9eeaeb9fbe5df744fe0ef88e0cd62704868188ad4c35c1eed \
-    --hash=sha256:3b63f88832665a6b03dd65696243d9a274699c84fbe35200d1388f52ece0076c \
-    --hash=sha256:43a992fee7907929e978940a7ac0ea6d6aaaeb8246dc77754c587432a6396827 \
-    --hash=sha256:481ddb3be09b75b8acc8577dfe015e12e43845e756ef3f089ff1fa3ae4afa77d \
-    --hash=sha256:59a00d3d69baa43bd01f547bd559b2cfbea53b387f07c45cd79fde4164326046 \
-    --hash=sha256:62ac510088a541bfe1a4abefe0c963c973199aa93b900ba165798887e4485b70 \
-    --hash=sha256:78115e244f2d76270b45462f0bae007af8d1ec51d12ae10cfc40e2e5a1112d4f \
-    --hash=sha256:7c4b8fac65ba8b7be1388330cdab2ab04c792e1482f287991a95a14d0ac76fdb \
-    --hash=sha256:8c278a7545d631ad71013edff80543989978c952c1470609793ea384bea91533 \
-    --hash=sha256:9841983d0f4c8ec7227f64357cfd6549fee083656badfe3e85ecc8202927acf6 \
-    --hash=sha256:a86b47b252cb4bc28ce2a9c680bf1096443e21235dc6a00578ac588bd7ab88ec \
-    --hash=sha256:ab045bfb0ac014b80afb478190d14c6f7d3b57ade0d1fcd6ffc07414a0266b96 \
-    --hash=sha256:b4914b7ac763e68a2dc369a251de201c0d682bf46d7c46d50e161ae62a1da322 \
-    --hash=sha256:bf405f8717c6bf8a255cd7b603b5f17d6b35c750718837e73acae5e194bb7179 \
-    --hash=sha256:c7c485a49482071741aca33dbc594d5213b3e88c57178791b3dae0dfd0a736c4 \
-    --hash=sha256:c9e3cb4f609341d418d40a9bbae4280a029f9839d32f123f1c9bcc99aa003843 \
-    --hash=sha256:d1b1e196a514c0ec73a35699aebabc4afdbc333092569b4d0c26bed9bb4ed568 \
-    --hash=sha256:e6e5a4edd2c34ea69eda59060a18e360d485220a5e544da12f198f109440ace9 \
-    --hash=sha256:f72d92b80dccf565fd43a9e069caa5b57eef5b8e9089fc553a8c77c9a5fe366c \
-    --hash=sha256:f846900988cbd64b055886c9ad7e7a44606c5710e8272921062c647f237eae34 \
-    --hash=sha256:f84aa3864cc5a4da6de460275a07a3e20deb982d715bf1c4eae1c624311c3c58
 tqdm==4.70.1 \
     --hash=sha256:c293e525e6fef9c20e8728fd4612df02a0aa31bb5fe91ecd93e123b1b7bffa73 \
     --hash=sha256:cefd0eca11b2a37a3aee776544d4f4ae913f02688135b5556b8788dfa474afc4

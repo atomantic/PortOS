@@ -1327,7 +1327,11 @@ describe('Wan 2.2 CUDA hash-pinned installation', () => {
   const direct = readFileSync(join(REQUIREMENTS_DIR, 'requirements-wan22-cuda.txt'), 'utf8')
     .split(/\r?\n/).filter((line) => /^[\w.-]+==/.test(line));
 
-  it.each(['windows', 'linux'])('pins and hashes the entire %s runtime, including the CUDA torch stack', (target) => {
+  it('omits torchvision from the direct requirements', () => {
+    expect(direct.some((pin) => /^torchvision==/i.test(pin))).toBe(false);
+  });
+
+  it.each(['windows', 'linux'])('pins and hashes the entire %s runtime, including CUDA torch', (target) => {
     const lock = readFileSync(join(REQUIREMENTS_DIR, `requirements-wan22-cuda-${target}.lock.txt`), 'utf8');
     const requirements = lock.split(/\r?\n/).filter((line) => /^\w/.test(line));
     const blocks = lock.match(/^[\w.-]+==[^\n]+\n(?:[ \t]+[^\n]*\n?)*/gm) ?? [];
@@ -1340,7 +1344,7 @@ describe('Wan 2.2 CUDA hash-pinned installation', () => {
       expect(pins.some((pin) => pin.startsWith(backend))).toBe(true);
     }
     expect(pins.find((pin) => pin.startsWith('torch=='))).toMatch(/\+cu126$/);
-    expect(pins.find((pin) => pin.startsWith('torchvision=='))).toMatch(/\+cu126$/);
+    expect(pins.some((pin) => /^torchvision==/i.test(pin))).toBe(false);
     expect(lock.includes('nvidia-cuda-runtime-cu12==')).toBe(target === 'linux');
   });
 

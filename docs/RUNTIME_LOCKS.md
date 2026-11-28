@@ -21,7 +21,7 @@ together when changing the CUDA index or shared inputs.
 | `minimax-h3-cuda` | `INSTALL_MINIMAX_H3_CUDA` | torch torchvision | torchao |
 | `minimax-music3-cuda` | `INSTALL_MINIMAX_MUSIC3` | torch | |
 | `muscriptor-cuda` | `INSTALL_MUSCRIPTOR` | torch | |
-| `wan22-cuda` | `INSTALL_WAN22_CUDA` | torch torchvision | |
+| `wan22-cuda` | `INSTALL_WAN22_CUDA` | torch | |
 
 ACE-Step builds its pinned source after dependency sync. Keep Linux TorchAO
 on the CUDA index for H3 and ACE-Step 1.5 and Windows TorchAO on PyPI.
