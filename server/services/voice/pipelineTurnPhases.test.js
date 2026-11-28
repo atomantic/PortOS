@@ -321,4 +321,30 @@ describe('runTurn dictation routing', () => {
     expect(mocks.getToday).not.toHaveBeenCalled();
     expect(mocks.streamChat).not.toHaveBeenCalled();
   });
+
+  it('mirrors stage timings to the client only while timing debug is on', async () => {
+    mocks.streamChat.mockImplementation(async (_messages, { onDelta, onModelLoading }) => {
+      onModelLoading({ model: 'test-model' });
+      onDelta('Hi. ');
+      return { ...completion('Hi.'), resolveMs: 3 };
+    });
+    const run = async (state) => {
+      const timings = [];
+      await runTurn({
+        text: 'hello', state, signal: new AbortController().signal,
+        emit: (event, payload) => { if (event === 'voice:timing') timings.push(payload); },
+      });
+      return timings;
+    };
+
+    expect(await run({})).toEqual([]);
+    const timings = await run({ timingDebug: true });
+    const labels = timings.map((t) => t.label.split(' ')[0]);
+    for (const stage of ['turn.start', 'llm.start', 'llm.loading', 'llm.ttft', 'llm.done', 'tts.start', 'tts.done', 'turn.summary']) {
+      expect(labels).toContain(stage);
+    }
+    expect(timings.find((t) => t.label.startsWith('llm.done')).label).toContain('resolve=3ms');
+    expect(new Set(timings.map((t) => t.turnId)).size).toBe(1);
+    expect(timings.every((t) => Number.isInteger(t.ms) && t.ms >= 0)).toBe(true);
+  });
 });

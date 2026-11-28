@@ -137,17 +137,18 @@ export default function VoiceWidget({ config, claimHeld, consoleHost }) {
   const conversationId = useId();
   const useWebSpeech = sttEngine === 'web-speech' && webSpeechSupported;
 
+  // `at` lets the Voice Call timing debug interleave its lines with the turns.
   const appendHistory = useCallback((entry) => {
-    setHistory((h) => [...h, entry].slice(-MAX_HISTORY));
+    setHistory((h) => [...h, { at: Date.now(), ...entry }].slice(-MAX_HISTORY));
   }, []);
 
   const appendAssistantDelta = useCallback((delta) => {
     setHistory((h) => {
       const last = h[h.length - 1];
       if (last?.role === 'assistant') {
-        return [...h.slice(0, -1), { role: 'assistant', text: last.text + delta }];
+        return [...h.slice(0, -1), { ...last, text: last.text + delta }];
       }
-      return [...h, { role: 'assistant', text: delta }].slice(-MAX_HISTORY);
+      return [...h, { role: 'assistant', text: delta, at: Date.now() }].slice(-MAX_HISTORY);
     });
   }, []);
 

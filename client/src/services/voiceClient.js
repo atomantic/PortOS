@@ -7,6 +7,7 @@ import { cancelVoicePlayback, detectAudioRoute, joinVoiceOutput } from './voiceP
 import { disposeContinuousCapture, startContinuous as startContinuousVad } from './voiceContinuousVad.js';
 import { disposeWebSpeechCapture, startWebSpeechCapture as startSpeechRecognition } from './voiceWebSpeech.js';
 import { invalidateVisionCapture } from './voiceVision.js';
+import { markVoiceTiming } from './voiceTimingDebug.js';
 
 export {
   getVoiceVolume,
@@ -189,6 +190,7 @@ export const stopCapture = async ({ submit = true } = {}) => {
   if (recorderGeneration === generation) recorderGeneration += 1;
   const stoppedGeneration = recorderGeneration;
   if (!isOwnerCurrent(ownerGeneration) || stoppedGeneration !== generation + 1) return null;
+  if (submit) markVoiceTiming('mic.stop', { startsTurn: true });
 
   const blob = new Blob(recordedChunks, { type: rec.mimeType });
   // Mode-switch cancellation (e.g. user toggled hands-free mid-utterance):
@@ -202,6 +204,7 @@ export const stopCapture = async ({ submit = true } = {}) => {
     refuseLongRecording();
     return null;
   }
+  markVoiceTiming(`audio.sent ${wav.byteLength}B (encoded)`);
   socket.emit('voice:turn', { audio: wav, mimeType: 'audio/wav' });
   return { mimeType: 'audio/wav', size: wav.byteLength, sourceSize: blob.size, peak };
 };
@@ -210,6 +213,7 @@ export const sendText = (text, source = 'text') => {
   const trimmed = (text || '').trim();
   if (!trimmed) return;
   cancelVoicePlayback();
+  markVoiceTiming(`text.sent ${source}`, { startsTurn: true });
   socket.emit('voice:text', { text: trimmed, source });
 };
 

@@ -3,6 +3,7 @@
 import socket from './socket';
 import { resumeAudioContext, acquireAudioSession } from '../lib/audioContext.js';
 import { float32ToWav16k, MAX_VOICE_AUDIO_BYTES } from '../lib/audioRecorder.js';
+import { markVoiceTiming } from './voiceTimingDebug.js';
 import { cancelVoicePlayback, detectAudioRoute, isHeadsetAudioRoute, isInTtsEchoWindow, isTtsActive } from './voicePlayback.js';
 
 // ─── Continuous mode (hands-free VAD) ─────────────────────────────────────
@@ -125,6 +126,7 @@ const submitUtterance = async (capture) => {
   if (!vad.speechChunks.length) return;
   const chunksToSubmit = vad.speechChunks;
   vad.speechChunks = [];
+  markVoiceTiming('speech.end', { startsTurn: true });
 
   const total = chunksToSubmit.reduce((n, c) => n + c.length, 0);
   const samples = new Float32Array(total);
@@ -143,6 +145,7 @@ const submitUtterance = async (capture) => {
     capture.callbacks?.onSubmit?.({ submitted: false, peak });
     return;
   }
+  markVoiceTiming(`audio.sent ${wav.byteLength}B (encoded)`);
   socket.emit('voice:turn', { audio: wav, mimeType: 'audio/wav' });
   capture.callbacks?.onSubmit?.({ submitted: true, peak, size: wav.byteLength });
 };

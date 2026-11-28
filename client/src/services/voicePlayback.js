@@ -5,6 +5,7 @@ import { throwApiError } from './apiCore.js';
 import { subscribeVisibility } from '../hooks/useVisibilityEvent.js';
 import { resumeAudioContext } from '../lib/audioContext.js';
 import { safeReadStorage, safeWriteStorage } from '../lib/safeStorage.js';
+import { markVoiceTiming } from './voiceTimingDebug.js';
 import { ECHO_WINDOW_MS, MIN_TOKENS_FOR_ECHO_CHECK, MIN_SHARED_TRIGRAMS, tokenize, trigramsOf } from '../../../server/lib/voiceEcho.js';
 
 let audioCtx = null;
@@ -393,6 +394,7 @@ const toExactArrayBuffer = (wav) => {
 
 const playServerTurnAudio = ({ sentence, wav }) => {
   if (!playback.acceptsServerTurnAudio) return; // stale chunk from a cancelled turn — drop it
+  markVoiceTiming(`tts.recv ${sentence?.length ?? 0}c`);
   rememberTtsSentence(sentence);
   const ab = toExactArrayBuffer(wav);
   if (!ab) return;

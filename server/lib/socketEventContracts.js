@@ -56,6 +56,14 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
   'voice:avatar:library:changed': { direction: 'server-to-client', summary: 'Invalidate the Voice Call avatar library (Avatars collection and channel assignments); no payload.' },
   'voice:llm:residency:changed': { direction: 'server-to-client', summary: 'Invalidate the Voice LLM residency badge when a warm-up starts or finishes loading the model; no payload.' },
   'voice:conversationalGemma:changed': { direction: 'server-to-client', summary: 'Invalidate the machine-local Conversational Gemma 4 31B llama.cpp setup status; no payload.' },
+  'voice:timing': {
+    direction: 'server-to-client',
+    summary: 'One Voice turn stage timing line, sent only while the socket turned on the Voice Call timing debug.',
+    payloadSchema: {
+      type: 'object', required: ['turnId', 'label', 'ms'], additionalProperties: false,
+      properties: { turnId: { type: 'string' }, label: { type: 'string' }, ms: { type: 'integer' } },
+    },
+  },
   'voice:realtime:state': {
     direction: 'server-to-client',
     summary: 'Lifecycle state of the socket’s realtime speech-to-speech Voice call.',

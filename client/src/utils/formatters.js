@@ -194,14 +194,16 @@ export function formatDateFull(value) {
  * @param {string} [options.timeZone] - Render in a specific IANA timezone
  *   (e.g. the server's configured user timezone) instead of the browser's
  * @param {boolean} [options.seconds=true] - Include seconds ("02:30:45 PM" vs "02:30 PM")
+ * @param {boolean} [options.milliseconds=false] - Add milliseconds ("02:30:45.120 PM"); implies seconds
  * @param {boolean} [options.hour12] - Force 12h/24h; omit to follow the locale
  * @returns {string} Formatted clock time, or '' for missing/invalid input
  */
-export function formatClockTime(date, { timeZone, seconds = true, hour12 } = {}) {
+export function formatClockTime(date, { timeZone, seconds = true, milliseconds = false, hour12 } = {}) {
   return localized('time', date, {
     hour: '2-digit',
     minute: '2-digit',
-    ...(seconds ? { second: '2-digit' } : {}),
+    ...(seconds || milliseconds ? { second: '2-digit' } : {}),
+    ...(milliseconds ? { fractionalSecondDigits: 3 } : {}),
     ...(timeZone ? { timeZone } : {}),
     ...(hour12 === undefined ? {} : { hour12 }),
   }, '');

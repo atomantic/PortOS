@@ -456,6 +456,11 @@ export const registerVoiceHandlers = (socket) => {
     setTabSharing(state, payload?.live === true);
   });
 
+  // Voice Call timing debug: while on, each turn's stage timings are also pushed as voice:timing.
+  socket.on('voice:debug:timing', (payload) => {
+    state.timingDebug = payload?.enabled === true;
+  });
+
   // Lazy visible-text reply. The ui_read tool emitted voice:ui:read-request;
   // the client recomputed extractVisibleText on the live DOM and sent it back
   // here. Re-apply the same ~8 KB word-boundary cap server-side so a runaway
