@@ -2,7 +2,7 @@ import { EventEmitter } from 'node:events';
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { pinPlatform, resolveTestPython } from '../../lib/testHelper.js';
@@ -175,18 +175,20 @@ describe('MLX video runtime currency', () => {
   const markerPython = resolveTestPython({ modules: ['packaging.markers'] })
     ?? resolveTestPython({ modules: ['pip._vendor.packaging.markers'] });
 
+  const h3Lock = 'requirements-minimax-h3-mlx.lock.txt';
+  const fastVideoLock = 'requirements-fastvideo-mlx.lock.txt';
   const cases = [
-    { runtime: 'minimax_h3', profile: 'minimax-h3', minor: 11 },
-    { runtime: 'minimax_h3', profile: 'minimax-h3', minor: 12 },
-    { runtime: 'fastvideo', profile: 'fastvideo', minor: 11, pythonMarker: "python_full_version < '3.12'" },
-    { runtime: 'fastvideo', profile: 'fastvideo', minor: 12, pythonMarker: "python_full_version >= '3.12'" },
+    { runtime: 'minimax_h3', lockName: h3Lock, minor: 11 },
+    { runtime: 'minimax_h3', lockName: h3Lock, minor: 12 },
+    { runtime: 'fastvideo', lockName: fastVideoLock, minor: 11, pythonMarker: "python_full_version < '3.12'" },
+    { runtime: 'fastvideo', lockName: fastVideoLock, minor: 12, pythonMarker: "python_full_version >= '3.12'" },
   ];
-  for (const { runtime, profile, minor, pythonMarker } of cases) {
+  for (const { runtime, lockName, minor, pythonMarker } of cases) {
     const interpreter = pythonMarker ? markerPython : python;
     it.skipIf(!interpreter)(`checks ${runtime} active pins with Python 3.${minor} after verifying the source`, async () => {
       const info = BYOV_RUNTIME_INFO[runtime];
       const [isolation, command, script, lock] = info.currencyProbeArgs;
-      expect(lock).toMatch(new RegExp(`requirements-${profile}-mlx\\.lock\\.txt$`));
+      expect(basename(lock)).toBe(lockName);
       const lockText = readFileSync(lock, 'utf8');
       const installed = Object.fromEntries(Array.from(
         lockText.matchAll(/^([a-z0-9-]+)==([^\s;]+)([^\r\n]*)/gm),
@@ -230,7 +232,7 @@ ${script}`, lock, JSON.stringify(packages), runtime, String(minor)], { encoding:
       const log = vi.spyOn(console, 'log').mockImplementation(() => {});
       try {
         await expect(check(installed)).resolves.toBe(true);
-        const changedPin = pythonMarker ? 'av' : 'fastapi';
+        const changedPin = pythonMarker ? 'av' : 'certifi';
         const missingPin = pythonMarker ? 'av' : 'httpx2';
         expect(installed[changedPin]).toBeDefined();
         expect(installed[missingPin]).toBeDefined();
