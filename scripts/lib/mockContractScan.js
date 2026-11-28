@@ -57,14 +57,22 @@ export function mask(source) {
   let copied = 0;
   const blank = (from, to) => {
     if (to <= from) return;
-    parts.push(source.slice(copied, from), source.slice(from, to).replace(/[^\n]/g, ' '));
+    const span = source.slice(from, to);
+    parts.push(source.slice(copied, from), span.includes('\n') ? span.replace(/[^\n]/g, ' ') : ' '.repeat(span.length));
     copied = to;
   };
+  const syntax = /[/'"`{}]/g;
   // Scans code from `i`; in expression mode returns at the `}` closing a `${`.
   const scan = (start, inExpression) => {
     let i = start;
     let depth = 0;
     while (i < source.length) {
+      // The rest of the text passes through unchanged. Look only for the
+      // delimiters that can open a masked span or close a template expression.
+      syntax.lastIndex = i;
+      const match = syntax.exec(source);
+      if (!match) return source.length;
+      i = match.index;
       const ch = source[i];
       const next = source[i + 1];
       if (ch === '/' && next === '/') {

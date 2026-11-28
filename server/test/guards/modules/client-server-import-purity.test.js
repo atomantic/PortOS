@@ -14,10 +14,8 @@ import { moduleSpecifiers } from '../../../../scripts/lib/moduleGraph.js';
 import { tokenize } from '../../../../scripts/lib/sourceTokens.js';
 import { guardCorpus, REPO_ROOT } from '../../../../scripts/lib/guardCorpus.js';
 
-const isWithin = (root, file) => {
-  const rel = posix.relative(root, file);
-  return rel !== '..' && !rel.startsWith('../');
-};
+// resolveRelative already normalized the POSIX path.
+const isWithin = (root, file) => file === root || file.startsWith(`${root}/`);
 
 const resolveRelative = (file, specifier) => {
   const path = specifier.replaceAll('\\', '/').split(/[?#]/)[0];
@@ -30,7 +28,13 @@ const resolveRelative = (file, specifier) => {
  * the text before the first escape must be a prefix of a relative path. Stop at the
  * opening delimiter's next occurrence so an escape in a later literal is irrelevant.
  */
-const MAY_REACH_SERVER = /\.\.[/\\]+(?:\.{1,2}[/\\]+)*server\b|(['"`])(?:\.{0,2}|\.{1,2}\/(?:(?!\1)[^\\])*)\\/;
+const SERVER_PATH = /\.\.[/\\]+(?:\.{1,2}[/\\]+)*server\b/;
+const ESCAPED_RELATIVE_PATH = /(['"`])(?:\.{0,2}|\.{1,2}\/(?:(?!\1)[^\\])*)\\/;
+// If "server" itself is split up, it needs a hex/Unicode escape, an
+// identity escape in the name, or a continuation that joins the letters.
+const POSSIBLE_SERVER_NAME = /server|\\[xesur\r\n]/;
+const mayReachServer = (source) => SERVER_PATH.test(source)
+  || (POSSIBLE_SERVER_NAME.test(source) && ESCAPED_RELATIVE_PATH.test(source));
 
 function inspectClientImports(clientFiles, readSource) {
   const violations = [];
@@ -38,7 +42,7 @@ function inspectClientImports(clientFiles, readSource) {
   const queue = [];
   for (const file of clientFiles) {
     const source = readSource(file);
-    if (source == null || !MAY_REACH_SERVER.test(source)) continue;
+    if (source == null || !mayReachServer(source)) continue;
     const { statics: imports, deferred: dynamic } = moduleSpecifiers(source, file);
     for (const specifier of [...imports, ...dynamic]) {
       const target = resolveRelative(file, specifier);

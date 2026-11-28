@@ -62,7 +62,11 @@ export function unreferencedScripts(candidates, corpus) {
   const pending = new Set(candidates);
   if (pending.size === 0) return [];
   const keys = referenceKeys(candidates);
-  const pattern = keyPattern(keys.keys());
+  let pattern = keyPattern(keys.keys());
+  // Only ordinary filename tokens are unambiguous. Punctuation or a trailing
+  // dot can make one key's match shadow another, so keep those patterns intact.
+  const canShrink = keys.keys().every((key) => /^[\w-]+(?:\.[\w-]+)*$/.test(key));
+  let patternSize = pending.size;
   const repo = guardCorpus();
   // Most references come from workflows, docs, scripts and application code.
   // Search those first and retain the full fallback for any outstanding script.
@@ -72,6 +76,12 @@ export function unreferencedScripts(candidates, corpus) {
     (LIKELY_POINTER.test(path) ? likely : rest).push(path);
   }
   for (const path of [...likely, ...rest]) {
+    // Stop testing the common names once enough owners have a live reference.
+    // Rebuild between files and at most logarithmically across the corpus.
+    if (canShrink && pending.size <= patternSize / 2) {
+      pattern = keyPattern(keys.keys().filter((token) => pending.has(keys.get(token))));
+      patternSize = pending.size;
+    }
     // Tracked symlinks (.claude/commands/do/*) point into the lib/slashdo submodule; a symlink holds no text of its own.
     if (!repo.lstat(path).isFile()) continue;
     // A binary asset (git's NUL-in-the-first-8000-bytes heuristic) holds no pointer to a script.
