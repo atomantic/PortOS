@@ -223,7 +223,9 @@ describe('VoiceWidget accessibility', () => {
     const panelId = collapse.getAttribute('aria-controls');
     expect(widget.querySelector('[id="' + panelId + '"]')).not.toBeNull();
     fireEvent.click(collapse);
-    expect(within(widget).getByRole('button', { name: 'Show conversation' })).toHaveAttribute('aria-expanded', 'false');
+    const expand = within(widget).getByRole('button', { name: 'Show conversation' });
+    expect(expand).toHaveAttribute('aria-expanded', 'false');
+    expect(expand).not.toHaveAttribute('aria-controls');
   });
 
   it('keeps the mic state when the controls are minimized and restored', async () => {
@@ -314,6 +316,18 @@ describe('Voice Call console', () => {
     const consoleView = await screen.findByRole('region', { name: 'PortOS call console' });
     await settle();
     const ui = within(consoleView);
+    const videoTab = ui.getByRole('button', { name: /Video feed/ });
+    const brainTab = ui.getByRole('button', { name: /Voice brain/ });
+    const channelsTab = ui.getByRole('button', { name: /Channels/ });
+    expect(videoTab).toHaveAttribute('aria-expanded', 'true');
+    expect(videoTab).toHaveAttribute('aria-controls', 'station-panel-video');
+    expect(consoleView.querySelector('#station-panel-video')).not.toBeNull();
+    expect(brainTab).toHaveAttribute('aria-expanded', 'false');
+    expect(brainTab).not.toHaveAttribute('aria-controls');
+    expect(channelsTab).toHaveAttribute('aria-expanded', 'false');
+    expect(channelsTab).not.toHaveAttribute('aria-controls');
+    expect(ui.getByRole('heading', { level: 2, name: /Avatar setup|AvatarForcing live/ })).toBeInTheDocument();
+
     expect(voiceClientMock.startContinuous).not.toHaveBeenCalled();
     expect(voiceClientMock.prepareVoicePlayback).not.toHaveBeenCalled();
     fireEvent.click(ui.getByRole('button', { name: 'Open mic' }));

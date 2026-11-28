@@ -46,8 +46,11 @@ describe('RealtimeCallPanel', () => {
       handlers.onReply({ text: "It's 9 PM.", cancelled: false });
     });
     expect(await screen.findByText('Realtime call live')).toBeInTheDocument();
-    expect(screen.getByText('Looking up: What time is it?')).toBeInTheDocument();
-    expect(screen.getByText('Result: It is 9 PM.')).toBeInTheDocument();
+    const captionLog = screen.getByRole('log', { name: 'Realtime captions' });
+    expect(captionLog).toHaveAttribute('aria-live', 'polite');
+    expect(captionLog).toHaveTextContent('Looking up: What time is it?');
+    expect(captionLog).toHaveTextContent('Result: It is 9 PM.');
+    expect(screen.getByRole('heading', { level: 2, name: 'Realtime call live' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Hang up' }));
     expect(stop).toHaveBeenCalled();
   });

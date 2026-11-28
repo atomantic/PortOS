@@ -53,7 +53,7 @@ export default function VoiceLlmQuickPicker({
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2 min-w-0">
           <Brain size={14} aria-hidden="true" className="shrink-0 text-port-accent" />
-          <h3 className="font-mono text-xs font-semibold uppercase tracking-wider">Voice brain (LLM)</h3>
+          <h2 className="font-mono text-xs font-semibold uppercase tracking-wider">Voice brain (LLM)</h2>
         </div>
         {saving && <span className="font-mono text-[10px] uppercase tracking-wider text-port-accent-text">Saving…</span>}
         {!saving && residencyBadge && (

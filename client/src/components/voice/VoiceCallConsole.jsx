@@ -53,7 +53,7 @@ function StationTabs({ runningAvatar, llmProvider, llmModel, llmResidency, onLlm
             key={id}
             type="button"
             aria-expanded={tab === id}
-            aria-controls={`station-panel-${id}`}
+            aria-controls={tab === id ? `station-panel-${id}` : undefined}
             onClick={() => choose(id)}
             className={`flex min-h-11 min-w-0 items-center gap-2 rounded-xl border px-2.5 py-1.5 text-left transition-colors ${
               tab === id ? 'border-port-accent bg-port-accent/10' : 'border-port-border bg-port-card hover:border-port-accent'

@@ -49,9 +49,9 @@ export default function AvatarRuntimeSettings({ data, error, updateData, refetch
     <div className="flex flex-wrap items-center justify-between gap-2">
       <div className="flex items-center gap-2 min-w-0">
         <span aria-hidden="true" className={`h-2 w-2 shrink-0 rounded-full ${ledTone}`} />
-        <h3 className="font-mono text-xs font-semibold uppercase tracking-wider">
+        <h2 className="font-mono text-xs font-semibold uppercase tracking-wider">
           {running ? 'AvatarForcing live' : 'Avatar setup'}
-        </h3>
+        </h2>
       </div>
       {running && <button type="button" className={button} aria-expanded={showControls}
         onClick={() => setShowControls(!showControls)}>{showControls ? 'Hide avatar settings' : 'Avatar settings'}</button>}

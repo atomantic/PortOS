@@ -89,9 +89,11 @@ export default function RealtimeCallPanel({ compact = false }) {
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2 min-w-0">
           <span aria-hidden="true" className={`h-2 w-2 shrink-0 rounded-full ${ledTone}`} />
-          <h3 className="font-mono text-xs font-semibold uppercase tracking-wider">
-            {live ? 'Realtime call live' : call.phase === 'loading' ? 'Loading realtime voice…' : 'Realtime voice'}
-          </h3>
+          <h2 className="font-mono text-xs font-semibold uppercase tracking-wider">
+            <span aria-live="polite">
+              {live ? 'Realtime call live' : call.phase === 'loading' ? 'Loading realtime voice…' : 'Realtime voice'}
+            </span>
+          </h2>
         </div>
         {status?.installed && status.enabled && (live || call.phase === 'loading'
           ? <button type="button" className={button} onClick={hangUp}>Hang up</button>
@@ -126,15 +128,22 @@ export default function RealtimeCallPanel({ compact = false }) {
         </div>
       )}
       {call.error && <p role="alert" className="text-xs text-port-error-text">{call.error}</p>}
-      {captions.length > 0 && (
-        <ul aria-label="Realtime captions" className="space-y-1 text-xs">
-          {captions.map((c) => (
-            <li key={c.id} className={c.kind === 'assistant' ? '' : 'text-port-text-muted'}>
-              {c.kind === 'task' ? `Looking up: ${c.text}` : c.kind === 'result' ? `Result: ${c.text}` : c.text}
-            </li>
-          ))}
-        </ul>
-      )}
+      <div
+        role="log"
+        aria-live="polite"
+        aria-label="Realtime captions"
+        className={captions.length > 0 ? undefined : 'sr-only'}
+      >
+        {captions.length > 0 && (
+          <ul className="space-y-1 text-xs">
+            {captions.map((c) => (
+              <li key={c.id} className={c.kind === 'assistant' ? '' : 'text-port-text-muted'}>
+                {c.kind === 'task' ? `Looking up: ${c.text}` : c.kind === 'result' ? `Result: ${c.text}` : c.text}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
     </section>
   );
 }
