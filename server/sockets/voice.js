@@ -829,10 +829,12 @@ export const registerVoiceHandlers = (socket) => {
   // result. One realtime call per socket.
   let realtime = null;
   let realtimeOpening = null;
+  let realtimeGeneration = 0;
   // Aborts delegated turns still running when the call ends, so their tool
   // actions stop and nothing reaches the tab after hang-up.
   let realtimeCtrl = null;
   const closeRealtime = () => {
+    realtimeGeneration += 1;
     realtimeOpening = null;
     realtimeCtrl?.abort();
     realtimeCtrl = null;
@@ -863,9 +865,12 @@ export const registerVoiceHandlers = (socket) => {
     return reply;
   };
 
-  socket.on('voice:realtime:start', async () => {
+  const startRealtime = async () => {
+    if (realtime || realtimeOpening) return;
+    const generation = ++realtimeGeneration;
     try {
       const cfg = await getVoiceConfig();
+      if (realtimeGeneration !== generation) return;
       if (!cfg.enabled || !cfg.realtime?.enabled) {
         socket.emit('voice:realtime:state', { active: false, error: 'Realtime voice is turned off in Voice settings.' });
         return;
@@ -874,14 +879,27 @@ export const registerVoiceHandlers = (socket) => {
       realtimeCtrl = new AbortController();
       socket.emit('voice:realtime:state', { active: false, loading: true });
       const { openRealtimeCall } = await import('../services/voice/realtimeSession.js');
+      if (realtimeGeneration !== generation) return;
       const opening = openRealtimeCall({ cfg, emit: (event, data) => socket.emit(event, data), runDelegate: runRealtimeDelegate });
       realtimeOpening = opening;
       const session = await opening;
-      if (realtimeOpening !== opening) { session.close(); return; }   // hung up while the model was loading
+      if (realtimeGeneration !== generation || realtimeOpening !== opening) { session.close(); return; }   // hung up while the model was loading
       realtimeOpening = null;
       realtime = session;
     } catch (err) {
+      if (realtimeGeneration !== generation) return;
       realtimeOpening = null;
+      realtimeCtrl?.abort();
+      realtimeCtrl = null;
+      console.error(`🗣️ voice:realtime:start failed: ${err.message}`);
+      socket.emit('voice:realtime:state', { active: false, error: err.message });
+    }
+  };
+
+  socket.on('voice:realtime:start', async () => {
+    try {
+      await startRealtime();
+    } catch (err) {
       console.error(`🗣️ voice:realtime:start failed: ${err.message}`);
       socket.emit('voice:realtime:state', { active: false, error: err.message });
     }
