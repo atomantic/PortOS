@@ -176,6 +176,17 @@ describe('VoicePicker', () => {
     expect(listPipelineTtsVoices).toHaveBeenCalledTimes(1);
   });
 
+  it('exposes an accessible name on the select in compact mode and uses theme-safe text color', async () => {
+    listPipelineTtsVoices.mockResolvedValue({ voices: SAMPLE_VOICES });
+    render(<VoicePicker value={null} onChange={() => {}} compact label="Character voice" />);
+    await waitFor(() => {
+      expect(document.querySelector('option[value="kokoro:af_bella"]')).toBeInTheDocument();
+    });
+    const select = screen.getByRole('combobox', { name: 'Character voice' });
+    expect(select.className).toContain('text-port-text');
+    expect(select.className).not.toContain('text-white');
+  });
+
   it('refetches after the cache TTL expires (so newly-downloaded voices show up)', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {

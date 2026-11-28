@@ -175,7 +175,7 @@ export default function VoiceCompactBar({
       )}
       <form
         onSubmit={(e) => { e.preventDefault(); onSend(); }}
-        className={`flex items-center gap-1 bg-port-card/95 backdrop-blur border rounded-full pl-1 pr-1 py-1 w-full focus-within:border-port-accent ${FAB_SURFACE}`}
+        className={`flex items-center gap-1 bg-port-card/95 backdrop-blur border rounded-full pl-1 pr-1 py-1 w-full focus-within:border-port-accent focus-within:ring-2 focus-within:ring-port-accent ${FAB_SURFACE}`}
       >
         <FilePickerButton
           accept="image/*"
@@ -322,7 +322,7 @@ export default function VoiceCompactBar({
           <button
             type="button"
             onClick={onToggleVision}
-            aria-label={visionEnabled ? 'Disable screen vision for voice' : 'Enable screen vision for voice'}
+            aria-label="Screen vision for voice"
             aria-pressed={visionEnabled}
             title={visionEnabled
               ? 'Screen vision ON — the assistant can describe what\'s on your screen ("what\'s on this chart?"). Click to stop sharing.'

@@ -64,7 +64,7 @@ export default function SatPhoneConversation({
               className="space-y-1.5 break-words font-mono text-[11px] leading-relaxed"
             >
               {history.length === 0 && !interimTranscript && (
-                <p className="opacity-60">Standby — press TALK or type below.</p>
+                <p className="text-port-text-muted">Standby — press TALK or type below.</p>
               )}
               {history.map((turn, i) => (
                 <div key={i} className={turn.role === 'user' ? 'opacity-75' : ''}>

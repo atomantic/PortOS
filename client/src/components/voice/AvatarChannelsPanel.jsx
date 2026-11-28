@@ -77,7 +77,7 @@ function ChannelRow({ index, channel, active, avatars, agentDefaults, tuneReques
           onChange={(event) => setLabel(event.target.value)}
           onBlur={commitLabel}
           onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); commitLabel(); } }}
-          className="min-h-11 min-w-0 flex-1 rounded-lg border border-port-border bg-port-card px-2.5 font-mono text-xs text-port-text placeholder:text-port-text-muted focus:border-port-accent focus:outline-none"
+          className="min-h-11 min-w-0 flex-1 rounded-lg border border-port-border bg-port-card px-2.5 font-mono text-xs text-port-text placeholder:text-port-text-muted focus:border-port-accent"
         />
         <button
           type="button"
@@ -102,7 +102,7 @@ function ChannelRow({ index, channel, active, avatars, agentDefaults, tuneReques
             title="Use the default radio operator portrait"
             className={`relative aspect-square min-h-11 min-w-11 overflow-hidden rounded-lg border ${!channel.avatar ? 'border-port-accent ring-2 ring-port-accent' : 'border-port-border hover:border-port-accent'}`}
           >
-            <AvatarThumb filename={null} alt="Default portrait" className="size-full" />
+            <AvatarThumb filename={null} alt="" className="size-full" />
           </button>
           {avatars.map((avatar, position) => (
             <button
@@ -114,7 +114,7 @@ function ChannelRow({ index, channel, active, avatars, agentDefaults, tuneReques
               title="Assign this avatar"
               className={`relative aspect-square min-h-11 min-w-11 overflow-hidden rounded-lg border ${channel.avatar === avatar.filename ? 'border-port-accent ring-2 ring-port-accent' : 'border-port-border hover:border-port-accent'}`}
             >
-              <AvatarThumb filename={avatar.filename} alt="Avatar" className="size-full" />
+              <AvatarThumb filename={avatar.filename} alt="" className="size-full" />
             </button>
           ))}
         </div>
@@ -167,7 +167,7 @@ function AvatarCreator({ onCreated }) {
         onChange={(event) => setPrompt(event.target.value)}
         onKeyDown={(event) => { if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) generate(event); }}
         placeholder="Head-and-shoulders portrait facing the camera, neutral expression, soft studio light…"
-        className="min-h-[60px] w-full rounded-xl border border-port-border bg-port-bg px-3 py-2 text-sm text-port-text placeholder:text-port-text-muted focus:border-port-accent focus:outline-none"
+        className="min-h-[60px] w-full rounded-xl border border-port-border bg-port-bg px-3 py-2 text-sm text-port-text placeholder:text-port-text-muted focus:border-port-accent"
       />
       <p className="text-[11px] text-port-text-muted">
         Renders a square image with your saved <Link to="/media/image" className="underline hover:text-port-text">Image Gen</Link> settings.
@@ -289,14 +289,14 @@ export default function AvatarChannelsPanel({ agentDefaults, tuneRequest = null 
               </p>
             ) : (
               <ul className="grid grid-cols-3 gap-2 sm:grid-cols-4 xl:grid-cols-6">
-                {avatars.map((avatar) => (
+                {avatars.map((avatar, position) => (
                   <li key={avatar.filename} className="flex flex-col gap-1">
                     <div className="aspect-square overflow-hidden rounded-lg border border-port-border">
-                      <AvatarThumb filename={avatar.filename} alt="Avatar" className="size-full" />
+                      <AvatarThumb filename={avatar.filename} alt={`Avatar ${position + 1}`} className="size-full" />
                     </div>
                     {confirmRemove === avatar.filename ? (
                       <ConfirmButtonPair
-                        ariaLabel="Remove avatar from the collection?"
+                        ariaLabel={`Remove avatar ${position + 1} from the collection?`}
                         confirmText="Remove"
                         onConfirm={() => remove(avatar.filename)}
                         onCancel={() => setConfirmRemove(null)}
@@ -308,7 +308,7 @@ export default function AvatarChannelsPanel({ agentDefaults, tuneRequest = null 
                       <button
                         type="button"
                         onClick={() => setConfirmRemove(avatar.filename)}
-                        aria-label="Remove avatar from the collection"
+                        aria-label={`Remove avatar ${position + 1} from the collection`}
                         title="Remove from Avatars (the gallery image stays)"
                         className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg border border-port-border text-port-text-muted hover:border-port-error hover:text-port-error-text"
                       >

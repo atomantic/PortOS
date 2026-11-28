@@ -116,7 +116,7 @@ function PipelineProgressStrip({ stage }) {
           return (
             <span key={step.id} className="flex flex-1 items-center gap-1 min-w-0">
               <span className={`h-1 flex-1 rounded-full transition-colors ${barTone}`} />
-              <span className={`font-mono text-[7px] font-semibold tracking-wider ${isActive ? 'opacity-100' : isDone ? 'opacity-80' : 'opacity-45'}`}>
+              <span className={`font-mono text-[7px] font-semibold tracking-wider ${isActive ? 'opacity-100' : isDone ? 'opacity-85' : 'opacity-75'}`}>
                 {step.label}
               </span>
             </span>
@@ -320,6 +320,8 @@ export function SatPhoneTelemetry({
   onSelectChannel,
   onTuneChannel,
   onOpenBrain,
+  brainExpanded,
+  brainControlsId,
   volume,
   muted,
   voiceLabel,
@@ -372,6 +374,8 @@ export function SatPhoneTelemetry({
             <button
               type="button"
               onClick={onOpenBrain}
+              aria-expanded={typeof brainExpanded === 'boolean' ? brainExpanded : undefined}
+              aria-controls={brainExpanded && brainControlsId ? brainControlsId : undefined}
               aria-label={`Voice telemetry: ${llmLine || voiceDisplay}. Open voice brain settings`}
               title={lcdTitle}
               className="satphone-lcd block w-full min-w-0 rounded-lg border px-2.5 py-1.5 text-left transition-colors cursor-pointer hover:border-port-accent/80 focus:outline-none focus-visible:ring-2 focus-visible:ring-port-accent"
@@ -462,7 +466,7 @@ export function SatPhoneActionKeys({
         className={actionBtn}
       >
         {muted ? <VolumeX size={12} aria-hidden="true" className="shrink-0" /> : <Volume2 size={12} aria-hidden="true" className="shrink-0" />}
-        {muted ? 'Unmute' : 'Mute'}
+        {muted ? 'Muted' : 'Mute'}
       </button>
 
       {showRate && (
@@ -485,7 +489,7 @@ export function SatPhoneActionKeys({
           onClick={onToggleVision}
           aria-pressed={visionEnabled}
           data-active={visionEnabled ? 'true' : 'false'}
-          aria-label={visionEnabled ? 'Disable screen vision for voice' : 'Enable screen vision for voice'}
+          aria-label="Screen vision for voice"
           title={visionEnabled
             ? 'Vision ON — the assistant sees your shared tab with each message. Click to stop.'
             : 'Share a tab so the assistant sees it with each message'}
