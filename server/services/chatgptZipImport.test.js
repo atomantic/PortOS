@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, rm, writeFile, readdir, readFile, mkdir } from 'fs/promises';
+import { mkdtemp, rm, writeFile, readdir, readFile, mkdir, stat } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -174,6 +174,19 @@ describe('chatgptZipImport service', () => {
   });
 
   describe('extractChatgptZip', () => {
+    it.skipIf(process.platform === 'win32')('creates private directories and extracted assets', async () => {
+      const zipPath = await writeZip([
+        ['conversations.json', '[]'],
+        ['file-IMG.dat', PNG],
+      ]);
+      const assetDir = join(TMP, 'imports', 'assets');
+      const { assets } = await extractChatgptZip(zipPath, { assetDir });
+
+      expect((await stat(join(TMP, 'imports'))).mode & 0o777).toBe(0o700);
+      expect((await stat(assetDir)).mode & 0o777).toBe(0o700);
+      expect((await stat(join(assetDir, assets.get('file-IMG').file))).mode & 0o777).toBe(0o600);
+    });
+
     it('extracts conversation shards + assets with sniffed extensions and friendly names', async () => {
       const zipPath = await writeZip([
         ['conversations-000.json', JSON.stringify([{ id: 'c1', title: 'A', mapping: {} }])],

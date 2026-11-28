@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, statSync, chmodSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { makePathsProxy } from '../lib/mockPathsDataRoot.js';
@@ -63,6 +63,31 @@ beforeEach(() => {
 });
 
 const ISO = (s) => new Date(s).toISOString();
+
+it.skipIf(process.platform === 'win32')('writes private Brain logs and settings and restricts existing logs on append', async () => {
+  const brainDir = join(getTempRoot(), 'brain');
+  const digestPath = join(brainDir, 'digests.jsonl');
+  const reviewPath = join(brainDir, 'reviews.jsonl');
+  const metaPath = join(brainDir, 'meta.json');
+  const firstDigest = await brainStorage.createDigest({ summary: 'First digest' });
+  const review = await brainStorage.createReview({ summary: 'Weekly review' });
+
+  expect(statSync(brainDir).mode & 0o777).toBe(0o700);
+  for (const path of [digestPath, reviewPath, metaPath]) {
+    expect(statSync(path).mode & 0o777).toBe(0o600);
+  }
+  expect((await brainStorage.getReviews()).map(({ id }) => id)).toContain(review.id);
+
+  chmodSync(digestPath, 0o644);
+  const nextDigest = await brainStorage.createDigest({ summary: 'Next digest' });
+  expect(statSync(digestPath).mode & 0o777).toBe(0o600);
+  expect((await brainStorage.getDigests()).map(({ id }) => id)).toEqual(
+    expect.arrayContaining([firstDigest.id, nextDigest.id]),
+  );
+
+  // Later cases exercise logs in the same scratch root.
+  for (const path of [digestPath, reviewPath, metaPath]) rmSync(path);
+});
 
 it('refreshes projections, settings and digest logs after a live file restore', async () => {
   const journalId = 'restore-journal';

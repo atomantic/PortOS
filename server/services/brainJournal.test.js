@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
-import { mkdirSync, rmSync, readFileSync, writeFileSync } from 'fs';
+import { mkdirSync, rmSync, readFileSync, writeFileSync, statSync } from 'fs';
 import { join } from 'path';
 
 // vi.hoisted lets us share this constant with the hoisted vi.mock factory.
@@ -330,6 +330,18 @@ describe('brainJournal', () => {
   });
 
   describe('Obsidian mirror', () => {
+    it.skipIf(process.platform === 'win32').each(['single', 'bulk'])('writes a private %s location sidecar', async (mode) => {
+      obsidian.upsertNote.mockResolvedValue('Daily Log/example.md');
+      await journal.updateSettings({ obsidianVaultId: 'v1', autoSync: false });
+      const entry = await journal.appendJournal('2026-04-17', 'hi');
+
+      if (mode === 'single') await journal.syncToObsidian(entry, { force: true });
+      else await journal.resyncAllToObsidian();
+
+      expect(statSync(TEMP_ROOT).mode & 0o777).toBe(0o700);
+      expect(statSync(join(TEMP_ROOT, 'journal-obsidian-locations.json')).mode & 0o777).toBe(0o600);
+    });
+
     it('skips sync when autoSync is false', async () => {
       await journal.updateSettings({ obsidianVaultId: 'v1', autoSync: false });
       await journal.appendJournal('2026-04-17', 'hi');
