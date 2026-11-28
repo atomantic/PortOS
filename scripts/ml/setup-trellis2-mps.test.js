@@ -87,6 +87,12 @@ function run(mode = 'success') {
   }));
 }
 
+it.each(['txt', 'lock.txt'])('keeps only required imaging packages in the TRELLIS.2 Metal %s manifest', extension => {
+  const requirements = readFileSync(new URL(`./requirements/requirements-trellis2-mps.${extension}`, import.meta.url), 'utf8');
+  expect(requirements).not.toMatch(/^imageio(?:-ffmpeg)?==/m);
+  expect(requirements).toMatch(/^kornia==/m);
+});
+
 describe.skipIf(!python)('TRELLIS.2 Metal Install/Repair boundary', () => {
   it('rebuilds the interpreter from verified inputs, keeps weights and records native verification', () => {
     const result = run();

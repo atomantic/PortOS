@@ -59,14 +59,15 @@ MOGE_DOWNLOAD=".venv/moge-download"
 MOGE_STAGE=".venv/moge-src"
 rm -rf "$MOGE_DOWNLOAD" "$MOGE_STAGE"
 mkdir -p "$MOGE_DOWNLOAD" "$MOGE_STAGE"
-"$VPY" -m pip download --disable-pip-version-check --require-hashes --no-deps -r "$MOGE_REQ" -d "$MOGE_DOWNLOAD"
+"$VPY" -m pip download --disable-pip-version-check --require-hashes --no-deps --no-build-isolation -r "$MOGE_REQ" -d "$MOGE_DOWNLOAD"
 "$VPY" - "$MOGE_DOWNLOAD" "$MOGE_STAGE" "$SCRIPTS_DIR/ml/patch-moge-metadata.py" <<'PY'
 import sys
 import tarfile
 from pathlib import Path
 download, stage, patcher = (Path(arg) for arg in sys.argv[1:])
-archives = sorted(download.glob('*.tar.gz'))
-if len(archives) != 1:
+# pip can save a codeload archive under its bare commit ID.
+archives = list(download.iterdir())
+if len(archives) != 1 or archives[0].is_symlink() or not archives[0].is_file():
     raise SystemExit('Expected one hash-verified MoGe archive')
 if not hasattr(tarfile, 'data_filter'):
     raise SystemExit('Update the bootstrap Python to a security-patched build with tarfile.data_filter.')

@@ -1,14 +1,10 @@
-# Bounded #16047 regeneration: uv 0.13.7; cutoff 2026-11-07T00:00:00Z; Transformers 5.22.2 only; retained companion versions and artifact hashes.
-# Bounded #16047 regeneration: uv 0.8.14 (0.13.x could not reach PyPI on the regenerating host); cutoff 2026-11-07T00:00:00Z; click 8.5.1 and tqdm 4.70.1 only — every other pin unchanged.
 # TRELLIS.2 Metal wheel closure: CPython 3.13, Apple Silicon, macOS 26+.
-# Generated with hash-verified uv 0.13.7; cutoff 2026-11-05T00:00:00Z (seven days).
-# Regenerate from the repository root, advancing the cutoff for a future update:
+# Generated with hash-verified uv 0.13.7; cutoff 2026-11-25T00:00:00Z.
+# Seed the output with this lock to preserve unrelated versions. Regenerate from the repository root:
 # MACOSX_DEPLOYMENT_TARGET=26.0 uv --no-config pip compile scripts/ml/requirements/requirements-trellis2-mps.txt \
 #   --python-version 3.13 --python-platform aarch64-apple-darwin \
-#   --generate-hashes --only-binary :all: --exclude-newer 2026-11-05T00:00:00Z \
+#   --generate-hashes --only-binary :all: --exclude-newer 2026-11-25T00:00:00Z \
 #   --no-header --no-annotate -o scripts/ml/requirements/requirements-trellis2-mps.lock.txt
-# Complete generated artifact hashes; preserve unrelated versions during regeneration.
-
 accelerate==1.15.0 \
     --hash=sha256:97eacca0b73e45cb867dbf8c5d5d4dc32219544300e0c8992c7334dc2ef33cec
 annotated-doc==0.0.4 \
@@ -132,8 +128,6 @@ huggingface-hub==2.4.0 \
 idna==3.20 \
     --hash=sha256:a7db850025b95ded1eae8a46181a1a6c56c92c96f0e2b005d9ff8dc0210cab44 \
     --hash=sha256:ab7ae7122974553370f0bdb919e1a960b2cd1bc1ef0276416d896db81c14582c
-imageio==2.37.3 \
-    --hash=sha256:46f5bb8522cd421c0f5ae104d8268f569d856b29eb1a13b92829d1970f32c9f0
 jinja2==3.1.6 \
     --hash=sha256:85ece4451f492d0c13c5dd7c13a64681a86afae63a5f347908daf103ce6d2f67
 kornia==0.9.0 \
