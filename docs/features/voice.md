@@ -17,6 +17,7 @@ On Apple Silicon, **Voice Call → Realtime voice** runs a local full-duplex voi
 - The voice is the [Sophon-Realtime](https://github.com/adventists-ai/sophon-realtime) Mac build (Apache-2.0), installed separately. The panel shows the install command when it is missing. PortOS looks in `~/.portos/sophon-mac` (`voice.realtime.home`) and does not download it for you yet.
 - Pick **32B** (about 24 GB on disk and about 26 GB of memory during a call, more knowledgeable) or **4B** (about 9 GB, fastest). The first call loads the model in about a minute. It stays loaded between calls and is freed after 10 idle minutes.
 - Use headphones, or a microphone with good echo cancellation. Speaker audio that reaches the microphone can interrupt the reply.
+- You can interrupt a reply for as long as you can hear it, including the tail of a reply the voice has finished generating while the browser or avatar is still playing it. The voice remembers only the part you heard.
 - It runs on the same GPU as your Voice model and AvatarForcing. Stop AvatarForcing during realtime calls for the fastest replies.
 - The sidecar (`scripts/ml/sophon/portos_sophon.py`) listens on loopback port 5569 only, behind a per-launch token.
 

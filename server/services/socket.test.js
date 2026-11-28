@@ -2031,6 +2031,7 @@ describe('voice socket host-control boundary (#19169)', () => {
     'voice:realtime:start',
     'voice:realtime:audio',
     'voice:realtime:interrupt',
+    'voice:realtime:cut',
   ];
 
   it.each(hostEvents)('stops %s before dispatch for a remote password-free socket', async (event, stage) => {

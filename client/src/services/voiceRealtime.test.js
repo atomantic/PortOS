@@ -162,7 +162,7 @@ describe('startRealtimeCall', () => {
     socketListeners.get('voice:realtime:audio')({ pcm: new Int16Array(240).buffer });
     handle.interrupt();
     expect(scheduledSources[2].stop).toHaveBeenCalledTimes(1);
-    expect(socketMock.emit).toHaveBeenCalledWith('voice:realtime:interrupt');
+    expect(socketMock.emit).toHaveBeenCalledWith('voice:realtime:interrupt', {});
 
     // Reply forwarding works before stop.
     socketListeners.get('voice:realtime:reply')({ text: 'Hello', cancelled: false });
@@ -208,6 +208,72 @@ describe('startRealtimeCall', () => {
     socketListeners.get('voice:realtime:interrupt')();
     expect(anims.every((a) => a.stop.mock.calls.length > 0)).toBe(true);
     expect(scheduledSources.every((src) => src.stop.mock.calls.length === 1)).toBe(true);
+    handle.stop();
+  });
+
+  it('stops a finished reply still playing behind the avatar when the voice reports a late onset, and reports what was heard', async () => {
+    const anims = [];
+    let avatarReady;
+    playbackMock.visualizer = vi.fn(() => {
+      // The avatar takes a while to prepare the first segment; later ones are ready at once.
+      const ready = anims.length ? Promise.resolve() : new Promise((resolve) => { avatarReady = resolve; });
+      const anim = { ready, start: vi.fn(), stop: vi.fn() };
+      anims.push(anim);
+      return anim;
+    });
+    const handle = await startRealtimeCall();
+    const out = contexts[1];
+    const audio = socketListeners.get('voice:realtime:audio');
+    // A whole 1 s reply arrives at once and the voice reports it finished: its generation is over.
+    audio({ pcm: new Int16Array(14400).buffer, sampleRate: 24000, replyId: 'a1' });
+    audio({ pcm: new Int16Array(9600).buffer, sampleRate: 24000, replyId: 'a1' });
+    socketListeners.get('voice:realtime:reply')({ text: 'Hello there', cancelled: false, replyId: 'a1' });
+    await vi.waitFor(() => expect(anims).toHaveLength(1));
+    expect(scheduledSources).toHaveLength(0);
+    // Playback only starts once the avatar is ready, 0.75 s later on the browser clock.
+    out.currentTime = 0.75;
+    avatarReady();
+    await vi.waitFor(() => expect(scheduledSources).toHaveLength(2));
+    expect(scheduledSources.map((src) => src.start.mock.calls[0][0])).toEqual([0.78, expect.closeTo(1.38, 6)]);
+    // At 1.2 s the voice's clock says the reply is over, but here it is still playing: the onset stops it.
+    out.currentTime = 1.2;
+    socketListeners.get('voice:realtime:onset')({ replyId: 'a1' });
+    expect(scheduledSources.every((src) => src.stop.mock.calls.length === 1)).toBe(true);
+    expect(anims.every((anim) => anim.stop.mock.calls.length > 0)).toBe(true);
+    expect(socketMock.emit).toHaveBeenCalledWith('voice:realtime:cut', { replyId: 'a1', playedS: 0.42 });
+    handle.stop();
+  });
+
+  it('never lets an older reply or finished playback stop a newer reply, and the manual interrupt still stops everything', async () => {
+    const handle = await startRealtimeCall();
+    const out = contexts[1];
+    const audio = socketListeners.get('voice:realtime:audio');
+    const interrupt = socketListeners.get('voice:realtime:interrupt');
+    const onset = socketListeners.get('voice:realtime:onset');
+    const cuts = () => socketMock.emit.mock.calls.filter(([ev]) => ev === 'voice:realtime:cut').map(([, data]) => data);
+    audio({ pcm: new Int16Array(2400).buffer, sampleRate: 24000, replyId: 'b1' });
+    // The voice cuts b1 itself; its audio stops and a late chunk of it is dropped.
+    interrupt({ replyId: 'b1' });
+    expect(scheduledSources[0].stop).toHaveBeenCalledTimes(1);
+    expect(cuts()).toEqual([{ replyId: 'b1', playedS: 0 }]);
+    audio({ pcm: new Int16Array(2400).buffer, sampleRate: 24000, replyId: 'b1' });
+    expect(scheduledSources).toHaveLength(1);
+    // A newer reply plays; b1's stale interrupt and onset leave it alone.
+    audio({ pcm: new Int16Array(2400).buffer, sampleRate: 24000, replyId: 'b2' });
+    expect(scheduledSources).toHaveLength(2);
+    interrupt({ replyId: 'b1' });
+    onset({ replyId: 'b1' });
+    expect(scheduledSources[1].stop).not.toHaveBeenCalled();
+    // Once b2 has finished playing here, an onset for it is not an interruption.
+    out.currentTime = 1;
+    onset({ replyId: 'b2' });
+    expect(scheduledSources[1].stop).not.toHaveBeenCalled();
+    expect(cuts()).toHaveLength(1);
+    // The Interrupt button stops what is playing and tells the voice how much of it was heard.
+    audio({ pcm: new Int16Array(2400).buffer, sampleRate: 24000, replyId: 'b3' });
+    handle.interrupt();
+    expect(scheduledSources[2].stop).toHaveBeenCalledTimes(1);
+    expect(socketMock.emit).toHaveBeenCalledWith('voice:realtime:interrupt', { replyId: 'b3', playedS: 0 });
     handle.stop();
   });
 

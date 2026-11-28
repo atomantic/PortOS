@@ -1,6 +1,7 @@
 // One realtime (speech-to-speech) Voice call: relays microphone and reply audio between a browser socket and the
 // sidecar, and answers the voice's `delegate` hand-offs with the regular Voice tool pipeline (text only), whose
-// result the voice then speaks. The voice handles turn-taking and barge-in itself.
+// result the voice then speaks. The voice handles turn-taking and barge-in itself; reply audio, interrupts and onsets
+// carry the sidecar's reply id so the browser, which owns the playout clock, can stop exactly the reply that was heard.
 import WebSocket from 'ws';
 import { ensureRealtimeSidecar, scheduleRealtimeIdleStop } from './realtimeRuntime.js';
 
@@ -9,6 +10,9 @@ const MAX_RESULT_CHARS = 1500;
 const READY_TIMEOUT_MS = 15_000;
 // Sidecar events worth showing the call UI; the rest (turn checks, prefill timings) stay in the sidecar.
 const FORWARDED_EVENTS = new Set(['first_audio', 'barge_in', 'reply_start', 'merge_abort', 'error']);
+// The sidecar's reply ids are short hex; anything else is dropped rather than relayed.
+const REPLY_ID_RE = /^[0-9a-f]{1,32}$/;
+const replyIdOf = (value) => (typeof value === 'string' && REPLY_ID_RE.test(value) ? value : null);
 
 /** The persona line the voice gets, from the same personality settings the text Voice uses. */
 export const realtimePersona = (cfg) => {
@@ -118,12 +122,20 @@ export const openRealtimeCall = async ({
     if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'tool_result', call_id: callId, output }));
   };
 
+  // Binary reply audio belongs to the reply the sidecar last announced with `reply_audio` (one ordered WebSocket).
+  let audioReplyId = null;
   ws.on('message', (data, isBinary) => {
-    if (isBinary) { emit('voice:realtime:audio', { pcm: data, sampleRate: 24000 }); return; }
+    if (isBinary) { emit('voice:realtime:audio', { pcm: data, sampleRate: 24000, replyId: audioReplyId }); return; }
     let msg;
     try { msg = JSON.parse(String(data)); } catch { return; }
-    if (msg.type === 'interrupt') emit('voice:realtime:interrupt', {});
-    else if (msg.type === 'reply') emit('voice:realtime:reply', { text: msg.text || '', cancelled: Boolean(msg.cancelled) });
+    if (msg.type === 'reply_audio') audioReplyId = replyIdOf(msg.reply_id);
+    else if (msg.type === 'interrupt') emit('voice:realtime:interrupt', { replyId: replyIdOf(msg.reply_id) });
+    else if (msg.type === 'onset') {
+      const replyId = replyIdOf(msg.reply_id);
+      if (replyId) emit('voice:realtime:onset', { replyId });
+    } else if (msg.type === 'reply') {
+      emit('voice:realtime:reply', { text: msg.text || '', cancelled: Boolean(msg.cancelled), replyId: replyIdOf(msg.reply_id) });
+    }
     else if (msg.type === 'delegate') {
       const job = handleDelegate(String(msg.call_id || ''), msg.task).finally(() => pending.delete(job));
       pending.add(job);
@@ -156,8 +168,14 @@ export const openRealtimeCall = async ({
     pushAudio(buf) {
       if (!closed && ws.readyState === WebSocket.OPEN) ws.send(buf);
     },
-    interrupt() {
-      if (!closed && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'interrupt' }));
+    /** Stop talking now; `heard` says which reply the browser stopped and how many seconds of it had played. */
+    interrupt(heard) {
+      if (closed || ws.readyState !== WebSocket.OPEN) return;
+      ws.send(JSON.stringify(heard ? { type: 'interrupt', reply_id: heard.replyId, played_s: heard.playedS } : { type: 'interrupt' }));
+    },
+    /** The browser stopped a reply the sidecar had judged finished; the sidecar trims its history to what was heard. */
+    cut({ replyId, playedS }) {
+      if (!closed && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'cut', reply_id: replyId, played_s: playedS }));
     },
     close() {
       if (closed) return;

@@ -11,15 +11,27 @@ The Sophon engine is imported from its install folder (--app), not vendored. `_s
 Wire protocol (one WebSocket, loopback only, `Authorization: Bearer <token>` must match PORTOS_REALTIME_TOKEN / --token, no browser Origin):
   in  binary   PCM16 mono at --rate (microphone, after the browser's own echo cancellation)
   in  text     {"type": "tool_result", "call_id": str, "output": str}   result of a delegated task, spoken as the next reply
-               {"type": "interrupt"}                                    stop talking now
+               {"type": "interrupt", "reply_id"?: str, "played_s"?: float}  stop talking now (the browser already stopped
+                                                                        reply_id after played_s seconds of it)
+               {"type": "cut", "reply_id": str, "played_s": float}      the browser stopped reply_id after played_s seconds
   out binary   PCM16 mono at 24 kHz (reply audio, sent as soon as it is generated)
-  out text     {"type": "ready"} | {"type": "interrupt"} (drop buffered audio: the user barged in)
-               {"type": "delegate", "call_id": str, "task": str} | {"type": "reply", "text": str, "cancelled": bool}
+  out text     {"type": "ready"} | {"type": "reply_audio", "reply_id": str} (the binary audio that follows belongs to reply_id)
+               {"type": "interrupt", "reply_id": str | null} (drop reply_id's buffered audio: the user barged in)
+               {"type": "onset", "reply_id": str} (the user started speaking after reply_id finished generating; the
+                                                   browser stops it if it is still playing there, then sends "cut")
+               {"type": "delegate", "call_id": str, "task": str}
+               {"type": "reply", "text": str, "cancelled": bool, "reply_id": str | null}
                {"type": "event", ...engine event...}
+
+Playout clock: the engine decides whether a finished reply is still being heard from the wall time since its first chunk was
+generated, but the browser schedules the audio itself (and may wait for the avatar before each segment), so it can still be
+playing when the engine thinks it is over. The engine's own cut is kept for a reply it believes is still playing; for one it
+believes is over, the browser decides from its own playout and reports how much was heard ("cut"), and the history is made to
+match what the user actually heard.
 
     PORTOS_REALTIME_TOKEN=T python portos_sophon.py --app ~/.portos/sophon-mac/app --models ~/.portos/sophon-mac/models --port 5569
 """
-import argparse, asyncio, hmac, json, os, re, signal, sys, threading, time, uuid
+import argparse, asyncio, collections, hmac, json, math, os, re, signal, sys, threading, time, uuid
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--app", required=True, help="the Sophon Mac install's app folder (engine.py)")
@@ -47,6 +59,8 @@ import engine  # noqa: E402
 from engine import Brain, Session, SR  # noqa: E402
 
 OUT_RATE = 24000
+CUT_MARK = "……（被用户打断）"    # the engine's marker for a reply the user talked over ("interrupted by the user")
+RECENT_REPLIES = 16               # replies the browser may still report playout for
 TC_OPEN, TC_CLOSE = "<tool_call>", "</tool_call>"
 TOOL_RE = re.compile(r"<tool_call>\s*(.*?)\s*(?:</tool_call>|$)", re.S)
 
@@ -239,17 +253,94 @@ class ToolBrain(Brain):
 class ToolSession(Session):
     """Sophon's session (VAD, turn-taking, barge-in) plus the delegate hand-off and follow-up replies."""
 
-    def __init__(self, *args, on_delegate=None, **kw):
+    def __init__(self, brain, play, *args, on_delegate=None, send=None, **kw):
+        """play(audio, reply_id) sends reply audio, or an interrupt for reply_id when audio is None; send(obj) sends a message."""
         self.on_delegate = on_delegate
-        super().__init__(*args, **kw)
+        self.send = send or (lambda _msg: None)
+        self.gen_r = None                                     # the reply the worker thread is generating
+        self.announced = None                                 # the reply whose audio the browser is receiving
+        self.recent = collections.OrderedDict()               # reply_id -> reply, for the browser's playout reports
+
+        def tagged(audio):
+            if audio is None:                                 # Session._onset cuts self.reply
+                play(None, self._rid(self.reply)); return
+            r = self.gen_r
+            if r is not None and self.announced is not r:
+                self.announced = r; self.send({"type": "reply_audio", "reply_id": self._rid(r)})
+            play(audio, None)
+
+        super().__init__(brain, tagged, *args, **kw)
+
+    def _rid(self, r):
+        if r is None: return None
+        rid = r.get("rid")
+        if rid is None:
+            rid = r["rid"] = uuid.uuid4().hex[:12]; self.recent[rid] = r
+            while len(self.recent) > RECENT_REPLIES: self.recent.popitem(last=False)
+        return rid
+
+    def _begin(self, r):
+        with self.lock: self.gen_r = r; self._rid(r)
+
+    def ev(self, name, **kw):
+        if name == "reply_done" and self.gen_r is not None: kw["reply_id"] = self.gen_r.get("rid")
+        super().ev(name, **kw)
+
+    def _onset(self):
+        r = self.reply
+        heard = r is not None and not r["cancel"] and r.get("t_out") is not None
+        super()._onset()
+        if heard and not r["cancel"]:
+            # The engine judged this reply over from generation time alone; the browser knows whether it is still playing.
+            self.send({"type": "onset", "reply_id": self._rid(r)})
+
+    def browser_cut(self, rid, played_s):
+        """The browser stopped reply `rid` after `played_s` seconds of it had played: cancel it and make the history say what was
+        actually heard. This also corrects the engine's own cut, which estimates what was heard from generation time."""
+        try: played = float(played_s)
+        except (TypeError, ValueError): return False
+        if not math.isfinite(played): return False
+        played = max(0.0, played)
+        with self.lock:
+            r = self.recent.get(str(rid))
+            if r is None or (r["cancel"] and r.get("cut") is None): return False     # unknown, or merged into the next turn
+            frac = max(0.0, min(1.0, played / max(r["gen_s"], 1e-3)))
+            fresh = not r["cancel"]
+            r["cancel"] = True; r["cut"] = (played, frac)    # a reply still generating commits this cut when it finishes
+            if not r["done"]: return True
+            said = self._rewrite_heard(r, played, frac)
+            if said is None: return True
+            if self.reply is r: self.last_said = said
+            if fresh:
+                if not r.get("followup"): self.cut = {"t": time.time(), "r": r["resume"] if r.get("resume") is not None else r}
+                self.ev("barge_in", played_s=round(played, 2), said=said, source="browser")
+            return True
+
+    def _rewrite_heard(self, r, played, frac):
+        """Rewrite a finished reply's history entry to the part that was heard. Returns what was said, or None if there is no entry."""
+        e = r.get("entry")
+        if e is None or e.get("calls") or not any(h is e for h in self.history): return None   # identity: entries hold arrays
+        text = r.get("text") or ""
+        said = r.get("heard_prefix", "") + text[: int(len(text) * frac)]
+        a16 = r.get("a16") if r.get("resume") is None else None
+        a16 = a16[: int(played * SR)] if a16 is not None and played > 0.5 else None
+        if not said and a16 is None:
+            self.history = [h for h in self.history if h is not e]; r["entry"] = None
+        else:
+            e["a_text"] = said + CUT_MARK; e["a_audio"] = a16; e["akey"] = uuid.uuid4().hex     # new audio, new cache key
+        return said
 
     def _run_resume(self, r):
+        self._begin(r)
         # Follow-up replies ride the base worker's "resume" job, so they queue behind turn checks and replies on the one GPU thread.
         if r.get("followup"): return self._run_followup(r)
         if r["resume"].get("followup"): return            # a cut follow-up has no user audio to continue from
+        e = r["resume"].get("entry")
+        r["heard_prefix"] = (e.get("a_text") or "").replace(CUT_MARK, "") if e is not None else ""   # what the resumed reply continues
         return super()._run_resume(r)
 
     def _run_reply(self, r):
+        self._begin(r)
         super()._run_reply(r)
         calls = parse_calls(self.b.last_raw)
         if not calls and not r.get("cancel") and r.get("user") is not None and promises_action(cut_tool(self.b.last_raw, True)):
@@ -342,18 +433,20 @@ async def main():
             try: loop.call_soon_threadsafe(outq.put_nowait, item)
             except RuntimeError: pass
 
-        def play(x):
-            if x is None: send_soon(json.dumps({"type": "interrupt"})); return
+        def play(x, reply_id=None):
+            if x is None: send_soon(json.dumps({"type": "interrupt", "reply_id": reply_id})); return
             send_soon((np.clip(np.asarray(x, np.float32), -1, 1) * 32767).astype("<i2").tobytes())
 
         def log(line):
             try: ev = json.loads(line)
             except ValueError: return
             if "text" in ev: ev["text"] = cut_tool(str(ev["text"]), True).strip()
-            if ev.get("ev") == "reply_done": send_soon(json.dumps({"type": "reply", "text": ev["text"], "cancelled": ev.get("cancelled", False)}))
+            if ev.get("ev") == "reply_done":
+                send_soon(json.dumps({"type": "reply", "text": ev["text"], "cancelled": ev.get("cancelled", False), "reply_id": ev.get("reply_id")}))
             send_soon(json.dumps({"type": "event", **ev}))
 
-        sess = ToolSession(brain, play, log=log, on_delegate=lambda cid, task: send_soon(json.dumps({"type": "delegate", "call_id": cid, "task": task})))
+        sess = ToolSession(brain, play, log=log, send=lambda obj: send_soon(json.dumps(obj)),
+                           on_delegate=lambda cid, task: send_soon(json.dumps({"type": "delegate", "call_id": cid, "task": task})))
 
         async def sender():
             try:
@@ -372,6 +465,8 @@ async def main():
                     if o.get("type") == "tool_result": sess.tool_result(str(o.get("call_id", "")), str(o.get("output", "")))
                     elif o.get("type") == "interrupt":
                         with sess.lock: sess._onset()
+                        if o.get("reply_id"): sess.browser_cut(o["reply_id"], o.get("played_s"))
+                    elif o.get("type") == "cut" and o.get("reply_id"): sess.browser_cut(o["reply_id"], o.get("played_s"))
                     continue
                 x = np.frombuffer(m[: len(m) // 2 * 2], "<i2").astype(np.float32) / 32768.0
                 if a.rate != SR: x = engine.resample(x, a.rate, SR).astype(np.float32)

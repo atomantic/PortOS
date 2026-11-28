@@ -25,6 +25,7 @@ import {
   shellResizeSchema,
   shellStopSchema,
   standardizeStartSchema,
+  voiceRealtimeCutSchema,
 } from './socketValidation.js';
 
 const input = (schema, summary) => Object.freeze({
@@ -81,23 +82,35 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
     direction: 'server-to-client',
     summary: 'Streamed 24 kHz mono PCM16 reply audio chunk from the realtime voice sidecar.',
     payloadSchema: {
-      type: 'object', required: ['pcm', 'sampleRate'], additionalProperties: false,
-      properties: { pcm: { type: 'string', format: 'binary' }, sampleRate: { type: 'integer' } },
+      type: 'object', required: ['pcm', 'sampleRate', 'replyId'], additionalProperties: false,
+      properties: { pcm: { type: 'string', format: 'binary' }, sampleRate: { type: 'integer' }, replyId: { type: ['string', 'null'] } },
     },
   },
   'voice:realtime:interrupt': {
     direction: 'server-to-client',
-    summary: 'User barged in; client drops buffered realtime reply audio.',
-    payloadSchema: { type: 'object', additionalProperties: false, properties: {} },
+    summary: 'User barged in; client drops the buffered audio of that reply (all reply audio when replyId is null).',
+    payloadSchema: {
+      type: 'object', required: ['replyId'], additionalProperties: false,
+      properties: { replyId: { type: ['string', 'null'] } },
+    },
+  },
+  'voice:realtime:onset': {
+    direction: 'server-to-client',
+    summary: 'User started speaking after the realtime voice finished generating this reply; the client stops it if it is still playing.',
+    payloadSchema: {
+      type: 'object', required: ['replyId'], additionalProperties: false,
+      properties: { replyId: { type: 'string' } },
+    },
   },
   'voice:realtime:reply': {
     direction: 'server-to-client',
     summary: 'Spoken transcript of a completed or interrupted realtime voice reply.',
     payloadSchema: {
-      type: 'object', required: ['text', 'cancelled'], additionalProperties: false,
-      properties: { text: { type: 'string' }, cancelled: { type: 'boolean' } },
+      type: 'object', required: ['text', 'cancelled', 'replyId'], additionalProperties: false,
+      properties: { text: { type: 'string' }, cancelled: { type: 'boolean' }, replyId: { type: ['string', 'null'] } },
     },
   },
+  'voice:realtime:cut': input(voiceRealtimeCutSchema, 'The client stopped a realtime reply after playedS seconds of it played; the voice trims its history to what was heard.'),
   'voice:realtime:delegate': {
     direction: 'server-to-client',
     summary: 'Realtime voice handed a lookup or action to the PortOS Voice tool pipeline.',

@@ -41,7 +41,7 @@ vi.mock('../services/voice/pipeline.js', () => ({
   describeAttachedImage: vi.fn(async () => ({ text: 'synthetic description', model: 'example-vision' })),
 }));
 vi.mock('../services/voice/realtimeSession.js', () => ({
-  openRealtimeCall: vi.fn(async () => ({ pushAudio: vi.fn(), interrupt: vi.fn(), close: vi.fn() })),
+  openRealtimeCall: vi.fn(async () => ({ pushAudio: vi.fn(), interrupt: vi.fn(), cut: vi.fn(), close: vi.fn() })),
 }));
 // Partial-mock the call session so one test can make detachHost() reject the
 // way a failing teardown does. endCall()'s own hangup/journal/mind steps are
@@ -1378,6 +1378,7 @@ describe('realtime speech-to-speech voice call', () => {
   const makeSession = () => ({
     pushAudio: vi.fn(),
     interrupt: vi.fn(),
+    cut: vi.fn(),
     close: vi.fn(),
   });
   const makeLocalSocket = () => Object.assign(makeFakeSocket(), { data: { portosLocalConnection: true } });
@@ -1452,6 +1453,16 @@ describe('realtime speech-to-speech voice call', () => {
 
     socket.fire('voice:realtime:interrupt');
     expect(session.interrupt).toHaveBeenCalledTimes(1);
+    expect(session.interrupt).toHaveBeenLastCalledWith(undefined);
+    // The browser says which reply it stopped and how much of it played; malformed reports are not relayed.
+    socket.fire('voice:realtime:interrupt', { replyId: 'a1b2', playedS: 0.42 });
+    expect(session.interrupt).toHaveBeenLastCalledWith({ replyId: 'a1b2', playedS: 0.42 });
+    socket.fire('voice:realtime:interrupt', { replyId: '../x', playedS: 1 });
+    expect(session.interrupt).toHaveBeenLastCalledWith(undefined);
+    socket.fire('voice:realtime:cut', { replyId: 'a1b2', playedS: 1.5 });
+    socket.fire('voice:realtime:cut', { replyId: 'a1b2', playedS: -1 });
+    socket.fire('voice:realtime:cut', { replyId: 'a1b2' });
+    expect(session.cut.mock.calls).toEqual([[{ replyId: 'a1b2', playedS: 1.5 }]]);
 
     socket.fire('voice:realtime:stop');
     expect(session.close).toHaveBeenCalledTimes(1);

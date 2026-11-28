@@ -158,7 +158,7 @@ const HOST_CONTROL_SOCKET_EVENTS = new Set([
   'agent-processes:subscribe', 'processes:subscribe', 'command:subscribe', 'codex-account:subscribe', 'voice-readiness:subscribe',
   'voice:call:attach', 'voice:call:audio', 'voice:call:hangup', 'voice:capture:start', 'voice:dictation:set',
   'voice:output:available', 'voice:output:claim',
-  'voice:realtime:start', 'voice:realtime:audio', 'voice:realtime:interrupt',
+  'voice:realtime:start', 'voice:realtime:audio', 'voice:realtime:interrupt', 'voice:realtime:cut',
 ]);
 const HOST_CONTROL_SOCKET_PREFIXES = ['shell:', 'iterm:', 'generated-preview:'];
 // Closing only stops work, so a refused socket can always tear down its own preview.
