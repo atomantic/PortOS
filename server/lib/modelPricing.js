@@ -121,11 +121,7 @@ export function serviceTierExtra(rateModel, tier) {
   return 0;
 }
 
-/** Ledger names for the Fast and Ultrafast subsets. Absent means zero. */
-export const SPEED_LEDGER_FIELDS = Object.freeze([
-  'fastTokensIn', 'fastTokensOut', 'fastCacheReadTokens', 'fastCacheWriteTokens',
-  'ultrafastTokensIn', 'ultrafastTokensOut', 'ultrafastCacheReadTokens', 'ultrafastCacheWriteTokens',
-]);
+export { SPEED_LEDGER_FIELDS } from './usageFields.js';
 
 /** Docs' recommended Imagine models, and what the Grok CLI bills when it names none. */
 export const GROK_IMAGINE_IMAGE_MODEL = 'grok-imagine-image-2.0';

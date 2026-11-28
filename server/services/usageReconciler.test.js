@@ -2100,4 +2100,33 @@ describe('Codex source inventory accounting', () => {
     expect(snapshotUsageClaims().codexHighWater).toEqual([]);
     expect(await readMeasuredUsage(args)).toMatchObject({ tokensOut: 120 });
   });
+
+  it('reportedRunUsage preserves base, long-context, and speed token tiers while excluding messages', async () => {
+    const { reportedRunUsage } = await import('./usageReconciler.js');
+    expect(reportedRunUsage({
+      reportedUsage: {
+        messages: 99,
+        tokensIn: 1000,
+        tokensOut: 250,
+        cacheReadTokens: 400,
+        cacheWriteTokens: 50,
+        longTokensIn: 1000,
+        fastTokensIn: 600,
+        fastTokensOut: 150,
+        ultrafastTokensIn: 200,
+        ultrafastCacheReadTokens: 100,
+      },
+    })).toEqual({
+      tokensIn: 1000,
+      tokensOut: 250,
+      cacheReadTokens: 400,
+      cacheWriteTokens: 50,
+      longTokensIn: 1000,
+      fastTokensIn: 600,
+      fastTokensOut: 150,
+      ultrafastTokensIn: 200,
+      ultrafastCacheReadTokens: 100,
+      source: 'measured',
+    });
+  });
 });

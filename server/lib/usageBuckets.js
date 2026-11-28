@@ -117,14 +117,7 @@ export const adjustCounts = (bucket, counts, direction) => {
   }
 };
 
-export const rebuildDayTotals = (day) => {
-  const providers = Object.values(day.byProvider || {});
-  day.sessions = providers.reduce((sum, provider) => sum + (provider.sessions || 0), 0);
-  day.messages = providers.reduce((sum, provider) => sum + (provider.messages || 0), 0);
-  day.tokensIn = providers.reduce((sum, provider) => sum + (provider.tokensIn || 0), 0);
-  day.tokensOut = providers.reduce((sum, provider) => sum + (provider.tokensOut || 0), 0);
-  day.tokens = day.tokensOut;
-};
+export { rebuildDayTotals } from './usageFields.js';
 
 export const cacheActivityDay = (usageData, day) => {
   if (!DAY_KEY_RE.test(day)) return;

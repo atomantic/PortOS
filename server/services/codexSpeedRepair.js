@@ -18,24 +18,13 @@
 import { homedir } from 'node:os';
 import { resolve } from 'node:path';
 import { PATHS } from '../lib/fileUtils.js';
-import { SPEED_LEDGER_FIELDS } from '../lib/modelPricing.js';
+import { mergeCodexBoundary, SPEED_LEDGER_FIELDS } from '../lib/usageFields.js';
 import { familyForProvider } from '../lib/provider/providerFamilies.js';
 import { parseCodexRollout } from '../lib/provider/providerTranscriptUsage.js';
 import { codexIdentityHash, codexSessionClaimKey, readCodexAccountingSources } from './codexUsageSources.js';
 import { addDatedUsageBatch, backupUsageRepairLedger, loadUsage } from './usage.js';
 
-const TOKEN_FIELDS = ['messages', 'tokensIn', 'tokensOut', 'cacheReadTokens', 'cacheWriteTokens'];
 const INDEXING_PASSES = 20;
-
-function mergeBoundary(existing, value) {
-  const merged = {};
-  for (const field of TOKEN_FIELDS) merged[field] = Math.max(existing?.[field] || 0, value?.[field] || 0);
-  for (const field of SPEED_LEDGER_FIELDS) {
-    const amount = Math.max(existing?.[field] || 0, value?.[field] || 0);
-    if (amount) merged[field] = amount;
-  }
-  return merged;
-}
 
 /** CLI, then TUI, then any Codex family record, else the id `codex`. */
 function codexUsageProviderIdFromList(providers) {
@@ -54,7 +43,7 @@ function highWaterMap(reconciledRuns) {
     if (!Array.isArray(marker?.codexHighWater)) continue;
     for (const entry of marker.codexHighWater) {
       if (!Array.isArray(entry) || typeof entry[0] !== 'string' || !entry[1] || typeof entry[1] !== 'object') continue;
-      merged.set(entry[0], mergeBoundary(merged.get(entry[0]), entry[1]));
+      merged.set(entry[0], mergeCodexBoundary(merged.get(entry[0]), entry[1]));
     }
   }
   return merged;
@@ -65,7 +54,7 @@ function boundaryForSession(session, highWater) {
   for (const [key, counts] of highWater) {
     const legacyId = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl(?:\.zst)?$/i.exec(key)?.[1];
     if (session.paths?.includes(key) || (legacyId && codexIdentityHash(legacyId) === session.id)) {
-      billed = mergeBoundary(billed, counts);
+      billed = mergeCodexBoundary(billed, counts);
     }
   }
   return billed;
