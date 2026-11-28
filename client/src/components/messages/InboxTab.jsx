@@ -302,10 +302,11 @@ export default function InboxTab({ accounts }) {
   }, [messageId, resolvedMessageAccount, closeMessage, detailAttempt]);
 
   // A legacy URL may omit its account; wait for the list to resolve it before
-  // deciding that selection is stale.
+  // deciding that selection is stale. Keep the selection intact if the list read
+  // itself failed so the user can retry without losing their deep link.
   useEffect(() => {
-    if (messageId && !resolvedMessageAccount && !loading) closeMessage();
-  }, [messageId, resolvedMessageAccount, loading, closeMessage]);
+    if (messageId && !resolvedMessageAccount && !loading && !loadFailed) closeMessage();
+  }, [messageId, resolvedMessageAccount, loading, loadFailed, closeMessage]);
 
   const handleSync = async (mode) => {
     if (syncTargets.length === 0) return toast.error('No enabled accounts to sync');

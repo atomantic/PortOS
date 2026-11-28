@@ -1,6 +1,6 @@
 import { openExternalUrl } from '../../utils/openExternalUrl.js';
 import { Link } from 'react-router';
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useSearchParams } from 'react-router';
 import { Plus, Trash2, RefreshCw, Mail, Globe, MessageSquare, Save, ExternalLink, User, Key, Monitor, Wand2 } from 'lucide-react';
 import toast from '../ui/Toast';
@@ -60,8 +60,18 @@ export default function ConfigTab({ accounts, setAccounts, accountsUnavailable =
   const [config, setConfig] = useState(null);
   const [configLoading, setConfigLoading] = useState(true);
   const [configDirty, setConfigDirty] = useState(false);
+  const [savingConfig, setSavingConfig] = useState(false);
+  const savingConfigRef = useRef(false);
+  const configVersionRef = useRef(0);
+  const togglingAccountsRef = useRef(new Set());
+  const [togglingAccounts, setTogglingAccounts] = useState(() => new Set());
   // Defaults shown after a failed read are not the saved config; Save stays shut.
   const [configLoadError, setConfigLoadError] = useState(false);
+
+  const markConfigDirty = () => {
+    configVersionRef.current += 1;
+    setConfigDirty(true);
+  };
 
   // Separate provider/model selectors for triage and reply
   const triage = useProviderModels();
@@ -186,7 +196,10 @@ export default function ConfigTab({ accounts, setAccounts, accountsUnavailable =
   };
 
   const handleSaveConfig = async () => {
-    if (!config || configLoadError) return;
+    if (!config || configLoadError || savingConfigRef.current) return;
+    const saveVersion = configVersionRef.current;
+    savingConfigRef.current = true;
+    setSavingConfig(true);
     const patch = {
       messages: {
         triage: {
@@ -203,15 +216,20 @@ export default function ConfigTab({ accounts, setAccounts, accountsUnavailable =
       }
     };
     let failure = null;
-    const result = await updateSettings(patch, { silent: true }).catch(err => { failure = err; return null; });
+    const result = await updateSettings(patch, { silent: true })
+      .catch(err => { failure = err; return null; })
+      .finally(() => {
+        savingConfigRef.current = false;
+        setSavingConfig(false);
+      });
     if (!result) return toast.error(failureMessage('Could not save message config', failure));
     toast.success('Message config saved');
-    setConfigDirty(false);
+    if (configVersionRef.current === saveVersion) setConfigDirty(false);
   };
 
   const updateTemplate = (key, value) => {
     setConfig(prev => ({ ...prev, [key]: value }));
-    setConfigDirty(true);
+    markConfigDirty();
   };
 
   // Account CRUD
@@ -238,23 +256,42 @@ export default function ConfigTab({ accounts, setAccounts, accountsUnavailable =
   };
 
   const handleToggle = async (account) => {
+    const key = `${account.id}:enabled`;
+    if (togglingAccountsRef.current.has(key)) return;
+    togglingAccountsRef.current.add(key);
+    setTogglingAccounts(new Set(togglingAccountsRef.current));
+    const next = !account.enabled;
     let failure = null;
-    const result = await updateMessageAccount(account.id, { enabled: !account.enabled }, { silent: true }).catch(err => { failure = err; return null; });
+    const result = await updateMessageAccount(account.id, { enabled: next }, { silent: true })
+      .catch(err => { failure = err; return null; })
+      .finally(() => {
+        togglingAccountsRef.current.delete(key);
+        setTogglingAccounts(new Set(togglingAccountsRef.current));
+      });
     if (!result) return toast.error(failureMessage('Could not update the account', failure));
-    toast.success(account.enabled ? 'Account disabled' : 'Account enabled');
-    setAccounts(prev => prev.map(a => a.id === account.id ? { ...a, enabled: !a.enabled } : a));
+    toast.success(next ? 'Account enabled' : 'Account disabled');
+    setAccounts(prev => prev.map(a => a.id === account.id ? { ...a, enabled: next } : a));
   };
 
   // Per-account reply detection: ingest sent mail so Tribe-outreach won't nudge an
   // already-replied thread (#2796). Default-on for Gmail (absent === on).
   const handleToggleIngestSent = async (account) => {
+    const key = `${account.id}:ingestSent`;
+    if (togglingAccountsRef.current.has(key)) return;
+    togglingAccountsRef.current.add(key);
+    setTogglingAccounts(new Set(togglingAccountsRef.current));
     const next = account.syncConfig?.ingestSent === false; // flipping to enabled
     let failure = null;
     const result = await updateMessageAccount(
       account.id,
       { syncConfig: { ...account.syncConfig, ingestSent: next } },
       { silent: true }
-    ).catch(err => { failure = err; return null; });
+    )
+      .catch(err => { failure = err; return null; })
+      .finally(() => {
+        togglingAccountsRef.current.delete(key);
+        setTogglingAccounts(new Set(togglingAccountsRef.current));
+      });
     if (!result) return toast.error(failureMessage('Could not update the account', failure));
     toast.success(next ? 'Reply detection enabled' : 'Reply detection disabled');
     setAccounts(prev => prev.map(a => a.id === account.id
@@ -291,8 +328,8 @@ export default function ConfigTab({ accounts, setAccounts, accountsUnavailable =
           selectedProviderId={hook.selectedProviderId}
           selectedModel={hook.selectedModel}
           availableModels={hook.availableModels}
-          onProviderChange={(id) => { hook.setSelectedProviderId(id); setConfigDirty(true); }}
-          onModelChange={(m) => { hook.setSelectedModel(m); setConfigDirty(true); }}
+          onProviderChange={(id) => { hook.setSelectedProviderId(id); markConfigDirty(); }}
+          onModelChange={(m) => { hook.setSelectedModel(m); markConfigDirty(); }}
         />
       )}
     </div>
@@ -551,7 +588,8 @@ export default function ConfigTab({ accounts, setAccounts, accountsUnavailable =
                     {account.type === 'gmail' && (
                       <button
                         onClick={() => handleToggleIngestSent(account)}
-                        className={`px-2 py-1 rounded text-xs transition-colors ${
+                        disabled={togglingAccounts.has(`${account.id}:ingestSent`)}
+                        className={`px-2 py-1 rounded text-xs transition-colors disabled:opacity-50 ${
                           account.syncConfig?.ingestSent !== false
                             ? 'bg-port-accent/20 text-port-accent'
                             : 'bg-gray-700 text-gray-400'
@@ -563,7 +601,8 @@ export default function ConfigTab({ accounts, setAccounts, accountsUnavailable =
                     )}
                     <button
                       onClick={() => handleToggle(account)}
-                      className={`px-2 py-1 rounded text-xs transition-colors ${
+                      disabled={togglingAccounts.has(`${account.id}:enabled`)}
+                      className={`px-2 py-1 rounded text-xs transition-colors disabled:opacity-50 ${
                         isPendingAuthorization
                           ? 'bg-port-warning/20 text-port-warning'
                           : account.enabled
@@ -659,7 +698,7 @@ export default function ConfigTab({ accounts, setAccounts, accountsUnavailable =
             <button
               type="button"
               disabled={!config}
-              onClick={() => { setConfig(prev => (prev ? { ...prev, voiceMode: !prev.voiceMode } : prev)); setConfigDirty(true); }}
+              onClick={() => { setConfig(prev => (prev ? { ...prev, voiceMode: !prev.voiceMode } : prev)); markConfigDirty(); }}
               className={`px-3 py-1.5 rounded text-xs font-medium transition-colors shrink-0 self-start sm:self-auto disabled:opacity-50 ${
                 config?.voiceMode
                   ? 'bg-port-accent-2/20 text-port-accent-2'
@@ -700,10 +739,10 @@ export default function ConfigTab({ accounts, setAccounts, accountsUnavailable =
             <div className="flex items-center gap-3">
               <button
                 onClick={handleSaveConfig}
-                disabled={!configDirty}
+                disabled={!configDirty || savingConfig}
                 className="flex items-center gap-2 px-4 py-2 bg-port-accent text-white rounded-lg text-sm hover:bg-port-accent/80 transition-colors disabled:opacity-50"
               >
-                <Save size={14} /> Save Config
+                <Save size={14} /> {savingConfig ? 'Saving...' : 'Save Config'}
               </button>
               {configDirty && <span className="text-xs text-port-warning">Unsaved changes</span>}
             </div>

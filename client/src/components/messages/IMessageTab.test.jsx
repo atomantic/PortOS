@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
 
 const api = vi.hoisted(() => ({
+  addImessageBlocklist: vi.fn(),
   checkImessageSetup: vi.fn(),
   getImessageBlocklist: vi.fn(),
   getImessageConversationEvents: vi.fn(),
@@ -10,18 +11,21 @@ const api = vi.hoisted(() => ({
   getImessageStats: vi.fn(),
   getImessageStatus: vi.fn(),
   getSettings: vi.fn(),
+  purgeImessageConversation: vi.fn(),
   syncImessage: vi.fn(),
   updateSettings: vi.fn(),
 }));
 const toast = vi.hoisted(() => Object.assign(vi.fn(), { error: vi.fn(), success: vi.fn() }));
 
 vi.mock('../../services/apiMessages.js', () => ({
+  addImessageBlocklist: api.addImessageBlocklist,
   checkImessageSetup: api.checkImessageSetup,
   getImessageBlocklist: api.getImessageBlocklist,
   getImessageConversationEvents: api.getImessageConversationEvents,
   getImessageConversations: api.getImessageConversations,
   getImessageStats: api.getImessageStats,
   getImessageStatus: api.getImessageStatus,
+  purgeImessageConversation: api.purgeImessageConversation,
   syncImessage: api.syncImessage,
 }));
 vi.mock('../../services/apiSystem.js', () => ({ getSettings: api.getSettings, updateSettings: api.updateSettings }));
@@ -191,5 +195,57 @@ describe('IMessageTab — timeline link day', () => {
 
   it('uses the same day in UTC', async () => {
     expect(await linkFor('UTC')).toBe('/timeline/2026-01-02');
+  });
+});
+
+describe('IMessageTab — conversation switch during destructive confirm/purge', () => {
+  it('clears an armed purge confirmation when switching to another conversation', async () => {
+    api.getImessageConversations.mockResolvedValue({
+      conversations: [
+        { chatKey: 'chat-a', title: 'Chat A', eventCount: 2 },
+        { chatKey: 'chat-b', title: 'Chat B', eventCount: 3 },
+      ],
+    });
+    renderTab('/messages/imessage/chat-a');
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Purge from PortOS' }));
+    expect(screen.getByText(/Purge all PortOS events for this conversation/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: /Chat B/ }));
+
+    expect(await screen.findByRole('heading', { name: 'Chat B' })).toBeTruthy();
+    expect(screen.queryByText(/Purge all PortOS events for this conversation/)).toBeNull();
+  });
+
+  it('does not leave the newly selected conversation when an earlier purge resolves', async () => {
+    let resolvePurge;
+    api.purgeImessageConversation.mockReturnValueOnce(new Promise((resolve) => { resolvePurge = resolve; }));
+    api.getImessageConversations.mockResolvedValue({
+      conversations: [
+        { chatKey: 'chat-a', title: 'Chat A', eventCount: 2 },
+        { chatKey: 'chat-b', title: 'Chat B', eventCount: 3 },
+      ],
+    });
+    api.getImessageConversationEvents.mockImplementation(async (chatKey) => ({
+      events: [{ id: `ev-${chatKey}`, happenedAt: '2026-01-02T05:00:00Z', kind: 'message.received', summary: `Event for ${chatKey}` }],
+      identity: null,
+    }));
+
+    renderTab('/messages/imessage/chat-a');
+    expect(await screen.findByText('Event for chat-a')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Purge from PortOS' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Purge from PortOS' }));
+    expect(api.purgeImessageConversation).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole('button', { name: /Chat B/ }));
+    expect(await screen.findByText('Event for chat-b')).toBeTruthy();
+
+    await act(async () => {
+      resolvePurge({ deleted: 2 });
+    });
+    expect(toast.success).toHaveBeenCalledWith('Removed 2 events from PortOS');
+    expect(screen.getByRole('heading', { name: 'Chat B' })).toBeTruthy();
+    expect(screen.getByText('Event for chat-b')).toBeTruthy();
   });
 });

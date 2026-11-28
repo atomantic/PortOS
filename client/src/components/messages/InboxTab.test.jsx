@@ -599,6 +599,30 @@ describe('InboxTab deep-linked message read failures', () => {
     await waitFor(() => expect(screen.getByTestId('location')).not.toHaveTextContent('message='));
     expect(screen.queryByText('Could not load this message')).not.toBeInTheDocument();
   });
+
+  it('keeps an accountless message deep link when the inbox list read fails', async () => {
+    const summaryRow = {
+      id: message.id,
+      accountId: message.accountId,
+      subject: message.subject,
+      preview: 'Summary preview',
+      from: message.from,
+      date: message.date,
+      source: message.source,
+    };
+    api.getMessageInbox
+      .mockRejectedValueOnce(new Error('Inbox unavailable'))
+      .mockResolvedValue({ messages: [summaryRow], total: 1 });
+    api.getMessageDetail.mockResolvedValue(message);
+
+    renderInboxWithLocation([neverSyncedAccount], { route: `/messages/inbox?message=${message.id}` });
+
+    expect(await screen.findByText('Could not load messages.')).toBeInTheDocument();
+    expect(screen.getByTestId('location')).toHaveTextContent(`message=${message.id}`);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('Message body')).toBeInTheDocument();
+  });
 });
 
 describe('fetchFullToastMessage', () => {

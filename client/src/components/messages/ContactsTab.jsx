@@ -99,8 +99,10 @@ export default function ContactsTab() {
     if (!res) toast.error(failureMessage('Could not load Tribe suggestions', failure));
   };
 
+  const suggestionKey = (s) => s.contactId || s.handle || s.displayName;
+
   const handleImport = async (s) => {
-    const key = s.contactId || s.handle || s.displayName;
+    const key = suggestionKey(s);
     setImportingId(key);
     let failure = null;
     const result = await importContactToTribe({
@@ -117,7 +119,7 @@ export default function ContactsTab() {
       return;
     }
     toast.success(result.created ? `Added ${result.person?.name} to Tribe` : `${result.person?.name} already in Tribe`);
-    setSuggestions((prev) => prev.filter((x) => (x.contactId || x.handle) !== (s.contactId || s.handle)));
+    setSuggestions((prev) => prev.filter((x) => suggestionKey(x) !== key));
   };
 
   if (loading && !status && !statusError) return <BrailleSpinner />;
@@ -275,7 +277,7 @@ export default function ContactsTab() {
         {suggestions.length > 0 && (
           <ul className="divide-y divide-port-border rounded border border-port-border max-h-80 overflow-y-auto">
             {suggestions.map((s) => {
-              const key = s.contactId || s.handle || s.displayName;
+              const key = suggestionKey(s);
               return (
                 <li key={key} className="flex items-center justify-between gap-2 px-3 py-2 text-sm">
                   <div className="min-w-0">
