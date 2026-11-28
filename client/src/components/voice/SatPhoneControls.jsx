@@ -242,8 +242,8 @@ export function SatPhoneActionKeys({
             data-active={visionEnabled ? 'true' : 'false'}
             aria-label={visionEnabled ? 'Disable screen vision for voice' : 'Enable screen vision for voice'}
             title={visionEnabled
-              ? 'Screen vision ON — assistant can inspect your shared screen. Click to stop.'
-              : 'Share screen so the voice assistant can describe what you see'}
+              ? 'Vision ON — the assistant sees your shared tab with each message. Click to stop.'
+              : 'Share a tab so the assistant sees it with each message'}
             className={keyBase}
           >
             {visionEnabled ? <Monitor size={12} aria-hidden="true" /> : <MonitorOff size={12} aria-hidden="true" />}

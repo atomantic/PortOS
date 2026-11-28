@@ -13,8 +13,8 @@ vi.mock('../services/voice/pipeline.js', () => ({ runTurn: vi.fn(async ({ emit, 
   if (text === 'capture') {
     const screenshot = new Promise((resolve) => state.screenshotWaiters.set('example-capture', resolve));
     emit('voice:screenshot:request', { requestId: 'example-capture' });
-    const dataUrl = await screenshot;
-    emit('test:screenshot', { length: dataUrl?.length ?? null });
+    const frame = await screenshot;
+    emit('test:screenshot', { length: frame?.dataUrl?.length ?? null });
   }
   emit('voice:idle', {});
   return {};
