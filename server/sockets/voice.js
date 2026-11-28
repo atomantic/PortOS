@@ -228,11 +228,6 @@ export const registerVoiceHandlers = (socket) => {
     }
   };
 
-  // Gate voice:turn / voice:text on the Settings voice.enabled toggle so the
-  // disabled state isn't merely "don't provision PM2" — disabled clients can't
-  // run the LLM/TTS pipeline either. Small race (config change mid-turn) is
-  // acceptable: the per-turn check runs at event dispatch, not inside the
-  // streaming loop.
   // A realtime call owns the conversation: the realtime voice hears the mic
   // and speaks. A pipeline turn arriving meanwhile (the widget's hands-free
   // listener, a typed line) would answer separately in the Piper voice as a
@@ -244,6 +239,11 @@ export const registerVoiceHandlers = (socket) => {
     return true;
   };
 
+  // Gate voice:turn / voice:text on the Settings voice.enabled toggle so the
+  // disabled state isn't merely "don't provision PM2" — disabled clients can't
+  // run the LLM/TTS pipeline either. Small race (config change mid-turn) is
+  // acceptable: the per-turn check runs at event dispatch, not inside the
+  // streaming loop.
   const ensureEnabled = async (stage) => {
     const cfg = await getVoiceConfig();
     if (cfg.enabled) return true;
