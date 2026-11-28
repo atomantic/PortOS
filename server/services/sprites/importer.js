@@ -24,7 +24,7 @@
 
 import { join, basename, dirname } from 'path';
 import { readdir, realpath } from 'fs/promises';
-import { PATHS, ensureDir, sha256File, atomicWrite, pathExists, readJSONFile, expandHome, copyFileGuarded, rmGuarded } from '../../lib/fileUtils.js';
+import { PATHS, ensureDir, sha256File, atomicWrite, pathExists, readJSONFile, readJSONFileStrict, expandHome, copyFileGuarded, rmGuarded } from '../../lib/fileUtils.js';
 import { isWithinRoot } from '../../lib/workspaceRoots.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
@@ -436,8 +436,15 @@ async function importCharacter({ sourceRoot, characterId, spec, specPath, select
   // — a same-id import would copy the source's reference tree straight over
   // the frozen identity root, bypassing every lock check. Refuse the whole
   // character; the user can delete the record or import under another id.
-  const destManifest = await readJSONFile(join(destDir, 'reference', `${characterId}-reference-set-v1.json`), null);
-  if (destManifest?.mainReference?.locked) {
+  const missing = Symbol('missing destination manifest');
+  const { ok, value: destManifest } = await readJSONFileStrict(
+    join(destDir, 'reference', `${characterId}-reference-set-v1.json`), missing, { allowArray: false },
+  );
+  if (!ok || (destManifest !== missing && (!destManifest || typeof destManifest !== 'object'))) {
+    result.errors.push('destination reference manifest is unreadable or corrupt — refusing to overwrite reference artifacts');
+    return result;
+  }
+  if (destManifest?.mainReference?.locked || destManifest?.turnaround?.locked) {
     result.errors.push('destination has a locked reference set — refusing to overwrite immutable artifacts (delete the record or import under a different id)');
     return result;
   }
@@ -632,10 +639,11 @@ export async function importFromSource({ sourceRoot, characters, includeProps = 
       }
       allSpecCharacterIds.add(characterId);
       if (wanted && !wanted.has(characterId)) continue;
-      characterIds.add(characterId);
-      results.push(await withBackupAssetPublication(
+      const result = await withBackupAssetPublication(
         () => importCharacter({ sourceRoot, characterId, spec, specPath, selection }),
-      ));
+      );
+      results.push(result);
+      if (result.files > 0) characterIds.add(characterId);
     }
   }
 
