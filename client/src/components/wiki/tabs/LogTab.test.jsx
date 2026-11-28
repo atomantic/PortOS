@@ -35,4 +35,14 @@ describe('LogTab', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     expect(await screen.findByText('Recovered entry')).toBeInTheDocument();
   });
+
+  it('uses an h2 heading and bordered 44px Refresh button', async () => {
+    getNote.mockReset().mockResolvedValue(logNote('Entry one'));
+    render(<LogTab vaultId="vault-a" allNotes={LOG_NOTES} />);
+    expect(await screen.findByRole('heading', { level: 2, name: 'Activity Log' })).toBeInTheDocument();
+    const refresh = screen.getByRole('button', { name: 'Refresh' });
+    expect(refresh).toHaveAttribute('type', 'button');
+    expect(refresh.className).toContain('min-h-[44px]');
+    expect(refresh.className).toContain('border-port-border');
+  });
 });

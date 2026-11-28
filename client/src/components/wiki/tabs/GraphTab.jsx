@@ -4,6 +4,7 @@ import { getNotesVaultGraph } from '../../../services/apiNotes.js';
 import { RefreshCw, Network, ZoomIn, ZoomOut } from 'lucide-react';
 import { WIKI_CATEGORIES } from '../constants.jsx';
 import BrailleSpinner from '../../BrailleSpinner';
+import ListLoadError from '../../ui/ListLoadError';
 import OfflineNotesNotice from '../../OfflineNotesNotice.jsx';
 import useChartColors from '../../../hooks/useChartColors.js';
 import useLatestRequest from '../../../hooks/useLatestRequest.js';
@@ -25,6 +26,7 @@ export default function GraphTab({ vaultId }) {
   const canvasRef = useRef(null);
   const [graphData, setGraphData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [viewport, setViewport] = useState(null);
   const [zoom, setZoom] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
@@ -39,9 +41,12 @@ export default function GraphTab({ vaultId }) {
   const loadGraph = useCallback(async () => {
     const isCurrent = beginLoad();
     setLoading(true);
-    const data = await getNotesVaultGraph(vaultId).catch(() => null);
+    setLoadFailed(false);
+    const data = await getNotesVaultGraph(vaultId, { silent: true }).catch(() => null);
     if (!isCurrent()) return;
-    if (data && !data.error) {
+    const ok = Boolean(data) && !data.error;
+    setLoadFailed(!ok);
+    if (ok) {
       setGraphData(data);
       layoutNodes(data);
     }
@@ -302,15 +307,23 @@ export default function GraphTab({ vaultId }) {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-64">
+      <div className="w-full flex-1 flex items-center justify-center p-4">
         <BrailleSpinner text="Loading" />
+      </div>
+    );
+  }
+
+  if (loadFailed && !graphData) {
+    return (
+      <div className="w-full p-4">
+        <ListLoadError what="the knowledge graph" onRetry={loadGraph} />
       </div>
     );
   }
 
   if (!hasGraph) {
     return (
-      <div className="flex flex-col items-center justify-center h-64 text-gray-500">
+      <div className="w-full flex-1 flex flex-col items-center justify-center p-4 text-gray-500">
         <Network size={32} className="mb-2 opacity-30" />
         <p className="text-sm">No pages to graph yet</p>
       </div>
@@ -318,12 +331,13 @@ export default function GraphTab({ vaultId }) {
   }
 
   return (
-    <div className="relative -m-4" style={{ height: 'calc(100dvh - 220px)' }}>
+    <div className="relative w-full flex-1 min-h-0 overflow-hidden">
       {/* Controls */}
       <div className="absolute inset-x-4 top-4 z-10 flex flex-col items-end gap-2 pointer-events-none">
         <div className="flex flex-wrap items-center justify-end gap-2 max-w-full pointer-events-auto">
           <span className="text-xs text-gray-500">{graphData.totalNodes} nodes, {graphData.totalEdges} edges</span>
           <button
+            type="button"
             onClick={() => setZoom(z => Math.min(z + 0.2, 3))}
             aria-label="Zoom in"
             className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 rounded bg-port-card border border-port-border text-gray-400 hover:text-white"
@@ -331,6 +345,7 @@ export default function GraphTab({ vaultId }) {
             <ZoomIn size={14} />
           </button>
           <button
+            type="button"
             onClick={() => setZoom(z => Math.max(z - 0.2, 0.3))}
             aria-label="Zoom out"
             className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 rounded bg-port-card border border-port-border text-gray-400 hover:text-white"
@@ -338,20 +353,29 @@ export default function GraphTab({ vaultId }) {
             <ZoomOut size={14} />
           </button>
           <button
+            type="button"
             onClick={() => { setZoom(1); setOffset({ x: 0, y: 0 }); }}
             className="min-h-[44px] px-2 py-1 rounded bg-port-card border border-port-border text-gray-400 hover:text-white text-xs"
           >
             Reset
           </button>
-          <button onClick={loadGraph} aria-label="Refresh" className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 rounded bg-port-card border border-port-border text-gray-400 hover:text-white">
+          <button
+            type="button"
+            onClick={loadGraph}
+            aria-label="Refresh"
+            className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 rounded bg-port-card border border-port-border text-gray-400 hover:text-white"
+          >
             <RefreshCw size={14} />
           </button>
         </div>
         <OfflineNotesNotice count={graphData.skippedUnavailable} className="w-full max-w-md pointer-events-auto" />
+        {loadFailed && (
+          <ListLoadError what="the knowledge graph" onRetry={loadGraph} className="w-full max-w-md pointer-events-auto" />
+        )}
       </div>
 
       {/* Legend */}
-      <div className="absolute bottom-4 left-4 z-10 bg-port-card/90 border border-port-border rounded-lg p-3 flex flex-wrap gap-3 text-xs">
+      <div className="absolute bottom-4 left-4 right-4 sm:right-auto z-10 bg-port-card/90 border border-port-border rounded-lg p-3 flex flex-wrap gap-3 text-xs">
         {WIKI_CATEGORIES.map(cat => (
           <span key={cat.key} className="flex items-center gap-1">
             <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: cat.hex }} />

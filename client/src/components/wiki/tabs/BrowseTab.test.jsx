@@ -2,7 +2,7 @@ import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import { MemoryRouter, useLocation } from 'react-router';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import BrowseTab from './BrowseTab';
-import { getNote, updateNote } from '../../../services/apiNotes.js';
+import { getNote, getNotesVaultTags, updateNote } from '../../../services/apiNotes.js';
 
 vi.mock('../../../services/apiNotes.js');
 
@@ -96,6 +96,51 @@ describe('BrowseTab responsive list/detail', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     expect(await screen.findByRole('heading', { name: 'Example Source' })).toBeInTheDocument();
     expect(getNote).toHaveBeenCalledTimes(2);
+  });
+
+  it('shows empty and retryable error states for the Tags toggle with bordered button affordance', async () => {
+    getNotesVaultTags
+      .mockRejectedValueOnce(new Error('disk error'))
+      .mockResolvedValueOnce({ tags: [], skippedUnavailable: 0 });
+    renderTab();
+
+    const rawToggle = screen.getByRole('button', { name: 'Raw (0)' });
+    expect(rawToggle.className).toContain('border-port-border');
+
+    const tagsBtn = screen.getByRole('button', { name: 'Tags' });
+    expect(tagsBtn).toHaveAttribute('aria-pressed', 'false');
+    expect(tagsBtn.className).toContain('border-port-border');
+
+    fireEvent.click(tagsBtn);
+    expect(tagsBtn).toHaveAttribute('aria-pressed', 'true');
+    expect(await screen.findByText('Could not load tags')).toBeInTheDocument();
+    expect(getNotesVaultTags).toHaveBeenCalledWith('v1', { silent: true });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('No tags found')).toBeInTheDocument();
+
+    // Closing the tags panel does not trigger another fetch.
+    fireEvent.click(tagsBtn);
+    expect(tagsBtn).toHaveAttribute('aria-pressed', 'false');
+    expect(getNotesVaultTags).toHaveBeenCalledTimes(2);
+  });
+
+  it('drops a stale tags response when the panel is closed and reopened', async () => {
+    let rejectFirst;
+    getNotesVaultTags
+      .mockImplementationOnce(() => new Promise((_, reject) => { rejectFirst = reject; }))
+      .mockResolvedValueOnce({ tags: [{ tag: 'fresh', count: 3 }], skippedUnavailable: 0 });
+    renderTab();
+
+    const tagsBtn = screen.getByRole('button', { name: 'Tags' });
+    fireEvent.click(tagsBtn); // open (request 1 pending)
+    fireEvent.click(tagsBtn); // close
+    fireEvent.click(tagsBtn); // reopen (request 2 resolves)
+    expect(await screen.findByText('#fresh')).toBeInTheDocument();
+
+    await act(async () => { rejectFirst(new Error('stale failure')); });
+    expect(screen.getByText('#fresh')).toBeInTheDocument();
+    expect(screen.queryByText('Could not load tags')).toBeNull();
   });
 });
 
