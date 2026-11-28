@@ -620,6 +620,8 @@ const executeTurnLlmLoop = async ({
         onTimeout: () => speaker.cancel('timeout'),
         tools: toolSpecs,
         tag: turnId,
+        // The call UI shows "Loading model" instead of "Thinking" until tokens arrive.
+        onModelLoading: ({ model }) => emit('voice:llm:loading', { model }),
         onDelta: (delta) => {
           if (firstDeltaAt === null) {
             firstDeltaAt = Date.now();

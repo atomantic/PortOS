@@ -6,6 +6,7 @@ import useMounted from '../../hooks/useMounted';
 import useVoiceLlmProviders from '../../hooks/useVoiceLlmProviders';
 import toast from '../ui/Toast';
 import VoiceLlmFields from './VoiceLlmFields';
+import { voiceLlmResidencyBadge } from './voiceLlmResidencyBadge';
 
 /**
  * Inline Voice Brain / LLM picker for the Voice Call station and floating
@@ -16,7 +17,9 @@ export default function VoiceLlmQuickPicker({
   model = 'auto',
   onSaved,
   compact = false,
+  residency = null,
 }) {
+  const residencyBadge = voiceLlmResidencyBadge(residency);
   const mountedRef = useMounted();
   const { apiProviders, error, reload, refreshing, refreshModels } = useVoiceLlmProviders();
   const [saving, setSaving] = useState(false);
@@ -47,6 +50,12 @@ export default function VoiceLlmQuickPicker({
           <h3 className="font-mono text-xs font-semibold uppercase tracking-wider">Voice brain (LLM)</h3>
         </div>
         {saving && <span className="font-mono text-[10px] uppercase tracking-wider text-port-accent-text">Saving…</span>}
+        {!saving && residencyBadge && (
+          <span role="status" className="inline-flex min-w-0 items-center gap-1.5 font-mono text-[10px] uppercase tracking-wider text-port-text-muted">
+            <span aria-hidden="true" className={`h-1.5 w-1.5 shrink-0 rounded-full ${residencyBadge.led}`} />
+            <span className="truncate">{residencyBadge.label}</span>
+          </span>
+        )}
         {error && (
           <button
             type="button"

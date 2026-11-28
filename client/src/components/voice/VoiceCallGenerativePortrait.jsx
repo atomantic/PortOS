@@ -9,7 +9,8 @@ const IDLE_STAGES = new Set(['idle', 'listening', 'thinking']);
 const FRAME_INTERVAL_MS = 40; // 25 fps
 const MAX_IDLE_QUEUE = 20;
 
-const normalizeIdleStage = (stage) => (IDLE_STAGES.has(stage) ? stage : 'idle');
+// A model load reads as thinking on the portrait; only the status chip tells them apart.
+const normalizeIdleStage = (stage) => (stage === 'loading' ? 'thinking' : IDLE_STAGES.has(stage) ? stage : 'idle');
 
 function decodeAndPaint(canvas, jpeg, isStillValid, onPainted) {
   const image = new Image();

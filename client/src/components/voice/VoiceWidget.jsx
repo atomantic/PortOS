@@ -5,7 +5,7 @@ import VoiceCallConsole from './VoiceCallConsole';
 import SatPhoneHandset from './SatPhoneHandset';
 import { useAvatarRuntime } from './useAvatarRuntime';
 import { useSidebarContext } from '../SidebarContext';
-import { Mic, MicOff, Brain, Volume2, VolumeX, Square, Trash2, ChevronDown, ChevronUp, Send, Infinity as InfinityIcon, NotebookPen, X, EyeOff, Monitor, MonitorOff, Radio, Maximize2 } from 'lucide-react';
+import { Mic, MicOff, Brain, Hourglass, Volume2, VolumeX, Square, Trash2, ChevronDown, ChevronUp, Send, Infinity as InfinityIcon, NotebookPen, X, EyeOff, Monitor, MonitorOff, Radio, Maximize2 } from 'lucide-react';
 import {
   startCapture, stopCapture, interrupt, resetConversation, sendText, onVoiceEvent, isCapturing,
   startContinuous, stopContinuous, isContinuous, whenPlaybackDrained, whenVoiceTurnAudioDrained, getVadLevel,
@@ -55,6 +55,7 @@ const STAGE = {
   listening: { icon: MicOff, label: 'Listening… (click to send)', tone: 'text-port-accent' },
   handsfree: { icon: MicOff, label: 'Hands-free — speak anytime', tone: 'text-port-accent' },
   capturing: { icon: MicOff, label: 'Capturing your voice…', tone: 'text-port-accent animate-pulse' },
+  loading: { icon: Hourglass, label: 'Loading model into memory…', tone: 'text-port-warning animate-pulse' },
   thinking: { icon: Brain, label: 'Thinking…', tone: 'text-port-warning' },
   speaking: { icon: Volume2, label: 'Speaking (talk to interrupt)', tone: 'text-port-success' },
 };
@@ -244,8 +245,14 @@ export default function VoiceWidget({ config, claimHeld, consoleHost }) {
         if (d.text && d.source !== 'text') appendUser(d.text);
         setStage('thinking');
       }),
+      // A cold local model: the server saw it was not resident before sending
+      // the request, so the wait is a load, not the model thinking.
+      onVoiceEvent('voice:llm:loading', () => {
+        setStage((current) => (current === 'thinking' ? 'loading' : current));
+      }),
       onVoiceEvent('voice:llm:delta', (d) => {
         if (d.delta) appendAssistantDelta(d.delta);
+        setStage((current) => (current === 'loading' ? 'thinking' : current));
       }),
       onVoiceEvent('voice:tts:audio', () => {
         // 'handsfree' is intentionally NOT preserved here — the arrival of

@@ -8,6 +8,8 @@ import VoiceLlmQuickPicker from './VoiceLlmQuickPicker';
 import { useAvatarRuntime } from './useAvatarRuntime';
 import { activeChannelOf, useAvatarLibrary } from './useAvatarLibrary';
 import { safeReadStorage, safeWriteStorage } from '../../lib/safeStorage';
+import useVoiceLlmResidency from '../../hooks/useVoiceLlmResidency';
+import { voiceLlmResidencyBadge } from './voiceLlmResidencyBadge';
 
 
 const TAB_KEY = 'portos.voice.callTab';
@@ -18,7 +20,7 @@ const TABS = ['video', 'brain', 'avatars'];
  * so the handset and log stay above the fold on a phone. Each chip carries its
  * live status and opens one panel at a time; tapping the open chip folds it.
  */
-function StationTabs({ runningAvatar, llmProvider, llmModel, onLlmSaved, avatarData, avatarError, onUpdateAvatarData, onRefetchAvatar }) {
+function StationTabs({ runningAvatar, llmProvider, llmModel, llmResidency, onLlmSaved, avatarData, avatarError, onUpdateAvatarData, onRefetchAvatar }) {
   const [tab, setTab] = useState(() => {
     const saved = safeReadStorage(TAB_KEY);
     return saved === 'none' ? null : TABS.includes(saved) ? saved : 'video';
@@ -32,10 +34,12 @@ function StationTabs({ runningAvatar, llmProvider, llmModel, onLlmSaved, avatarD
   const videoStatus = runningAvatar ? 'Live' : 'Still portrait';
   const channel = activeChannelOf(library);
   const avatarsStatus = channel ? `CH${channel.index + 1} on air` : 'Channels';
-  const brainStatus = llmModel && llmModel !== 'auto' ? voiceModelDisplayName(llmModel) : `${llmProvider || 'lmstudio'} (auto)`;
+  const brainModel = llmModel && llmModel !== 'auto' ? voiceModelDisplayName(llmModel) : `${llmProvider || 'lmstudio'} (auto)`;
+  const residencyBadge = voiceLlmResidencyBadge(llmResidency);
+  const brainStatus = residencyBadge ? `${brainModel} · ${residencyBadge.short}` : brainModel;
   const tabs = [
     { id: 'video', label: 'Video feed', status: videoStatus, Icon: Video, led: runningAvatar ? 'bg-port-accent shadow-[0_0_6px_rgb(var(--port-accent))]' : 'bg-port-success' },
-    { id: 'brain', label: 'Voice brain', status: brainStatus, Icon: Brain },
+    { id: 'brain', label: 'Voice brain', status: brainStatus, Icon: Brain, led: residencyBadge?.led },
     { id: 'avatars', label: 'Avatars', status: avatarsStatus, Icon: ScanFace },
   ];
 
@@ -73,7 +77,7 @@ function StationTabs({ runningAvatar, llmProvider, llmModel, onLlmSaved, avatarD
       )}
       {tab === 'brain' && (
         <div id="station-panel-brain">
-          <VoiceLlmQuickPicker compact provider={llmProvider} model={llmModel} onSaved={onLlmSaved} />
+          <VoiceLlmQuickPicker compact provider={llmProvider} model={llmModel} residency={llmResidency} onSaved={onLlmSaved} />
         </div>
       )}
       {tab === 'avatars' && (
@@ -93,6 +97,7 @@ export default function VoiceCallConsole({
 }) {
   const { data, error, updateData, refetch } = useAvatarRuntime();
   const runningAvatar = Boolean(!error && data?.supported && data.phase === 'running');
+  const llmResidency = useVoiceLlmResidency({ provider: llmProvider, model: llmModel, stage });
 
   return (
     <section
@@ -123,6 +128,7 @@ export default function VoiceCallConsole({
           voiceLabel={voiceLabel}
           llmProvider={llmProvider}
           llmModel={llmModel}
+          llmResidency={llmResidency}
           onLlmSaved={onLlmSaved}
           avatarData={data}
           avatarError={error}
@@ -147,6 +153,7 @@ export default function VoiceCallConsole({
           runningAvatar={runningAvatar}
           llmProvider={llmProvider}
           llmModel={llmModel}
+          llmResidency={llmResidency}
           onLlmSaved={onLlmSaved}
           avatarData={data}
           avatarError={error}

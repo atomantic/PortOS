@@ -12,6 +12,7 @@ import { managedOllamaBaseUrl } from '../../lib/ollamaContext.js';
 import { normalizeOpenAiBaseUrl } from '../../lib/localProviderRuntime.js';
 import { isConversationalGemma } from '../../lib/voiceModelCatalog.js';
 import { assertSecretEndpoint } from '../../lib/aiToolkit/endpointGuard.js';
+import { probeVoiceLlmResidency } from './llmResidency.js';
 
 // Legacy env-based LM Studio default. Returns the OpenAI-compatible API base
 // INCLUDING the version path, so callers append `/models` / `/chat/completions`.
@@ -79,6 +80,10 @@ export const authHeaders = (apiKey) => (apiKey ? { Authorization: `Bearer ${apiK
 // a total request-plus-stream budget, rather than an idle-chunk timeout.
 export const VOICE_LLM_TIMEOUT_MS = 30_000;
 export const VOICE_LLM_TIMEOUT_MESSAGE = 'Voice LLM request timed out';
+// A cold local model spends most of the normal budget reading weights from disk,
+// so a turn that found its model not resident gets this total budget instead.
+export const VOICE_LLM_COLD_LOAD_TIMEOUT_MS = 120_000;
+const RESIDENCY_PROBE_CAP_MS = 400;
 
 // Approximate parameter count from LM Studio model id so 'auto' avoids a 70B
 // when smaller, faster models are available. Returns Infinity for non-matches
@@ -332,6 +337,16 @@ export const extractInlineToolCalls = (text) => {
  * @param {Array<object>} [opts.tools]  OpenAI-format tool specs (optional)
  * @returns {Promise<{ text: string, toolCalls: Array<object>, model: string|null, ttfbMs: number|null, totalMs: number, finishReason: string|null }>}
  */
+/**
+ * Residency of the model a voice turn on `provider`/`model` would use, with
+ * `auto` resolved the way a tool-calling turn resolves it.
+ */
+export const readVoiceLlmResidency = async ({ provider, model } = {}) => {
+  const endpoint = await resolveLlmEndpoint(provider);
+  const resolved = await resolveModel(model, { ...endpoint, requireTools: true });
+  return probeVoiceLlmResidency({ providerId: provider || DEFAULT_VOICE_BACKEND, apiBase: endpoint.apiBase, apiKey: endpoint.apiKey, model: resolved });
+};
+
 export const streamChat = async (messages, opts = {}) => {
   const resolveStart = Date.now();
   const { apiBase, apiKey, defaultModel, providerName } = await resolveLlmEndpoint(opts.provider);
@@ -408,7 +423,7 @@ export const streamChat = async (messages, opts = {}) => {
     if (opts.signal.aborted) onExternalAbort();
     else opts.signal.addEventListener('abort', onExternalAbort, { once: true });
   }
-  const timeoutId = setTimeout(() => {
+  const onDeadline = () => {
     timedOut = true;
     try {
       opts.onTimeout?.();
@@ -416,7 +431,28 @@ export const streamChat = async (messages, opts = {}) => {
       console.error(`🤖 voice.llm.timeout_hook failed: ${err.message}`);
     }
     requestController.abort();
-  }, VOICE_LLM_TIMEOUT_MS);
+  };
+  // Asked before the request goes out: once it is in flight the runtime may
+  // already list the model as resident. Local probes answer in milliseconds,
+  // and the cap keeps a slow one from delaying the turn.
+  let coldModel = false;
+  if (opts.onModelLoading) {
+    const residency = await Promise.race([
+      probeVoiceLlmResidency({ providerId: opts.provider || DEFAULT_VOICE_BACKEND, apiBase, apiKey, model })
+        .catch((err) => { console.log(`🤖 ${tag}voice.llm.residency_probe skipped: ${err.message}`); return null; }),
+      new Promise((resolve) => { setTimeout(resolve, RESIDENCY_PROBE_CAP_MS, null).unref?.(); }),
+    ]);
+    coldModel = residency?.state === 'unloaded' || residency?.state === 'loading';
+    if (coldModel) {
+      console.log(`🤖 ${tag}voice.llm.cold_load model=${model} state=${residency.state}`);
+      try {
+        opts.onModelLoading({ model });
+      } catch (err) {
+        console.error(`🤖 voice.llm.loading_hook failed: ${err.message}`);
+      }
+    }
+  }
+  const timeoutId = setTimeout(onDeadline, coldModel ? VOICE_LLM_COLD_LOAD_TIMEOUT_MS : VOICE_LLM_TIMEOUT_MS);
 
   const requestPromise = (async () => {
     const reqStart = Date.now();
