@@ -13,6 +13,7 @@ import { getLlamaServerStatus, startLlamaServer as managedStartLlamaServer } fro
 import { setLlamaServerAutoStart } from '../llamaServerAutoStart.js';
 import { CONVERSATIONAL_GEMMA } from '../../lib/voiceModelCatalog.js';
 import {
+  CONVERSATIONAL_GEMMA_CTX_SIZE,
   _resetConversationalGemmaSetupForTests,
   cancelConversationalGemmaSetup,
   getConversationalGemmaSetupStatus,
@@ -85,7 +86,7 @@ describe('conversationalGemmaSetup', () => {
       model: CONVERSATIONAL_GEMMA.localGgufPath,
       alias: CONVERSATIONAL_GEMMA.id,
       specType: 'none',
-      ctxSize: 4096,
+      ctxSize: CONVERSATIONAL_GEMMA_CTX_SIZE,
     }));
     expect(updateProvider).toHaveBeenCalledWith('llama-server', expect.objectContaining({
       enabled: true,
@@ -97,6 +98,47 @@ describe('conversationalGemmaSetup', () => {
     });
     expect(status.phase).toBe('ready');
     expect(emitToOperators).toHaveBeenCalledWith('voice:conversationalGemma:changed');
+  });
+
+  it.each([
+    [4096, true],
+    [CONVERSATIONAL_GEMMA_CTX_SIZE, false],
+  ])('relaunches a managed server serving Conversational Gemma with ctxSize %i: %s', async (ctxSize, relaunch) => {
+    const startLlamaServer = vi.fn().mockResolvedValue({ running: true });
+    const stopLlamaServer = vi.fn().mockResolvedValue({});
+    const status = await startConversationalGemmaSetup({
+      supported: true,
+      awaitCompletion: true,
+      resolveLlamaServerBinary: vi.fn().mockReturnValue('/opt/homebrew/bin/llama-server'),
+      readGgufStat: vi.fn().mockResolvedValue({ size: 33_000_000_000 }),
+      getHfToken: vi.fn().mockResolvedValue(null),
+      llamaInstallMod: {
+        resolveLlamaServerBinary: vi.fn().mockReturnValue('/opt/homebrew/bin/llama-server'),
+        installLlamaServer: vi.fn(),
+      },
+      llamaLifecycleMod: {
+        getLlamaServerStatus: vi.fn().mockResolvedValue({
+          running: true,
+          managed: true,
+          config: { alias: CONVERSATIONAL_GEMMA.id, ctxSize },
+        }),
+        startLlamaServer,
+        stopLlamaServer,
+      },
+      providersMod: {
+        getProviderById: vi.fn().mockResolvedValue({ id: 'llama-server', endpoint: 'http://127.0.0.1:5568/v1', models: [], enabled: false }),
+        updateProvider: vi.fn().mockResolvedValue({}),
+        createProvider: vi.fn(),
+      },
+      voiceConfigMod: { updateVoiceConfig: vi.fn().mockResolvedValue({}) },
+    });
+
+    expect(status.phase).toBe('ready');
+    expect(stopLlamaServer).toHaveBeenCalledTimes(relaunch ? 1 : 0);
+    expect(startLlamaServer).toHaveBeenCalledTimes(relaunch ? 1 : 0);
+    if (relaunch) {
+      expect(startLlamaServer).toHaveBeenCalledWith(expect.objectContaining({ ctxSize: CONVERSATIONAL_GEMMA_CTX_SIZE }));
+    }
   });
 
   it('installs llama.cpp and surfaces token-required cleanly when GGUF and HF token are missing', async () => {
