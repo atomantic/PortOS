@@ -447,6 +447,46 @@ describe('VoiceWidget async lifecycle', () => {
     expect(voiceClientMock.sendText).toHaveBeenCalledTimes(1);
     expect(voiceClientMock.sendText).toHaveBeenCalledWith('newer question');
   });
+
+  it('discards an earlier pending typed fast-path lookup when a new server-transcribed voice turn starts', async () => {
+    mocks.getVoiceConfig.mockResolvedValue({ ...ENABLED_CONFIG, llm: { fastPath: { enabled: true } } });
+    let resolveTyped;
+    mocks.resolveTurn.mockReturnValueOnce(new Promise((r) => { resolveTyped = r; }));
+    const widget = await renderWidget();
+    const ui = within(widget);
+
+    fireEvent.change(ui.getByLabelText('Message to the voice assistant'), { target: { value: 'older typed question' } });
+    fireEvent.click(ui.getByRole('button', { name: 'Send text' }));
+    await settle();
+
+    // A genuinely new server-transcribed voice turn starts while the typed fast path is still pending.
+    act(() => mocks.events.get('voice:transcript')?.({ text: 'spoken question', source: 'voice' }));
+    await settle();
+
+    await act(async () => { resolveTyped({ tier: 'nano', reply: 'stale fast reply' }); });
+    expect(mocks.speakSynthesized).not.toHaveBeenCalled();
+    expect(voiceClientMock.sendText).not.toHaveBeenCalled();
+  });
+
+  it('ignores an older turn voice:idle delivered after a newer typed turn has already started', async () => {
+    const widget = await renderWidget();
+    const ui = within(widget);
+
+    // Prior server turn is active.
+    act(() => mocks.events.get('voice:transcript')?.({ text: 'old turn', source: 'voice' }));
+    await settle();
+
+    // User starts a new typed turn before the prior turn's voice:idle arrives.
+    fireEvent.change(ui.getByLabelText('Message to the voice assistant'), { target: { value: 'new typed turn' } });
+    fireEvent.click(ui.getByRole('button', { name: 'Send text' }));
+    await settle();
+    expect(ui.getByText('Thinking', { selector: '[role="status"]' })).toBeInTheDocument();
+
+    // Delayed voice:idle from the older turn arrives after the newer turn started.
+    act(() => mocks.events.get('voice:idle')?.({ reason: 'turn-complete' }));
+    await settle();
+    expect(ui.getByText('Thinking', { selector: '[role="status"]' })).toBeInTheDocument();
+  });
 });
 
 describe('Voice Call console', () => {
