@@ -491,4 +491,49 @@ describe('active cleanup and retry owner preservation (#13430)', () => {
       spy.mockRestore();
     }
   }));
+
+  it('clears a large multi-bucket archive batch with bounded concurrency and filtered reservation release', joinTestWork(async () => {
+    const bucketDates = ['2001-01-01', '2001-01-02', '2001-01-03'];
+    const total = 75;
+    const protectedId = 'agent-batch-000';
+    const reservedClearedId = 'agent-batch-001';
+    const runningId = 'agent-batch-running';
+    const idx = await index.loadAgentIndex();
+
+    for (let i = 0; i < total; i++) {
+      const agentId = `agent-batch-${String(i).padStart(3, '0')}`;
+      const bucketDate = bucketDates[i % bucketDates.length];
+      const record = {
+        id: agentId,
+        status: 'completed',
+        startedAt: `${bucketDate}T01:00:00Z`,
+        completedAt: `${bucketDate}T02:00:00Z`,
+        result: { success: true },
+        metadata: agentId === protectedId ? { repoStateVerification: { status: 'pending' } } : {},
+      };
+      const dir = join(fixture.root, bucketDate, agentId);
+      await mkdir(dir, { recursive: true });
+      await writeFile(join(dir, 'output.txt'), 'Example preserved output');
+      await writeFile(join(dir, 'metadata.json'), JSON.stringify(record));
+      idx.set(agentId, bucketDate);
+    }
+    await index.saveAgentIndex();
+    await seedAgent(runningId);
+
+    const clearedReservation = maintenance.admit('agent', reservedClearedId);
+    const runningReservation = maintenance.admit('agent', runningId);
+    try {
+      const result = await api.clearCompletedAgents();
+      expect(result).toEqual({ cleared: total - 1, retained: 1 });
+      expect(await readIndex()).toEqual({ [protectedId]: '2001-01-01' });
+      await assertIndexedTrees();
+      expect(await readdir(join(fixture.root, '2001-01-01'))).toEqual([protectedId]);
+      await expect(readdir(join(fixture.root, '2001-01-02'))).rejects.toThrow();
+      await expect(readdir(join(fixture.root, '2001-01-03'))).rejects.toThrow();
+      expect(clearedReservation.isCurrent()).toBe(false);
+      expect(runningReservation.isCurrent()).toBe(true);
+    } finally {
+      await Promise.all([clearedReservation.finish(), runningReservation.finish()]);
+    }
+  }));
 });

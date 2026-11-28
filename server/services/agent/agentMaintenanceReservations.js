@@ -7,11 +7,35 @@
  */
 import { maintenance } from '../../lib/maintenanceAdmission.js';
 import { isPidAlive } from '../../lib/heavyJobClaim.js';
+import { mapWithConcurrency } from '../../lib/mapWithConcurrency.js';
+
+const RESERVATION_RELEASE_CONCURRENCY = 16;
 
 /** Idempotent, never throws: a journal needing recovery must not abort the caller's terminal transition. */
 export async function releaseAgentReservation(agentId) {
   try { await maintenance.finishResource('agent', agentId); }
   catch (err) { console.warn(`⚠️ Maintenance reservation for ${agentId} was not released: ${err.message}`); }
+}
+
+/**
+ * Release reservations for a batch of purged agents without scanning the
+ * admission journal once per archived id when most have no active reservation.
+ */
+export async function releaseAgentReservations(agentIds) {
+  const ids = [...new Set(agentIds)];
+  if (ids.length === 0) return;
+  let targets = ids;
+  try {
+    const activeResources = new Set(
+      maintenance.operations()
+        .filter(op => op.kind === 'agent' && typeof op.resource === 'string')
+        .map(op => op.resource)
+    );
+    targets = ids.filter(id => activeResources.has(id));
+  } catch {
+    // Fall back to per-id release so a journal error still logs and attempts cleanup.
+  }
+  await mapWithConcurrency(targets, RESERVATION_RELEASE_CONCURRENCY, releaseAgentReservation);
 }
 
 /**

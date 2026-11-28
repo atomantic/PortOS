@@ -16,9 +16,12 @@ import { join } from 'path';
 import { cosEvents } from './cosEvents.js';
 import { loadState, saveState, withStateLock, AGENTS_DIR } from './cosState.js';
 import { atomicWrite, ensureDir } from '../../lib/fileUtils.js';
+import { mapWithConcurrency } from '../../lib/mapWithConcurrency.js';
 import { loadAgentIndex, saveAgentIndex, recordArchivedAgentOrder, moveAgentDir, writeArchivedAgentMetadata } from './cosAgentIndex.js';
 import { readProtectedCleanupOwners } from './cosAgentLifecycle.js';
-import { releaseAgentReservation } from '../agent/agentMaintenanceReservations.js';
+import { releaseAgentReservations } from '../agent/agentMaintenanceReservations.js';
+
+const ARCHIVE_CLEANUP_CONCURRENCY = 32;
 
 // Archive stale completed agents from state.json.
 // Completed agents are already persisted to per-agent metadata files on disk
@@ -137,29 +140,25 @@ export async function clearCompletedAgents() {
 
     // Whole buckets with no retained entries can be removed in one pass; mixed
     // buckets remove only the unprotected agent directories inside them.
-    const removals = [];
+    const removalPaths = [];
     for (const date of allDates) {
       if (retainedDates.has(date)) continue;
-      const dateDir = join(AGENTS_DIR, date);
-      if (existsSync(dateDir)) {
-        removals.push(rm(dateDir, { recursive: true }).catch(() => {}));
-      }
+      removalPaths.push(join(AGENTS_DIR, date));
     }
     for (const [id, date] of removedIndexEntries) {
       if (!retainedDates.has(date)) continue;
-      const agentDir = join(AGENTS_DIR, date, id);
-      if (existsSync(agentDir)) {
-        removals.push(rm(agentDir, { recursive: true }).catch(() => {}));
-      }
+      removalPaths.push(join(AGENTS_DIR, date, id));
     }
-    await Promise.all(removals);
+    await mapWithConcurrency(removalPaths, ARCHIVE_CLEANUP_CONCURRENCY, path =>
+      rm(path, { recursive: true, force: true }).catch(() => {})
+    );
 
     const purgedAgentIds = new Set(removableStateIds);
     for (const [id] of removedIndexEntries) {
       // Archive-only records can no longer settle their own reservations.
       if (!state.agents[id]) purgedAgentIds.add(id);
     }
-    for (const id of purgedAgentIds) await releaseAgentReservation(id);
+    await releaseAgentReservations(purgedAgentIds);
     cosEvents.emit('agents:changed', { action: 'cleared-completed', cleared: totalCleared, retained: retainedIds.size });
     return { cleared: totalCleared, retained: retainedIds.size };
   }));
