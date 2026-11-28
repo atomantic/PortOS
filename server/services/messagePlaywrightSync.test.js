@@ -304,7 +304,7 @@ describe('Outlook configured row extraction', () => {
     mailbox([[record('unrelated')]], { selector: defaultSelector });
     tryReadFile.mockResolvedValue(JSON.stringify({ outlook: { messageRow: '[' } }));
     expect(await testSelectors('outlook')).toMatchObject({ status: 'partial', results: { messageRow: { matches: 0, error: expect.stringContaining('Invalid Outlook') } } });
-    expect(await syncPlaywright(account, { messages: [] })).toMatchObject({ status: 'extraction-failed', messages: [], error: expect.stringContaining('Messages > Sync') });
+    expect(await syncPlaywright(account, { messages: [] })).toMatchObject({ status: 'extraction-failed', messages: [], error: expect.stringContaining('Comms → Sync') });
     expect(await refreshMessageDetail(account, { providerRowId: 'unrelated' })).toMatchObject({ error: 'invalid-selector' });
   });
 

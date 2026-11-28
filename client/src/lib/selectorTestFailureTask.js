@@ -1,9 +1,9 @@
 /**
  * Build the CoS task payload for the "Investigate & fix" action on a failing
- * DOM-selector test (Settings > Messages > Sync tab > DOM Selectors).
+ * DOM-selector test (Comms → Sync → DOM Selectors, `/messages/sync`).
  *
- * Build the CoS task payload behind the DOM-selector-test "Investigate & fix" action (Settings >
- * Messages > Sync tab): `buildSelectorTestFailureTask({ provider, status, results, error })` → `{
+ * Build the CoS task payload behind the DOM-selector-test "Investigate & fix" action (Comms →
+ * Sync): `buildSelectorTestFailureTask({ provider, status, results, error })` → `{
  * description, prompt }` naming the provider, the `testSelectors()` status, the per-selector match
  * counts, and the relevant source files. Fed to the generic `QueueInvestigationButton`
  * (`components/ui/QueueInvestigationButton.jsx`), the same queueing primitive `installFailureTask.js`
@@ -42,7 +42,7 @@ export function buildSelectorTestFailureTask({ provider, status, results, error 
   const prose = STATUS_PROSE[status] || 'The selector test did not report success.';
 
   const sections = [
-    `The DOM Selectors test for ${name} (Settings > Messages > Sync tab) is failing. Investigate the root cause and fix it.`,
+    `The DOM Selectors test for ${name} (Comms → Sync at /messages/sync) is failing. Investigate the root cause and fix it.`,
     '',
     `Provider: ${name}`,
     `Test status: ${status || '(unknown)'}`,
@@ -55,14 +55,14 @@ export function buildSelectorTestFailureTask({ provider, status, results, error 
     formatResults(results),
     '',
     'Relevant code: server/services/messagePlaywrightSync.js (testSelectors, buildExtractionScript), '
+      + 'server/lib/messageSelectorDefaults.js (MESSAGE_SELECTOR_DEFAULTS), '
       + 'server/services/browserService.js (findOrOpenPage, isAuthPage, evaluateOnPage), '
       + 'client/src/components/messages/SyncTab.jsx (the DOM Selectors panel).',
     '',
-    'Reproduce against the portos-browser CDP instance (Settings > Browser), find why the configured '
-      + 'selector(s) no longer match the live page DOM — the provider may have changed its markup, or the '
-      + 'selector may not be the one the real scraper actually reads (the Outlook extraction script currently '
-      + "hardcodes its own selectors rather than reading messageRow from data/messages/selectors.json) — and "
-      + 'fix the selector(s) or the code that reads them so the test reports "ok".',
+    'Reproduce against the portos-browser CDP instance (Dev Tools → Browser at /browser), find why the configured '
+      + 'selector(s) in data/messages/selectors.json (falling back to MESSAGE_SELECTOR_DEFAULTS) no longer match '
+      + 'the live page DOM — the provider may have changed its markup or a custom override may be stale — and '
+      + 'fix the selector(s) or extraction logic so the test reports "ok".',
   );
 
   return { description, prompt: sections.join('\n') };

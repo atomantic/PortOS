@@ -35,7 +35,7 @@ function outlookRowContext(selector, requireScroll = true) {
     if (typeof selector !== 'string' || !selector.trim()) throw new Error('Empty selector');
     initialRows = rows();
   } catch {
-    return { error: 'invalid-selector', message: 'Invalid Outlook messageRow selector. Edit it in Messages > Sync and test again.' };
+    return { error: 'invalid-selector', message: 'Invalid Outlook messageRow selector. Edit it in Comms → Sync and test again.' };
   }
   if (!requireScroll || initialRows.length === 0) return { rows };
 
@@ -58,7 +58,7 @@ function outlookRowContext(selector, requireScroll = true) {
   if (!scrollContainer || typeof scrollContainer.scrollBy !== 'function'
       || typeof scrollContainer.scrollTo !== 'function'
       || initialRows.some(row => !scrollContainer.contains(row))) {
-    return { error: 'invalid-container', message: 'Outlook messageRow must match rows in one scrollable list or region. Edit it in Messages > Sync and test again.' };
+    return { error: 'invalid-container', message: 'Outlook messageRow must match rows in one scrollable list or region. Edit it in Comms → Sync and test again.' };
   }
   return { rows, scrollContainer };
 }
