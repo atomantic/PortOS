@@ -17,7 +17,7 @@ export default function ModelComparisonWorkspace({ view }) {
   const navigate = useNavigate();
   const active = view === 'coding' ? 'coding' : 'general';
   return <div className="min-w-0">
-    <TabPills tabs={TABS} activeTab={active} onChange={tab => navigate(PATHS[tab])} ariaLabel="Model comparison view" controlsIdPrefix="comparison-panel" className="mx-3 md:mx-5" />
+    <TabPills tabs={TABS} activeTab={active} onChange={tab => navigate(PATHS[tab])} mobileCompact ariaLabel="Model comparison view" controlsIdPrefix="comparison-panel" className="mx-3 md:mx-5" />
     <div role="tabpanel" id={`comparison-panel-${active}`} aria-labelledby={`tab-${active}`}>
       <Suspense fallback={<PageSkeleton header="none" label="Loading comparison" sidebar={false} />}>
         {active === 'coding' ? <CodingBenchmarkComparison /> : <GeneralComparison />}

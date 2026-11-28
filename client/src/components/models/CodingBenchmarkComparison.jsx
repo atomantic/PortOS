@@ -21,7 +21,7 @@ function BenchmarkSource({ suite }) {
 function BenchmarkChart({ rows, suite }) {
   const models = [...new Set(rows.map(row => row.model))];
   return <section className={panelClass} aria-label="Coding score versus cost chart">
-    <h2 className="font-semibold">Coding score vs. benchmark task cost</h2>
+    <h3 className="font-semibold">Coding score vs. benchmark task cost</h3>
     <figure className="mt-2 rounded-lg border border-port-border">
     {rows.length ? <div className="h-[380px] w-full min-w-0">
       <ResponsiveContainer width="100%" height="100%">
@@ -98,7 +98,7 @@ export default function CodingBenchmarkComparison() {
 
   return <div className="mx-auto w-full min-w-0 space-y-4 p-3 md:p-5">
     <header>
-      <h1 className="text-xl font-semibold">Coding benchmark comparison</h1>
+      <h2 className="text-lg font-semibold">Coding benchmark comparison</h2>
       <p className="text-sm text-port-text-muted">Compare published coding scores and average API costs on the same tasks. Benchmark suites are shown separately; costs are not subscription charges.</p>
     </header>
     <section className={`${panelClass} space-y-3`} aria-label="Coding benchmark filters">

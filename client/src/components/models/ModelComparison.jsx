@@ -50,7 +50,9 @@ const AXES = [
 ];
 const AXIS_NOUN = { money: 'cost', speed: 'speed', latency: 'latency' };
 const AXIS_TITLE = { money: 'Cost', speed: 'Speed', latency: 'Latency' };
-const buttonClass = 'rounded-lg border border-port-border px-3 py-2 text-xs disabled:opacity-50';
+const buttonClass = 'rounded-lg border border-port-border bg-port-bg/50 px-3 py-1.5 pointer-coarse:min-h-11 text-xs text-port-text transition-colors hover:bg-port-border/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-port-accent disabled:opacity-50';
+const activeButtonClass = 'rounded-lg border border-port-accent bg-port-accent/15 px-3 py-1.5 pointer-coarse:min-h-11 text-xs font-medium text-port-accent transition-colors hover:bg-port-accent/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-port-accent disabled:opacity-50';
+const toggleButtonClass = active => (active ? activeButtonClass : buttonClass);
 const formatAxisValue = (value, axis) => axis.kind === 'money' ? formatUsd(value, { maximumFractionDigits: 4 })
   : axis.kind === 'latency' ? `${formatCount(value, { maximumFractionDigits: 0 })} ms`
     : formatCount(value, { maximumFractionDigits: 1 });
@@ -104,7 +106,7 @@ function GenerationDelta({ rows, axis }) {
     return metrics.length && new Set(metrics.map(metric => metric.value)).size === 1 ? metrics[0] : null;
   };
   return <section className="rounded-xl border border-port-border bg-port-card p-4" aria-label="Pair comparison">
-    <h2 className="font-semibold break-words">{models[1]} compared with {models[0]}</h2>
+    <h3 className="font-semibold break-words">{models[1]} compared with {models[0]}</h3>
     <p className="text-xs text-port-text-muted">Matched effort levels. Differences with estimates carry ≈. Multiple provider prices require a narrower provider selection.</p>
     <div className="overflow-x-auto"><table className="mt-2 w-full text-left text-sm"><thead><tr><th className="p-2">Effort</th><th className="p-2">Intelligence change</th><th className="p-2">{AXIS_TITLE[axis.kind]} change</th></tr></thead><tbody>{efforts.map(effort => {
       const before = metricFor(models[0], effort, 'quality'), after = metricFor(models[1], effort, 'quality');
@@ -137,6 +139,7 @@ export default function ModelComparison() {
     };
   });
   const [query, setQuery] = useState('');
+  const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const [zoom, setZoom] = useState(true);
   const [researchOpen, setResearchOpen] = useState(false);
   const [researchScope, setResearchScope] = useState('all');
@@ -228,13 +231,14 @@ export default function ModelComparison() {
   const researchCount = rows.filter(row => row.needsResearch).length;
   const selectedResearchCount = scoped.filter(row => (settings.models === null || settings.models.includes(row.model)) && row.needsResearch).length;
 
-  return <div className="@container mx-auto w-full min-w-0 space-y-4 p-3 md:p-5">
+  return <div className="@container mx-auto w-full min-w-0 space-y-3 p-3 md:p-5">
     <div className="flex flex-wrap items-center justify-between gap-3">
-      <div><h1 className="text-xl font-semibold">{axisTitle} vs. intelligence</h1><p className="text-sm text-port-text-muted">Compare generations, peers and reasoning efforts across your selectable models.</p></div>
+      <div><h2 className="text-lg font-semibold">{axisTitle} vs. intelligence</h2><p className="text-sm text-port-text-muted">Compare generations, peers and reasoning efforts across your selectable models.</p></div>
       <div className="flex flex-wrap gap-2">
-        <button className={buttonClass} onClick={reload} disabled={loading}>{loading ? 'Loading…' : 'Reload data'}</button>
+        <button type="button" className={buttonClass} onClick={reload} disabled={loading}>{loading ? 'Loading…' : 'Reload data'}</button>
         <button
-          className={buttonClass}
+          type="button"
+          className={toggleButtonClass(researchOpen && researchScope === 'all')}
           aria-expanded={researchOpen && researchScope === 'all'}
           onClick={() => {
             if (researchOpen && researchScope === 'all') {
@@ -248,7 +252,8 @@ export default function ModelComparison() {
           Research all gaps ({formatCount(researchCount)})
         </button>
         <button
-          className={buttonClass}
+          type="button"
+          className={toggleButtonClass(researchOpen && researchScope === 'selected')}
           aria-expanded={researchOpen && researchScope === 'selected'}
           disabled={selectedModels.length === 0}
           onClick={() => {
@@ -272,27 +277,36 @@ export default function ModelComparison() {
         onScopeChange={setResearchScope}
       />
     </div>}
-    <section className="min-w-0 rounded-xl border border-port-border bg-port-card p-4 space-y-3" aria-label="Comparison controls">
+    <section className="min-w-0 rounded-xl border border-port-border bg-port-card p-3 space-y-2.5" aria-label="Comparison controls">
       <div className="flex flex-wrap items-end gap-3">
         {composites.length > 1 && <div className="min-w-0"><label htmlFor="comparison-anchor" className="block text-xs mb-1">Intelligence index</label><select className="max-w-full rounded-lg border border-port-border bg-port-bg p-2 text-sm" id="comparison-anchor" value={composite.anchor} onChange={event => update({ anchor: event.target.value })}>{composites.map(item => <option key={item.anchor} value={item.anchor}>{item.anchor}</option>)}</select></div>}
         <div className="min-w-0"><label htmlFor="comparison-price" className="block text-xs mb-1">X axis</label><select className="max-w-full rounded-lg border border-port-border bg-port-bg p-2 text-sm" id="comparison-price" value={axis.id} onChange={event => update({ priceId: event.target.value })}>{AXES.map(({ id, label }) => <option key={id} value={id}>{label}</option>)}</select></div>
         <div className="min-w-0"><label htmlFor="comparison-provider" className="block text-xs mb-1">Provider filter</label><select className="max-w-full rounded-lg border border-port-border bg-port-bg p-2 text-sm" id="comparison-provider" value={settings.provider} onChange={event => update({ provider: event.target.value })}><option value="">All providers</option>{providers.map(([id, name]) => <option key={id} value={id}>{name}</option>)}</select></div>
-        <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={showEstimates} onChange={event => setShowEstimates(event.target.checked)} />Include estimates</label>
-        <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={settings.log} onChange={event => update({ log: event.target.checked })} />Log {axisNoun} scale</label>
+        <label className="flex items-center gap-2 text-sm pointer-coarse:min-h-11"><input type="checkbox" checked={showEstimates} onChange={event => setShowEstimates(event.target.checked)} />Include estimates</label>
+        <label className="flex items-center gap-2 text-sm pointer-coarse:min-h-11"><input type="checkbox" checked={settings.log} onChange={event => update({ log: event.target.checked })} />Log {axisNoun} scale</label>
       </div>
-      <div className="flex flex-wrap items-center gap-2" aria-label="Effort toggles"><span className="text-sm">Effort</span><button className={buttonClass} onClick={() => update({ efforts: null })}>All efforts</button>{efforts.map(effort => <button key={effort} className={buttonClass} aria-pressed={settings.efforts === null || settings.efforts.includes(effort)} onClick={() => toggle('efforts', effort, efforts)}>{settings.efforts === null || settings.efforts.includes(effort) ? '✓ ' : ''}{effort}</button>)}</div>
-      <div className="flex flex-wrap items-center gap-2"><label htmlFor="comparison-search" className="sr-only">Filter models</label><input id="comparison-search" className="min-w-0 w-72 max-w-full rounded-lg border border-port-border bg-port-bg p-2 text-sm" placeholder="Find models, e.g. luna or comma-separated names" value={query} onChange={event => setQuery(event.target.value)} /><button className={buttonClass} onClick={() => update({ models: matches })}>Compare matching</button><button className={buttonClass} onClick={() => update({ models: null })}>All models</button><button className={buttonClass} onClick={() => update({ models: [] })}>Clear models</button></div>
-      <div className="flex max-h-48 flex-wrap gap-2 overflow-y-auto" aria-label="Model toggles">{matches.map(model => {
-        const info = modelProvider.get(model);
-        const color = info ? (providerColorMap.get(info.providerId) || getProviderColor(info.providerId, info.provider, 0)) : COLORS[models.indexOf(model) % COLORS.length];
-        const isSelected = settings.models === null || settings.models.includes(model);
-        return <button key={model} className={`${buttonClass} max-w-full break-all text-left inline-flex items-center gap-1.5`} aria-pressed={isSelected} onClick={() => toggle('models', model, models)}><span className="inline-block h-2 w-2 rounded-full shrink-0" style={{ backgroundColor: color }} /><span>{isSelected ? '✓ ' : ''}{model}</span></button>;
+      <div className="flex flex-wrap items-center gap-1.5" aria-label="Effort toggles"><span className="text-xs font-medium text-port-text-muted mr-1">Effort</span><button type="button" className={toggleButtonClass(settings.efforts === null)} aria-pressed={settings.efforts === null} onClick={() => update({ efforts: null })}>All efforts</button>{efforts.map(effort => {
+        const isPressed = settings.efforts === null || settings.efforts.includes(effort);
+        return <button key={effort} type="button" className={toggleButtonClass(isPressed)} aria-pressed={isPressed} onClick={() => toggle('efforts', effort, efforts)}>{isPressed ? '✓ ' : ''}{effort}</button>;
       })}</div>
+      <div className="flex flex-wrap items-center gap-2"><label htmlFor="comparison-search" className="sr-only">Filter models</label><input id="comparison-search" className="min-w-0 w-72 max-w-full rounded-lg border border-port-border bg-port-bg px-2.5 py-1.5 text-sm" placeholder="Find models, e.g. luna or comma-separated names" value={query} onChange={event => { const next = event.target.value; setQuery(next); if (next.trim()) setModelPickerOpen(true); }} /><button type="button" className={buttonClass} onClick={() => update({ models: matches })}>Compare matching</button><button type="button" className={toggleButtonClass(settings.models === null)} onClick={() => update({ models: null })}>All models</button><button type="button" className={toggleButtonClass(Array.isArray(settings.models) && settings.models.length === 0)} onClick={() => update({ models: [] })}>Clear models</button></div>
+      {/* Keep the model toggle wall collapsed by default so the scatter chart stays above the fold. */}
+      <details open={modelPickerOpen} onToggle={event => setModelPickerOpen(event.currentTarget.open)} className="rounded-lg border border-port-border/70 bg-port-bg/30 px-3 py-1.5">
+        <summary className="cursor-pointer select-none text-xs font-medium text-port-text-muted pointer-coarse:min-h-11 flex items-center">
+          Select individual models ({formatCount(selectedModels.length)} / {formatCount(models.length)} selected{query.trim() ? ` · ${formatCount(matches.length)} matching` : ''})
+        </summary>
+        <div className="mt-2 flex max-h-48 flex-wrap gap-1.5 overflow-y-auto pb-1" aria-label="Model toggles">{matches.map(model => {
+          const info = modelProvider.get(model);
+          const color = info ? (providerColorMap.get(info.providerId) || getProviderColor(info.providerId, info.provider, 0)) : COLORS[models.indexOf(model) % COLORS.length];
+          const isSelected = settings.models === null || settings.models.includes(model);
+          return <button key={model} type="button" className={`${toggleButtonClass(isSelected)} max-w-full break-all text-left inline-flex items-center gap-1.5`} aria-pressed={isSelected} onClick={() => toggle('models', model, models)}><span className="inline-block h-2 w-2 rounded-full shrink-0" style={{ backgroundColor: color }} /><span>{isSelected ? '✓ ' : ''}{model}</span></button>;
+        })}</div>
+      </details>
       <p className="text-xs text-port-text-muted">{formatCount(plotted.length)} plotted / {formatCount(selected.length)} selected configurations · {formatCount(excludedCount)} missing this metric or excluded · {formatCount(plotCandidates.length - plotted.length)} identical provider or effort points combined. ≈ identifies estimates.{money && ' Zero prices remain visible on the linear scale.'}</p>
       {composites.length > 1 && <p className="text-xs text-port-text-muted">Newer indexes can have fewer historical task-cost measurements. Select an earlier index to compare its published results.</p>}
     </section>
     <section className="min-w-0 rounded-xl border border-port-border bg-port-card p-3" aria-label={`${axisTitle} versus intelligence chart`}>
-      <div className="flex flex-wrap items-center justify-between gap-2"><h2 className="font-semibold">PortOS intelligence index vs. {axis.label.toLowerCase()}</h2><div className="flex flex-wrap gap-2"><button className={buttonClass} aria-pressed={zoom} onClick={() => setZoom(value => !value)}>{zoom ? 'Reset axes' : 'Fit visible'}</button>{[420, 600, 720].map(height => <button key={height} className={buttonClass} aria-pressed={settings.height === height} onClick={() => update({ height })}>{height}px</button>)}</div></div>
+      <div className="flex flex-wrap items-center justify-between gap-2"><h3 className="font-semibold">PortOS intelligence index vs. {axis.label.toLowerCase()}</h3><div className="flex flex-wrap gap-2"><button type="button" className={toggleButtonClass(zoom)} aria-pressed={zoom} onClick={() => setZoom(value => !value)}>{zoom ? 'Reset axes' : 'Fit visible'}</button>{[420, 600, 720].map(height => <button key={height} type="button" className={toggleButtonClass(settings.height === height)} aria-pressed={settings.height === height} onClick={() => update({ height })}>{height}px</button>)}</div></div>
       {plotted.length ? <div style={{ height: settings.height }} className="w-full min-w-0">
         <ResponsiveContainer width="100%" height="100%"><ScatterChart title={`PortOS intelligence versus ${axisNoun}`} desc={`Scatter plot of PortOS intelligence against ${axisNoun}; ${axis.better} ${axisNoun} and higher intelligence are preferred. Exact values are in the table below.`} margin={{ top: 35, right: 30, bottom: 35, left: 20 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="rgb(var(--port-border))" />
@@ -328,6 +342,6 @@ export default function ModelComparison() {
     }} />
     <GenerationDelta rows={selected} axis={axis} />
     <details className="rounded-xl border border-port-border bg-port-card p-4"><summary className="cursor-pointer font-medium">Methodology and confidence</summary><p className="mt-2 text-sm text-port-text-muted">PortOS index v1 uses {composite?.anchor || 'the versioned reference index'} as its scale. Exact results take priority. Other evaluations are calibrated using at least three shared model/effort configurations, then combined by their median. Uncalibrated benchmark scores are never mixed directly. Missing effort levels use interpolation or a low-confidence nearest-effort estimate for the same model. Unknown members of a recognized family receive a low-confidence median family baseline with source range. No improvement is assumed for a new generation without evidence. Each estimate retains its method and source dates below; missing models stay in the coverage list for research.</p></details>
-    <details className="rounded-xl border border-port-border bg-port-card p-4"><summary className="cursor-pointer font-medium">Selected configurations and evidence ({formatCount(selected.length)})</summary><div className="mt-3 overflow-x-auto"><table className="w-full min-w-[800px] text-left text-sm"><thead><tr><th className="p-2">Model / provider</th><th className="p-2">Effort</th><th className="p-2">Intelligence</th><th className="p-2">{axisTitle}</th><th className="p-2">Performance evidence</th><th className="p-2">{axisTitle} evidence</th></tr></thead><tbody>{selected.slice(0, evidenceLimit).map(row => <tr key={row.id} className="border-t border-port-border"><td className="p-2">{row.model}<span className="block text-xs text-port-text-muted">{row.provider}{row.endpointModel !== row.model ? ` · ${row.endpointModel}` : ''}</span></td><td className="p-2">{row.effort}</td><td className="p-2">{valueText(row.quality)}</td><td className="p-2">{valueText(row[axis.id], axis, row)}</td><td className="p-2">{row.incomparableReason ? <p className="max-w-sm whitespace-normal">{row.incomparableReason}</p> : <MetricEvidence metric={row.quality} />}</td><td className="p-2"><AxisEvidence row={row} axis={axis} /></td></tr>)}</tbody></table></div>{selected.length > evidenceLimit && <button className={buttonClass} onClick={() => setEvidenceLimit(value => value + 100)}>Show 100 more configurations</button>}</details>
+    <details className="rounded-xl border border-port-border bg-port-card p-4"><summary className="cursor-pointer font-medium">Selected configurations and evidence ({formatCount(selected.length)})</summary><div className="mt-3 overflow-x-auto"><table className="w-full min-w-[800px] text-left text-sm"><thead><tr><th className="p-2">Model / provider</th><th className="p-2">Effort</th><th className="p-2">Intelligence</th><th className="p-2">{axisTitle}</th><th className="p-2">Performance evidence</th><th className="p-2">{axisTitle} evidence</th></tr></thead><tbody>{selected.slice(0, evidenceLimit).map(row => <tr key={row.id} className="border-t border-port-border"><td className="p-2">{row.model}<span className="block text-xs text-port-text-muted">{row.provider}{row.endpointModel !== row.model ? ` · ${row.endpointModel}` : ''}</span></td><td className="p-2">{row.effort}</td><td className="p-2">{valueText(row.quality)}</td><td className="p-2">{valueText(row[axis.id], axis, row)}</td><td className="p-2">{row.incomparableReason ? <p className="max-w-sm whitespace-normal">{row.incomparableReason}</p> : <MetricEvidence metric={row.quality} />}</td><td className="p-2"><AxisEvidence row={row} axis={axis} /></td></tr>)}</tbody></table></div>{selected.length > evidenceLimit && <button type="button" className={buttonClass} onClick={() => setEvidenceLimit(value => value + 100)}>Show 100 more configurations</button>}</details>
   </div>;
 }
