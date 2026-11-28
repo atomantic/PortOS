@@ -47,10 +47,13 @@ describe('agents routes', () => {
       expect(res.body.error).toMatch(/process not found/i);
     });
 
-    it('coerces the pid param to an integer before service lookup', async () => {
-      getProcessInfo.mockResolvedValue({ pid: 42 });
-      await request(buildApp()).get('/api/agents/42abc');
-      expect(getProcessInfo).toHaveBeenCalledWith(42);
+    it('returns 400 INVALID_PARAM for malformed or non-positive pid params without calling the service', async () => {
+      for (const badPid of ['42abc', '-1', '0', 'not-a-pid', '1.5']) {
+        const res = await request(buildApp()).get(`/api/agents/${badPid}`);
+        expect(res.status).toBe(400);
+        expect(res.body.code).toBe('INVALID_PARAM');
+      }
+      expect(getProcessInfo).not.toHaveBeenCalled();
     });
   });
 
@@ -63,11 +66,20 @@ describe('agents routes', () => {
       expect(killProcess).toHaveBeenCalledWith(5555);
     });
 
+    it('returns 400 INVALID_PARAM for malformed or non-positive pid params without killing a process', async () => {
+      for (const badPid of ['42abc', '-1', '0', 'not-a-pid', '1.5']) {
+        const res = await request(buildApp()).delete(`/api/agents/${badPid}`);
+        expect(res.status).toBe(400);
+        expect(res.body.code).toBe('INVALID_PARAM');
+      }
+      expect(killProcess).not.toHaveBeenCalled();
+    });
+
     it('propagates a service error to the centralized error middleware', async () => {
-      killProcess.mockRejectedValue(new Error('Invalid PID provided'));
-      const res = await request(buildApp()).delete('/api/agents/-1');
+      killProcess.mockRejectedValue(new Error('Process kill failed'));
+      const res = await request(buildApp()).delete('/api/agents/5555');
       expect(res.status).toBe(500);
-      expect(res.body.error).toMatch(/invalid pid/i);
+      expect(res.body.error).toMatch(/process kill failed/i);
     });
   });
 });

@@ -24,6 +24,8 @@ export const installSchema = z.object({
 
 export const installQuerySchema = z.object({ pythonPath: z.string().optional(), packages: z.string().optional() });
 
+export const flux2QuerySchema = z.object({ modelId: z.string().optional() });
+
 export const flux3RuntimeQuerySchema = z.object({ runtime: z.literal('flux3') }).strict();
 
 export const mossRuntimeQuerySchema = z.object({ runtime: z.literal('moss-swift').optional() }).strict();
