@@ -29,7 +29,7 @@ const JSON_TWIN_FILES = [
 const queueIndexWrite = createFileWriteQueue();
 
 async function ensureSnapshotsDir() {
-  await ensureDir(SNAPSHOTS_DIR);
+  await ensureDir(SNAPSHOTS_DIR, { mode: 0o700 });
 }
 
 function indexEntryFromSnapshotFile(parsed) {
@@ -73,7 +73,7 @@ async function loadIndex() {
 
 async function saveIndex(index) {
   await ensureSnapshotsDir();
-  await atomicWrite(INDEX_FILE, index);
+  await atomicWrite(INDEX_FILE, index, { mode: 0o600, dirMode: 0o700 });
 }
 
 /**
@@ -219,7 +219,7 @@ export async function createSnapshot(label, description = '') {
     // unshift a duplicate of it.
     const index = await loadIndex();
     const snapshotFile = join(SNAPSHOTS_DIR, `${snapshot.id}.json`);
-    await atomicWrite(snapshotFile, { ...snapshot, data });
+    await atomicWrite(snapshotFile, { ...snapshot, data }, { mode: 0o600, dirMode: 0o700 });
     index.snapshots.unshift(snapshot);
     await saveIndex(index);
     console.log(`📸 Time capsule created: ${snapshot.id.slice(0, 8)}`);
@@ -359,7 +359,7 @@ async function scrubSnapshotFiles() {
   }
 
   for (const { filePath, snapshot } of updatedSnapshots) {
-    await atomicWrite(filePath, snapshot);
+    await atomicWrite(filePath, snapshot, { mode: 0o600, dirMode: 0o700 });
   }
 
   const { ok: indexOk, value: indexValue } = await readJSONFileStrict(INDEX_FILE, null, { logError: false });

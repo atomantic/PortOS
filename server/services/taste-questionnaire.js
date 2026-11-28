@@ -437,10 +437,10 @@ async function readProfileForMutation() {
 // which the federation merge uses as its LWW clock. Call only from inside the queue.
 async function writeTasteProfile(profile, { touch = true } = {}) {
   if (!existsSync(DIGITAL_TWIN_DIR)) {
-    await ensureDir(DIGITAL_TWIN_DIR);
+    await ensureDir(DIGITAL_TWIN_DIR, { mode: 0o700 });
   }
   if (touch) profile.updatedAt = now();
-  await atomicWrite(TASTE_PROFILE_FILE, profile);
+  await atomicWrite(TASTE_PROFILE_FILE, profile, { mode: 0o600, dirMode: 0o700 });
   profileCache = profile;
 }
 
@@ -1108,7 +1108,7 @@ async function readAestheticsBytes(targetPath) {
 async function restoreAestheticsBytes(targetPath, previousContent) {
   try {
     if (previousContent === null) await unlink(targetPath);
-    else await atomicWrite(targetPath, previousContent);
+    else await atomicWrite(targetPath, previousContent, { mode: 0o600, dirMode: 0o700 });
   } catch (restoreErr) {
     console.error(`❌ Taste aesthetics restore failed: ${restoreErr.message}`);
   }
@@ -1150,7 +1150,7 @@ async function appendToAestheticsFile(sectionId, config, questionId, answer) {
     content += entry;
   }
 
-  await atomicWrite(targetPath, content);
+  await atomicWrite(targetPath, content, { mode: 0o600, dirMode: 0o700 });
   return true;
 }
 
@@ -1176,6 +1176,6 @@ async function writeAestheticsFile(profileSummary, completedSections) {
     }
   }
 
-  await atomicWrite(targetPath, content);
+  await atomicWrite(targetPath, content, { mode: 0o600, dirMode: 0o700 });
   return true;
 }
