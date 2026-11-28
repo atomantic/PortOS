@@ -12,6 +12,7 @@ import { validateRequest } from '../lib/validateRequest.js';
 import {
   vaultInputSchema,
   notePathSchema,
+  noteReadQuerySchema,
   createNoteSchema,
   updateNoteSchema,
   searchQuerySchema,
@@ -93,8 +94,8 @@ router.get('/vaults/:id/scan', asyncHandler(async (req, res) => {
 }));
 
 router.get('/vaults/:id/note', asyncHandler(async (req, res) => {
-  const { path } = validateRequest(notePathSchema, req.query);
-  const includeBacklinks = req.query.backlinks !== 'false';
+  const { path, backlinks } = validateRequest(noteReadQuerySchema, req.query);
+  const includeBacklinks = backlinks !== 'false';
   const result = await obsidian.getNote(req.params.id, path, { includeBacklinks });
   throwOnError(result);
   res.json(result);
