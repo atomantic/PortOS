@@ -62,8 +62,10 @@ export async function runVideoStitch({ jobId, videoIds }) {
     videoGenEvents.emit('started', { generationId: jobId, id: jobId, stitchedFrom: videoIds, etaMs: null });
     result = await stitchVideos(videoIds, { id: jobId, signal: entry.abort.signal });
   } catch (err) {
-    failureReason = entry.abort.signal.aborted ? 'Canceled while running' : (err.message || 'Stitch failed');
-    console.error(`❌ Video stitch ${entry.abort.signal.aborted ? 'canceled' : 'failed'} [${jobId.slice(0, 8)}]: ${failureReason}`);
+    const canceled = entry.abort.signal.aborted;
+    failureReason = canceled ? 'Canceled while running' : (err.message || 'Stitch failed');
+    if (canceled) console.log(`🛑 Video stitch canceled [${jobId.slice(0, 8)}]: ${failureReason}`);
+    else console.error(`❌ Video stitch failed [${jobId.slice(0, 8)}]: ${failureReason}`);
   } finally {
     activeStitches.delete(jobId);
   }

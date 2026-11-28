@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { EventEmitter } from 'events';
 
 const state = vi.hoisted(() => ({ jobs: [], enqueued: [], stitch: null, admission: null }));
@@ -23,6 +23,10 @@ beforeEach(() => {
   state.admission = null;
   state.stitch = async (ids, { id }) => ({ id, stitchedFrom: ids });
   videoGenEvents.removeAllListeners();
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 describe('enqueueStitch', () => {
@@ -71,6 +75,8 @@ describe('runVideoStitch', () => {
   });
 
   it('cancel aborts the signal handed to stitchVideos and settles as failed', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
     const failed = vi.fn();
     videoGenEvents.on('failed', failed);
     state.stitch = (ids, { signal }) => new Promise((_, reject) => {
@@ -80,6 +86,15 @@ describe('runVideoStitch', () => {
     expect(cancel('j2')).toBe(true);
     await run;
     expect(failed).toHaveBeenCalledWith({ generationId: 'j2', error: 'Canceled while running' });
+    expect(log).toHaveBeenCalledWith('🛑 Video stitch canceled [j2]: Canceled while running');
+    expect(error).not.toHaveBeenCalled();
     expect(cancel('j2')).toBe(false);
+  });
+
+  it('logs an encode failure to stderr', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    state.stitch = async () => { throw new Error('Encode failed'); };
+    await runVideoStitch({ jobId: 'j3', videoIds: ['a', 'b'] });
+    expect(error).toHaveBeenCalledWith('❌ Video stitch failed [j3]: Encode failed');
   });
 });
