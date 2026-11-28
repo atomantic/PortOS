@@ -12,6 +12,7 @@ const script = fileURLToPath(new URL('./portos_sophon.py', import.meta.url));
 const harness = String.raw`
 import importlib.util, json, sys, threading, types
 import time
+real_clock = time.perf_counter
 clock = {"now": 0.0}
 time.time = lambda: clock["now"]      # the engine and the sidecar both read wall time through time.time
 
@@ -92,7 +93,11 @@ r1 = reply("abcdefghij", 10.0)
 result["markers"] = [m for m in out if m != "audio"]
 out.clear(); onset(11.2)
 result["late_onset"] = out[:]
+# A reply starting right after that onset waits (bounded) for the browser's answer, and not once it has arrived.
+clock["now"] = 11.4
+t0 = real_clock(); sess._await_cut_report(); result["waited_s"] = round(real_clock() - t0, 2)
 out.clear(); result["cut_ok"] = sess.browser_cut(r1["rid"], 0.6)
+t0 = real_clock(); sess._await_cut_report(); result["waited_after_cut_s"] = round(real_clock() - t0, 2)
 result["after_cut"] = {"history": [h["a_text"] for h in sess.history], "audio": len(sess.history[-1]["a_audio"]), "last_said": sess.last_said,
                        "cut_is_r1": sess.cut["r"] is r1, "barge": [e for e in sess.events if e["ev"] == "barge_in"]}
 result["recut_ok"] = sess.browser_cut(r1["rid"], 0.2)
@@ -123,6 +128,10 @@ describe.skipIf(!python)('realtime voice sidecar playout cuts', () => {
     expect(res.markers).toEqual([{ type: 'reply_audio', reply_id: res.r1 }]);
     // The engine judged the reply over (no interrupt), so the browser is told the user started speaking.
     expect(res.late_onset).toEqual([{ type: 'onset', reply_id: res.r1 }]);
+    // Until the browser answers, a reply starting 0.2 s after the onset waits out the remaining 0.3 s at most.
+    expect(res.waited_s).toBeGreaterThanOrEqual(0.25);
+    expect(res.waited_s).toBeLessThan(1);
+    expect(res.waited_after_cut_s).toBe(0);
     expect(res.ids_differ).toBe(true);
   });
 

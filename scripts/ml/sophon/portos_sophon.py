@@ -61,6 +61,10 @@ from engine import Brain, Session, SR  # noqa: E402
 OUT_RATE = 24000
 CUT_MARK = "……（被用户打断）"    # the engine's marker for a reply the user talked over ("interrupted by the user")
 RECENT_REPLIES = 16               # replies the browser may still report playout for
+# The browser answers an onset (with "cut", when the reply was still playing there) within one round trip, and a reply
+# starts at least about this long after the onset that began its turn, so waiting until then for that answer before
+# generating costs nothing in practice and keeps the reply from building on audio the user never heard.
+CUT_REPORT_WAIT_S = 0.5
 TC_OPEN, TC_CLOSE = "<tool_call>", "</tool_call>"
 TOOL_RE = re.compile(r"<tool_call>\s*(.*?)\s*(?:</tool_call>|$)", re.S)
 
@@ -260,6 +264,8 @@ class ToolSession(Session):
         self.gen_r = None                                     # the reply the worker thread is generating
         self.announced = None                                 # the reply whose audio the browser is receiving
         self.recent = collections.OrderedDict()               # reply_id -> reply, for the browser's playout reports
+        self.onset_wait = None                                # (reply_id, time) of the last onset the browser may answer
+        self.cut_report = threading.Event()                   # set once the browser answered that onset
 
         def tagged(audio):
             if audio is None:                                 # Session._onset cuts self.reply
@@ -280,7 +286,14 @@ class ToolSession(Session):
         return rid
 
     def _begin(self, r):
+        self._await_cut_report()
         with self.lock: self.gen_r = r; self._rid(r)
+
+    def _await_cut_report(self):
+        wait = self.onset_wait
+        if wait is None: return
+        left = wait[1] + CUT_REPORT_WAIT_S - time.time()
+        if left > 0: self.cut_report.wait(left)
 
     def ev(self, name, **kw):
         if name == "reply_done" and self.gen_r is not None: kw["reply_id"] = self.gen_r.get("rid")
@@ -292,7 +305,9 @@ class ToolSession(Session):
         super()._onset()
         if heard and not r["cancel"]:
             # The engine judged this reply over from generation time alone; the browser knows whether it is still playing.
-            self.send({"type": "onset", "reply_id": self._rid(r)})
+            rid = self._rid(r)
+            self.cut_report.clear(); self.onset_wait = (rid, time.time())
+            self.send({"type": "onset", "reply_id": rid})
 
     def browser_cut(self, rid, played_s):
         """The browser stopped reply `rid` after `played_s` seconds of it had played: cancel it and make the history say what was
@@ -302,6 +317,7 @@ class ToolSession(Session):
         if not math.isfinite(played): return False
         played = max(0.0, played)
         with self.lock:
+            if self.onset_wait is not None and self.onset_wait[0] == str(rid): self.cut_report.set()
             r = self.recent.get(str(rid))
             if r is None or (r["cancel"] and r.get("cut") is None): return False     # unknown, or merged into the next turn
             frac = max(0.0, min(1.0, played / max(r["gen_s"], 1e-3)))
