@@ -427,6 +427,26 @@ describe('VoiceWidget async lifecycle', () => {
     await settle();
     expect(ui.getByText('Thinking', { selector: '[role="status"]' })).toBeInTheDocument();
   });
+
+  it('does not let a delayed voice:transcript echo invalidate a newer turn fast-path lookup', async () => {
+    mocks.getVoiceConfig.mockResolvedValue({ ...ENABLED_CONFIG, llm: { fastPath: { enabled: true } } });
+    let resolveSecond;
+    mocks.resolveTurn.mockReturnValueOnce(new Promise((r) => { resolveSecond = r; }));
+    const widget = await renderWidget();
+    const ui = within(widget);
+
+    fireEvent.change(ui.getByLabelText('Message to the voice assistant'), { target: { value: 'newer question' } });
+    fireEvent.click(ui.getByRole('button', { name: 'Send text' }));
+    await settle();
+
+    // Delayed text echo from an earlier server-routed turn arrives while the newer fast path is in flight.
+    act(() => mocks.events.get('voice:transcript')?.({ text: 'earlier question', source: 'text' }));
+    await settle();
+
+    await act(async () => { resolveSecond({ tier: 'server' }); });
+    expect(voiceClientMock.sendText).toHaveBeenCalledTimes(1);
+    expect(voiceClientMock.sendText).toHaveBeenCalledWith('newer question');
+  });
 });
 
 describe('Voice Call console', () => {

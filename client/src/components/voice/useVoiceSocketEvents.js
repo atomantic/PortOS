@@ -38,6 +38,7 @@ export function useVoiceSocketEvents({
   useEffect(() => {
     if (!enabled) return undefined;
     let active = true;
+    let socketTurnSeq = 0;
     const isLive = () => active && !disposedRef.current;
 
     const restState = () => {
@@ -55,8 +56,10 @@ export function useVoiceSocketEvents({
       onVoiceEvent('voice:transcript', (d) => {
         // In web-speech mode, user text is already appended client-side when
         // onFinal fires. Server echoes it back with source='text' — skip the
-        // duplicate append but still advance the stage.
-        if (turnGenerationRef) turnGenerationRef.current += 1;
+        // duplicate append but still advance the stage. Track server-delivered
+        // turns separately from `turnGenerationRef` so a delayed echo from an
+        // earlier turn cannot invalidate a newer turn's in-flight fast path.
+        socketTurnSeq += 1;
         if (d.text && d.source !== 'text') appendHistory({ role: 'user', text: d.text });
         setStage('thinking');
       }),
@@ -79,6 +82,7 @@ export function useVoiceSocketEvents({
       onVoiceEvent('voice:idle', (d) => {
         if (!isLive()) return;
         const idleGeneration = turnGenerationRef?.current;
+        const idleSocketSeq = socketTurnSeq;
         // voice:idle fires when the server finishes *sending* TTS; local
         // playback may still be running. Wait for drain so stage doesn't
         // flip off 'speaking' while audio is still playing.
@@ -86,6 +90,7 @@ export function useVoiceSocketEvents({
         whenVoiceTurnAudioDrained().then(() => {
           if (!isLive()) return;
           if (turnGenerationRef && idleGeneration !== turnGenerationRef.current) return;
+          if (idleSocketSeq !== socketTurnSeq) return;
           if (d?.reason === 'turn-complete') markVoiceTiming('audio.drained (turn end)');
           setStage((current) => (activeStages.has(current) ? current : restState()));
         });
