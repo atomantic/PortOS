@@ -14,6 +14,8 @@ import { Loader2 } from 'lucide-react';
 // (e.g. unlocking a frozen walk set) where the action isn't destructive;
 // `success` for the positive commits that move a workflow forward but are still
 // worth confirming (approving a walk candidate, freezing a reference version).
+// `stacked` puts the buttons in a full-width column for cells too narrow for a
+// row (a grid tile's footer), so nothing overflows or overlaps.
 const TONES = {
   error: 'bg-port-error/20 text-port-error hover:bg-port-error/30',
   warning: 'bg-port-warning/20 text-port-warning hover:bg-port-warning/30',
@@ -49,6 +51,7 @@ export default function ConfirmButtonPair({
   className = '',
   largeTouchTargets = false,
   responsiveTouchTargets = false,
+  stacked = false,
 }) {
   const groupRef = useRef(null);
 
@@ -83,6 +86,8 @@ export default function ConfirmButtonPair({
   // disable; the label additionally swaps to the in-flight word ("Deleting")
   // when a busyText is supplied, otherwise it stays put.
   const confirmLabel = busy && busyText ? busyText : confirmText;
+  const layoutClass = stacked ? 'flex w-full flex-col items-stretch gap-1' : 'flex items-center gap-2';
+  const stackedButtonClass = stacked ? 'justify-center' : '';
 
   return (
     <div
@@ -90,7 +95,7 @@ export default function ConfirmButtonPair({
       role="group"
       tabIndex={-1}
       aria-label={ariaLabel || prompt || `${confirmAriaLabel || confirmText}?`}
-      className={`flex items-center gap-2 focus-visible:outline-2 focus-visible:outline-port-accent ${className}`.trim()}
+      className={`${layoutClass} focus-visible:outline-2 focus-visible:outline-port-accent ${className}`.trim()}
     >
       {prompt ? <span className="text-xs text-gray-400">{prompt}</span> : null}
       <button
@@ -98,7 +103,7 @@ export default function ConfirmButtonPair({
         onClick={onConfirm}
         disabled={busy}
         aria-label={confirmAriaLabel}
-        className={`inline-flex ${buttonSizeClass} items-center gap-1 px-2 py-1 text-xs rounded transition-colors disabled:opacity-50 ${confirmTone}`}
+        className={`inline-flex ${buttonSizeClass} ${stackedButtonClass} items-center gap-1 px-2 py-1 text-xs rounded transition-colors disabled:opacity-50 ${confirmTone}`}
       >
         {busy ? (
           <Loader2 size={12} className="animate-spin" />
@@ -112,7 +117,7 @@ export default function ConfirmButtonPair({
         onClick={onCancel}
         disabled={busy}
         aria-label={cancelAriaLabel}
-        className={`${buttonSizeClass} px-2 py-1 text-xs text-gray-400 hover:text-white transition-colors disabled:opacity-50`}
+        className={`${buttonSizeClass} ${stackedButtonClass} px-2 py-1 text-xs text-gray-400 hover:text-white transition-colors disabled:opacity-50`}
       >
         {cancelText}
       </button>
