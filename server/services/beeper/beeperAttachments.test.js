@@ -13,7 +13,8 @@
  * instance, and nothing here sends anything through a messaging API.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdirSync, readdirSync, rmSync, utimesSync, writeFileSync, readFileSync, existsSync } from 'fs';
+import { createHash } from 'crypto';
+import { chmodSync, statSync, mkdirSync, readdirSync, rmSync, utimesSync, writeFileSync, readFileSync, existsSync } from 'fs';
 import { dirname, join } from 'path';
 import { createTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 
@@ -171,6 +172,32 @@ describe('ensureAttachmentBytes — the lazy mirror', () => {
     expect(vi.mocked(headAsset)).toHaveBeenCalledTimes(1);
   });
 
+  it.skipIf(process.platform === 'win32').each(['new', 'existing'])(
+    'enforces owner-only permissions when mirroring into %s directories',
+    async (directoryState) => {
+      const bytes = new Uint8Array([1, 2, 3]);
+      const sha256 = createHash('sha256').update(bytes).digest('hex');
+      const root = attachmentsRoot();
+      const directories = [root, join(root, '.tmp'), join(root, sha256.slice(0, 2))];
+
+      if (directoryState === 'existing') {
+        for (const directory of directories) {
+          mkdirSync(directory, { recursive: true });
+          chmodSync(directory, 0o755);
+        }
+      }
+
+      respondTo([['FROM beeper_attachments WHERE message_id', { rows: [attachmentRow()] }]]);
+      vi.mocked(headAsset).mockResolvedValue({ bytes: bytes.length });
+      vi.mocked(fetchAssetStream).mockResolvedValue(streamResponse([bytes]));
+
+      const { filePath } = await ensureAttachmentBytes('msg-example-1', 0);
+
+      for (const directory of directories) expect(statSync(directory).mode & 0o777).toBe(0o700);
+      expect(statSync(filePath).mode & 0o777).toBe(0o600);
+    },
+  );
+
   it('refuses an over-cap attachment at the HEAD pre-flight, before a byte moves', async () => {
     respondTo([['FROM beeper_attachments WHERE message_id', { rows: [attachmentRow()] }]]);
     vi.mocked(headAsset).mockResolvedValue({ bytes: 40 * 1024 * 1024 });
@@ -213,13 +240,19 @@ describe('ensureAttachmentBytes — the lazy mirror', () => {
       }),
     }));
     vi.useFakeTimers();
-    const pending = ensureAttachmentBytes('msg-example-1', 0);
-    const settled = pending.then(() => null).catch((err) => err);
-    await vi.advanceTimersByTimeAsync(61_000);
-    const failure = await settled;
-    vi.useRealTimers();
+    try {
+      const settled = ensureAttachmentBytes('msg-example-1', 0).catch((err) => err);
+      const tempDir = join(attachmentsRoot(), '.tmp');
+      await vi.waitFor(() => {
+        const [partial] = existsSync(tempDir) ? readdirSync(tempDir) : [];
+        expect(partial && statSync(join(tempDir, partial)).size).toBe(4);
+      });
+      await vi.advanceTimersByTimeAsync(61_000);
+      expect(await settled).toMatchObject({ code: 'ATTACHMENT_DOWNLOAD_FAILED' });
+    } finally {
+      vi.useRealTimers();
+    }
 
-    expect(failure).toMatchObject({ code: 'ATTACHMENT_DOWNLOAD_FAILED' });
     expect(storedFiles()).toEqual([]);
     expect(readdirSync(join(attachmentsRoot(), '.tmp'))).toEqual([]);
   });
