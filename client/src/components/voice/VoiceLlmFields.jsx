@@ -5,6 +5,7 @@ import { withUnlistedOption } from '../../lib/withUnlistedOption';
 import BrailleSpinner from '../BrailleSpinner';
 import ProviderModelSelector from '../ProviderModelSelector';
 import ConversationalGemmaNotice from '../settings/voice/ConversationalGemmaNotice';
+import FastVoiceModelNotice from './FastVoiceModelNotice';
 import LlamaRuntimeRow, { isManagedLlamaProvider } from './LlamaRuntimeRow';
 
 export const VOICE_LLM_SELECT_CLS = 'min-h-10 pointer-coarse:min-h-11 w-full min-w-0 rounded-lg border border-port-border bg-port-bg px-2.5 py-1.5 font-mono text-xs text-port-text focus:border-port-accent focus:outline-none disabled:opacity-50';
@@ -96,6 +97,14 @@ export default function VoiceLlmFields({
       </div>
 
       {isManagedLlamaProvider(selectedProvider) && <LlamaRuntimeRow />}
+
+      <FastVoiceModelNotice
+        apiProviders={apiProviders}
+        selectedProviderId={provider}
+        selectedModelId={model}
+        onChange={onChange}
+        onRefreshModels={onRefreshModels}
+      />
 
       <ConversationalGemmaNotice
         compact={compact}
