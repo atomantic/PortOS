@@ -136,9 +136,7 @@ export const startRealtimeCall = async (handlers = {}) => {
       try {
         await outCtx.audioWorklet.addModule(url);
         tap = new AudioWorkletNode(outCtx, 'portos-realtime-tap');
-      } catch {
-        tap = null;
-      }
+      } catch { /* no tap: tap stays null and frames go up without a reference */ }
     }
   } catch (err) {
     // Release the microphone and contexts, or the mic indicator stays on after a failed start.
