@@ -38,7 +38,8 @@ import { claimHeavyLocalJob } from '../../lib/heavyJobClaim.js';
 import { safeChildProcessOptions } from '../../lib/processEnv.js';
 import { IMAGE_GEN_MODE, LOCAL_IMAGEGEN_DEFAULT_MODEL } from './modes.js';
 import { bufferChildExit } from '../videoGen/generateVideoHelpers.js';
-import { getImageModels } from '../../lib/mediaModels.js';
+import { getImageModels, repoForModel } from '../../lib/mediaModels.js';
+import { inspectModelCache } from '../../lib/hfCache.js';
 import { hardwareUnavailableReason, isHardwareCompatible } from '../../lib/systemCapabilities.js';
 import { flux3Env, resolveFlux3Snapshot } from './flux3Runtime.js';
 import {
@@ -99,6 +100,36 @@ export const cancel = () => {
   return true;
 };
 
+const isPinnedMfluxModel = (model) => (
+  process.platform !== 'win32'
+  && !usesTorchVenv(model)
+  && !usesMossSwift(model)
+  && !usesFlux3(model)
+  && !usesMinimaxH3Image(model)
+  && typeof model?.revision === 'string'
+  && model.revision.trim().length > 0
+);
+
+// Resolves the cached snapshot of a pinned mflux model's commit, refusing
+// instead of letting `mflux-generate` pull a mutable `main` from the Hub.
+async function resolveMfluxSnapshot(model) {
+  const repo = repoForModel(model);
+  if (!repo) {
+    throw new ServerError(
+      `mflux model "${model?.id}" has no Hugging Face repo on file for revision ${model.revision.slice(0, 12)}.`,
+      { status: 500, code: 'MFLUX_MISCONFIGURED' },
+    );
+  }
+  const { cached, snapshotPath } = await inspectModelCache(repo, { revision: model.revision });
+  if (!cached || !snapshotPath) {
+    throw new ServerError(
+      `FLUX.1 weights for revision ${model.revision.slice(0, 12)} are not downloaded. Use Download beside the model in Image Gen, then retry.`,
+      { status: 400, code: 'MFLUX_WEIGHTS_NOT_CACHED' },
+    );
+  }
+  return snapshotPath;
+}
+
 async function preflightLocalModel(params) {
   const { modelId, pythonPath } = params;
   // loadMediaModels memoizes — on-disk edits to data/media-models.json still
@@ -141,6 +172,10 @@ async function preflightLocalModel(params) {
   if (!usesTorchVenv(model) && !usesMossSwift(model) && !usesFlux3(model) && !usesMinimaxH3Image(model) && !pythonPath) {
     throw new ServerError('Python path not configured — set it in Media Gen Settings → Local', { status: 400, code: 'IMAGE_GEN_NOT_CONFIGURED' });
   }
+  let mfluxModelPath = null;
+  if (isPinnedMfluxModel(model)) {
+    mfluxModelPath = await resolveMfluxSnapshot(model);
+  }
   // Health, not mere presence. buildArgs below only checks that the shared
   // torch venv's python BINARY exists, so a venv left half-installed (killed
   // mid-download, a hand-run pip upgrade that broke diffusers) spawned anyway
@@ -159,7 +194,7 @@ async function preflightLocalModel(params) {
       );
     }
   }
-  return { model, minimaxRuntime, flux3ModelPath };
+  return { model, minimaxRuntime, flux3ModelPath, mfluxModelPath };
 }
 
 async function prepareLocalRenderMeta(inputs) {
@@ -201,6 +236,10 @@ async function prepareLocalRenderMeta(inputs) {
     meta.modelRepo = MOSS_MANIFEST.repo;
     meta.modelRevision = MOSS_MANIFEST.revision;
     meta.nativeRuntime = { runtime: 'moss-swift', sourceRevision: MOSS_MANIFEST.sourceRevision, adapterVersion: MOSS_MANIFEST.adapterVersion };
+  }
+  if (isPinnedMfluxModel(model)) {
+    meta.modelRepo = repoForModel(model);
+    meta.modelRevision = model.revision;
   }
   if (addedTriggerWords.length) {
     console.log(`🔤 LoRA trigger words woven [${jobId.slice(0, 8)}]: ${addedTriggerWords.join(', ')}`);
@@ -264,7 +303,7 @@ async function launchLocalChild(render, stepwiseDir) {
     jobId, model, modelId, meta, actualSteps, actualGuidance, actualSeed, width, height,
     pythonPath, renderPrompt, negativePrompt, quantize, outputPath, validLoras, loraScales,
     validInitImagePath, validInitImageStrength, validReferenceImagePaths, validReferenceImageStrengths,
-    minimaxRuntime, flux3ModelPath, reviewedReferenceSnapshot,
+    minimaxRuntime, flux3ModelPath, mfluxModelPath, reviewedReferenceSnapshot,
   } = render;
   const preparation = { cancelRequested: false };
   preparing = preparation;
@@ -291,7 +330,7 @@ async function launchLocalChild(render, stepwiseDir) {
       pythonPath, model, prompt: renderPrompt, negativePrompt, width: Number(width), height: Number(height),
       steps: actualSteps, guidance: actualGuidance, seed: actualSeed, quantize, outputPath, loraPaths: validLoras,
       loraScales, stepwiseDir, initImagePath: validInitImagePath, initImageStrength: validInitImageStrength,
-      referenceImagePaths: validReferenceImagePaths, referenceImageStrengths: validReferenceImageStrengths, minimaxRuntime, flux3ModelPath,
+      referenceImagePaths: validReferenceImagePaths, referenceImageStrengths: validReferenceImageStrengths, minimaxRuntime, flux3ModelPath, mfluxModelPath,
     });
     recordProviderInputs(render, providerInputs);
     heavyClaim = await claimHeavyLocalJob({ kind: 'local image generation', id: jobId });
@@ -301,8 +340,13 @@ async function launchLocalChild(render, stepwiseDir) {
     await prepareLocalGpu(jobId);
 
     const tokenEnv = usesMossSwift(model) || usesMinimaxH3Image(model) ? null : await hfChildEnv();
-    const childEnv = usesMossSwift(model) ? mossChildEnv() : usesFlux3(model) ? flux3Env(tokenEnv)
-      : usesMinimaxH3Image(model) ? minimaxH3ImageEnv() : tokenEnv;
+    // Pinned mflux renders load strictly from the verified local snapshot; force
+    // HF_HUB_OFFLINE after tokenEnv so mflux cannot reach the Hub on render.
+    const childEnv = usesMossSwift(model) ? mossChildEnv()
+      : usesFlux3(model) ? flux3Env(tokenEnv)
+        : usesMinimaxH3Image(model) ? minimaxH3ImageEnv()
+          : mfluxModelPath ? { ...tokenEnv, HF_HUB_OFFLINE: '1' }
+            : tokenEnv;
     // A cancel() during GPU preparation found no child to signal.
     assertRenderNotCanceled(preparation);
 
@@ -690,7 +734,7 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
   // callers that bypass the queue must not run two concurrent renders — the
   // activeProcess handle below would be clobbered and cancel() would orphan
   // the first child.
-  const { model, minimaxRuntime, flux3ModelPath } = await preflightLocalModel({
+  const { model, minimaxRuntime, flux3ModelPath, mfluxModelPath } = await preflightLocalModel({
     modelId, pythonPath, negativePrompt, width, height, steps, guidance, seed, initImagePath,
     referenceImagePaths, referenceImageStrengths, loraPaths, loraFilenames,
   });
@@ -723,7 +767,7 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
   const render = {
     ...metadata, job, jobId, model, modelId, pythonPath, negativePrompt, width, height, quantize, loraScales,
     outputPath, filename, outputDir, publicPath, skipSidecar, cleanC2PA, denoise, regenOf,
-    upscaleTo, reviewedReferenceSnapshot, minimaxRuntime, flux3ModelPath,
+    upscaleTo, reviewedReferenceSnapshot, minimaxRuntime, flux3ModelPath, mfluxModelPath,
   };
   const child = await launchLocalChild(render, stepwiseDir);
   wireLocalChild(render, child, stepwiseDir);

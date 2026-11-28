@@ -1814,3 +1814,72 @@ describe('FLUX.3 dispatch', () => {
     expect(() => buildArgs({ ...base, ...input })).toThrow();
   });
 });
+
+describe.skipIf(process.platform === 'win32')('FLUX.1 mflux pinned snapshot dispatch', () => {
+  const devRevision = '45d95c497444bbaebe766e1528792fc9158c0c3a';
+  const snapshot = `/hf-cache/snapshots/${devRevision}`;
+  beforeEach(() => { mockInspectModelCache.mockReset().mockResolvedValue({ cached: true, sizeBytes: 1, snapshotPath: snapshot }); });
+
+  it('resolves the pinned local snapshot, forces HF_HUB_OFFLINE, and records repo/revision provenance', async () => {
+    const { hfChildEnv } = await import('../hfToken.js');
+    const { imageGenEvents } = await import('../imageGenEvents.js');
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter(); child.stderr = new EventEmitter();
+    mockSpawn.mockReset().mockReturnValue(child);
+    hfChildEnv.mockResolvedValueOnce({ HF_TOKEN: 'fixture-stored-token' });
+
+    const job = await generateImage({
+      pythonPath: '/venv-mflux/bin/python3',
+      modelId: 'dev',
+      prompt: 'A brass astrolabe on a wooden desk',
+      width: 512,
+      height: 512,
+      seed: 42,
+    });
+    writeFileSync(join(PATHS.images, job.filename), 'synthetic FLUX.1 output');
+    const completed = new Promise(resolve => imageGenEvents.once('completed', resolve));
+    child.emit('close', 0);
+    await completed;
+
+    expect(mockInspectModelCache).toHaveBeenCalledWith('black-forest-labs/FLUX.1-dev', { revision: devRevision });
+    expect(mockSpawn.mock.calls[0][0]).toMatch(/mflux-generate$/);
+    const argv = mockSpawn.mock.calls[0][1];
+    expect(argv.slice(0, 4)).toEqual(['--model', snapshot, '--base-model', 'dev']);
+    expect(mockSpawn.mock.calls[0][2].env).toMatchObject({ HF_TOKEN: 'fixture-stored-token', HF_HUB_OFFLINE: '1' });
+    const sidecar = JSON.parse(readFileSync(join(PATHS.images, `${job.jobId}.metadata.json`), 'utf8'));
+    expect(sidecar).toMatchObject({
+      modelId: 'dev',
+      modelRepo: 'black-forest-labs/FLUX.1-dev',
+      modelRevision: devRevision,
+    });
+  });
+
+  it('refuses an uncached pinned snapshot before spawning mflux-generate', async () => {
+    mockInspectModelCache.mockResolvedValue({ cached: false, sizeBytes: 0, snapshotPath: null });
+    mockSpawn.mockReset();
+    await expect(generateImage({
+      pythonPath: '/venv-mflux/bin/python3',
+      modelId: 'dev',
+      prompt: 'A brass astrolabe',
+      width: 512,
+      height: 512,
+      seed: 42,
+    })).rejects.toMatchObject({ code: 'MFLUX_WEIGHTS_NOT_CACHED' });
+    expect(mockSpawn).not.toHaveBeenCalled();
+  });
+
+  it('refuses buildArgs for a pinned mflux model when mfluxModelPath is omitted', () => {
+    expect(() => buildArgs({
+      pythonPath: '/venv-mflux/bin/python3',
+      model: { id: 'dev', revision: devRevision, steps: 20, guidance: 3.5 },
+      prompt: 'A brass astrolabe',
+      width: 512,
+      height: 512,
+      steps: 20,
+      guidance: 3.5,
+      seed: 42,
+      quantize: '8',
+      outputPath: '/tmp/example.png',
+    })).toThrow(expect.objectContaining({ code: 'MFLUX_MISCONFIGURED' }));
+  });
+});

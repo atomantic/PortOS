@@ -1,7 +1,7 @@
 /** Load-time normalization, compatibility backfills, and retirement of shipped media model entries. */
 
-import { DEFAULT_REGISTRY, FASTMETAL_DOWNLOAD_SIZE_PROFILES, FLUX3_KLEIN_REVISIONS, MINIMAX_H3_OUTPUT_PROFILE } from './catalogDefaults.js';
-import { FLUX2_REVISION_FIELDS } from './metadata.js';
+import { DEFAULT_REGISTRY, FASTMETAL_DOWNLOAD_SIZE_PROFILES, FLUX3_KLEIN_REVISIONS, MFLUX_FLUX1_REVISIONS, MINIMAX_H3_OUTPUT_PROFILE } from './catalogDefaults.js';
+import { FLUX2_REVISION_FIELDS, repoForModel } from './metadata.js';
 import { isPlainObject } from '../objects.js';
 import {
   LEGACY_VIDEO_KEYS,
@@ -290,6 +290,19 @@ const backfillFlux3Revisions = (list) => {
   return list.map((entry) => {
     if (!isPlainObject(entry) || entry.runner !== 'flux3' || 'revision' in entry) return entry;
     const pin = FLUX3_KLEIN_REVISIONS[entry.repo];
+    return pin ? { ...entry, revision: pin } : entry;
+  });
+};
+
+// Fork-safe commit-pin backfill for persisted FLUX.1 mflux entries (`dev`/`schnell`):
+// the pin lands only while the resolved repo matches a shipped one and no explicit
+// revision (including '') is already set.
+const backfillMfluxRevisions = (list) => {
+  if (!Array.isArray(list)) return list;
+  return list.map((entry) => {
+    if (!isPlainObject(entry) || 'revision' in entry) return entry;
+    if (entry.runner !== undefined && entry.runner !== RUNNER_FAMILIES.MFLUX) return entry;
+    const pin = MFLUX_FLUX1_REVISIONS[repoForModel(entry)];
     return pin ? { ...entry, revision: pin } : entry;
   });
 };
@@ -583,9 +596,9 @@ export const normalizeRegistry = (parsed) => {
   // (treat as fresh install — let the new entries land).
   const shippedImage = isPlainObject(safe._shippedDefaults?.image) ? safe._shippedDefaults.image : null;
   const isImageBootstrap = shippedImage === null;
-  const upgradedImage = backfillFlux3Revisions(backfillDiffusersRevisions(backfillFlux2Revisions(backfillKvRepo(backfillEditOnly(backfillCfgDisabled(
+  const upgradedImage = backfillMfluxRevisions(backfillFlux3Revisions(backfillDiffusersRevisions(backfillFlux2Revisions(backfillKvRepo(backfillEditOnly(backfillCfgDisabled(
     upgradeImageEntries(arrayOrDefault(safe.image, DEFAULT_REGISTRY.image)),
-  ))))));
+  )))))));
   // Image bootstrap deliberately uses userIds ONLY (not union with defaults).
   // Image is getting `_shippedDefaults` for the first time in this release, so
   // there's no prior history of deletions to preserve via the union trick the

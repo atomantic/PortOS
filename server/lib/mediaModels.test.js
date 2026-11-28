@@ -2024,3 +2024,29 @@ describe('FLUX.3 Klein revision pins', () => {
     expect(byId['flux3-klein-q8'].revision).toBe('');
   });
 });
+
+describe('FLUX.1 mflux revision pins', () => {
+  it('ships a 40-hex commit pin on dev and schnell and threads it into requiredRepoSpecsForModel', async () => {
+    const { getImageModels } = await import('./mediaModels.js');
+    const flux1 = getImageModels().filter(m => m.id === 'dev' || m.id === 'schnell');
+    expect(flux1.map(m => m.id).sort()).toEqual(['dev', 'schnell']);
+    for (const m of flux1) {
+      expect(m.revision).toMatch(/^[0-9a-f]{40}$/);
+      expect(requiredRepoSpecsForModel(m)).toEqual([
+        { repo: m.id === 'dev' ? 'black-forest-labs/FLUX.1-dev' : 'black-forest-labs/FLUX.1-schnell', revision: m.revision },
+      ]);
+    }
+  });
+  it('backfills persisted shipped dev/schnell entries without clobbering forks or explicit revisions', async () => {
+    writeFileSync(registryFile, JSON.stringify({ video: {}, image: [
+      { id: 'dev', name: 'Flux 1 Dev', steps: 20, guidance: 3.5 },
+      { id: 'schnell', name: 'Flux 1 Schnell', steps: 4, guidance: 0, revision: '' },
+      { id: 'dev-fork', name: 'Custom Dev Fork', repo: 'my-fork/FLUX.1-dev', steps: 20, guidance: 3.5 },
+    ] }));
+    const { getImageModels } = await import('./mediaModels.js');
+    const byId = Object.fromEntries(getImageModels().map(m => [m.id, m]));
+    expect(byId.dev.revision).toMatch(/^[0-9a-f]{40}$/);
+    expect(byId.schnell.revision).toBe('');
+    expect('revision' in byId['dev-fork']).toBe(false);
+  });
+});
