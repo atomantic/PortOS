@@ -105,7 +105,7 @@ export default function Calendar() {
         }
       />
 
-      <TabPills tabs={TABS} activeTab={activeTab} onChange={handleTabChange} ariaLabel="Calendar sections" />
+      <TabPills tabs={TABS} activeTab={activeTab} onChange={handleTabChange} ariaLabel="Calendar sections" mobileCompact />
 
       <div className="flex-1 overflow-auto p-4">
         {accountsError && (
