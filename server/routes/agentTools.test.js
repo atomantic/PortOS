@@ -17,7 +17,7 @@ vi.mock('../lib/fileUtils.js', async (importActual) => {
 });
 
 vi.mock('../services/platformAccounts.js', () => fnMap([
-  'getAccountWithCredentials', 'recordActivity',
+  'getAccountWithCredentials', 'recordActivity', 'updateAccountStatus',
 ]));
 vi.mock('../services/agent/agentPersonalities.js', () => fnMap(['getAgentById']));
 vi.mock('../services/agent/agentActivity.js', () => fnMap(['logActivity', 'getActivities']));
@@ -30,6 +30,7 @@ vi.mock('../services/agent/agentContentGenerator.js', () => fnMap([
 
 // createMoltbookClient is a factory; checkRateLimit gates the engage loop's writes.
 const moltbookClient = vi.hoisted(() => ({
+  createPost: vi.fn(() => Promise.resolve({ id: 'p-new' })),
   upvote: vi.fn(() => Promise.resolve({})),
   createComment: vi.fn(() => Promise.resolve({ id: 'c1' })),
   getPost: vi.fn(() => Promise.resolve({ id: 'p1', title: 'T' })),
@@ -41,15 +42,18 @@ const moltbookClient = vi.hoisted(() => ({
   apiKey: 'key-123',
 }));
 const checkRateLimitMock = vi.hoisted(() => vi.fn(() => ({ allowed: true })));
+const isAccountSuspendedMock = vi.hoisted(() => vi.fn(() => false));
 vi.mock('../integrations/moltbook/index.js', () => ({
   createMoltbookClient: () => moltbookClient,
   checkRateLimit: checkRateLimitMock,
+  isAccountSuspended: isAccountSuspendedMock,
 }));
 
 import agentToolsRoutes from './agentTools.js';
 import * as platformAccounts from '../services/platformAccounts.js';
 import * as agentPersonalities from '../services/agent/agentPersonalities.js';
 import * as agentActivity from '../services/agent/agentActivity.js';
+import * as agentDrafts from '../services/agent/agentDrafts.js';
 import { generatePost, generateComment, generateReply, assertMoltbookCommentProvider } from '../services/agent/agentContentGenerator.js';
 import { ServerError } from '../lib/errorHandler.js';
 
@@ -65,6 +69,7 @@ describe('Agent Tools Routes', () => {
     app.use('/api/agents/tools', agentToolsRoutes);
     vi.clearAllMocks();
     assertMoltbookCommentProvider.mockResolvedValue(undefined);
+    isAccountSuspendedMock.mockReturnValue(false);
     agentActivity.getActivities.mockResolvedValue([]);
   });
 
@@ -278,6 +283,195 @@ describe('Agent Tools Routes', () => {
       expect(res.status).toBe(200);
       expect(res.body.posts).toEqual([expect.objectContaining({ postId: 'p1', score: 4, commentCount: 7 })]);
       expect(res.body.comments).toEqual([expect.objectContaining({ commentId: 'c9', postTitle: 'Other' })]);
+    });
+  });
+
+  describe('POST /generate-comment', () => {
+    // Catches untrusted Moltbook content reaching an ineligible provider before the gate runs.
+    it('refuses an ineligible comment provider before fetching post or comments', async () => {
+      platformAccounts.getAccountWithCredentials.mockResolvedValue(ACTIVE_ACCOUNT);
+      agentPersonalities.getAgentById.mockResolvedValue(AGENT);
+      assertMoltbookCommentProvider.mockRejectedValueOnce(new ServerError(
+        'Provider cannot read untrusted posts',
+        { status: 422, code: 'untrusted-content-provider-unavailable' },
+      ));
+
+      const res = await request(app)
+        .post('/api/agents/tools/generate-comment')
+        .send({ agentId: 'agent-1', accountId: 'acc-1', postId: 'p1', providerId: 'cli-1' });
+
+      expect(res.status).toBe(422);
+      expect(res.body.code).toBe('untrusted-content-provider-unavailable');
+      expect(assertMoltbookCommentProvider).toHaveBeenCalledWith('cli-1');
+      expect(moltbookClient.getPost).not.toHaveBeenCalled();
+      expect(moltbookClient.getComments).not.toHaveBeenCalled();
+      expect(generateComment).not.toHaveBeenCalled();
+      expect(generateReply).not.toHaveBeenCalled();
+    });
+
+    it('routes to generateReply when parentId matches a comment and falls back to generateComment otherwise', async () => {
+      platformAccounts.getAccountWithCredentials.mockResolvedValue(ACTIVE_ACCOUNT);
+      agentPersonalities.getAgentById.mockResolvedValue(AGENT);
+      const post = { id: 'p1', title: 'Topic' };
+      const parent = { id: 'c-parent', content: 'Parent comment' };
+      moltbookClient.getPost.mockResolvedValue(post);
+      moltbookClient.getComments.mockResolvedValue({ comments: [parent] });
+      generateReply.mockResolvedValueOnce({ content: 'Direct reply' });
+      generateComment.mockResolvedValueOnce({ content: 'Top-level comment' });
+
+      const replyRes = await request(app)
+        .post('/api/agents/tools/generate-comment')
+        .send({ agentId: 'agent-1', accountId: 'acc-1', postId: 'p1', parentId: 'c-parent', providerId: 'p-api', model: 'm1' });
+      expect(replyRes.status).toBe(200);
+      expect(replyRes.body).toEqual({ content: 'Direct reply' });
+      expect(generateReply).toHaveBeenCalledWith(AGENT, post, parent, null, 'p-api', 'm1');
+
+      const fallbackRes = await request(app)
+        .post('/api/agents/tools/generate-comment')
+        .send({ agentId: 'agent-1', accountId: 'acc-1', postId: 'p1', parentId: 'c-missing' });
+      expect(fallbackRes.status).toBe(200);
+      expect(fallbackRes.body).toEqual({ content: 'Top-level comment' });
+      expect(generateComment).toHaveBeenCalledWith(AGENT, post, [parent], null, undefined, undefined);
+    });
+  });
+
+  describe('POST /publish-post and POST /publish-comment', () => {
+    it('publishes a post, records activity, and flags verification_solved=false as verification_failed', async () => {
+      platformAccounts.getAccountWithCredentials.mockResolvedValue(ACTIVE_ACCOUNT);
+      agentPersonalities.getAgentById.mockResolvedValue(AGENT);
+      moltbookClient.createPost
+        .mockResolvedValueOnce({ post: { id: 'post-1', title: 'Ship it' } })
+        .mockResolvedValueOnce({ post: { id: 'post-2', title: 'Held' }, verification_solved: false });
+
+      const invalid = await request(app)
+        .post('/api/agents/tools/publish-post')
+        .send({ agentId: 'agent-1', accountId: 'acc-1', submolt: 'general' });
+      expect(invalid.status).toBe(400);
+      expect(moltbookClient.createPost).not.toHaveBeenCalled();
+
+      const ok = await request(app)
+        .post('/api/agents/tools/publish-post')
+        .send({ agentId: 'agent-1', accountId: 'acc-1', submolt: 'general', title: 'Ship it', content: 'Body' });
+      expect(ok.status).toBe(200);
+      expect(ok.body).toEqual({ id: 'post-1', title: 'Ship it', verificationFailed: false });
+      expect(platformAccounts.recordActivity).toHaveBeenCalledWith('acc-1');
+      expect(agentActivity.logActivity).toHaveBeenLastCalledWith(expect.objectContaining({
+        action: 'post',
+        status: 'completed',
+        result: expect.objectContaining({ postId: 'post-1', verificationFailed: false }),
+      }));
+
+      const held = await request(app)
+        .post('/api/agents/tools/publish-post')
+        .send({ agentId: 'agent-1', accountId: 'acc-1', submolt: 'general', title: 'Held', content: 'Body' });
+      expect(held.status).toBe(200);
+      expect(held.body).toMatchObject({ id: 'post-2', verificationFailed: true });
+      expect(agentActivity.logActivity).toHaveBeenLastCalledWith(expect.objectContaining({
+        action: 'post',
+        status: 'verification_failed',
+        result: expect.objectContaining({ postId: 'post-2', verificationFailed: true }),
+      }));
+    });
+
+    it('dispatches publish-comment to createComment or replyToComment and records verification failures', async () => {
+      platformAccounts.getAccountWithCredentials.mockResolvedValue(ACTIVE_ACCOUNT);
+      agentPersonalities.getAgentById.mockResolvedValue(AGENT);
+      moltbookClient.createComment.mockResolvedValueOnce({ id: 'c-top' });
+      moltbookClient.replyToComment.mockResolvedValueOnce({ id: 'c-reply', verification_solved: false });
+
+      const top = await request(app)
+        .post('/api/agents/tools/publish-comment')
+        .send({ agentId: 'agent-1', accountId: 'acc-1', postId: 'p1', content: 'Nice post' });
+      expect(top.status).toBe(200);
+      expect(top.body).toEqual({ id: 'c-top', verificationFailed: false });
+      expect(moltbookClient.createComment).toHaveBeenCalledWith('p1', 'Nice post');
+      expect(agentActivity.logActivity).toHaveBeenLastCalledWith(expect.objectContaining({
+        action: 'comment',
+        status: 'completed',
+        result: expect.objectContaining({ commentId: 'c-top', isReply: false, verificationFailed: false }),
+      }));
+
+      const reply = await request(app)
+        .post('/api/agents/tools/publish-comment')
+        .send({ agentId: 'agent-1', accountId: 'acc-1', postId: 'p1', parentId: 'c-top', content: 'Follow-up' });
+      expect(reply.status).toBe(200);
+      expect(reply.body).toMatchObject({ id: 'c-reply', verificationFailed: true });
+      expect(moltbookClient.replyToComment).toHaveBeenCalledWith('p1', 'c-top', 'Follow-up');
+      expect(agentActivity.logActivity).toHaveBeenLastCalledWith(expect.objectContaining({
+        action: 'comment',
+        status: 'verification_failed',
+        result: expect.objectContaining({ commentId: 'c-reply', isReply: true, verificationFailed: true }),
+      }));
+    });
+  });
+
+  describe('POST /check-posts suspension halt', () => {
+    // Catches continuing to hammer Moltbook or failing to mark the account suspended after a suspension error.
+    it('halts monitoring early, marks the account suspended, and logs a failed monitor run', async () => {
+      platformAccounts.getAccountWithCredentials.mockResolvedValue(ACTIVE_ACCOUNT);
+      agentPersonalities.getAgentById.mockResolvedValue(AGENT);
+      const now = new Date().toISOString();
+      moltbookClient.getPostsByAuthor.mockResolvedValueOnce([
+        { id: 'p1', title: 'First', created_at: now },
+        { id: 'p2', title: 'Second', created_at: now },
+      ]);
+      const suspendedErr = new Error('403 account suspended');
+      moltbookClient.getComments.mockRejectedValueOnce(suspendedErr);
+      isAccountSuspendedMock.mockImplementation((err) => err === suspendedErr);
+
+      const res = await request(app)
+        .post('/api/agents/tools/check-posts')
+        .send({ agentId: 'agent-1', accountId: 'acc-1', maxReplies: 1, maxUpvotes: 1 });
+
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({ postsChecked: 2, suspended: true });
+      expect(moltbookClient.getComments).toHaveBeenCalledTimes(1);
+      expect(platformAccounts.updateAccountStatus).toHaveBeenCalledWith('acc-1', 'suspended');
+      expect(agentActivity.logActivity).toHaveBeenLastCalledWith(expect.objectContaining({
+        action: 'monitor',
+        status: 'failed',
+        error: 'Account suspended by platform',
+      }));
+    });
+  });
+
+  describe('Drafts CRUD (/drafts)', () => {
+    it('lists, creates, updates, and deletes drafts while returning 400 on invalid input and 404 on missing drafts', async () => {
+      agentDrafts.listDrafts.mockResolvedValueOnce([{ id: 'd1', type: 'post', content: 'Hello' }]);
+      agentDrafts.createDraft.mockResolvedValueOnce({ id: 'd2', type: 'post', content: 'New' });
+      agentDrafts.updateDraft
+        .mockResolvedValueOnce({ id: 'd2', content: 'Updated' })
+        .mockResolvedValueOnce(null);
+      agentDrafts.deleteDraft
+        .mockResolvedValueOnce(true)
+        .mockResolvedValueOnce(false);
+
+      expect((await request(app).get('/api/agents/tools/drafts')).status).toBe(400);
+      const listed = await request(app).get('/api/agents/tools/drafts?agentId=agent-1');
+      expect(listed.status).toBe(200);
+      expect(listed.body).toEqual([{ id: 'd1', type: 'post', content: 'Hello' }]);
+
+      const badCreate = await request(app)
+        .post('/api/agents/tools/drafts')
+        .send({ agentId: 'agent-1', type: 'invalid', content: 'Nope' });
+      expect(badCreate.status).toBe(400);
+      const created = await request(app)
+        .post('/api/agents/tools/drafts')
+        .send({ agentId: 'agent-1', type: 'post', title: 'Draft', content: 'New' });
+      expect(created.status).toBe(201);
+      expect(created.body).toEqual({ id: 'd2', type: 'post', content: 'New' });
+
+      const updated = await request(app)
+        .put('/api/agents/tools/drafts/d2?agentId=agent-1')
+        .send({ content: 'Updated' });
+      expect(updated.status).toBe(200);
+      expect(updated.body).toEqual({ id: 'd2', content: 'Updated' });
+      expect((await request(app).put('/api/agents/tools/drafts/missing?agentId=agent-1').send({ content: 'X' })).status).toBe(404);
+
+      const deleted = await request(app).delete('/api/agents/tools/drafts/d2?agentId=agent-1');
+      expect(deleted.status).toBe(204);
+      expect(deleted.text).toBe('');
+      expect((await request(app).delete('/api/agents/tools/drafts/missing?agentId=agent-1')).status).toBe(404);
     });
   });
 });
