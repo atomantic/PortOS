@@ -82,7 +82,7 @@ describe('music video making-of story routes and persistence', () => {
     expect(videoCapture.body.story.items).toHaveLength(2);
     expect(videoCapture.body.story.posts[0].itemIds).toEqual([captured.body.item.id, videoCapture.body.item.id]);
 
-    // Update the post to staged -> posted with a public URL and verify formatted copy.
+    // Update the post to staged -> posted with per-part media and a public URL and verify formatted copy.
     const updatedPost = await call('patch', '/:id/making-of/posts/:postId', {
       id: project.id,
       postId: captured.body.createdPost.id,
@@ -91,22 +91,31 @@ describe('music video making-of story routes and persistence', () => {
       platform: 'x',
       summary: 'How a joint comparison sheet fixed giant characters.',
       body: 'Post 1: Giant characters.\n\n---\n\nPost 2: Ruler sheet solved it.',
+      partItemIds: [[captured.body.item.id], [videoCapture.body.item.id]],
       publishedUrl: 'https://example.com/status/12345',
     });
     expect(updatedPost.body.post.status).toBe('posted');
     expect(updatedPost.body.post.publishedAt).toBeTruthy();
+    expect(updatedPost.body.post.partItemIds).toEqual([[captured.body.item.id], [videoCapture.body.item.id]]);
     const copy = formatMakingOfPostCopy(updatedPost.body.post, updatedPost.body.story.items, { includeMedia: true });
     expect(copy).toContain('Post 1: Giant characters.');
+    expect(copy).toContain('Attachments (Part 1):');
     expect(copy).toContain('Updated broken attempt [image: example-fail.png]');
+    expect(copy).toContain('Attachments (Part 2):');
     expect(copy).toContain('Fixed motion take [video: clip-example-01]');
 
-    // Deleting an item removes it from all posts cleanly.
+    // Deleting an item removes it from both itemIds and partItemIds cleanly.
     const afterDelete = await call('delete', '/:id/making-of/items/:itemId', {
       id: project.id,
       itemId: captured.body.item.id,
     });
     expect(afterDelete.body.story.items).toHaveLength(1);
     expect(afterDelete.body.story.posts[0].itemIds).toEqual([videoCapture.body.item.id]);
+    expect(afterDelete.body.story.posts[0].partItemIds).toEqual([[], [videoCapture.body.item.id]]);
+
+    // Listing X drafts returns empty when no browser tabs are open.
+    const xDraftsRes = await call('get', '/:id/making-of/x-drafts', { id: project.id }, {});
+    expect(xDraftsRes.body).toEqual({ drafts: [] });
 
     // Peer wire sanitization preserves valid makingOfStory and drops tampered payloads;
     // legacy peer merge without makingOfStory preserves local makingOfStory.

@@ -10,6 +10,7 @@ import {
   MAKING_OF_POST_PLATFORMS,
   MAKING_OF_POST_STATUSES,
   MAKING_OF_STORY_LIMITS,
+  MAKING_OF_X_MAX_MEDIA_PER_POST,
   emptyMakingOfStory,
   normalizeMakingOfTags,
 } from './musicVideoMakingOfStoryShared.js';
@@ -23,10 +24,15 @@ export {
   MAKING_OF_POST_STATUSES,
   MAKING_OF_POST_STATUS_LABELS,
   MAKING_OF_STORY_LIMITS,
+  MAKING_OF_X_MAX_MEDIA_PER_POST,
+  autoDistributeMakingOfPartItems,
   emptyMakingOfStory,
   formatMakingOfPostCopy,
+  isMakingOfMediaItem,
   makingOfItemKey,
   normalizeMakingOfTags,
+  resolveMakingOfPostParts,
+  splitMakingOfThreadParts,
 } from './musicVideoMakingOfStoryShared.js';
 
 const SAFE_ID_PATTERN = /^[A-Za-z0-9_-]{1,100}$/;
@@ -84,6 +90,10 @@ export const makingOfItemSchema = z.object({
   capturedAt: z.string().max(64).default(''),
 }).strict();
 
+const partItemIdsSchema = z.array(
+  z.array(z.string().regex(SAFE_ID_PATTERN)).max(MAKING_OF_X_MAX_MEDIA_PER_POST),
+).max(MAKING_OF_STORY_LIMITS.maxThreadParts);
+
 export const makingOfPostSchema = z.object({
   id: z.string().regex(SAFE_ID_PATTERN),
   title: z.string().trim().min(1).max(MAKING_OF_STORY_LIMITS.titleMaxLength),
@@ -93,6 +103,7 @@ export const makingOfPostSchema = z.object({
   summary: z.string().max(MAKING_OF_STORY_LIMITS.summaryMaxLength).default(''),
   body: z.string().max(MAKING_OF_STORY_LIMITS.bodyMaxLength).default(''),
   itemIds: z.array(z.string().regex(SAFE_ID_PATTERN)).max(MAKING_OF_STORY_LIMITS.maxItems).default([]),
+  partItemIds: partItemIdsSchema.default([]),
   publishedUrl: optionalUrlSchema,
   publishedAt: z.string().max(64).nullable().optional().transform((v) => (v ? v : null)),
   updatedAt: z.string().max(64).default(''),
@@ -137,6 +148,7 @@ export const makingOfPostCreateSchema = z.object({
   summary: z.string().max(MAKING_OF_STORY_LIMITS.summaryMaxLength).default(''),
   body: z.string().max(MAKING_OF_STORY_LIMITS.bodyMaxLength).default(''),
   itemIds: z.array(z.string().regex(SAFE_ID_PATTERN)).max(MAKING_OF_STORY_LIMITS.maxItems).default([]),
+  partItemIds: partItemIdsSchema.default([]),
   publishedUrl: optionalUrlSchema,
   publishedAt: z.string().max(64).nullable().optional().transform((v) => (v ? v : null)),
 }).strict();
@@ -149,11 +161,16 @@ export const makingOfPostPatchSchema = z.object({
   summary: z.string().max(MAKING_OF_STORY_LIMITS.summaryMaxLength).optional(),
   body: z.string().max(MAKING_OF_STORY_LIMITS.bodyMaxLength).optional(),
   itemIds: z.array(z.string().regex(SAFE_ID_PATTERN)).max(MAKING_OF_STORY_LIMITS.maxItems).optional(),
+  partItemIds: partItemIdsSchema.optional(),
   publishedUrl: optionalUrlSchema.optional(),
   publishedAt: z.string().max(64).nullable().optional(),
 }).strict();
 
-/** Dedupe items/posts by id and drop dangling post.itemIds references. */
+export const makingOfXDraftPrepareSchema = z.object({
+  again: z.boolean().optional(),
+}).strict();
+
+/** Dedupe items/posts by id and drop dangling post.itemIds / post.partItemIds references. */
 export function normalizeMakingOfStory(input) {
   if (!input) return emptyMakingOfStory();
   const parsed = makingOfStorySchema.parse(input);
@@ -171,7 +188,23 @@ export function normalizeMakingOfStory(input) {
       seenIds.add(id);
       return true;
     });
-    postById.set(post.id, { ...post, itemIds });
+    const rawPartIds = (post.partItemIds || []).map((bucket) => {
+      const seenInPart = new Set();
+      const cleaned = [];
+      for (const id of bucket) {
+        if (!itemById.has(id) || seenInPart.has(id)) continue;
+        seenInPart.add(id);
+        cleaned.push(id);
+        if (!seenIds.has(id)) {
+          seenIds.add(id);
+          itemIds.push(id);
+        }
+        if (cleaned.length >= MAKING_OF_X_MAX_MEDIA_PER_POST) break;
+      }
+      return cleaned;
+    });
+    while (rawPartIds.length && rawPartIds[rawPartIds.length - 1].length === 0) rawPartIds.pop();
+    postById.set(post.id, { ...post, itemIds, partItemIds: rawPartIds });
   }
   return { version: 1, items, posts: [...postById.values()] };
 }

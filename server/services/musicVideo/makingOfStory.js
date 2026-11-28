@@ -152,11 +152,16 @@ export async function deleteMakingOfItem(projectId, itemId) {
       throw new ServerError('Making-of item not found', { status: 404, code: 'NOT_FOUND' });
     }
     const items = story.items.filter((entry) => entry.id !== itemId);
-    const posts = story.posts.map((post) => (
-      post.itemIds.includes(itemId)
-        ? { ...post, itemIds: post.itemIds.filter((id) => id !== itemId) }
-        : post
-    ));
+    const posts = story.posts.map((post) => {
+      const hasInList = post.itemIds.includes(itemId);
+      const hasInParts = (post.partItemIds || []).some((bucket) => bucket.includes(itemId));
+      if (!hasInList && !hasInParts) return post;
+      return {
+        ...post,
+        itemIds: post.itemIds.filter((id) => id !== itemId),
+        partItemIds: (post.partItemIds || []).map((bucket) => bucket.filter((id) => id !== itemId)),
+      };
+    });
     const nextStory = normalizeMakingOfStory({ version: 1, items, posts });
     return { project: { ...current, makingOfStory: nextStory }, story: nextStory };
   });
@@ -183,6 +188,7 @@ export async function createMakingOfPost(projectId, input) {
       summary: input.summary || '',
       body: input.body || '',
       itemIds: input.itemIds || [],
+      partItemIds: input.partItemIds || [],
       publishedUrl: input.publishedUrl || '',
       publishedAt: input.publishedAt ?? (status === 'posted' ? now : null),
       updatedAt: now,
@@ -213,6 +219,7 @@ export async function updateMakingOfPost(projectId, postId, patch) {
       ...(patch.summary !== undefined ? { summary: patch.summary } : {}),
       ...(patch.body !== undefined ? { body: patch.body } : {}),
       ...(patch.itemIds !== undefined ? { itemIds: patch.itemIds } : {}),
+      ...(patch.partItemIds !== undefined ? { partItemIds: patch.partItemIds } : {}),
       ...(patch.publishedUrl !== undefined ? { publishedUrl: patch.publishedUrl } : {}),
       publishedAt: nextPublishedAt,
       updatedAt: now,

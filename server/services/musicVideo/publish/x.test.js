@@ -6,7 +6,7 @@ import { xAdapter } from './x.js';
 // A page whose modal composer (when `dialog`) sits over the home timeline's inline one; both carry
 // tweetTextarea_0. `dialogDelay` makes the modal's editor appear only after a while (X still hydrating).
 const fakePage = ({ dialog, dialogDelay = 0 }) => {
-  const calls = { typed: [], clicked: [], waited: [] };
+  const calls = { typed: [], clicked: [], waited: [], files: [] };
   const born = Date.now();
   const page = {
     calls,
@@ -36,7 +36,7 @@ const fakePage = ({ dialog, dialogDelay = 0 }) => {
           calls.clicked.push(sel);
         },
         last: () => ({ click: async () => { calls.clicked.push(sel); } }),
-        first: () => ({ waitFor, setInputFiles: async () => {} }),
+        first: () => ({ waitFor, setInputFiles: async (paths) => { calls.files.push({ sel, paths }); } }),
       };
     },
   };
@@ -73,6 +73,21 @@ describe('X composer scope', () => {
   it('fills the composer without ever pressing the Post button', async () => {
     const page = fakePage({ dialog: true });
     await xAdapter.prepare(page, { posts: [{ text: 'one' }, { text: 'two' }] });
+    expect(page.calls.clicked.filter((c) => c.includes('tweetButton'))).toEqual([]);
+  });
+
+  it('attaches multiple mixed image and video files to a single post via mediaFiles', async () => {
+    const page = fakePage({ dialog: true });
+    await xAdapter.prepare(page, {
+      posts: [
+        { text: 'part 1', mediaFiles: [{ path: '/tmp/a.png' }, { path: '/tmp/b.mp4' }] },
+        { text: 'part 2', media: { path: '/tmp/c.png' } },
+      ],
+    });
+    expect(page.calls.files).toEqual([
+      { sel: '[role=dialog] input[data-testid=fileInput]', paths: ['/tmp/a.png', '/tmp/b.mp4'] },
+      { sel: '[role=dialog] input[data-testid=fileInput]', paths: '/tmp/c.png' },
+    ]);
     expect(page.calls.clicked.filter((c) => c.includes('tweetButton'))).toEqual([]);
   });
 });

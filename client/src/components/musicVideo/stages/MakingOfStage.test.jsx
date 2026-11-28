@@ -8,8 +8,15 @@ vi.mock('../../../services/apiMusicVideo.js', () => ({
   updateMusicVideoMakingOfPost: vi.fn(),
   deleteMusicVideoMakingOfPost: vi.fn(),
   deleteMusicVideoMakingOfItem: vi.fn(),
+  getMusicVideoMakingOfXDrafts: vi.fn(async () => ({ drafts: [] })),
+  prepareMusicVideoMakingOfXDraft: vi.fn(),
+  discardMusicVideoMakingOfXDraft: vi.fn(async () => ({ ok: true })),
   getMusicVideoMakingOfCatalog: vi.fn(async (id) => ({ project: { id, name: 'Demo', version: 1 }, snapshot: 'a'.repeat(64), assets: [] })),
   listMusicVideoProjectSummaries: vi.fn(async () => ({ items: [], nextCursor: null })),
+}));
+
+vi.mock('../../../services/socket', () => ({
+  default: { on: vi.fn(), off: vi.fn() },
 }));
 
 vi.mock('../../ui/Toast.jsx', () => ({
@@ -140,5 +147,63 @@ describe('MakingOfStage', () => {
 
     await waitFor(() => expect(api.deleteMusicVideoMakingOfItem).toHaveBeenCalledWith('mv-demo', 'moi-1', { silent: true }));
     expect(onMakingOfStorySaved).toHaveBeenCalled();
+  });
+
+  it('assigns mixed image and video media per thread part, fills an X draft for review, and records the top-level post link', async () => {
+    const onMakingOfStorySaved = vi.fn();
+    api.updateMusicVideoMakingOfPost.mockResolvedValue({
+      post: { ...baseProject.makingOfStory.posts[0], partItemIds: [['moi-1', 'moi-2'], []] },
+      story: {
+        ...baseProject.makingOfStory,
+        posts: [{ ...baseProject.makingOfStory.posts[0], itemIds: ['moi-1', 'moi-2'], partItemIds: [['moi-1', 'moi-2'], []] }],
+      },
+    });
+    api.prepareMusicVideoMakingOfXDraft.mockResolvedValueOnce({
+      draftId: 'mvmof-1',
+      projectId: 'mv-demo',
+      postId: 'mop-1',
+      state: 'open',
+      screenshot: 'data:image/jpeg;base64,abc',
+      summary: { account: 'example', posts: 2, attachments: 2 },
+      manualPublication: true,
+    });
+
+    render(
+      <MakingOfStage
+        board={{
+          project: baseProject,
+          onEditShot: vi.fn(),
+          openPreview: vi.fn(),
+          onCaptureMakingOf: vi.fn(),
+          onMakingOfStorySaved,
+        }}
+      />,
+    );
+
+    // Choose an image for Part 1 via the per-part media selector.
+    const part1Picker = screen.getByLabelText('Add image or video to part 1 of Fixing character height drift');
+    fireEvent.change(part1Picker, { target: { value: 'moi-2' } });
+    await waitFor(() => expect(api.updateMusicVideoMakingOfPost).toHaveBeenCalledWith(
+      'mv-demo',
+      'mop-1',
+      expect.objectContaining({ itemIds: ['moi-1', 'moi-2'], partItemIds: [['moi-2'], []] }),
+      { silent: true },
+    ));
+
+    // Fill the X draft and verify the review screenshot + Discard control appear.
+    fireEvent.click(screen.getByRole('button', { name: /Fill X draft/i }));
+    await waitFor(() => expect(api.prepareMusicVideoMakingOfXDraft).toHaveBeenCalledWith('mv-demo', 'mop-1', {}, { silent: true }));
+    expect(await screen.findByAltText('X draft as filled for Fixing character height drift')).toBeTruthy();
+
+    // Paste the top-level X post link and click Record (just like Publish).
+    const urlInput = screen.getByLabelText('Link to the top-level Fixing character height drift post');
+    fireEvent.change(urlInput, { target: { value: 'https://x.com/example/status/42' } });
+    fireEvent.click(screen.getByRole('button', { name: /Record/i }));
+    await waitFor(() => expect(api.updateMusicVideoMakingOfPost).toHaveBeenCalledWith(
+      'mv-demo',
+      'mop-1',
+      { status: 'posted', publishedUrl: 'https://x.com/example/status/42' },
+      { silent: true },
+    ));
   });
 });

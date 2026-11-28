@@ -239,6 +239,22 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
     direction: 'server-to-client', summary: 'A song revision changed; apply the persisted project snapshot.',
     payloadSchema: { type: 'object', required: ['projectId', 'project'], properties: { projectId: { type: 'string' }, project: { type: 'object' } } },
   },
+  'music-video:making-of-draft': {
+    direction: 'server-to-client',
+    summary: 'A Making-Of X thread draft tab was queued, filling, filled (open), closed by hand, discarded, or cleared after posting.',
+    payloadSchema: {
+      type: 'object',
+      required: ['projectId', 'postId', 'state'],
+      additionalProperties: false,
+      properties: {
+        projectId: { type: 'string' },
+        postId: { type: 'string' },
+        draftId: { type: 'string' },
+        state: { type: 'string', enum: ['queued', 'filling', 'open', 'closed', 'discarded', 'posted'] },
+        message: { type: 'string' },
+      },
+    },
+  },
   'voice-studio:changed': {
     direction: 'server-to-client', summary: 'Voice library or runtime setup changed; refetch authenticated state.',
     payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
