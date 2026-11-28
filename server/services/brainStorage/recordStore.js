@@ -33,6 +33,7 @@ import { join } from 'path';
 import EventEmitter from 'events';
 import { v4 as uuidv4 } from '../../lib/uuid.js';
 import { PATHS } from '../../lib/fileUtils.js';
+import { createFileWorkFence } from '../../lib/fileWriteQueue.js';
 import { createCollectionStore } from '../../lib/collectionStore.js';
 import { supersedingTimestamp } from '../../lib/tombstones.js';
 import { getInstanceId } from '../instanceIdentity.js';
@@ -64,11 +65,15 @@ export const BRAIN_STORE_SCHEMA_VERSION = 1;
 // One collectionStore per entity type, rooted at data/brain/<type>/. No
 // `sanitizeRecord` — brain records (and their in-place tombstones) are stored
 // and loaded verbatim, exactly as the old monolithic map did.
+const recordWrites = createFileWorkFence();
+export const withLiveRecordRestore = recordWrites.exclusive;
+
 const brainStores = Object.freeze(Object.fromEntries(
   BRAIN_ENTITY_TYPES.map((type) => [type, createCollectionStore({
     dir: join(DATA_DIR, type),
     type,
     schemaVersion: BRAIN_STORE_SCHEMA_VERSION,
+    withWrite: recordWrites.run,
   })]),
 ));
 
@@ -357,13 +362,13 @@ export async function create(type, recordData) {
     updatedAt: timestamp
   };
 
-  // Fresh uuid → no read-modify-write; saveOne queues per-id internally.
-  await store.saveOne(id, record);
-  brainEvents.emit(`${type}:upserted`, { id, record: { id, ...record } });
-  await brainSyncLog.appendLocalChanges([{ op: 'create', type, id, record, originInstanceId }]);
-
-  console.log(`🧠 Created ${type} record: ${id}`);
-  return { id, ...record };
+  return store.queueRecordWrite(id, async () => {
+    await store.saveOneNow(id, record);
+    brainEvents.emit(`${type}:upserted`, { id, record: { id, ...record } });
+    await brainSyncLog.appendLocalChanges([{ op: 'create', type, id, record, originInstanceId }]);
+    console.log(`🧠 Created ${type} record: ${id}`);
+    return { id, ...record };
+  });
 }
 
 /**
@@ -541,17 +546,11 @@ export async function updateMany(type, updates) {
         updatedAt: supersedingTimestamp(existing.updatedAt, now())
       };
       await store.saveOneNow(id, next);
+      brainEvents.emit(`${type}:upserted`, { id, record: { id, ...next } });
+      await brainSyncLog.appendLocalChanges([{ op: 'update', type, id, record: next, originInstanceId: next.originInstanceId }]);
       return next;
     });
-    if (!record) continue;
-    // Emit + append the sync-log entry as EACH record lands, not once after the
-    // whole batch. Per-record files mean there is no all-or-nothing batch to
-    // preserve, so if a later id's write throws, the records already persisted
-    // must still have federated — a batch-tail loop would skip them entirely and
-    // leave earlier successes local-only.
-    applied.push({ id, record });
-    brainEvents.emit(`${type}:upserted`, { id, record: { id, ...record } });
-    await brainSyncLog.appendLocalChanges([{ op: 'update', type, id, record, originInstanceId: record.originInstanceId }]);
+    if (record) applied.push({ id, record });
   }
   if (applied.length === 0) return [];
   console.log(`🧠 Updated ${applied.length} ${type} records in one batch`);

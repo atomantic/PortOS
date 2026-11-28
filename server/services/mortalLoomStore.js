@@ -313,7 +313,7 @@ export async function initMortalLoomStore() {
       const nextPath = settings?.mortalloom?.enabled ? normalizePath(settings.mortalloom.path) : null;
       if (nextPath !== watchedPath) {
         configureStoreWatcher(settings);
-        invalidateMeatspace(['overview', 'alcohol', 'body', 'blood', 'epigenetic', 'eyes', 'calendar']);
+        invalidateMeatspace(['overview', 'alcohol', 'nicotine', 'body', 'blood', 'epigenetic', 'eyes', 'calendar']);
         dashboardEvents.emit('goals:changed');
       }
       if (!settings?.mortalloom?.enabled) {
@@ -1222,7 +1222,7 @@ export async function importToPortOS() {
     for (const key of dailyKeys) { report.added[key] = 0; report.skipped[key] = 0; }
   }
 
-  invalidateMeatspace(['overview', 'blood', 'epigenetic', 'eyes', 'body', 'alcohol']);
+  invalidateMeatspace(['overview', 'blood', 'epigenetic', 'eyes', 'body', 'alcohol', 'nicotine']);
 
   if (profile) {
     const { filled } = await meatspaceConfig.fillConfigFromMortalLoomProfile(profile);

@@ -57,6 +57,41 @@ export function createKeyedFileWriteQueue() {
 }
 
 /**
+ * Drain parallel work before an exclusive operation and defer new work until
+ * it finishes. A work callback must not await another turn on the same fence.
+ */
+export function createFileWorkFence() {
+  const active = new Set();
+  const queueExclusive = createFileWriteQueue();
+  let held = null;
+
+  async function run(work) {
+    while (held) await held;
+    const pending = Promise.resolve().then(work);
+    active.add(pending);
+    try {
+      return await pending;
+    } finally {
+      active.delete(pending);
+    }
+  }
+
+  const exclusive = (work) => queueExclusive(async () => {
+    const { promise, resolve } = Promise.withResolvers();
+    held = promise;
+    try {
+      await Promise.allSettled(active);
+      return await work();
+    } finally {
+      held = null;
+      resolve();
+    }
+  });
+
+  return { run, exclusive };
+}
+
+/**
  * Detached writes (bookkeeping scheduled off a queued turn and not awaited) still need one drain
  * point for test teardown or shutdown. The registry lives on `globalThis` so module instances from
  * `vi.resetModules()` share it; entries remove themselves on settle.

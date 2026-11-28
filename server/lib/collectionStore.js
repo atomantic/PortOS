@@ -89,6 +89,8 @@ import { isVitestRunner } from './runtimeEnv.js';
  *   Initial `config` for a fresh type index (and the fallback when an on-disk
  *   index has a missing/non-object `config`). Defaults to `{}`; NOT re-applied
  *   on later `saveTypeIndex` writes.
+ * @param {(work: () => Promise<any>) => Promise<any>} [opts.withWrite]
+ *   Optional outer fence shared by this collection’s write queues.
  * @param {RegExp} [opts.idPattern]
  *   Allowlist for record-directory names. Defaults to a permissive pattern
  *   (`/^[A-Za-z0-9_-]{1,128}$/`) — services with stricter id rules should pass
@@ -100,6 +102,7 @@ export function createCollectionStore({
   schemaVersion,
   sanitizeRecord = null,
   defaultTypeIndexConfig = {},
+  withWrite = work => work(),
   idPattern = /^[A-Za-z0-9_-]{1,128}$/,
 } = {}) {
   if (typeof dir !== 'string' || !dir) {
@@ -124,14 +127,17 @@ export function createCollectionStore({
 
   // Per-record write queue; the assert throws synchronously on a bad id before
   // anything is enqueued.
-  const queueRecordWrite = createRecordWriteQueue((id) => {
+  const queueRecord = createRecordWriteQueue((id) => {
     if (!isValidId(id)) {
       throw new Error(`collectionStore[${type}]: invalid record id "${id}" — must match ${idPattern}`);
     }
   });
 
+  const queueRecordWrite = (id, work) => queueRecord(id, () => withWrite(work));
+
   // Type-index single-tail queue; also the write-fence for config-slot updates.
-  const queueTypeIndexWrite = createFileWriteQueue();
+  const queueTypeIndex = createFileWriteQueue();
+  const queueTypeIndexWrite = work => queueTypeIndex(() => withWrite(work));
 
   const buildEmptyTypeIndex = () => ({
     schemaVersion,

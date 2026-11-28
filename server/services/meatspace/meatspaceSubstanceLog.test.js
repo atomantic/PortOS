@@ -18,6 +18,7 @@ vi.mock('../mortalLoomStore.js', () => ({
 import { readJSONFile, atomicWrite } from '../../lib/fileUtils.js';
 import { isMortalLoomEnabled, readDailyLogIfEnabled, mlPush, mlPatchById, mlRemoveById, mlIdAtDateIndex } from '../mortalLoomStore.js';
 import * as alcohol from './meatspaceAlcohol.js';
+import { invalidateMortalLoomChanges } from './meatspaceEvents.js';
 import * as nicotine from './meatspaceNicotine.js';
 
 const cases = [
@@ -51,6 +52,18 @@ beforeEach(() => {
   atomicWrite.mockImplementation(async (path, data) => {
     if (String(path).endsWith('daily-log.json')) store = structuredClone(data);
   });
+});
+
+it('refreshes the nicotine summary on a MortalLoom nicotine change', async () => {
+  const date = '2024-06-01';
+  const item = { product: 'Example Pouch', mgPerUnit: 3, count: 1, date };
+  invalidateMortalLoomChanges({ nicotineEntries: [item] }, { nicotineEntries: [] });
+  expect((await nicotine.getNicotineSummary()).recentEntries).toEqual([]);
+
+  store.entries = [{ date, nicotine: { items: [item], totalMg: 3 } }];
+  expect((await nicotine.getNicotineSummary()).recentEntries).toEqual([]);
+  invalidateMortalLoomChanges({ nicotineEntries: [] }, { nicotineEntries: [item] });
+  expect((await nicotine.getNicotineSummary()).recentEntries).toEqual(store.entries);
 });
 
 describe.each(cases)('$name event log', ({ key, items, total, result, input, update, movedTotal, log, edit, remove, persisted, buttons, collection, zeroAmount }) => {

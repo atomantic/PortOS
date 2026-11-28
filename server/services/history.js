@@ -8,10 +8,16 @@ const HISTORY_FILE = join(DATA_DIR, 'history.jsonl');
 const MAX_ENTRIES = 500;
 
 // In-memory cache with TTL
+let cacheRevision = 0;
 let historyCache = null;
 let cacheTimestamp = 0;
 const CACHE_TTL_MS = 2000; // 2 second cache TTL
 const queueHistoryWrite = createFileWriteQueue();
+
+export const withLiveRestore = restore => queueHistoryWrite(() => restore(() => {
+  cacheRevision += 1;
+  historyCache = null;
+}));
 
 async function loadHistory() {
   // Return cached data if still valid
@@ -20,9 +26,12 @@ async function loadHistory() {
     return historyCache;
   }
 
+  const revision = cacheRevision;
   await ensureDir(DATA_DIR);
+  const entries = await readJSONLines(HISTORY_FILE, { logErrors: true });
+  if (revision !== cacheRevision) return loadHistory();
 
-  historyCache = { entries: await readJSONLines(HISTORY_FILE, { logErrors: true }) };
+  historyCache = { entries };
   cacheTimestamp = now;
   return historyCache;
 }
@@ -37,6 +46,7 @@ async function saveHistory(data) {
   };
   await writeJSONLines(HISTORY_FILE, nextData.entries);
   // Update cache only after the disk write succeeds.
+  cacheRevision += 1;
   historyCache = nextData;
   cacheTimestamp = Date.now();
 }
@@ -65,6 +75,7 @@ export async function logAction(action, target, targetName, details = {}, succes
       await saveHistory({ entries });
     } else {
       await appendJSONLine(HISTORY_FILE, entry);
+      cacheRevision += 1;
       historyCache = { entries };
       cacheTimestamp = Date.now();
     }

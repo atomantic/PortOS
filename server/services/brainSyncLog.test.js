@@ -51,7 +51,8 @@ import {
   appendChange,
   appendChanges,
   getChangesSince,
-  compactLog
+  compactLog,
+  withLiveRestore
 } from './brainSyncLog.js';
 
 const syncLogPath = () => join(getTempRoot(), 'brain', 'sync_log.jsonl');
@@ -86,6 +87,27 @@ describe('brainSyncLog', () => {
     rmSync(syncLogPath(), { force: true });
     await initSyncLog();
     vi.clearAllMocks();
+  });
+
+  it('reindexes restored bytes and deduplicates only against the restored log', async () => {
+    const relay = { op: 'update', type: 'people', id: 'relay', record: { updatedAt: '2026-01-01' } };
+    await appendChange('create', 'people', 'long-preimage', { name: 'é'.repeat(500) });
+    await appendChanges([relay]);
+    const restored = [
+      { seq: 31, op: 'create', type: 'ideas', id: 'restored-first' },
+      { seq: 32, op: 'create', type: 'ideas', id: 'restored-second', record: { name: '復元' } }
+    ];
+    await withLiveRestore(async refresh => {
+      writeLog(restored.map(entry => JSON.stringify(entry)).join('\n') + '\n');
+      await refresh();
+    });
+
+    expect(getCurrentSeq()).toBe(32);
+    expect((await getChangesSince(31)).changes).toEqual([restored[1]]);
+    expect(lastReadStart()).toBe(lineOffset(1));
+    expect(await appendChanges([relay, relay], { skipLogged: true })).toMatchObject([{ seq: 33, id: 'relay' }]);
+    expect((await getChangesSince(32)).changes).toMatchObject([{ seq: 33, id: 'relay' }]);
+    expect(lastReadStart()).toBe(lineOffset(2));
   });
 
   describe('getCurrentSeq', () => {

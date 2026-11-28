@@ -24,7 +24,7 @@ import * as brainStorage from './brainStorage.js';
 import * as memory from './memoryBackend.js';
 import * as embeddings from './memoryEmbeddings.js';
 import { atomicWrite, ensureDir, PATHS } from '../lib/fileUtils.js';
-import { createKeyedFileWriteQueue } from '../lib/fileWriteQueue.js';
+import { createFileWorkFence, createKeyedFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { BRAIN_BRIDGE_SOURCE_AGENT_ID } from '../lib/brainBridgeSource.js';
 import { iterateJournals, getJournal } from './brainJournal.js';
 
@@ -67,7 +67,9 @@ const BRIDGED_ENTITY_TYPES = Object.keys(TYPE_MAP)
 // reconcile walk. (JSONL stores are append-only, so they can never orphan a
 // mapped memory entry.)
 const RECONCILABLE_TYPES = [...BRIDGED_ENTITY_TYPES, 'journals'];
-const queueBridgeCommit = createKeyedFileWriteQueue();
+const bridgeWork = createFileWorkFence();
+const queueCommitByKey = createKeyedFileWriteQueue();
+const queueBridgeCommit = (key, work) => queueCommitByKey(key, () => bridgeWork.run(work));
 
 function readCanonicalRecord(brainType, id) {
   return brainType === 'journals' ? getJournal(id) : brainStorage.getById(brainType, id);
@@ -80,7 +82,11 @@ let bridgeMap = null;
 let bridgeMapLoading = null;
 let mapWriteTail = Promise.resolve();
 
-export async function loadBridgeMap({ readOnly = false } = {}) {
+export const withLiveRestore = restore => bridgeWork.exclusive(() => restore(() => { bridgeMap = null; }));
+
+export const loadBridgeMap = options => bridgeWork.run(() => readBridgeMap(options));
+
+async function readBridgeMap({ readOnly = false } = {}) {
   if (bridgeMap) return bridgeMap;
   if (bridgeMapLoading) return bridgeMapLoading;
   const load = async () => {
@@ -283,7 +289,8 @@ export async function syncBrainRecord(brainType, record, {
   const memoryData = brainRecordToMemory(brainType, record);
   if (!memoryData) return null;
 
-  const map = await loadBridgeMap();
+  // Validate the map before embedding, then resolve it again at commit time.
+  await loadBridgeMap();
   const key = bridgeKey(brainType, record.id);
 
   // Generate embedding. Pass the source hints (NOT persisted on memoryData —
@@ -297,6 +304,7 @@ export async function syncBrainRecord(brainType, record, {
   // An embedding may finish after a newer edit, archive, or delete. Check
   // canonical state at commit time without making those writes wait for it.
   return queueBridgeCommit(key, async () => {
+    const map = await readBridgeMap();
     if (RECONCILABLE_TYPES.includes(brainType)) {
       const current = await readCanonicalRecord(brainType, record.id);
       if (!current || current.archived) {
@@ -495,7 +503,9 @@ export async function syncAllBrainData({ dryRun = false, refresh = false, onlyMi
     return stats;
   } finally {
     if (bridgeMapChanged) {
-      await saveBridgeMap().catch((err) => {
+      await bridgeWork.run(async () => {
+        if (bridgeMap) await saveBridgeMap();
+      }).catch((err) => {
         console.error(`❌ Failed to save brain bridge map after bulk sync: ${err.message}`);
         stats.errors++;
       });
@@ -677,7 +687,7 @@ async function reconcileInactiveMemory(brainType, id, map, key, record, { hardDe
 function reconcileBrainRecord(brainType, id, options = {}) {
   const key = bridgeKey(brainType, id);
   return queueBridgeCommit(key, async () => {
-    const map = await loadBridgeMap();
+    const map = await readBridgeMap();
     const record = JSONL_TYPES.includes(brainType)
       ? (await readJsonlStore(brainType)).find(entry => entry.id === id)
       : await readCanonicalRecord(brainType, id);

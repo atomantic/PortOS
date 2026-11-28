@@ -28,7 +28,8 @@ const caches = {
 const CACHE_TTL_MS = 2000;
 // meta.json is one shared settings document, so serialize the complete
 // read/merge/write cycle rather than only its final atomic write.
-const queueMetaWrite = createFileWriteQueue();
+const queueLogWrite = createFileWriteQueue();
+export const withLiveLogRestore = queueLogWrite;
 
 // Default settings
 const DEFAULT_META = {
@@ -80,28 +81,25 @@ export async function loadMeta() {
 /**
  * Save brain settings
  */
-export async function saveMeta(meta) {
+export const saveMeta = meta => queueLogWrite(() => persistMeta(meta));
+
+async function persistMeta(meta) {
   await ensureBrainDir();
   await atomicWrite(FILES.meta, meta, { mode: 0o600, dirMode: 0o700 });
-  caches.meta.data = meta;
-  caches.meta.timestamp = Date.now();
+  caches.meta = { data: meta, timestamp: Date.now() };
   brainEvents.emit('meta:changed', meta);
 }
 
 /**
  * Update brain settings (partial update)
  */
-export async function updateMeta(updates) {
-  return queueMetaWrite(async () => {
-    // Read from disk inside the queue: a cached snapshot could predate a
-    // preceding queued update if another caller populated it before entry.
-    caches.meta.data = null;
-    caches.meta.timestamp = 0;
-    const meta = await loadMeta();
-    const updated = { ...meta, ...updates };
-    await saveMeta(updated);
-    return updated;
-  });
+export const updateMeta = updates => queueLogWrite(() => patchMeta(updates));
+
+async function patchMeta(updates) {
+  caches.meta = { data: null, timestamp: 0 };
+  const updated = { ...(await loadMeta()), ...updates };
+  await persistMeta(updated);
+  return updated;
 }
 
 // =============================================================================
@@ -151,8 +149,7 @@ async function appendJsonl(type, record) {
   }
 
   // Invalidate cache so next read gets fresh data
-  caches[type].data = null;
-  caches[type].timestamp = 0;
+  caches[type] = { data: null, timestamp: 0 };
 
   brainEvents.emit(`${type}:added`, record);
 }
@@ -188,10 +185,10 @@ export async function createDigest(digest) {
     generatedAt: now()
   };
 
-  await appendJsonl('digests', record);
-
-  // Update meta with last digest time
-  await updateMeta({ lastDailyDigest: record.generatedAt });
+  await queueLogWrite(async () => {
+    await appendJsonl('digests', record);
+    await patchMeta({ lastDailyDigest: record.generatedAt });
+  });
 
   console.log(`🧠 Created daily digest: ${record.id}`);
   return record;
@@ -228,10 +225,10 @@ export async function createReview(review) {
     generatedAt: now()
   };
 
-  await appendJsonl('reviews', record);
-
-  // Update meta with last review time
-  await updateMeta({ lastWeeklyReview: record.generatedAt });
+  await queueLogWrite(async () => {
+    await appendJsonl('reviews', record);
+    await patchMeta({ lastWeeklyReview: record.generatedAt });
+  });
 
   console.log(`🧠 Created weekly review: ${record.id}`);
   return record;
@@ -239,7 +236,6 @@ export async function createReview(review) {
 
 export function clearLogCaches() {
   for (const key of Object.keys(caches)) {
-    caches[key].data = null;
-    caches[key].timestamp = 0;
+    caches[key] = { data: null, timestamp: 0 };
   }
 }
