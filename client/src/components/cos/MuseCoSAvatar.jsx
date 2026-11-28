@@ -1,5 +1,5 @@
 import { useRef, useMemo, useEffect, useState, useCallback, Suspense } from 'react';
-import { Canvas, useFrame, useThree } from '@react-three/fiber';
+import { Canvas, useFrame } from '@react-three/fiber';
 import { useGLTF } from '../../lib/threeHelpers/gltf.js';
 import { Sparkles } from '../../lib/threeHelpers/effects.jsx';
 import * as THREE from 'three';
@@ -13,6 +13,7 @@ import {
 import CoSAvatarOrbitControls from './CoSAvatarOrbitControls';
 import CoSBackgroundCamera from './CoSBackgroundCamera';
 import CoSCanvasGuard from './CoSCanvasGuard';
+import CoSInvalidateOnStateChange from './CoSInvalidateOnStateChange';
 import { withInPlaceClips } from '../../utils/animationClips';
 import { fitModelToHeight } from '../../utils/modelFit';
 import useClonedGltf, { GltfPrimitive } from '../../hooks/useClonedGltf';
@@ -238,16 +239,6 @@ function StateEffects({ color, state }) {
   return <Sparkles count={15} scale={3} size={1.5} speed={0.3} color={color} />;
 }
 
-// Under frameloop='demand', state/speaking changes that only affect
-// useFrame-driven properties need to invalidate the frame so one renders.
-function InvalidateOnStateChange({ state, speaking }) {
-  const { invalidate } = useThree();
-  useEffect(() => {
-    invalidate();
-  }, [state, speaking, invalidate]);
-  return null;
-}
-
 function Scene({ state, speaking, background }) {
   const stateConfig = AGENT_STATES[state] || AGENT_STATES.sleeping;
   const color = stateConfig.color;
@@ -256,7 +247,7 @@ function Scene({ state, speaking, background }) {
     <>
       <CoSBackgroundCamera enabled={background} z={3.3} />
 
-      <InvalidateOnStateChange state={state} speaking={speaking} />
+      <CoSInvalidateOnStateChange state={state} speaking={speaking} />
 
       {/* Neutral, even lighting so the model renders in its own full texture
           and color. The per-state hue lives in the accent point light + halo /
