@@ -19,6 +19,8 @@ const DEPLOY_KILL_DELAY_MS = 10 * 1000;   // 10 seconds after SIGTERM
 // Per-app lock to prevent concurrent deploys
 const deployingApps = new Map();
 
+/** @typedef {{success: boolean, code: number | null, cancelled: boolean, timedOut: boolean, error?: string}} DeployResult */
+
 /**
  * Check whether an app has a deploy.sh script
  */
@@ -35,7 +37,7 @@ export function hasDeployScript(app) {
  * @param {object} app - App object with repoPath, type, name
  * @param {string[]} flags - CLI flags (--ios, --macos, --watch, --all, --skip-tests)
  * @param {function} emit - Callback (type, data) for streaming output
- * @returns {Promise<{success: boolean, code: number}>}
+ * @returns {Promise<DeployResult>}
  */
 export async function deployApp(app, flags, emit) {
   const dir = app.repoPath;
@@ -44,8 +46,9 @@ export async function deployApp(app, flags, emit) {
     catch (err) { console.error(`❌ Deploy output hook failed: ${err.message}`); }
   };
   if (deployingApps.has(dir)) {
-    send('error', { message: 'Deploy already in progress for this app' });
-    return { success: false, code: -1 };
+    const error = 'Deploy already in progress for this app';
+    send('error', { message: error });
+    return { success: false, code: -1, cancelled: false, timedOut: false, error };
   }
 
   const safeFlags = flags.filter(f => VALID_FLAGS.has(f));
@@ -83,16 +86,18 @@ export async function deployApp(app, flags, emit) {
     deployingApps.delete(dir);
   }
 
-  const reason = result.aborted ? 'Deploy cancelled' : result.timedOut ? 'Deploy timed out' : result.error?.message;
-  if (reason) send('error', { message: reason });
   const { success, code } = result;
+  const cancelled = Boolean(result.aborted);
+  const timedOut = Boolean(result.timedOut);
+  const reason = cancelled ? 'Deploy cancelled' : timedOut ? 'Deploy timed out' : result.error?.message;
+  if (reason) send('error', { message: reason });
   send('status', {
     message: reason || (success ? 'Deploy complete' : `Deploy failed (exit code ${code})`),
     phase: 'complete',
     success,
     code
   });
-  return { success, code };
+  return { success, code, cancelled, timedOut, ...(reason ? { error: reason } : {}) };
 }
 
 /** Request teardown of the active deploy for this app, if any. */
@@ -115,7 +120,7 @@ export function cancelDeploy(appId) {
  * Returns a discriminated outcome so the caller can map it to the right event:
  *   - `{ ok: false, error }` — the request was invalid (app not found, or no
  *     deploy.sh) and never started a deploy (caller emits `app:deploy:error`).
- *   - `{ ok: true, success, code }` — the deploy ran to completion (caller emits
+ *   - `{ ok: true, ...DeployResult }` — the deploy settled (caller emits
  *     `app:deploy:complete`).
  *
  * @param {string} appId - Id of the app to deploy
@@ -127,7 +132,7 @@ export function cancelDeploy(appId) {
  *   a test seam so the orchestration is unit-testable without a real app store.
  * @param {Function} [opts.checkScript] - Injectable deploy-script check (defaults to hasDeployScript).
  * @param {Function} [opts.runDeploy] - Injectable deploy runner (defaults to deployApp).
- * @returns {Promise<{ok: false, error: string} | {ok: true, success: boolean, code: number}>}
+ * @returns {Promise<{ok: false, error: string} | ({ok: true} & DeployResult)>}
  */
 export async function runDeployFlow(
   appId,
@@ -141,11 +146,11 @@ export async function runDeployFlow(
   console.log(`🚀 Deploy started for ${app.name} [${flags.join(', ') || 'default'}]`);
   const result = await maintenance.run('app-operation', String(app.id).slice(0, 256),
     () => runDeploy(app, flags, onOutput || (() => {})));
-  // A failed deploy is an error line (#7945); a successful one is progress.
-  const logDeploy = result.success ? console.log : console.error;
-  logDeploy(`${result.success ? '✅' : '❌'} Deploy ${result.success ? 'complete' : 'failed'} for ${app.name}`);
+  if (result.cancelled) console.log(`⏹️ Deploy cancelled for ${app.name}`);
+  else if (result.success) console.log(`✅ Deploy complete for ${app.name}`);
+  else console.error(`❌ ${result.timedOut ? 'Deploy timed out' : 'Deploy failed'} for ${app.name}`);
 
-  return { ok: true, success: result.success, code: result.code };
+  return { ok: true, ...result };
 }
 
 /**

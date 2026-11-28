@@ -11,7 +11,7 @@ import { describe, it, expect, vi, beforeEach, onTestFinished } from 'vitest';
 // have their own parity suite (services/updatePreflightParity.test.js).
 
 vi.mock('../services/streamingDetect.js', () => ({ streamDetection: vi.fn() }));
-vi.mock('../services/appDeployer.js', () => ({ runDeployFlow: vi.fn() }));
+vi.mock('../services/appDeployer.js', () => ({ cancelDeploy: vi.fn(), runDeployFlow: vi.fn() }));
 vi.mock('../services/updatePreflight.js', () => ({
   checkPortosUpdatePreflight: vi.fn(async () => {}),
   checkManualUpdateActivity: vi.fn(async () => {}),
@@ -34,7 +34,7 @@ vi.mock('../services/pm2Standardizer.js', () => ({
 import * as appsService from '../services/apps.js';
 import * as appUpdater from '../services/appUpdater.js';
 import * as pm2Standardizer from '../services/pm2Standardizer.js';
-import { runDeployFlow } from '../services/appDeployer.js';
+import { cancelDeploy, runDeployFlow } from '../services/appDeployer.js';
 
 // The real orchestration, so app:standardize is exercised through the same
 // flow the standardize:start path uses. Its analyze/backup/apply seams are wired
@@ -45,6 +45,7 @@ import { checkPortosUpdatePreflight } from '../services/updatePreflight.js';
 import { PORTOS_APP_ID } from '../lib/appIdentity.js';
 import { PEER_SOCKET_ROOM } from '../services/socketIo.js';
 import { maintenance } from '../lib/maintenanceAdmission.js';
+import * as systemActivityNotify from '../services/systemActivityNotify.js';
 import { __resetAppOperations, registerAppHandlers } from '../sockets/apps.js';
 
 // Two app records pointing at ONE checkout — the case app id alone can't catch.
@@ -92,7 +93,7 @@ const connect = (bus, rooms = []) => {
   registerAppHandlers(socket, bus.io);
   return {
     emitted,
-    fire: (event, payload) => handlers.get(event)(payload),
+    fire: (event, ...args) => handlers.get(event)(...args),
     events: (name) => emitted.filter((e) => e.event === name),
     last: (name) => emitted.filter((e) => e.event === name).at(-1),
   };
@@ -381,7 +382,7 @@ describe('app socket handlers', () => {
       expect(client.last('app:deploy:output').payload).toMatchObject({ appId: 'app-a', text: 'building\n', stream: 'stdout' });
       // io.emit: the terminal frame also reaches a socket that connected after the request.
       for (const watcher of [client, remount]) {
-        expect(watcher.last('app:deploy:complete').payload).toEqual({ appId: 'app-a', startedAt: expect.any(Number), success: true, code: 0 });
+        expect(watcher.last('app:deploy:complete').payload).toEqual({ appId: 'app-a', startedAt: expect.any(Number), success: true, code: 0, cancelled: false, timedOut: false });
         expect(watcher.last('app:operations:active').payload.operations).toEqual([]);
       }
       // Every frame names the run, so a client can tombstone a run no snapshot named.
@@ -413,8 +414,38 @@ describe('app socket handlers', () => {
       runDeployFlow.mockResolvedValue({ ok: true, success: false, code: 2 });
       const client = connect(bus);
       await client.fire('app:deploy', { appId: 'app-a' });
-      expect(client.last('app:deploy:complete').payload).toEqual({ appId: 'app-a', startedAt: expect.any(Number), success: false, code: 2 });
+      expect(client.last('app:deploy:complete').payload).toEqual({ appId: 'app-a', startedAt: expect.any(Number), success: false, code: 2, cancelled: false, timedOut: false });
       expect(client.last('app:operations:active').payload.operations).toEqual([]);
+    });
+
+    it.each([
+      { cancelled: true, timedOut: false, error: 'Deploy cancelled', phase: 'cancellation' },
+      { cancelled: false, timedOut: true, error: 'Deploy timed out', phase: 'failure' },
+    ])('broadcasts "$error" and ends the operation with $phase', async ({ cancelled, timedOut, error, phase }) => {
+      const noteActivity = vi.spyOn(systemActivityNotify, 'noteSystemActivity');
+      onTestFinished(() => noteActivity.mockRestore());
+      const { client, settled, release } = await startParkedDeploy('app-a');
+      const watcher = connect(bus);
+
+      if (cancelled) {
+        cancelDeploy.mockReturnValueOnce(true);
+        const acknowledge = vi.fn();
+        await watcher.fire('app:deploy:cancel', { appId: 'app-a' }, acknowledge);
+        expect(cancelDeploy).toHaveBeenCalledExactlyOnceWith('app-a');
+        expect(acknowledge).toHaveBeenCalledExactlyOnceWith({ ok: true });
+        expect(client.events('app:deploy:complete')).toHaveLength(0);
+        expect(watcher.last('app:operations:active').payload.operations).toHaveLength(1);
+      }
+      release({ ok: true, success: false, code: -1, cancelled, timedOut, error });
+      await settled;
+
+      for (const observer of [client, watcher]) {
+        expect(observer.last('app:deploy:complete').payload).toEqual({
+          appId: 'app-a', startedAt: expect.any(Number), success: false, code: -1, cancelled, timedOut, error,
+        });
+        expect(observer.last('app:operations:active').payload.operations).toEqual([]);
+      }
+      expect(noteActivity).toHaveBeenCalledWith('appOperations', phase);
     });
 
     it('releases the operation when the flow refuses the request', async () => {

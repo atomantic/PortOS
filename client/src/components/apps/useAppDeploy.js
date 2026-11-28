@@ -9,6 +9,7 @@ import { useState, useCallback, useEffect, useRef } from 'react';
 import socket from '../../services/socket';
 
 const MAX_OUTPUT_LINES = 5000;
+const CANCEL_ACK_TIMEOUT_MS = 10_000;
 
 const DEPLOY_CONNECTION_LOST_MESSAGE =
   "Lost connection while this deploy ran; it has finished on the server. Check the app's logs or run Deploy again to confirm.";
@@ -48,18 +49,28 @@ const statusEntry = (message, ts) => ({ text: `--- ${message} ---\n`, stream: 's
 export function useAppDeploy(appId) {
   const [output, setOutput] = useState([]);
   const [isDeploying, setIsDeploying] = useState(false);
+  const [isCancelling, setIsCancelling] = useState(false);
   const [error, setError] = useState(null);
   const [result, setResult] = useState(null);
-  const runRef = useRef({ live: false, confirmed: false, linkLost: false, startedAt: null, tombstone: null });
+  const runRef = useRef({
+    live: false, confirmed: false, linkLost: false, startedAt: null, tombstone: null,
+    terminalError: null, cancelRequest: null,
+  });
+
+  const resetCancellation = useCallback(() => {
+    runRef.current.cancelRequest = null;
+    setIsCancelling(false);
+  }, []);
 
   useEffect(() => {
-    if (!appId) return undefined;
     const run = runRef.current;
-    Object.assign(run, { live: false, confirmed: false, linkLost: false, startedAt: null, tombstone: null });
+    Object.assign(run, { live: false, confirmed: false, linkLost: false, startedAt: null, tombstone: null, terminalError: null });
+    resetCancellation();
     setOutput([]);
     setError(null);
     setResult(null);
     setIsDeploying(false);
+    if (!appId) return undefined;
 
     const appendOutput = (...entries) => setOutput(prev => {
       const next = [...prev, ...entries];
@@ -74,6 +85,8 @@ export function useAppDeploy(appId) {
         // refused duplicate's error.
         setError(null);
         run.linkLost = false;
+        run.terminalError = null;
+        resetCancellation();
         if (otherRun) {
           setOutput([]);
           setResult(null);
@@ -90,6 +103,7 @@ export function useAppDeploy(appId) {
       // An unknown identity keeps the previous tombstone rather than erasing it.
       if (run.startedAt != null) run.tombstone = run.startedAt;
       setIsDeploying(false);
+      resetCancellation();
     };
     const forApp = (handler) => (data) => { if (data?.appId === appId) handler(data); };
 
@@ -116,21 +130,27 @@ export function useAppDeploy(appId) {
         run.live = false;
         run.startedAt = null;
         setIsDeploying(false);
+        resetCancellation();
         socket.emit('app:operations:list');
         return;
       }
       if (data.startedAt != null) run.startedAt = data.startedAt;
+      run.terminalError = data.message;
       endRun();
     });
     const onComplete = forApp((data) => {
       if (data.startedAt != null) run.startedAt = data.startedAt;
-      // A failed run replaces any stale duplicate-refusal error.
-      setError(data.success === false ? (data.error || DEPLOY_FAILED_MESSAGE) : null);
+      // Only the terminal error can fill in a missing failure reason. Dispatch
+      // and cancellation refusals describe requests, not the deploy's outcome.
+      const failure = data.cancelled ? 'Deploy cancelled' : data.timedOut ? 'Deploy timed out' : DEPLOY_FAILED_MESSAGE;
+      setError(data.success === false ? (data.error || run.terminalError || failure) : null);
       setResult(data);
       endRun();
     });
 
     const adopt = (op) => {
+      resetCancellation();
+      run.terminalError = null;
       run.live = true;
       run.confirmed = true;
       run.linkLost = false;
@@ -176,6 +196,7 @@ export function useAppDeploy(appId) {
     requestActive();
 
     return () => {
+      run.cancelRequest = null;
       socket.off('app:deploy:output', onOutput);
       socket.off('app:deploy:status', onStatus);
       socket.off('app:deploy:error', onError);
@@ -184,16 +205,37 @@ export function useAppDeploy(appId) {
       socket.off('connect', requestActive);
       socket.off('disconnect', onDisconnect);
     };
-  }, [appId]);
+  }, [appId, resetCancellation]);
 
   const startDeploy = useCallback((flags = []) => {
-    Object.assign(runRef.current, { live: true, confirmed: false, linkLost: false, startedAt: null });
+    resetCancellation();
+    Object.assign(runRef.current, { live: true, confirmed: false, linkLost: false, startedAt: null, terminalError: null });
     setOutput([]);
     setError(null);
     setResult(null);
     setIsDeploying(true);
     socket.emit('app:deploy', { appId, flags });
-  }, [appId]);
+  }, [appId, resetCancellation]);
+
+  const cancelDeploy = useCallback(() => {
+    const run = runRef.current;
+    if (!appId || !run.live || run.cancelRequest) return;
+    if (!socket.connected) {
+      setError('Reconnect to cancel this deploy');
+      return;
+    }
+    const request = Symbol();
+    run.cancelRequest = request;
+    setIsCancelling(true);
+    setError(null);
+    // Drop this request if it cannot be sent now. A buffered cancellation
+    // replayed on reconnect could target a later deploy of the same app.
+    socket.volatile.timeout(CANCEL_ACK_TIMEOUT_MS).emit('app:deploy:cancel', { appId }, (err, response) => {
+      if (run.cancelRequest !== request || (!err && response?.ok)) return;
+      resetCancellation();
+      setError(response?.message || 'Could not confirm deploy cancellation');
+    });
+  }, [appId, resetCancellation]);
 
   const clearDeploy = useCallback(() => {
     setOutput([]);
@@ -201,5 +243,5 @@ export function useAppDeploy(appId) {
     setResult(null);
   }, []);
 
-  return { output, isDeploying, error, result, startDeploy, clearDeploy };
+  return { output, isDeploying, isCancelling, error, result, startDeploy, cancelDeploy, clearDeploy };
 }
