@@ -1958,6 +1958,16 @@ ${section}`;
     expect(oldPy.stderr).toContain('FastVideo on Apple Silicon needs Python 3.11+');
     expect(oldPy.calls).not.toContain('uv pip sync');
   });
+
+  it('omits unused peft, accelerate, loguru, timm, torchaudio, omegaconf, and duplicate httpx/httpcore packages', () => {
+    const names = new Set(Array.from(lock.matchAll(/^([a-z0-9][a-z0-9._-]*)==/gim), ([, name]) => name.toLowerCase()));
+    for (const omitted of ['peft', 'accelerate', 'loguru', 'timm', 'torchaudio', 'omegaconf', 'httpx', 'httpcore']) {
+      expect(names.has(omitted), omitted).toBe(false);
+    }
+    for (const kept of ['psutil', 'cloudpickle', 'remote-pdb', 'mlx', 'diffusers', 'transformers', 'huggingface-hub', 'httpx2', 'httpcore2']) {
+      expect(names.has(kept), kept).toBe(true);
+    }
+  });
 });
 
 describe('ACE-Step Apple Silicon install is hash-pinned', () => {
