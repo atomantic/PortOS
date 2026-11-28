@@ -61,8 +61,8 @@ Submit tasks, manage durable autonomous agents, schedule recurring automations, 
 |---|---|---|---|
 | **Chief of Staff Tasks** | `/cos/tasks` | Task dispatch queue, priority scheduling (HIGH, MEDIUM, LOW), auto-execution vs user approval gates, task context preparation, and learning ETAs. | [Chief of Staff](./chief-of-staff.md) |
 | **Agent Runs & Feedback** | `/cos/agents` | Live streaming agent output, token counts, transcript inspection, and durable rating/feedback collection for continuous learning. | [Chief of Staff](./chief-of-staff.md) |
-| **Schedule Timeline & Workflows** | `/cos/workflow`, `/cos/schedule` | Visual Gantt-style schedule editor showing launch order, task dependencies, concurrency limits, and cron schedules. | [Chief of Staff](./chief-of-staff.md) |
-| **Operational Briefings & Digest** | `/cos/briefing`, `/cos/digest` | Morning briefings of operational signals, system alerts, pending approvals, and end-of-day accomplishment rollups. | [GOALS_OPERATIONAL.md](../GOALS_OPERATIONAL.md) |
+| **Schedule Timeline & Workflows** | `/cos/schedule/timeline`, `/cos/schedule` | Visual Gantt-style schedule editor showing launch order, task dependencies, concurrency limits, and cron schedules. | [Chief of Staff](./chief-of-staff.md) |
+| **Operational Briefings & Digest** | `/cos/briefing`, `/cos/briefing/digest` | Morning briefings of operational signals, system alerts, pending approvals, and end-of-day accomplishment rollups. | [GOALS_OPERATIONAL.md](../GOALS_OPERATIONAL.md) |
 | **CoS Health & Diagnostics** | `/cos/health`, `/cos/jobs` | Agent runner daemon health, PM2 worker telemetry, background maintenance jobs, and queue diagnostics. | [Chief of Staff](./chief-of-staff.md) |
 | **Learning** | `/cos/learning` | Task duration models, success rate metrics, and category learning curves. | — |
 | **Persistent Mind** | `/cos/mind` | Resident long-term conversational AI agent with persistent context memory, annotation support, and continuous system oversight. | [Agent Tools (MCP)](./agent-context.md), [Persistent Mind](./persistent-mind-continuous-play.md) |
@@ -73,7 +73,7 @@ Submit tasks, manage durable autonomous agents, schedule recurring automations, 
 | **AI Providers & Model Runner** | `/ai/presets` | Multi-provider configuration supporting CLI agents (Claude Code, Codex, Antigravity, OpenCode), cloud APIs (OpenAI, Anthropic, Gemini, Grok), and local endpoints (Ollama, LM Studio, vLLM, SGLang). | [Claude on Ollama](./claude-ollama.md) |
 | **Fleet LLM Setup** | `/ai/fleet` | Connect this install to a dedicated model server on a PortOS peer. Configure providers to send requests directly to that host. | [Dedicated LLM Host](./fleet-llm-host.md) |
 | **Prompt Manager** | `/prompts` | Reusable prompt template library, variable substitution engine, prompt versioning, and auto-upgrade migrations. | [Prompt Manager](./prompt-manager.md) |
-| **Runs & Run Events Ledger** | `/cos/runs`, `/cos/run-events` | Comprehensive ledger of past and in-flight AI runs, lifecycle event replay, and orphaned process recovery. | — |
+| **Runs & Run Events Ledger** | `/cos/runs`, `/cos/runs/events` | Comprehensive ledger of past and in-flight AI runs, lifecycle event replay, and orphaned process recovery. | — |
 | **Code Reviewers** | `/models/code-reviewers` | Configure reviewer chains, model settings, and when a review stops. Enable goal-fidelity review to check whether completed agent work meets the original task and route confirmed gaps for follow-up. | [Chief of Staff](./chief-of-staff.md) |
 
 ---

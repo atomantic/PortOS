@@ -503,6 +503,8 @@ describe('describeSignalDeath (#3101 signal → actionable cause)', () => {
       expect(reason).toMatch(new RegExp(sig));
       expect(reason).toMatch(/MLX\/Metal/);
       expect(reason).toMatch(/native fault/i);
+      expect(reason).toMatch(/Media Gen Settings → Local/);
+      expect(reason).not.toMatch(/Settings → Video/);
     }
   });
 

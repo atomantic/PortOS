@@ -1806,5 +1806,5 @@ echo ""
 if [[ "$ANY_BYOV" == *[!0]* ]]; then
   echo "PortOS auto-discovers the requested runtime; no Python path or other manual configuration is needed."
 else
-  echo "Set this Python path in PortOS Settings → Image Gen → Local."
+  echo "Set this Python path in PortOS Media Gen Settings → Local."
 fi
