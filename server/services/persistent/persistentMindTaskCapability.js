@@ -8,6 +8,7 @@
  */
 
 import { isProcessProvider } from '../../lib/provider/providerTypes.js';
+import { PROVIDERS_PAGE_BREADCRUMB } from '../../lib/navManifest.js';
 import {
   PERSISTENT_MIND_TASK_LIMITS,
   isPersistentMindTaskModelAllowed,
@@ -302,9 +303,9 @@ const boundedError = (error) => boundedErrorMessage(error, 'Task creation failed
 const readinessError = (providerId, verdict) => {
   const reasonCodes = (verdict?.reasonCodes || []).slice(0, 5).join(', ') || 'prerequisites';
   if (verdict?.status === 'unknown') {
-    return `Provider '${providerId}' readiness is still being checked (${reasonCodes}); retry shortly or check Settings > AI Providers`;
+    return `Provider '${providerId}' readiness is still being checked (${reasonCodes}); retry shortly or check ${PROVIDERS_PAGE_BREADCRUMB}`;
   }
-  return `Provider '${providerId}' is not ready (${reasonCodes}); check Settings > AI Providers`;
+  return `Provider '${providerId}' is not ready (${reasonCodes}); check ${PROVIDERS_PAGE_BREADCRUMB}`;
 };
 
 const validateChoice = async (request, apps, providers, capabilities) => {

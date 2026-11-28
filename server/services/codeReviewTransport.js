@@ -10,6 +10,7 @@ import { readResponseJson } from '../lib/readResponseJson.js'
 import { probeOpenAiModels } from '../lib/openAiModelsProbe.js'
 import { normalizeOpenAiBaseUrl } from '../lib/localProviderRuntime.js'
 import { LOCAL_LLM_REVIEWERS, isProviderReviewer, normalizeReviewerEffort } from '../lib/reviewerConfig.js'
+import { CODE_REVIEWERS_PAGE_BREADCRUMB } from '../lib/navManifest.js'
 import { reviewerCommandPermissionFailureCode, normalizeReviewFinishReason, reviewFailureDiagnostics } from '../lib/reviewerHealth.js'
 import { listProviders, getProviderById } from './provider/providers.js'
 import { safeJSONLParse } from '../lib/jsonIo.js'
@@ -484,7 +485,7 @@ export async function runReviewerCompletion({ backend, model: pinnedModel, messa
     if (!served.model) {
       // `code` so a caller can tell a config gap from a reviewer that ran and
       // failed (a 4xx vs the 502 bucket) without matching on the message text.
-      return { ok: false, code: 'NO_MODEL', error: `No model configured for ${backend} reviewer and ${served.reason} — set one on the Settings → Code Reviewers page.` }
+      return { ok: false, code: 'NO_MODEL', error: `No model configured for ${backend} reviewer and ${served.reason} — set one on the ${CODE_REVIEWERS_PAGE_BREADCRUMB} page.` }
     }
     model = served.model
     console.log(`🔍 No ${backend} reviewer model configured — using the only model it serves: ${model}`)

@@ -10,6 +10,7 @@ import RuntimeInstallModal from '../install/RuntimeInstallModal';
 import Banner from '../ui/Banner';
 import { PORTS } from '../../lib/ports.js';
 import { LOCAL_RUNTIME_MANAGE_URLS } from '../../../../server/lib/modelPinMembership.js';
+import { PROVIDERS_PAGE_BREADCRUMB } from '../../../../server/lib/navManifest.js';
 
 const HOST_EVENTS = ['fleet-host:changed', 'fleet-host:usage:changed'];
 const PEER_EVENTS = ['instances:peers:updated'];
@@ -227,7 +228,7 @@ export default function FleetHostSetup({ compact = false, providers = [], onConf
           <section className="space-y-3 text-sm">
             <h3 className="font-medium">Connect another PortOS instance</h3>
             <ol className="list-decimal pl-5 space-y-2">
-              <li>On the other instance, open <strong>AI Providers → Model host setup → Connect client</strong>.</li>
+              <li>On the other instance, open <strong>{PROVIDERS_PAGE_BREADCRUMB} → Fleet setup → Connect client</strong>.</li>
               <li>Use the queued API endpoint below and the host key. Choose <strong>Direct API</strong> for text calls or <strong>Pi</strong> (or <strong>OpenCode TUI</strong>) for coding agents. The coding tools run on that client.</li>
               <li>Refresh models, then test a small request before assigning agent tasks.</li>
             </ol>

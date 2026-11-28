@@ -16,6 +16,7 @@ import { checkGhHealth } from './github.js';
 import { getMediaCapacity } from './mediaCapacity.js';
 import { runningAgentsByTaskId, unclaimedTaskIds } from '../lib/cos/cosSpawnWindow.js';
 import { PLATFORM_SCHEMA_VERSIONS } from '../lib/schemaVersions/platform.js';
+import { CODE_REVIEWERS_PAGE_BREADCRUMB } from '../lib/navManifest.js';
 
 // Disk capacity remains actionable. Memory thresholds are retained on the wire
 // for older clients, but no longer generate warnings or degrade health.
@@ -263,7 +264,7 @@ function reviewerConfigWarning(reviewerConfigHealth) {
   return {
     type: 'code-review',
     severity: 'warning',
-    message: `Code review configuration needs attention for ${faulty.join(', ')} — open Settings → Code Reviewers`
+    message: `Code review configuration needs attention for ${faulty.join(', ')} — open ${CODE_REVIEWERS_PAGE_BREADCRUMB}`
   };
 }
 

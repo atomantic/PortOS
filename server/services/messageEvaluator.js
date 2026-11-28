@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { ServerError } from '../lib/errorHandler.js';
+import { ABUSE_GUARD_PAGE_BREADCRUMB } from '../lib/navManifest.js';
 import { getSettings } from './settings.js';
 import { getProviderById } from './provider/providers.js';
 import { getTriageRules } from './messageTriageRules.js';
@@ -41,7 +42,7 @@ async function resolveProviderConfig(actionType, source) {
   const dedicatedProvider = policyLayers.some(layer => layer && Object.hasOwn(layer, 'providerId'));
   const providerId = dedicatedProvider ? dedicated.providerId : actionConfig.providerId || msgConfig.providerId;
   const provider = providerId ? await getProviderById(providerId) : undefined;
-  if (providerId && !provider) throw new Error('The selected Messages API provider no longer exists. Configure it in Models > LLMs > Abuse Guard.');
+  if (providerId && !provider) throw new Error(`The selected Messages API provider no longer exists. Configure it in ${ABUSE_GUARD_PAGE_BREADCRUMB}.`);
   const model = dedicatedProvider ? dedicated.model : dedicated.model || actionConfig.model || msgConfig.model;
   return { provider, model, msgConfig };
 }

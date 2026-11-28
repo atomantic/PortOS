@@ -1,6 +1,7 @@
 /** Programmatic on-demand request dispatch and empty-result handling, including preflight, parking and escalation. */
 
 import { isManualOnDemandRequest } from '../../lib/quotaBurnOrigin.js';
+import { ABUSE_GUARD_PAGE_BREADCRUMB } from '../../lib/navManifest.js';
 import { isImprovementEnabled } from './cosState.js';
 import { cosEvents, emitLog } from './cosEvents.js';
 import { getAppById } from '../apps.js';
@@ -194,7 +195,7 @@ export async function emitOnDemandEmpty({ taskScheduleMod, request, targetApp, t
       reason,
       note: `PR review stopped before an agent started (${reason}). No PR actions were taken. `
         + (reason.startsWith('security-guard-')
-          ? 'Open Models → LLMs → Abuse Guard, check its setup and repair it if needed, then retry PR review. The classifier did not return a usable safety verdict; this is not a finding against the PR.'
+          ? `Open ${ABUSE_GUARD_PAGE_BREADCRUMB}, check its setup and repair it if needed, then retry PR review. The classifier did not return a usable safety verdict; this is not a finding against the PR.`
           : 'Check the repository connection and security scan configuration, then retry PR review.'),
     });
   } else {

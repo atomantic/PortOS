@@ -70,11 +70,11 @@ Submit tasks, manage durable autonomous agents, schedule recurring automations, 
 | **Feature Agents** | `/feature-agents` | Durable, specialized agents assigned to specific feature domains or managed codebases. | — |
 | **Review Hub** | `/review` | Centralized triage inbox for agent-generated diffs, pull request reviews, approval requests, and code quality findings. | — |
 | **Social Agents** | `/agents` | Autonomous agent personas for managing external social communications and community presence. | — |
-| **AI Providers & Model Runner** | `/ai` | Multi-provider configuration supporting CLI agents (Claude Code, Codex, Antigravity, OpenCode), cloud APIs (OpenAI, Anthropic, Gemini, Grok), and local endpoints (Ollama, LM Studio, vLLM, SGLang). | [Claude on Ollama](./claude-ollama.md) |
+| **AI Providers & Model Runner** | `/ai/presets` | Multi-provider configuration supporting CLI agents (Claude Code, Codex, Antigravity, OpenCode), cloud APIs (OpenAI, Anthropic, Gemini, Grok), and local endpoints (Ollama, LM Studio, vLLM, SGLang). | [Claude on Ollama](./claude-ollama.md) |
 | **Fleet LLM Setup** | `/ai/fleet` | Connect this install to a dedicated model server on a PortOS peer. Configure providers to send requests directly to that host. | [Dedicated LLM Host](./fleet-llm-host.md) |
 | **Prompt Manager** | `/prompts` | Reusable prompt template library, variable substitution engine, prompt versioning, and auto-upgrade migrations. | [Prompt Manager](./prompt-manager.md) |
 | **Runs & Run Events Ledger** | `/cos/runs`, `/cos/run-events` | Comprehensive ledger of past and in-flight AI runs, lifecycle event replay, and orphaned process recovery. | — |
-| **Code Reviewers** | `/settings/code-reviewers` | Configure reviewer chains, model settings, and when a review stops. Enable goal-fidelity review to check whether completed agent work meets the original task and route confirmed gaps for follow-up. | [Chief of Staff](./chief-of-staff.md) |
+| **Code Reviewers** | `/models/code-reviewers` | Configure reviewer chains, model settings, and when a review stops. Enable goal-fidelity review to check whether completed agent work meets the original task and route confirmed gaps for follow-up. | [Chief of Staff](./chief-of-staff.md) |
 
 ---
 

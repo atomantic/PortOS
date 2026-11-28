@@ -16,6 +16,8 @@
  * counts when the providerStatus message already named them.
  */
 
+import { PROVIDERS_PAGE_BREADCRUMB } from '../navManifest.js';
+
 /** Prefix shared by every stored/public context-budget pause reason. */
 export const CONTEXT_BUDGET_PAUSE_REASON_PREFIX =
   'Local context window too small';
@@ -64,7 +66,7 @@ export function formatContextBudgetPauseReason({ known = null, required = null }
   const counts = Number.isFinite(known) && Number.isFinite(required) && known > 0 && required > 0
     ? `known ${known}-token context is below the ${required}-token request budget`
     : 'known context is below the request token budget';
-  return `${CONTEXT_BUDGET_PAUSE_REASON_PREFIX}: ${counts}. Raise provider numCtx (Settings → AI providers) or shrink mind context, then resume.`;
+  return `${CONTEXT_BUDGET_PAUSE_REASON_PREFIX}: ${counts}. Raise provider numCtx (${PROVIDERS_PAGE_BREADCRUMB}) or shrink mind context, then resume.`;
 }
 
 export function contextBudgetPauseReasonFrom(errorOrMessage) {

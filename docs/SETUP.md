@@ -109,6 +109,17 @@ After PortOS starts:
 
 Certificate provisioning and the PortOS restart are one-click actions in the UI once MagicDNS and the Tailscale admin certificate toggle are ready.
 
+## Start on boot
+
+Once PortOS is running via `npm start` (or `npm run pm2:start`), register the PM2 startup hook and save the active process list so PortOS restarts automatically after a reboot:
+
+```bash
+npm run pm2:startup
+npm run pm2:save
+```
+
+Follow any `sudo` command printed by `pm2:startup` to register the OS service. See [PM2 process management](./PM2.md) for process lifecycle commands.
+
 ## Updates and recovery
 
 `update.sh`, `update.ps1`, and the in-app updater retry the safe certificate provisioning step on every update, report the current network prerequisite in update progress, and print the full walkthrough afterward. An update does not fail merely because Tailscale is absent or an account toggle still needs you.

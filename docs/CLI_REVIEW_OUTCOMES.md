@@ -66,7 +66,7 @@ PR/MR comments announcing unavailable reviews.
 
 ## Configured provider pins
 
-Settings → Code Reviewers keeps configured providers as exact `provider:<id>`
+Models → Code Reviewers keeps configured providers as exact `provider:<id>`
 identities, including their account and transport. Their model and effort
 overrides persist in `providerModels` and `providerEfforts`; standalone builtin
 reviewers keep their existing scalar settings. Clearing an override restores
