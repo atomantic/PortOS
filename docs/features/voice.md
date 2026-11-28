@@ -10,6 +10,16 @@ Open **Settings → Voice**. Choose the speech-to-text engine, voice and model, 
 - **Avatars and channels.** The transceiver has six channels; its channel key steps through them, and each channel wears an avatar on the viewfinder (AvatarForcing animates the active channel's face). Manage them under **Voice Call → Avatars & channels**: generate an avatar from a prompt with your saved Image Gen settings, or add a gallery image. Avatars live in the **Avatars** media collection, so they federate to your other machines with that collection; channel names and assignments stay on each machine. A centered, front-facing face animates best.
 - With the fast path enabled, navigation commands can resolve in the browser. Simple requests can use Chrome's on-device model on supported installs. Other requests use the configured server model.
 
+## Realtime speech-to-speech calls
+
+On Apple Silicon, **Voice Call → Realtime voice** runs a local full-duplex voice model instead of the speech-to-text, language model and speech pipeline. It decides when you have finished, starts speaking about half a second to a second later, and stops within about 0.1 s when you talk over it. When a request needs a lookup or an action, it says a short lead-in and hands the task to your regular Voice model and tools as a text-only turn, then speaks the result.
+
+- The voice is the [Sophon-Realtime](https://github.com/adventists-ai/sophon-realtime) Mac build (Apache-2.0), installed separately. The panel shows the install command when it is missing. PortOS looks in `~/.portos/sophon-mac` (`voice.realtime.home`) and does not download it for you yet.
+- Pick **32B** (about 24 GB on disk and about 26 GB of memory during a call, more knowledgeable) or **4B** (about 9 GB, fastest). The first call loads the model in about a minute. It stays loaded between calls and is freed after 10 idle minutes.
+- Use headphones, or a microphone with good echo cancellation. Speaker audio that reaches the microphone can interrupt the reply.
+- It runs on the same GPU as your Voice model and AvatarForcing. Stop AvatarForcing during realtime calls for the fastest replies.
+- The sidecar (`scripts/ml/sophon/portos_sophon.py`) listens on loopback port 5569 only, behind a per-launch token.
+
 ## Local speech models
 
 Save & Reconcile prepares the selected Whisper model and Piper voice as applicable. Managed Whisper models live in `~/.portos/voice/models/` and Piper voices in `~/.portos/voice/voices/`. A Piper voice needs both its ONNX and its companion JSON. If Settings reports **Incomplete**, use **Save & Reconcile** or re-download from the voice picker. Boot only checks what's present. Keep hand-installed files in their own directory.

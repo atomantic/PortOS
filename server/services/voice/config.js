@@ -174,6 +174,18 @@ export const VOICE_DEFAULTS = Object.freeze({
   },
 
   vad: { endOfSpeechMs: 700, minUtteranceMs: 250 },
+
+  // Realtime (speech-to-speech) Voice Call: a local full-duplex voice model
+  // (Sophon-Realtime's Mac/MLX build, installed separately) listens, takes
+  // turns, can be interrupted and speaks; lookups and actions are delegated to
+  // the regular Voice tool pipeline above. OFF by default: it needs a ~24 GB
+  // (32B) or ~9 GB (4B) model install and keeps it loaded during calls.
+  realtime: {
+    enabled: false,
+    engine: 'sophon',
+    size: '32B', // '32B' | '4B'
+    home: '~/.portos/sophon-mac',
+  },
 });
 
 // Alias kept for backward-compat with the 5 callers under server/services/voice/.
