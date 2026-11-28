@@ -17,6 +17,11 @@ describe('monthly usage', () => {
     expect(rows[0]).toHaveTextContent('MonthClaude Code (USD)Codex (USD)Est. cost (USD)Tokens');
     expect(rows[1]).toHaveTextContent('September 2026$100.00$23.45$123.451,250,000');
     expect(rows[2]).toHaveTextContent('October 2026 (partial)$0.00$0.00$0.000');
+    const columnHeaders = screen.getAllByRole('columnheader');
+    expect(columnHeaders).toHaveLength(5);
+    for (const header of columnHeaders) expect(header).toHaveAttribute('scope', 'col');
+    expect(within(rows[1]).getByRole('rowheader')).toHaveAttribute('scope', 'row');
+    expect(within(rows[2]).getByRole('rowheader')).toHaveAttribute('scope', 'row');
     expect(screen.getByRole('img', { name: 'Monthly estimated API cost and tokens' })).toBeInTheDocument();
     expect(screen.getByText(/3 instances/)).toHaveTextContent('Calendar months differ from a trailing 30-day window');
   });

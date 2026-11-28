@@ -2,7 +2,13 @@ import { formatCount } from '../../utils/formatters';
 
 export default function UsageActivityCharts({ activity, hourlyActivity, hourlyIncomplete }) {
   const maxActivity = Math.max(1, ...(activity?.map((day) => day.sessions) || []));
-  const maxHour = Math.max(1, ...(hourlyActivity || []));
+  const peakCount = Math.max(0, ...(hourlyActivity || []));
+  const hourScaleMax = Math.max(1, peakCount);
+  const peakHour = hourlyActivity?.indexOf(peakCount);
+  const totalSessions = hourlyActivity?.reduce((sum, count) => sum + count, 0);
+  const hourlySummary = peakCount > 0
+    ? `Hourly distribution, ${formatCount(totalSessions)} sessions. Peak at ${peakHour}:00 with ${formatCount(peakCount)} sessions.`
+    : 'Hourly distribution, 0 sessions.';
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6">
       {/* Selected-period activity */}
@@ -42,12 +48,12 @@ export default function UsageActivityCharts({ activity, hourlyActivity, hourlyIn
       <div className="bg-port-card border border-port-border rounded-xl p-3 sm:p-4">
         <h3 className="text-sm font-medium text-gray-400 mb-3 sm:mb-4">Hourly Distribution</h3>
         {hourlyActivity ? <>
-          <div className="flex items-end gap-0.5 h-24 sm:h-32">
+          <div className="flex items-end gap-0.5 h-24 sm:h-32" role="img" aria-label={hourlySummary}>
             {hourlyActivity.map((count, hour) => (
-              <div key={hour} className="flex-1 h-full flex items-end">
+              <div key={hour} className="flex-1 h-full flex items-end" aria-hidden="true">
                 <div
                   className="w-full bg-port-accent/40 rounded-t"
-                  style={{ height: `${(count / maxHour) * 100}%`, minHeight: count > 0 ? 2 : 0 }}
+                  style={{ height: `${(count / hourScaleMax) * 100}%`, minHeight: count > 0 ? 2 : 0 }}
                   title={`${hour}:00 - ${count} sessions`}
                 />
               </div>
@@ -60,6 +66,12 @@ export default function UsageActivityCharts({ activity, hourlyActivity, hourlyIn
             <span>6pm</span>
             <span>12am</span>
           </div>
+          <details className="mt-2 text-xs text-gray-400">
+            <summary className="cursor-pointer py-2">View session counts by hour</summary>
+            <ul className="mt-2 grid grid-cols-2 sm:grid-cols-3 gap-1">
+              {hourlyActivity.map((count, hour) => <li key={hour}>{hour}:00: {formatCount(count)}</li>)}
+            </ul>
+          </details>
           <p className="text-xs text-gray-500 mt-1">Sessions in this period across available instances, by hour in your configured timezone (days recorded before this change are keyed and binned in UTC).</p>
           {hourlyIncomplete && <p className="text-xs text-port-warning mt-1">Partial: older sessions or unavailable instances do not provide hourly detail.</p>}
         </> : <p className="text-sm text-gray-500">Hourly data is unavailable for this period.</p>}

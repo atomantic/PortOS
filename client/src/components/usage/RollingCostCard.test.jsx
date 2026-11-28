@@ -57,14 +57,23 @@ describe('RollingCostCard', () => {
     expect(screen.getByText('Oct 20 · $10')).toBeTruthy();
   });
 
-  it('pins from the keyboard', async () => {
+  it('announces keyboard movement and pin changes', async () => {
     render(<RollingCostCard />);
     await screen.findByText('$40.25');
     const group = screen.getByRole('group', { name: /pin/ });
+    const status = screen.getByRole('status');
+    expect(status).toBeEmptyDOMElement();
     fireEvent.keyDown(group, { key: 'ArrowLeft' });
+    expect(status).toHaveTextContent('Oct 21, $25.50, not pinned');
     fireEvent.keyDown(group, { key: 'Enter' });
+    expect(status).toHaveTextContent('Pinned Oct 21, $25.50');
     expect(screen.getByText('Oct 21 · $25.5')).toBeTruthy();
-    fireEvent.keyDown(group, { key: 'Enter' });
+    fireEvent.keyDown(group, { key: 'ArrowRight' });
+    expect(status).toHaveTextContent('Oct 22, $40.25, not pinned');
+    fireEvent.keyDown(group, { key: 'ArrowLeft' });
+    expect(status).toHaveTextContent(/^Oct 21, \$25.50, pinned$/);
+    fireEvent.keyDown(group, { key: ' ' });
+    expect(status).toHaveTextContent('Unpinned Oct 21');
     expect(screen.queryByText('Oct 21 · $25.5')).toBeNull();
   });
 

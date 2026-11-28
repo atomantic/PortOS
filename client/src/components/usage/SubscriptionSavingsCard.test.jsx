@@ -73,6 +73,9 @@ describe('SubscriptionSavingsCard', () => {
     expect(screen.getAllByText('$766.44').length).toBeGreaterThan(0);
     expect(screen.getAllByLabelText('Monthly cost for Claude Code')[0]).toHaveValue(200);
     expect(screen.getAllByText('not priced').length).toBeGreaterThan(0);
+    const columnHeaders = screen.getAllByRole('columnheader');
+    expect(columnHeaders).toHaveLength(5);
+    for (const header of columnHeaders) expect(header).toHaveAttribute('scope', 'col');
   });
 
   // An estimated plan usually UNDERSTATES its API cost, so a low number must
