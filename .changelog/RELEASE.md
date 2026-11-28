@@ -1,34 +1,34 @@
-# Release v2.131.0 - Upscaled Nightingale
+# Release v2.132.0 - Transceiver Phoenix
 
-Released: 2026-11-27
+Released: 2026-11-28
 
 ## Highlights
 
-- **Video & Shot Upscaling**: Upscale generated videos and Music Video shots using the new opt-in local Real-ESRGAN lane or the fal.ai SeedVR2 1080p cloud upscaler.
-- **Browser Voice Call & Lip Sync**: Start voice calls directly from a dedicated browser call console and the mobile top bar, with optional local AvatarForcing lip sync and Conversational Gemma voice support.
-- **Music Video & Storyboard Editing**: Undo and redo Music Video board edits, cancel in-flight storyboard panel generation batches and Photoreal renders, and preview snapshot treatments cleanly.
-- **Local X Drafts, Legacy PDF & Digest Catch-Up**: Manage the full local X draft lifecycle, export Legacy archives to PDF with live progress, and configure Activity Digest catch-up settings in Brain.
-- **Stronger Host-Control & Storage Safety**: Enforced host-control admission for remote desktop, vault reads, and process streams; tightened owner-only permissions on personal and credential stores; and reconciled live caches after backup restores.
+- **Voice Call Transceiver & Realtime Speech**: Redesigned the Voice Call station with a sat-phone transceiver handset, added realtime speech-to-speech calls with Voice tool handoff, added per-channel avatar and agent settings backed by a federated Avatars collection, and enabled continuous AvatarForcing neural idle with realtime lip sync.
+- **Music Video Effects & Vertical Export**: Added optical film light effects with live picture preview and stacked effects, styled credits themes with background stills and social handle badges, and a framed 16:9 vertical preview with safe zones and full-length export.
+- **Voice Setup & Model Controls**: Added an inline Voice LLM picker with live loading and memory status, one-click llama.cpp Conversational Gemma setup with 16k context, and cancellation for local TUI checks and Jev training in Models.
+- **Security, Privacy & Backup Hardening**: Enforced targeted session revocation across VNC, Eidoverse, and FableLoom; locked down personal, Digital Twin, Brain, and Beeper store permissions; switched `.env` writes to atomic owner-only files; and kept database passwords out of process arguments and logs.
+- **Mobile, Accessibility & Runtime Efficiency**: Improved mobile layouts across Wiki, Insights, Calendar, Video Gen, and Navigation; tightened accessibility semantics across Voice Call, MeatSpace, and Organize panels; and trimmed dozens of unused dependencies from local MLX and CUDA runtime locks.
 
 ## Added
 
-- **Video & Music Video Upscaling**: Added an opt-in local Real-ESRGAN video upscale lane, fal.ai SeedVR2 1080p cloud video upscaling, and a Music Video shot upscale workflow that inherits project attribution.
-- **Voice Studio & Calls**: Added a browser Voice Call console, added Voice Call quick access to the mobile top bar, added optional local AvatarForcing lip sync, and cataloged Trelis Conversational Gemma with gated download access checks.
-- **Creative Studio Controls**: Added a board edit undo stack and UI controls in Music Video, batch cancellation for Storyboards panel generation, and active Photoreal render cancellation in Catalog.
-- **Brain, Models, Legacy & Social**: Completed the local X draft lifecycle, exposed Activity Digest catch-up settings in Brain, added PDF export options with progress tracking in Legacy Export, and added Inkling and cached MTPLX agent checks in Models.
+- **Voice Call & Transceiver**: Added a sat-phone transceiver handset and redesigned Voice Call station, added realtime speech-to-speech Voice Calls that delegate lookups and actions to Voice tools, added per-channel agent settings and avatar channels backed by a federated Avatars collection, and added inline chat input and vision support for shared tabs and uploaded images.
+- **Avatar & Voice Model Setup**: Added continuous AvatarForcing neural idle that starts automatically on Voice Call open with a pixelated connecting state and realtime reply lip-sync, added an inline Voice LLM picker with loading and memory status indicators, and added one-click llama.cpp Conversational Gemma setup.
+- **Music Video Studio**: Added optical film light effects with live picture preview and stacked effects, styled credits themes with background stills and social handle badges, and framed 16:9 TikTok vertical preview with safe zones and full-length export.
+- **Models**: Added cancellation support for local TUI checks and Jev training.
 
 ## Changed
 
-- **Music Video & Previews**: Applied restrained default template effects for new Music Video projects, displayed snapshot treatments in native previews, and updated the icon library.
-- **API & List Bounding**: Bounded Chief of Staff and media list responses, projected FableLoom story summaries in PostgreSQL, avoided loading large media records for list metadata, and batched Tribe touchpoint writes.
-- **UI & Accessibility**: Consolidated Persistent Mind workspace controls and learning analytics in Chief of Staff, unified image generation provider controls, added bulk confirmation prompts for app automation toggles and media/AI cleanups, and improved accessibility across Rapid Reader, Walk workflows, and Cognitive Drills.
+- **Voice Defaults & Layout**: Recommended Ollama `gemma4:26b` as the fast Voice brain, kept the Voice prompt prefix stable across turns to preserve LLM caching, moved desktop floating voice setup controls behind compact tabs, and raised Conversational Gemma `llama-server` context to 16k.
+- **UI & Mobile Polish**: Wrapped narrow Video Gen provider switches, compacted Insights and Calendar navigation on phones, improved Wiki mobile Browse width and Search input layout, improved Peer card button affordances, and added bulk confirmation prompts across destructive PortOS actions.
+- **Runtime Locks & Performance**: Trimmed unused packages across Apple Silicon MLX and CUDA runtime locks (FLUX.3 Klein, FastVideo, Wan 2.2, MiniMax Music 3, MiniMax H3, MusicGen, MuScriptor, AuK, Pixal3D, and 3D Metal), bounded peer pull concurrency, projected Music Video summaries in PostgreSQL, and batched raw agent terminal spools.
 
 ## Fixed
 
-- **Security & Privacy**: Enforced browser and host-control admission for Remote Desktop, gated host vault reads and process streams behind host control, revoked hosted FableLoom sessions with PortOS auth, bound Eidoverse renderer access to the visitor seat, protected personal and provider recovery stores with owner-only permissions, and scrubbed deleted subject addresses.
-- **Voice & Media Stability**: Removed Voice's default completion cap, prevented capture transcription races, serialized voice profile promotion and model provisioning, preserved EXIF orientation on image uploads, preserved opening preview frames across seeks, and surfaced FFmpeg and upscale failures cleanly.
-- **Backups, Sync & Chief of Staff**: Reconciled live JSON, prompt, timer, and Digital Twin caches after backup restores; locked snapshot actions during database restores; preserved active CoS workers during dev startup; reconciled agent schedule timers during live restore; protected MortalLoom history during bidirectional edits; and made failed run, Pipeline, and Sharing loads retryable.
+- **Security & Session Revocation**: Disconnected sockets and rejected credential creation after targeted session revocation across authGate, VNC, Eidoverse, and FableLoom; required host control for CLI vision, workspace contexts, video-gen status, and live host probes; wrote `.env` secrets atomically with `0600` permissions while preserving symlinks; and kept database passwords and realtime voice tokens out of process arguments and URLs.
+- **Privacy & Backups**: Restricted personal, Digital Twin, Brain, and Beeper store permissions; scrubbed genetic conclusions from Time Capsule snapshots; enforced broker consent and delivery confirmation in Privacy; preserved live Brain stores during legacy snapshot restores; and reconciled cached JSON stores during live restore.
+- **Voice, Media & Reliability**: Hardened realtime voice sidecar auth, startup, and teardown across tabs and turn boundaries; prevented Music Video credits color save storms and vertical render stalls; settled canceled FableLoom media batches cleanly; retried transient Docker and Ollama setup fetches; and surfaced deploy and local runtime failures cleanly.
 
 ## Full Changelog
 
-**Full Diff**: https://github.com/atomantic/PortOS/compare/v2.130.0...v2.131.0
+**Full Diff**: https://github.com/atomantic/PortOS/compare/v2.131.0...v2.132.0
