@@ -40,7 +40,7 @@ export default function SatPhoneConversation({
                 type="button"
                 onClick={onToggleCollapsed}
                 aria-expanded={!collapsed}
-                aria-controls={conversationId}
+                aria-controls={!collapsed ? conversationId : undefined}
                 title={collapsed ? 'Show conversation' : 'Hide conversation'}
                 aria-label={collapsed ? 'Show conversation' : 'Hide conversation'}
                 className="inline-flex items-center justify-center rounded p-1 pointer-coarse:min-h-11 pointer-coarse:min-w-11 opacity-75 hover:opacity-100"
