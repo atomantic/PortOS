@@ -222,6 +222,27 @@ describe('VoiceWidget accessibility', () => {
     expect(within(widget).getByRole('button', { name: 'Show conversation' })).toHaveAttribute('aria-expanded', 'false');
   });
 
+  it('keeps the mic state when the controls are minimized and restored', async () => {
+    const widget = await renderWidget();
+    const restore = () => fireEvent.click(within(widget).getByRole('button', { name: 'Open voice controls' }));
+    const minimize = () => fireEvent.click(within(widget).getByRole('button', { name: 'Minimize voice controls' }));
+
+    restore();
+    await settle();
+    minimize();
+    await settle();
+    restore();
+    await settle();
+    expect(mocks.startContinuous).not.toHaveBeenCalled();
+
+    mocks.isContinuous.mockReturnValue(true);
+    minimize();
+    await settle();
+    restore();
+    await settle();
+    expect(mocks.stopContinuous).not.toHaveBeenCalled();
+  });
+
   it('moves focus on expand, minimize and hide instead of dropping to body', async () => {
     const widget = await renderWidget();
     fireEvent.click(within(widget).getByRole('button', { name: 'Open voice controls' }));
