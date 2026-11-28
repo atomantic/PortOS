@@ -4,12 +4,18 @@ import { ERROR_CATEGORIES } from '../../lib/aiToolkit/errorDetection.js';
 import { isGenerationModel } from '../../lib/localModelHeuristics.js';
 import { executeProviderRunOnce, providerHonorsModelOverride } from './providerExecution.js';
 
+// Provider fields naming a model the operator chose, in the order Tier 1 prefers them.
+const CONFIGURED_MODEL_KEYS = ['fallbackModel', 'defaultModel', 'mediumModel', 'heavyModel', 'lightModel'];
+
 /**
  * Tier-1 (config/env) deterministic fix for `model-not-found` / `model-not-supported` (#2342): pick a
  * DIFFERENT valid generation model the (reachable) provider lists and retry the SAME provider,
- * cheaper than benching it for Tier 3. Pure. Returns null (Tier 1 declines) when the provider has no
- * enumerable `models`, or only the failed id and/or embedding-only ids. The failed id is excluded so
- * the same broken request is never re-issued.
+ * cheaper than benching it for Tier 3. Pure. Prefers the models the provider is configured to use
+ * (fallback, default, then medium/heavy/light tier) when it still lists them, so a removed model is
+ * replaced by the operator's chosen model rather than whichever id happens to be listed first (often
+ * the smallest install). Falls back to the first listed generation model. Returns null (Tier 1
+ * declines) when the provider has no enumerable `models`, or only the failed id and/or
+ * embedding-only ids. The failed id is excluded so the same broken request is never re-issued.
  * @param {object} provider
  * @param {string} [failedModel] — the model id that just failed model-not-found
  * @returns {string|null}
@@ -17,7 +23,9 @@ import { executeProviderRunOnce, providerHonorsModelOverride } from './providerE
 export function pickConfigCorrectedModel(provider, failedModel) {
   const models = provider?.models;
   if (!Array.isArray(models)) return null;
-  return models.find((m) => m && m !== failedModel && isGenerationModel(m)) || null;
+  const usable = (m) => typeof m === 'string' && m && m !== failedModel && models.includes(m) && isGenerationModel(m);
+  const configured = CONFIGURED_MODEL_KEYS.map((key) => provider[key]).find(usable);
+  return configured || models.find(usable) || null;
 }
 
 /**

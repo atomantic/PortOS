@@ -1987,6 +1987,25 @@ describe('pickConfigCorrectedModel', () => {
     expect(pickConfigCorrectedModel(p, 'broken-model')).toBe('qwen3.6:35b');
   });
 
+  it('prefers the provider\'s configured models over the first listed id', () => {
+    const p = { id: 'p', models: ['tiny-model', 'big-model', 'mid-model'], defaultModel: 'big-model', mediumModel: 'mid-model' };
+    expect(pickConfigCorrectedModel(p, 'removed-model')).toBe('big-model');
+    expect(pickConfigCorrectedModel({ ...p, fallbackModel: 'mid-model' }, 'removed-model')).toBe('mid-model');
+  });
+
+  it('skips a configured model that failed, is no longer listed, or is embedding-only', () => {
+    const p = {
+      id: 'p',
+      models: ['tiny-model', 'nomic-embed-text:latest', 'mid-model'],
+      fallbackModel: 'nomic-embed-text:latest',
+      defaultModel: 'removed-model',
+      mediumModel: 'gone-model',
+      heavyModel: 'mid-model',
+    };
+    expect(pickConfigCorrectedModel(p, 'removed-model')).toBe('mid-model');
+    expect(pickConfigCorrectedModel({ ...p, heavyModel: '' }, 'removed-model')).toBe('tiny-model');
+  });
+
   it('returns null when the only alternatives are the failed id and/or embedding models', () => {
     expect(pickConfigCorrectedModel({ id: 'p', models: ['broken-model'] }, 'broken-model')).toBeNull();
     expect(pickConfigCorrectedModel({ id: 'p', models: ['broken-model', 'nomic-embed-text'] }, 'broken-model')).toBeNull();
