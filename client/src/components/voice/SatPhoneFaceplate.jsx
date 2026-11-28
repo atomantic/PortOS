@@ -4,6 +4,7 @@ import { AudioLines, Brain, EyeOff, Maximize2, PanelBottomClose, ScanFace, Slide
 import RealtimeCallPanel from './RealtimeCallPanel';
 import AvatarRuntimeSettings from './AvatarRuntimeSettings';
 import ChannelBrainPicker from './ChannelBrainPicker';
+import TabPills from '../ui/TabPills';
 import useMediaQuery from '../../hooks/useMediaQuery';
 import { safeReadStorage, safeWriteStorage } from '../../lib/safeStorage';
 
@@ -147,9 +148,9 @@ export function SatPhoneFaceplate({
 
 const SETUP_TAB_KEY = 'portos.voice.setupTab';
 const SETUP_TABS = [
-  { id: 'brain', label: 'Brain', Icon: Brain },
-  { id: 'realtime', label: 'Realtime', Icon: AudioLines },
-  { id: 'avatar', label: 'Avatar', Icon: Video },
+  { id: 'setup-brain', label: 'Brain', icon: Brain },
+  { id: 'setup-realtime', label: 'Realtime', icon: AudioLines },
+  { id: 'setup-avatar', label: 'Avatar', icon: Video },
 ];
 
 /**
@@ -170,33 +171,16 @@ export function SatPhoneSetup({
   const tabbed = useMediaQuery('(min-width: 768px) and (pointer: fine)');
   const [tab, setTab] = useState(() => {
     const saved = safeReadStorage(SETUP_TAB_KEY);
-    return SETUP_TABS.some((t) => t.id === saved) ? saved : 'brain';
+    return SETUP_TABS.some((t) => t.id === saved) ? saved : 'setup-brain';
   });
   const choose = (id) => { safeWriteStorage(SETUP_TAB_KEY, id); setTab(id); };
   const shown = (id) => !tabbed || tab === id;
   return (
     <div className="space-y-2">
       {tabbed && (
-        <div role="tablist" aria-label="Voice setup" className="grid grid-cols-3 gap-1">
-          {SETUP_TABS.map(({ id, label, Icon }) => (
-            <button
-              key={id}
-              type="button"
-              role="tab"
-              aria-selected={tab === id}
-              aria-controls={`satphone-setup-${id}`}
-              onClick={() => choose(id)}
-              className={`inline-flex min-h-8 items-center justify-center gap-1 rounded-md border px-1.5 font-mono text-[10px] font-semibold uppercase tracking-wider transition-colors ${
-                tab === id ? 'border-port-accent bg-port-accent/10 text-port-text' : 'border-port-border bg-port-card text-port-text-muted hover:text-port-text'
-              }`}
-            >
-              <Icon size={11} aria-hidden="true" />
-              {label}
-            </button>
-          ))}
-        </div>
+        <TabPills tabs={SETUP_TABS} activeTab={tab} onChange={choose} size="xs" stretch ariaLabel="Voice setup" controlsIdPrefix="satphone" />
       )}
-      <div id="satphone-setup-brain" role={tabbed ? 'tabpanel' : undefined} hidden={!shown('brain')}>
+      <div id="satphone-setup-brain" role={tabbed ? 'tabpanel' : undefined} aria-labelledby={tabbed ? 'tab-setup-brain' : undefined} hidden={!shown('setup-brain')}>
         <ChannelBrainPicker
           compact
           globalProvider={llmProvider}
@@ -205,10 +189,10 @@ export function SatPhoneSetup({
           onGlobalSaved={onLlmSaved}
         />
       </div>
-      <div id="satphone-setup-realtime" role={tabbed ? 'tabpanel' : undefined} hidden={!shown('realtime')}>
+      <div id="satphone-setup-realtime" role={tabbed ? 'tabpanel' : undefined} aria-labelledby={tabbed ? 'tab-setup-realtime' : undefined} hidden={!shown('setup-realtime')}>
         <RealtimeCallPanel compact />
       </div>
-      <div id="satphone-setup-avatar" role={tabbed ? 'tabpanel' : undefined} hidden={!shown('avatar')} className="space-y-2">
+      <div id="satphone-setup-avatar" role={tabbed ? 'tabpanel' : undefined} aria-labelledby={tabbed ? 'tab-setup-avatar' : undefined} hidden={!shown('setup-avatar')} className="space-y-2">
         <AvatarRuntimeSettings
           compact
           data={avatarData}
