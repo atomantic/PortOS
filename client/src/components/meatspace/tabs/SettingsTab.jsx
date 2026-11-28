@@ -21,9 +21,8 @@ export default function SettingsTab({ onRefresh }) {
   const [xmlError, setXmlError] = useState(null);
   const [xmlFileName, setXmlFileName] = useState(null);
 
-  // Live record count only. Completion comes from the upload's own response:
-  // health:xml:complete is emitted once and never replayed, so a socket that
-  // dropped mid-import would leave the spinner stuck.
+  // Live record count only. Completion comes from the upload's own HTTP response
+  // so a socket drop mid-import cannot leave the spinner stuck.
   useEffect(() => {
     const onProgress = ({ processed }) => setXmlProgress(processed);
     socket.on('health:xml:progress', onProgress);

@@ -11,7 +11,7 @@ import { ORG_CATEGORIES, ORG_TRUST_LEVELS, ORG_STATUSES, VAULT_TYPES, INPUT_CLS,
 
 const EMPTY = {
   name: '', category: 'other', website: '', trust: 'trusted', status: 'active',
-  contactEmail: '', contactPhone: '', notes: '', socialAccountId: '',
+  contactEmail: '', contactPhone: '', contactPortalUrl: '', contactMailingAddress: '', notes: '', socialAccountId: '',
 };
 
 // Digital Twin accounts for the cross-link picker (#2147); the component owns the error UI.
@@ -53,6 +53,8 @@ export default function OrgDrawer({ open, org, subjectId, vaultRecords, vaultErr
         status: org.status ?? 'active',
         contactEmail: org.contact?.email ?? '',
         contactPhone: org.contact?.phone ?? '',
+        contactPortalUrl: org.contact?.portalUrl ?? '',
+        contactMailingAddress: org.contact?.mailingAddress ?? '',
         notes: org.notes ?? '',
         socialAccountId: org.socialAccountId ?? '',
       }
@@ -90,6 +92,8 @@ export default function OrgDrawer({ open, org, subjectId, vaultRecords, vaultErr
     const contact = {};
     if (form.contactEmail.trim()) contact.email = form.contactEmail.trim();
     if (form.contactPhone.trim()) contact.phone = form.contactPhone.trim();
+    if (form.contactPortalUrl.trim()) contact.portalUrl = form.contactPortalUrl.trim();
+    if (form.contactMailingAddress.trim()) contact.mailingAddress = form.contactMailingAddress.trim();
     const payload = {
       name: form.name.trim(),
       category: form.category,
@@ -193,6 +197,14 @@ export default function OrgDrawer({ open, org, subjectId, vaultRecords, vaultErr
             <input type="tel" value={form.contactPhone} onChange={(e) => set('contactPhone', e.target.value)} className={INPUT_CLS} maxLength={64} />
           </FormField>
         </div>
+
+        <FormField label="Privacy portal URL">
+          <input type="url" value={form.contactPortalUrl} onChange={(e) => set('contactPortalUrl', e.target.value)} placeholder="https://…" className={INPUT_CLS} maxLength={2000} />
+        </FormField>
+
+        <FormField label="Mailing address">
+          <textarea value={form.contactMailingAddress} onChange={(e) => set('contactMailingAddress', e.target.value)} rows={2} className={INPUT_CLS} maxLength={2000} />
+        </FormField>
 
         <div>
           <span className="block text-sm text-gray-400 mb-1">Holdings — which vault records does this org have?</span>
