@@ -17,6 +17,7 @@ import {
   repoRelativeFromCrashPath,
   parseShard,
   requiresSourceFiles,
+  shouldPublishTestMemo,
   shouldWarmTestChrome,
   spawnNpm,
   toRunnerPath,
@@ -66,6 +67,20 @@ describe('parseShard', () => {
     expect(parseShard('1/1')).toBeNull();
     expect(parseShard('2/3')).toEqual({ index: 2, count: 3 });
     expect(() => parseShard('2')).toThrow(/<index>\/<count>/);
+  });
+});
+
+describe('shouldPublishTestMemo', () => {
+  it('publishes only when a green trusted run actually changed or seeded the memo store', () => {
+    const base = { memoDir: '/tmp/memo', readOnlyMemo: false, status: 0, written: 0, pruned: { removedEntries: 0, removedRecords: 0 }, factsStats: { hits: 100, misses: 4 } };
+    expect(shouldPublishTestMemo(base)).toBe(false);
+    expect(shouldPublishTestMemo({ ...base, written: 1 })).toBe(true);
+    expect(shouldPublishTestMemo({ ...base, pruned: { removedEntries: 1, removedRecords: 0 } })).toBe(true);
+    expect(shouldPublishTestMemo({ ...base, pruned: { removedEntries: 0, removedRecords: 2 } })).toBe(true);
+    expect(shouldPublishTestMemo({ ...base, factsStats: { hits: 0, misses: 12 } })).toBe(true);
+    expect(shouldPublishTestMemo({ ...base, written: 1, readOnlyMemo: true })).toBe(false);
+    expect(shouldPublishTestMemo({ ...base, written: 1, status: 1 })).toBe(false);
+    expect(shouldPublishTestMemo({ ...base, written: 1, memoDir: null })).toBe(false);
   });
 });
 
@@ -914,7 +929,7 @@ describe('ci.yml shard wiring', () => {
       expect(body, id).toContain('CI_SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}');
       // Shards race to save one immutable cache entry; without the shard in
       // the key the winner's 1/n of the transform artifacts is all that persists.
-      expect(body, id).toMatch(/key: vitest-\w+-\$\{\{ runner\.os \}\}-\$\{\{ hashFiles\([^)]*\) \}\}-\$\{\{ matrix\.shard \}\}of\$\{\{ strategy\.job-total \}\}/);
+      expect(body, id).toMatch(/key: vitest-\w+-\$\{\{ runner\.os \}\}-\$\{\{ hashFiles\([^)]*\) \}\}-\$\{\{ hashFiles\([^)]*\) \}\}-\$\{\{ matrix\.shard \}\}of\$\{\{ strategy\.job-total \}\}/);
     }
   });
 
@@ -948,7 +963,7 @@ describe('ci.yml shard wiring', () => {
     for (const step of [cache, provision, tools, run]) expect(step).toContain(dbGate);
     expect(restore).toContain(`if: ${liveRestore}\n`);
     expect(save).toContain('key: ${{ steps.test-memo.outputs.key }}');
-    expect(body).toContain("steps.db-tests.outcome == 'success' && github.event_name != 'pull_request'");
+    expect(body).toContain("steps.db-tests.outcome == 'success' && steps.db-tests.outputs.memo-written == 'true' && github.event_name != 'pull_request'");
   });
 
   it('runs the planner-selected browser suites on their own job with prerequisites required (#10312)', () => {

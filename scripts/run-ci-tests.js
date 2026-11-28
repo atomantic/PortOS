@@ -324,35 +324,48 @@ async function executeTestPasses(passes, {
   return { status, passed, served };
 }
 
-function finalizeTestMemo({ scope, plan, browserJob, memoDir, readOnlyMemo }, { status, passed, served }) {
+export function shouldPublishTestMemo({ memoDir, readOnlyMemo, status, written = 0, pruned = null, factsStats = null }) {
+  if (!memoDir || readOnlyMemo || status !== 0) return false;
+  const prunedAny = Boolean(pruned && (pruned.removedEntries > 0 || pruned.removedRecords > 0));
+  const coldFactsSeeded = Boolean(factsStats && factsStats.hits === 0 && factsStats.misses > 0);
+  return written > 0 || prunedAny || coldFactsSeeded;
+}
+
+function finalizeTestMemo({ scope, plan, memoDir, readOnlyMemo }, { status, passed, served }) {
   // A run that may save its store bounds it first (the cache save follows a green step).
   const pruneMemo = () => {
-    if (!memoDir || readOnlyMemo) return;
+    if (!memoDir || readOnlyMemo) return null;
     const pruned = pruneTestMemo({ memoDir, repoRoot, trustedCi: Boolean(process.env.CI) });
     if (pruned) console.log(`🧠 Test memo: pruned ${pruned.removedEntries} entries and ${pruned.removedRecords} records; kept ${pruned.entries} entries and ${pruned.records} records.`);
+    return pruned;
   };
+  let written = 0;
+  let pruned = null;
   if (!memoDir || passed.length === 0) {
-    if (status === 0) pruneMemo();
-    return;
-  }
-  // PR jobs restore trusted memos, but ci.yml never saves their new entries.
-  // Avoid expensive post-success closure hashing/writes that cannot be reused
-  // and can consume the Windows step deadline after every test already passed.
-  if (readOnlyMemo) {
+    if (status === 0) pruned = pruneMemo();
+  } else if (readOnlyMemo) {
+    // PR jobs restore trusted memos, but ci.yml never saves their new entries.
+    // Avoid expensive post-success closure hashing/writes that cannot be reused
+    // and can consume the Windows step deadline after every test already passed.
     console.log('🧠 Test memo: read-only for pull requests; no cache publication.');
     return;
+  } else {
+    const recorded = recordTestMemo({
+      scope, repoRoot, memoDir, plan, passed: [...new Set(passed)],
+      dependencies: readVitestDependencies(findVitestDependenciesFile(repoRoot, scope), scope),
+      served,
+      source: process.env.CI ? 'ci' : 'local', commit: currentCommit(repoRoot),
+    });
+    written = recorded.written;
+    console.log(`🧠 Test memo: recorded ${written} green entries for ${new Set(passed).size} passed files.`);
+    // A passed file that stores nothing re-runs on every trusted run; say which and why.
+    for (const line of memoUnrecordedLines(recorded.unrecorded)) console.log(line);
+    if (status === 0) pruned = pruneMemo();
   }
-  const { written, unrecorded } = recordTestMemo({
-    scope, repoRoot, memoDir, plan, passed: [...new Set(passed)],
-    dependencies: readVitestDependencies(findVitestDependenciesFile(repoRoot, scope), scope),
-    served,
-    source: process.env.CI ? 'ci' : 'local', commit: currentCommit(repoRoot),
-  });
-  console.log(`🧠 Test memo: recorded ${written} green entries for ${new Set(passed).size} passed files.`);
-  if (browserJob && status === 0 && written > 0) writeStepOutput('memo-written', 'true');
-  // A passed file that stores nothing re-runs on every trusted run; say which and why.
-  for (const line of memoUnrecordedLines(unrecorded)) console.log(line);
-  if (status === 0) pruneMemo();
+  const factsStats = plan?.factsCache?.stats?.() ?? null;
+  if (shouldPublishTestMemo({ memoDir, readOnlyMemo, status, written, pruned, factsStats })) {
+    writeStepOutput('memo-written', 'true');
+  }
 }
 
 async function main() {

@@ -60,6 +60,8 @@ describe('trusted CI test-memo cache reuse', () => {
     const foreign = seeded.map(value => value.replace(`-${jobId}-`, '-other-job-'));
     expect(restoreFrom(restore, foreign, context)).toBeUndefined();
     expect(save).toContain("github.event_name != 'pull_request'");
+    const stepId = jobId === 'windows-server' ? 'windows-tests' : `${jobId}-tests`;
+    expect(save).toContain(`steps.${stepId}.outcome == 'success' && steps.${stepId}.outputs.memo-written == 'true'`);
   });
 
   // Related unit selection and smaller smoke matrices both need sibling records.
@@ -217,6 +219,6 @@ describe('trusted CI test-memo cache reuse', () => {
     expect(restoreKey(restore)).toBe('test-memo-${{ runner.os }}-${{ runner.arch }}-db-${{ github.run_id }}');
     expect(memoPath(restore)).toBe(memoPath(save));
     expect(save).toContain('key: ${{ steps.test-memo.outputs.key }}');
-    expect(save).toContain("steps.db-tests.outcome == 'success' && github.event_name != 'pull_request'");
+    expect(save).toContain("steps.db-tests.outcome == 'success' && steps.db-tests.outputs.memo-written == 'true' && github.event_name != 'pull_request'");
   });
 });
