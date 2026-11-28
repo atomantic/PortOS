@@ -7,7 +7,7 @@
 //
 // Pure quiet-hour / barge-in helpers are exported separately for unit tests.
 
-import { synthesize } from './tts.js';
+import { synthesizeAgentSpeech } from './channelAgent.js';
 import { getVoiceConfig } from './config.js';
 import { rememberTtsForAllSockets } from './echo.js';
 import { emitVoiceOutput } from './voiceOutput.js';
@@ -89,7 +89,7 @@ export const speakProactive = async ({ io, text, priority = 'normal', source = '
     return decision;
   }
 
-  const { wav, latencyMs } = await synthesize(trimmed);
+  const { wav, latencyMs } = await synthesizeAgentSpeech(trimmed);
   // `voice:speak` is distinct from per-turn `voice:tts:audio` so the client can
   // render a subtle pill and skip dialogue history.
   const delivery = await emitVoiceOutput(io, 'voice:speak', {

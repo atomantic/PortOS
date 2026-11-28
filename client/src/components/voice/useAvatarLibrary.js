@@ -15,3 +15,15 @@ export function activeChannelOf(library) {
   const index = library.active ?? 0;
   return { index, ...library.channels[index] };
 }
+
+/** The LLM a channel's agent runs: its own override, else the global voice LLM. */
+export function channelLlm(channel, globalProvider, globalModel) {
+  const own = channel?.agent?.provider;
+  return own
+    ? { provider: own, model: channel.agent.model || 'auto', own: true }
+    : { provider: globalProvider || 'lmstudio', model: globalModel || 'auto', own: false };
+}
+
+/** The voice a channel's agent speaks with, as a short label: its own voice, else the global one. */
+export const channelVoiceLabel = (channel, globalLabel) =>
+  channel?.agent?.voiceId?.split(':').slice(1).join(':') || globalLabel;

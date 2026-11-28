@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { saveAvatarChannels } from '../../services/apiVoiceAvatar';
-import { activeChannelOf, useAvatarLibrary } from './useAvatarLibrary';
+import { activeChannelOf, channelLlm, channelVoiceLabel, useAvatarLibrary } from './useAvatarLibrary';
 import { SatPhoneFaceplate, SatPhoneSetup, SatPhoneSpeaker } from './SatPhoneFaceplate';
 import SatPhoneViewfinder from './SatPhoneViewfinder';
 import { SatPhoneActionKeys, SatPhoneTalkPaddle, SatPhoneTelemetry } from './SatPhoneControls';
@@ -67,6 +67,8 @@ export default function SatPhoneHandset({
   const { data: library, updateData: updateLibrary } = useAvatarLibrary();
   const channel = activeChannelOf(library);
   const channelCount = library?.channels?.length ?? 0;
+  // The telemetry shows what the on-air channel's agent actually runs.
+  const onAirLlm = channelLlm(channel, llmProvider, llmModel);
   const nextChannel = channelCount > 1
     ? () => saveAvatarChannels({ active: ((channel?.index ?? 0) + 1) % channelCount }).then(updateLibrary).catch(() => {})
     : undefined;
@@ -156,9 +158,9 @@ export default function SatPhoneHandset({
           onNextChannel={nextChannel}
           volume={volume}
           muted={muted}
-          voiceLabel={voiceLabel}
-          llmProvider={llmProvider}
-          llmModel={llmModel}
+          voiceLabel={channelVoiceLabel(channel, voiceLabel)}
+          llmProvider={onAirLlm.provider}
+          llmModel={onAirLlm.model}
           signalLevel={signalLevel}
           onVolumeChange={onVolumeChange}
           onToggleMute={onToggleMute}

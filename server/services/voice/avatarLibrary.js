@@ -5,21 +5,22 @@
  * Storage: avatars are images in the `avatars` media collection, so they federate through
  * the `mediaCollections` sync category (records plus image bytes) like any other collection.
  * Channel assignments are machine-local settings (`settings.voiceAvatarChannels`): each
- * install picks which shared avatar answers on which of its channels.
+ * install picks which shared avatar answers on which of its channels, and what agent
+ * (voice, LLM and persona overrides, see lib/voiceChannels.js) speaks there.
  */
 
 import { join } from 'node:path';
 import { access, readFile } from 'node:fs/promises';
 import { ServerError } from '../../lib/errorHandler.js';
 import { PATHS } from '../../lib/fileUtils.js';
-import { AVATAR_CHANNEL_COUNT, AVATAR_CHANNEL_LABEL_MAX } from '../../lib/voiceValidation.js';
+import { mergeChannelAgentPatch, VOICE_CHANNELS_SETTINGS_KEY, normalizeChannels as normalizeChannelRecord } from '../../lib/voiceChannels.js';
 import { getSettings, updateSettingsWith } from '../settings.js';
 import { emitToOperators } from '../socketIo.js';
 import { ERR_DUPLICATE, ERR_NOT_FOUND, itemKey } from '../mediaCollections/collectionStore.js';
 import { addItem, removeItem } from '../mediaCollections/collectionEdits.js';
 import { AVATAR_COLLECTION_ID, findOrCreateAvatarCollection } from '../mediaCollections/ownerAdapters.js';
 
-const SETTINGS_KEY = 'voiceAvatarChannels';
+const SETTINGS_KEY = VOICE_CHANNELS_SETTINGS_KEY;
 const PORTRAIT_EDGE = 512;
 // Bounds the bytes decoded into a portrait; generated stills are far smaller.
 const MAX_PORTRAIT_SOURCE_BYTES = 40 * 1024 * 1024;
@@ -27,22 +28,8 @@ const MAX_PORTRAIT_SOURCE_BYTES = 40 * 1024 * 1024;
 const isSafeFilename = (value) => typeof value === 'string' && value.length > 0 && value.length <= 255
   && !/[\\/\0]/.test(value) && value !== '.' && value !== '..';
 
-const blankChannel = () => ({ label: '', avatar: null });
-
 /** Normalize a stored channels record; anything malformed falls back per field. */
-export function normalizeChannels(raw) {
-  const list = Array.isArray(raw?.channels) ? raw.channels : [];
-  const channels = Array.from({ length: AVATAR_CHANNEL_COUNT }, (_, index) => {
-    const entry = list[index];
-    if (!entry || typeof entry !== 'object') return blankChannel();
-    return {
-      label: typeof entry.label === 'string' ? entry.label.trim().slice(0, AVATAR_CHANNEL_LABEL_MAX) : '',
-      avatar: isSafeFilename(entry.avatar) ? entry.avatar : null,
-    };
-  });
-  const active = Number.isInteger(raw?.active) && raw.active >= 0 && raw.active < AVATAR_CHANNEL_COUNT ? raw.active : 0;
-  return { active, channels };
-}
+export const normalizeChannels = (raw) => normalizeChannelRecord(raw, { isSafeFilename });
 
 const readChannels = async () => normalizeChannels((await getSettings())?.[SETTINGS_KEY]);
 
@@ -67,6 +54,25 @@ export async function updateAvatarChannels(patch) {
       channels: patch.channels ?? current.channels,
     });
     return { ...settings, [SETTINGS_KEY]: next };
+  });
+  announce();
+  return getAvatarLibrary();
+}
+
+/**
+ * Edit one channel in place. Merging inside the settings write, and merging `agent` field
+ * by field, keeps overlapping edits to different channels or fields from overwriting each other.
+ */
+export async function updateAvatarChannel(index, patch) {
+  await updateSettingsWith((settings) => {
+    const current = normalizeChannels(settings[SETTINGS_KEY]);
+    const { agent, ...fields } = patch;
+    const channels = current.channels.map((channel, i) => (i !== index ? channel : {
+      ...channel,
+      ...fields,
+      ...(agent !== undefined && { agent: mergeChannelAgentPatch(channel.agent, agent) }),
+    }));
+    return { ...settings, [SETTINGS_KEY]: normalizeChannels({ ...current, channels }) };
   });
   announce();
   return getAvatarLibrary();

@@ -398,8 +398,12 @@ describe.skipIf(!chrome)('Voice Call console in Chrome', () => {
       // The portrait is always on; the transceiver offers channels instead of an audio-only toggle.
       await consoleView.getByRole('img', { name: 'Radio operator portrait' }).waitFor();
       expect(await consoleView.getByRole('button', { name: /^Avatar$|Play sample/ }).count()).toBe(0);
-      await consoleView.getByRole('group', { name: 'Station settings' }).getByRole('button', { name: /^Avatars/ }).click();
+      await consoleView.getByRole('group', { name: 'Station settings' }).getByRole('button', { name: /^Channels/ }).click();
       await consoleView.getByRole('list', { name: 'Transceiver channels' }).waitFor();
+      expect(await fitsFrame()).toBe(true);
+      // Each channel's agent tuning opens in place and stays inside the console at phone width.
+      await consoleView.getByRole('button', { name: 'Tune the agent on channel 1' }).click();
+      await consoleView.getByRole('group', { name: 'Agent for channel 1' }).waitFor();
       expect(await fitsFrame()).toBe(true);
       await page.getByRole('button', { name: 'Model & voice settings' }).click();
       await page.getByLabel('LLM model', { exact: true }).waitFor();

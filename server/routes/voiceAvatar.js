@@ -6,11 +6,11 @@ import { validateRequest } from '../lib/validateRequest.js';
 import { getAvatarStatus, manageAvatar, renderAvatar, renderAvatarIdle } from '../services/voice/avatarRuntime.js';
 import { MAX_AVATAR_WAV_BYTES } from '../lib/uploadLimits.js';
 import {
-  voiceAvatarAddSchema, voiceAvatarChannelsSchema, voiceAvatarCommandSchema, voiceAvatarFilenameParamsSchema,
+  voiceAvatarAddSchema, voiceAvatarChannelParamsSchema, voiceAvatarChannelPatchSchema, voiceAvatarChannelsSchema, voiceAvatarCommandSchema, voiceAvatarFilenameParamsSchema,
   voiceAvatarIdleSchema, voiceAvatarWaveSchema,
 } from '../lib/voiceValidation.js';
 import { emptyQuerySchema } from '../lib/queryValidation.js';
-import { addAvatar, getAvatarLibrary, removeAvatar, updateAvatarChannels } from '../services/voice/avatarLibrary.js';
+import { addAvatar, getAvatarLibrary, removeAvatar, updateAvatarChannel, updateAvatarChannels } from '../services/voice/avatarLibrary.js';
 import { avatarError } from '../services/voice/avatarWorker.js';
 
 function streamFrames(res, run) {
@@ -61,6 +61,11 @@ router.delete('/library/:filename', asyncHandler(async (req, res) => {
 router.put('/channels', asyncHandler(async (req, res) => {
   validateRequest(emptyQuerySchema, req.query);
   res.json(await updateAvatarChannels(validateRequest(voiceAvatarChannelsSchema, req.body)));
+}));
+router.patch('/channels/:index', asyncHandler(async (req, res) => {
+  validateRequest(emptyQuerySchema, req.query);
+  const { index } = validateRequest(voiceAvatarChannelParamsSchema, req.params);
+  res.json(await updateAvatarChannel(index, validateRequest(voiceAvatarChannelPatchSchema, req.body)));
 }));
 router.post('/frames', express.raw({ type: 'audio/wav', limit: MAX_AVATAR_WAV_BYTES, inflate: false }), asyncHandler(async (req, res) => {
   const wav = validateRequest(voiceAvatarWaveSchema, req.body);

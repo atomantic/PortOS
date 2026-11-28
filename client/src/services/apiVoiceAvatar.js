@@ -59,3 +59,7 @@ export const removeAvatarFromLibrary = (filename, options = {}) => request(`/voi
 export const saveAvatarChannels = (patch, options = {}) => request('/voice/avatar/channels', {
   method: 'PUT', body: JSON.stringify(patch), ...options,
 });
+// One channel's label, avatar or agent overrides; the server merges it into the stored channels.
+export const patchAvatarChannel = (index, patch, options = {}) => request(`/voice/avatar/channels/${index}`, {
+  method: 'PATCH', body: JSON.stringify(patch), ...options,
+});
