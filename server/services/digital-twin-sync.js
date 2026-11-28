@@ -1076,18 +1076,18 @@ export async function applyDigitalTwinRemote(remoteData) {
   if (!isPlainObject(remoteData)) return { applied: false, count: 0 };
 
   let count = 0;
-  count += await applyMerge(IDENTITY_FILE, remoteData.identity, (l, r) => mergeObjectLWW(l, r, 'updatedAt'));
+  count += await applyMerge(IDENTITY_FILE, remoteData.identity, (l, r) => mergeObjectLWW(l, r, 'updatedAt'), { mode: 0o600, dirMode: 0o700 });
   if (isPlainObject(remoteData.chronotype) || isPlainObject(remoteData.longevity)) {
     const { queueDerivedIdentityWrite, SSA_BASELINE_LIFE_EXPECTANCY } = await import('./identity/store.js');
     if (isPlainObject(remoteData.chronotype)) {
       count += await queueDerivedIdentityWrite(CHRONOTYPE_FILE, () =>
-        applyMerge(CHRONOTYPE_FILE, remoteData.chronotype, mergeChronotype)
+        applyMerge(CHRONOTYPE_FILE, remoteData.chronotype, mergeChronotype, { mode: 0o600, dirMode: 0o700 })
       );
     }
     if (isPlainObject(remoteData.longevity)) {
       count += await queueDerivedIdentityWrite(LONGEVITY_FILE, () =>
         applyMerge(LONGEVITY_FILE, remoteData.longevity, (local, remote) =>
-          mergeLongevity(local, remote, SSA_BASELINE_LIFE_EXPECTANCY)
+          mergeLongevity(local, remote, SSA_BASELINE_LIFE_EXPECTANCY), { mode: 0o600, dirMode: 0o700 }
         )
       );
     }
@@ -1097,7 +1097,7 @@ export async function applyDigitalTwinRemote(remoteData) {
   // Observed evidence (Phase 7): regenerated derived records — body is LWW on
   // derivedAt; taste also preserves the newest user-triggered AI interpretation.
   count += await applyTasteObserved(remoteData.tasteObserved);
-  count += await applyMerge(CHRONOTYPE_OBSERVED_FILE, remoteData.chronotypeObserved, mergeChronotypeObserved);
+  count += await applyMerge(CHRONOTYPE_OBSERVED_FILE, remoteData.chronotypeObserved, mergeChronotypeObserved, { mode: 0o600, dirMode: 0o700 });
   const { loadMeta, withMetaLock } = await import('./digital-twin-meta.js');
   // The meta lock (inside the backup lease, the order document writes use) keeps
   // a local edit from landing between the stamp comparison and the body write,

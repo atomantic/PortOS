@@ -1,6 +1,7 @@
 import { jevEvents } from './jevEvents.js';
 import { spriteEvents } from './sprites/events.js';
 import { modelLifecycleEvents } from './modelLifecycleEvents.js';
+import { observeModelResource } from './modelObservation.js';
 import { meatspaceEvents, invalidateMeatspace } from './meatspace/meatspaceEvents.js';
 import { dashboardEvents } from './dashboardEvents.js';
 import { settingsEvents } from './settings.js';
@@ -1951,6 +1952,47 @@ describe('processes:subscribe host-control boundary (#19729)', () => {
   });
 });
 
+
+describe('Codex account observation host-control boundary (#20300)', () => {
+  it('starts sampling only for local or session-authorized subscribers', async () => {
+    const io = makeIo();
+    initSocket(io);
+    vi.mocked(isAuthEnabled).mockResolvedValue(false);
+    const probe = vi.fn(async () => ({ readiness: null }));
+    const observation = observeModelResource('codex-account', probe);
+    const checkSubscription = async ({ local = false, headers = {} } = {}) => {
+      const socket = makeSocket();
+      socket.data.portosLocalConnection = local;
+      socket.handshake.headers = headers;
+      socket.use = (fn) => { socket.middleware = fn; };
+      io.connect(socket);
+      const event = 'codex-account:subscribe';
+      const next = vi.fn();
+      await socket.middleware([event], next);
+      if (next.mock.calls.length) {
+        socket.handlers[event]();
+        await observation.read();
+        socket.handlers['codex-account:unsubscribe']();
+      }
+      return { socket, next };
+    };
+
+    const remote = await checkSubscription();
+    expect(remote.next).not.toHaveBeenCalled();
+    expect(remote.socket.emitted).toContainEqual(['codex-account:subscribe:error', expect.objectContaining({ code: 'HOST_CONTROL_FORBIDDEN' })]);
+    expect(probe).not.toHaveBeenCalled();
+
+    const local = await checkSubscription({ local: true });
+    expect(local.next).toHaveBeenCalled();
+
+    vi.mocked(isAuthEnabled).mockResolvedValue(true);
+    const headers = { authorization: 'Bearer example-agent-session' };
+    vi.mocked(verifyRequestSession).mockImplementation(async (request) => request.headers === headers);
+    const agent = await checkSubscription({ headers });
+    expect(agent.next).toHaveBeenCalled();
+    expect(probe).toHaveBeenCalledTimes(2);
+  });
+});
 
 describe('voice socket host-control boundary (#19169)', () => {
   const hostEvents = [

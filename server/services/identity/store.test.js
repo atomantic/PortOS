@@ -1,7 +1,7 @@
 import { meatspaceEvents } from '../meatspace/meatspaceEvents.js';
 import { dashboardEvents } from '../dashboardEvents.js';
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'fs';
+import { chmodSync, statSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { makePathsProxy } from '../../lib/mockPathsDataRoot.js';
@@ -33,7 +33,7 @@ vi.mock('../taste-questionnaire.js', () => ({
   getTasteProfile: vi.fn(async () => ({ completedCount: 0, totalSections: 0, lastSessionAt: null })),
 }));
 
-const { saveJSON, loadJSON, mutateGoals, normalizeGoal, GOALS_FILE, LONGEVITY_FILE, DEFAULT_GOALS, DEFAULT_LONGEVITY, PORTOS_GOAL_DEFAULTS } = await import('./store.js');
+const { saveJSON, loadJSON, mutateGoals, normalizeGoal, IDENTITY_FILE, CHRONOTYPE_FILE, GOALS_FILE, LONGEVITY_FILE, DEFAULT_GOALS, DEFAULT_LONGEVITY, PORTOS_GOAL_DEFAULTS } = await import('./store.js');
 const { getIdentityStatus } = await import('./status.js');
 
 afterAll(() => rmSync(TEST_DATA_ROOT, { recursive: true, force: true }));
@@ -43,6 +43,19 @@ beforeEach(() => {
   rmSync(IDENTITY_DIR, { recursive: true, force: true });
   mkdirSync(IDENTITY_DIR, { recursive: true });
   vi.spyOn(console, 'warn').mockImplementation(() => {});
+});
+
+it.skipIf(process.platform === 'win32')('writes identity records with owner-only permissions', async () => {
+  rmSync(IDENTITY_DIR, { recursive: true });
+  await saveJSON(IDENTITY_FILE, { name: 'Example Twin' });
+  expect(statSync(IDENTITY_DIR).mode & 0o777).toBe(0o700);
+  expect(statSync(IDENTITY_FILE).mode & 0o777).toBe(0o600);
+  for (const file of [CHRONOTYPE_FILE, LONGEVITY_FILE, GOALS_FILE]) {
+    writeFileSync(file, '{}');
+    chmodSync(file, 0o644);
+    await saveJSON(file, {});
+    expect(statSync(file).mode & 0o777).toBe(0o600);
+  }
 });
 
 it('invalidates the death clock after saving longevity but not unrelated identity records', async () => {

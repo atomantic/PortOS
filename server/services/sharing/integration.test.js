@@ -747,6 +747,31 @@ describe('sharing round-trip', () => {
     expect((await manuscriptReview.getReview(s.id)).comments).toHaveLength(1);
   });
 
+  it('promoteInboxItem keeps the inbox row when a record insert fails', async () => {
+    const bucket = await buckets.createBucket({ name: 'PromoteRecordFailBucket', path: tempBucket, mode: 'inbox' });
+    const universe = await universeSvc.createUniverse({ name: 'Promote Record Retry' });
+    const exp = await exporter.exportUniverse(universe.id, bucket.id);
+    await universeSvc.deleteUniverse(universe.id);
+    simulateRemoteSender(tempBucket, exp.filename);
+    await importer.processManifest(bucket.id, exp.filename);
+
+    const spy = vi.spyOn(universeSvc, 'insertUniverseWithId').mockRejectedValueOnce(new Error('simulated disk failure'));
+    try {
+      await expect(importer.promoteInboxItem(bucket.id, exp.manifestId)).rejects.toMatchObject({
+        code: 'SHARING_RECORD_IMPORT_FAILED',
+        pendingRecordImportFailures: [`universe:${universe.id}`],
+      });
+      expect(await importer.listInbox(bucket.id)).toMatchObject([{ manifestId: exp.manifestId }]);
+      await expect(universeSvc.getUniverse(universe.id)).rejects.toThrow();
+    } finally {
+      spy.mockRestore();
+    }
+
+    await expect(importer.promoteInboxItem(bucket.id, exp.manifestId)).resolves.toMatchObject({ promoted: true });
+    expect(await universeSvc.getUniverse(universe.id)).toMatchObject({ name: universe.name });
+    expect(await importer.listInbox(bucket.id)).toEqual([]);
+  });
+
   it('promoteInboxItem keeps the inbox row when the bundled review merge fails', async () => {
     const bucket = await buckets.createBucket({ name: 'PromoteFailBucket', path: tempBucket, mode: 'inbox' });
     const s = await series.createSeries({ name: 'Promote Fail Series', logline: 'A' });
@@ -977,6 +1002,70 @@ describe('sharing round-trip', () => {
     expect(fs.existsSync(join(tempData, 'images', 'cover-a.png'))).toBe(true);
     expect(fs.existsSync(join(tempData, 'images', 'cover-b.png'))).toBe(true);
   });
+
+  for (const mode of ['auto-merge', 'inbox']) {
+    for (const [kind, failedWrite] of [
+      ['universe', 'findOrCreateUniverseCollection'],
+      ['series', 'findOrCreateSeriesCollection'],
+      ['universe', 'addItem'],
+    ]) {
+      it(`keeps a ${mode} collection import retryable when ${failedWrite} fails`, async () => {
+        const bucket = await buckets.createBucket({ name: 'CollectionRetryBucket', path: tempBucket, mode });
+        const mediaCollections = await import('../mediaCollections.js');
+        const { readCursor, hasBeenProcessed } = await import('./manifest.js');
+        const isUniverse = kind === 'universe';
+        const owner = await (isUniverse ? universeSvc.createUniverse : series.createSeries)({ name: 'Collection Retry' });
+        const collection = isUniverse
+          ? await mediaCollections.findOrCreateUniverseCollection({ universeId: owner.id, universeName: owner.name })
+          : await mediaCollections.findOrCreateSeriesCollection({ seriesId: owner.id, seriesName: owner.name });
+        writeFileSync(join(tempData, 'images', 'second.png'), pngBytes('SECOND'));
+        await mediaCollections.addItem(collection.id, { kind: 'image', ref: 'fakeasset.png' });
+        await mediaCollections.addItem(collection.id, { kind: 'image', ref: 'second.png' });
+        const exp = await (isUniverse ? exporter.exportUniverse : exporter.exportSeries)(owner.id, bucket.id);
+        await mediaCollections.deleteCollection(collection.id);
+        simulateRemoteSender(tempBucket, exp.filename);
+        if (mode === 'inbox') await importer.processManifest(bucket.id, exp.filename);
+
+        const expectedFailures = [failedWrite === 'addItem' ? 'image:fakeasset.png' : `${kind}:${owner.id}`];
+        const spy = vi.spyOn(mediaCollections, failedWrite).mockRejectedValueOnce(new Error('simulated disk failure'));
+        try {
+          if (mode === 'inbox') {
+            await expect(importer.promoteInboxItem(bucket.id, exp.manifestId)).rejects.toMatchObject({
+              code: 'SHARING_COLLECTION_MERGE_FAILED',
+              pendingCollectionMergeFailures: expectedFailures,
+            });
+            expect(await importer.listInbox(bucket.id)).toMatchObject([{ manifestId: exp.manifestId }]);
+          } else {
+            const first = await importer.processManifest(bucket.id, exp.filename);
+            expect(first).toMatchObject({ pending: true, outcome: {
+              collectionMergeFailures: expectedFailures,
+              pendingCollectionMergeFailures: expectedFailures,
+            } });
+            expect(hasBeenProcessed(await readCursor(bucket.id), exp.filename, exp.manifestId)).toBe(false);
+          }
+        } finally {
+          spy.mockRestore();
+        }
+
+        const retry = mode === 'inbox'
+          ? await importer.promoteInboxItem(bucket.id, exp.manifestId)
+          : await importer.processManifest(bucket.id, exp.filename);
+        expect(retry.outcome.collectionMergeFailures).toBeNull();
+        // When the first item fails, the second lands before retry. Retrying
+        // adds the missing item and treats the persisted second one as a duplicate.
+        expect(retry.outcome.collectionItemsAdded).toBe(failedWrite === 'addItem' ? 1 : 2);
+        if (mode === 'inbox') {
+          expect(retry.promoted).toBe(true);
+          expect(await importer.listInbox(bucket.id)).toEqual([]);
+        } else {
+          expect(retry.pending).toBeFalsy();
+          expect(hasBeenProcessed(await readCursor(bucket.id), exp.filename, exp.manifestId)).toBe(true);
+        }
+        const restored = await (isUniverse ? mediaCollections.findCollectionByUniverseId : mediaCollections.findCollectionBySeriesId)(owner.id);
+        expect(restored.items.map(({ ref }) => ref).sort()).toEqual(['fakeasset.png', 'second.png']);
+      });
+    }
+  }
 
   it('series export prefers the universe-linked collection when both exist', async () => {
     // A series can in principle be linked to a universe (universe-owned
@@ -1216,39 +1305,51 @@ describe('sharing round-trip', () => {
     expect(hasBeenProcessed(cursor, exp.filename, exp.manifestId)).toBe(true);
   });
 
-  it('keeps a manifest retryable (does not advance the cursor) when a record insert fails unexpectedly', async () => {
-    // A non-duplicate insert failure (disk error, transient fs error) must NOT
-    // advance the cursor — otherwise the manifest is marked processed and the
-    // record is silently dropped. It must stay pending and retry.
-    const bucket = await buckets.createBucket({ name: 'InsertFailBucket', path: tempBucket, mode: 'auto-merge' });
-    const universeBuilder = await import('../universeBuilder.js');
-    const { readCursor, hasBeenProcessed } = await import('./manifest.js');
-    const u = await universeBuilder.createUniverse({ name: 'Fails To Insert Once' });
+  for (const withCollection of [false, true]) {
+    it(`keeps a manifest retryable when a record insert fails ${withCollection ? 'with' : 'without'} a bundled collection`, async () => {
+      // A non-duplicate insert failure (disk error, transient fs error) must NOT
+      // advance the cursor — otherwise the manifest is marked processed and the
+      // record is silently dropped. It must stay pending and retry.
+      const bucket = await buckets.createBucket({ name: 'InsertFailBucket', path: tempBucket, mode: 'auto-merge' });
+      const universeBuilder = await import('../universeBuilder.js');
+      const { readCursor, hasBeenProcessed } = await import('./manifest.js');
+      const u = await universeBuilder.createUniverse({ name: 'Fails To Insert Once' });
 
-    const exp = await exporter.exportUniverse(u.id, bucket.id);
-    simulateRemoteSender(tempBucket, exp.filename);
-    await universeBuilder.deleteUniverse(u.id);
+      const mediaCollections = await import('../mediaCollections.js');
+      if (withCollection) {
+        const collection = await mediaCollections.findOrCreateUniverseCollection({ universeId: u.id, universeName: u.name });
+        await mediaCollections.addItem(collection.id, { kind: 'image', ref: 'fakeasset.png' });
+      }
+      const exp = await exporter.exportUniverse(u.id, bucket.id);
+      simulateRemoteSender(tempBucket, exp.filename);
+      await universeBuilder.deleteUniverse(u.id);
 
-    // Force the first insert to throw a non-duplicate error (not a *_DUPLICATE).
-    const spy = vi.spyOn(universeBuilder, 'insertUniverseWithId')
-      .mockRejectedValueOnce(new Error('simulated transient disk failure'));
+      // Force the first insert to throw a non-duplicate error (not a *_DUPLICATE).
+      const spy = vi.spyOn(universeBuilder, 'insertUniverseWithId')
+        .mockRejectedValueOnce(new Error('simulated transient disk failure'));
 
-    const first = await importer.processManifest(bucket.id, exp.filename);
-    expect(first.pending).toBe(true);
-    expect(first.outcome.pendingRecordImportFailures).toEqual([`universe:${u.id}`]);
-    let cursor = await readCursor(bucket.id);
-    expect(hasBeenProcessed(cursor, exp.filename, exp.manifestId)).toBe(false);
-    await expect(universeBuilder.getUniverse(u.id)).rejects.toThrow();
+      try {
+        const first = await importer.processManifest(bucket.id, exp.filename);
+        expect(first.pending).toBe(true);
+        expect(first.outcome.pendingRecordImportFailures).toEqual([`universe:${u.id}`]);
+        expect(hasBeenProcessed(await readCursor(bucket.id), exp.filename, exp.manifestId)).toBe(false);
+        await expect(universeBuilder.getUniverse(u.id)).rejects.toThrow();
+      } finally {
+        spy.mockRestore();
+      }
 
-    // Insert succeeds on retry → manifest finally marked processed.
-    spy.mockRestore();
-    const retry = await importer.processBacklog(bucket.id);
-    expect(retry.processed).toBe(1);
-    const restored = await universeBuilder.getUniverse(u.id);
-    expect(restored.name).toBe('Fails To Insert Once');
-    cursor = await readCursor(bucket.id);
-    expect(hasBeenProcessed(cursor, exp.filename, exp.manifestId)).toBe(true);
-  });
+      // Insert succeeds on retry → manifest finally marked processed.
+      const retry = await importer.processBacklog(bucket.id);
+      expect(retry.processed).toBe(1);
+      const restored = await universeBuilder.getUniverse(u.id);
+      expect(restored.name).toBe('Fails To Insert Once');
+      expect(hasBeenProcessed(await readCursor(bucket.id), exp.filename, exp.manifestId)).toBe(true);
+      if (withCollection) {
+        const collection = await mediaCollections.findCollectionByUniverseId(u.id);
+        expect(collection.items).toMatchObject([{ kind: 'image', ref: 'fakeasset.png' }]);
+      }
+    });
+  }
 
   it('keeps series manifests retryable while issue record files are still syncing', async () => {
     const bucket = await buckets.createBucket({ name: 'SlowIssueSync', path: tempBucket, mode: 'auto-merge' });

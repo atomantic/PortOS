@@ -48,9 +48,10 @@ router.post('/upscale/:id/topaz', asyncHandler(async (req, res) => {
   const parsed = historyIdSchema.safeParse(req.params.id);
   if (!parsed.success) failValidation(parsed);
   const body = validateRequest(topazTokenBodySchema, req.body ?? {});
-  const result = body.sceneId
+  const { musicVideoProjectId, sceneId } = body;
+  const result = sceneId
     ? await upscaleShot(parsed.data, { ...body, method: 'fal-topaz', topazToken: body.token })
-    : { job: await enqueueTopazUpscale(parsed.data, body.token) };
+    : { job: await enqueueTopazUpscale(parsed.data, body.token, { musicVideoProjectId, sceneId }) };
   res.json({ ok: true, ...result });
 }));
 
@@ -91,7 +92,8 @@ router.post('/upscale/:id', asyncHandler(async (req, res) => {
     return;
   }
   if (body.data.method === 'ltx') {
-    res.json({ ok: true, job: await enqueueLtxUpscale(parsed.data) });
+    const { musicVideoProjectId, sceneId } = body.data;
+    res.json({ ok: true, job: await enqueueLtxUpscale(parsed.data, { musicVideoProjectId, sceneId }) });
     return;
   }
   if (body.data.method === 'fal-seedvr2') {

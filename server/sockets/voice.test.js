@@ -229,6 +229,21 @@ describe('voice:turn validation', () => {
     expect(errors).toHaveLength(1);
     expect(errors[0].payload).toEqual({ stage: 'turn', message: 'audio is required' });
   });
+
+  it.each([null, 'invalid'])('treats malformed %s payload as missing audio without logging', async (payload) => {
+    const socket = makeFakeSocket();
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      registerVoiceHandlers(socket);
+      await socket.fire('voice:turn', payload);
+      expect(socket.emitted.filter((e) => e.event === 'voice:error')).toEqual([{
+        event: 'voice:error', payload: { stage: 'turn', message: 'audio is required' },
+      }]);
+      expect(error).not.toHaveBeenCalled();
+    } finally {
+      error.mockRestore();
+    }
+  });
 });
 
 describe('voice:text validation', () => {
@@ -321,6 +336,39 @@ describe('voice:text turn recovery', () => {
       event: 'voice:idle',
       payload: { reason: 'error' },
     }]);
+  });
+
+  it.each([
+    ['text', 'text'],
+    ['voice', 'voice'],
+    ['unknown', undefined],
+    [{ unexpected: true }, undefined],
+  ])('forwards only supported input source %j', async (inputSource, expectedSource) => {
+    const socket = makeFakeSocket();
+    registerVoiceHandlers(socket);
+    await socket.fire('voice:text', { text: 'hello', source: inputSource });
+    expect(runTurn).toHaveBeenCalledWith(expect.objectContaining({ source: expectedSource }));
+  });
+
+  it('sanitizes UI index elements to bounded DOM-index fields', async () => {
+    const socket = makeFakeSocket();
+    registerVoiceHandlers(socket);
+    socket.fire('voice:ui:index', {
+      elements: [{
+        ref: 1, kind: 'k'.repeat(40), label: 'l'.repeat(170), guard: 'confirm', active: true,
+        type: 't'.repeat(40), value: 'v'.repeat(170), checked: false,
+        options: ['o'.repeat(130), 3, ...Array.from({ length: 31 }, (_, i) => `option${i}`)], extra: 'drop me',
+      }, { ref: Infinity, label: 'invalid ref' }],
+    });
+    runTurn.mockImplementationOnce(async ({ state }) => {
+      expect(state.ui.elements).toEqual([{
+        ref: 1, kind: 'k'.repeat(32), label: 'l'.repeat(160), guard: 'confirm', active: true,
+        type: 't'.repeat(32), value: 'v'.repeat(160), checked: false,
+        options: ['o'.repeat(120), ...Array.from({ length: 29 }, (_, i) => `option${i}`)],
+      }]);
+      return {};
+    });
+    await socket.fire('voice:text', { text: 'hello' });
   });
 });
 

@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 
 vi.mock('../lib/paths.js', async (importOriginal) => {
   const { makePathsProxy, lazyTempDataRoot } = await import('../lib/mockPathsDataRoot.js');
@@ -39,6 +40,24 @@ afterEach(() => vi.useRealTimers());
 afterAll(cleanupTempDataRoots);
 
 describe('derived Digital Twin peer sync', () => {
+  it.skipIf(process.platform === 'win32')('rewrites peer identity and observed evidence with owner-only permissions', async () => {
+    const chronotypeObservedFile = join(PATHS.digitalTwin, 'chronotype-observed.json');
+    const tasteObservedFile = join(PATHS.digitalTwin, 'taste-observed.json');
+    const files = [IDENTITY_FILE, CHRONOTYPE_FILE, LONGEVITY_FILE, chronotypeObservedFile, tasteObservedFile];
+    for (const file of files) {
+      await writeFile(file, '{}');
+      await chmod(file, 0o644);
+    }
+    await expect(applyDigitalTwinRemote({
+      identity: { name: 'Example Twin', updatedAt: later },
+      chronotype: { derivedAt: later, behavioralData: { preferredWakeTime: '10:00' } },
+      longevity: { derivedAt: later, lifeExpectancy: { adjusted: 80 } },
+      chronotypeObserved: { derivedAt: later, sampleSize: 8 },
+      tasteObserved: { derivedAt: later, windows: { month: { listen: { total: 4 } } } },
+    })).resolves.toEqual({ applied: true, count: 5 });
+    for (const file of files) expect((await stat(file)).mode & 0o777).toBe(0o600);
+  });
+
   it('replaces newer idle defaults with coherent genome-derived snapshots and preserves the change event', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(earlier);

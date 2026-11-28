@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { freshQuerySchema } from '../../lib/queryValidation.js';
+import { assertHostControl, requestHasHostControl } from '../../services/authGate.js';
 import { observeModelResource } from '../../services/modelObservation.js';
 import { asyncHandler } from '../../lib/errorHandler.js';
 import { validateRequest } from '../../lib/validateRequest.js';
@@ -8,6 +9,8 @@ import {
   codexLogout,
   listCodexModels,
   getCodexAccountReadiness,
+  peekCodexAccountReadiness,
+  peekCodexModelCatalog,
   startCodexChatGptLogin,
 } from '../../services/codexAppServer.js';
 import { codexLoginCancelSchema, codexLoginStartSchema } from '../../lib/providerValidation.js';
@@ -30,15 +33,18 @@ export function createCodexAccountRoutes() {
    * a token.
    *
    * LAZY BY CONTRACT. This is the call that may spawn `codex app-server`, and
-   * it runs only from an explicit page fetch — nothing on the boot path calls
-   * it, and `GET /api/providers` decorates its cards from the cache-only peek.
-   * `?fresh=1` skips the TTL for the poll that follows a sign-in.
+   * authorized viewers can start it with a page fetch or subscription. Other
+   * readers get the same cache-only snapshot as `GET /api/providers`.
+   * `?fresh=1` requires host control and skips the TTL after sign-in.
    *
    * The payload carries a status, a plan name, and quota percentages. No token,
    * no account id, no email, no credential path.
    */
   router.get('/codex/account', asyncHandler(async (req, res) => {
-    res.json(await accountObservation.read({ fresh: validateRequest(freshQuerySchema, req.query).fresh === '1' }));
+    const fresh = validateRequest(freshQuerySchema, req.query).fresh === '1';
+    if (fresh) assertHostControl(req);
+    else if (!requestHasHostControl(req)) return res.json({ readiness: peekCodexAccountReadiness({ includeDiagnostics: false }) });
+    res.json(await accountObservation.read({ fresh }));
   }));
 
   /**
@@ -76,7 +82,10 @@ export function createCodexAccountRoutes() {
    * must not repaint an empty picker because one call timed out.
    */
   router.get('/codex/models', asyncHandler(async (req, res) => {
-    res.json(await listCodexModels({ fresh: validateRequest(freshQuerySchema, req.query).fresh === '1' }));
+    const fresh = validateRequest(freshQuerySchema, req.query).fresh === '1';
+    if (fresh) assertHostControl(req);
+    else if (!requestHasHostControl(req)) return res.json(peekCodexModelCatalog({ includeDiagnostics: false }));
+    res.json(await listCodexModels({ fresh }));
   }));
 
   /** Sign out. Codex drops its own credentials; PortOS has none to clear. */

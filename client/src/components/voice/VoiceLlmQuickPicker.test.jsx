@@ -22,6 +22,7 @@ vi.mock('../../services/apiLocalLlm', () => ({
   setLlamaServerAutoStart: mocks.setLlamaServerAutoStart,
 }));
 vi.mock('../settings/voice/ConversationalGemmaNotice', () => ({ default: () => null }));
+vi.mock('./FastVoiceModelNotice', () => ({ default: () => null }));
 vi.mock('../ProviderModelSelector', () => ({
   default: ({ label, providers, selectedProviderId, onProviderChange }) => (
     <select aria-label={label} value={selectedProviderId} onChange={(e) => onProviderChange(e.target.value)}>

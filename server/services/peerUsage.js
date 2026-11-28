@@ -1199,7 +1199,11 @@ export async function getFleetClaudeCodeModels({ from = null, to = null, apiBill
  * their readings into these meters would be a wrong number, not a fuller one.
  */
 export async function getFleetQuotaEntries({ excludeInstanceIds = [], includeEmpty = false } = {}) {
-  const { peers } = await entriesWithSelf();
+  // Only the saved peer slots are needed here. Rebuilding our digest can
+  // write its version and is unrelated to reading published peer quotas.
+  const [store, { instanceId: selfId }] = await Promise.all([readStore(), readSelfIdentity()]);
+  const peers = Object.values(store.instances).filter((entry) =>
+    isPlainObject(entry) && isPlainObject(entry.usage) && entry.instanceId !== selfId);
   const excluded = new Set(Array.isArray(excludeInstanceIds) ? excludeInstanceIds : []);
   const { participating, optedOut } = includeEmpty ? await usageParticipation() : { participating: [], optedOut: new Set() };
   const entries = peers

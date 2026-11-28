@@ -459,7 +459,7 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
   },
   'codex-account:subscribe': {
     direction: 'client-to-server',
-    summary: 'Start shared observation while a viewer is mounted.',
+    summary: 'Start shared Codex account observation with operator authority.',
     payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
   'codex-account:unsubscribe': {

@@ -57,7 +57,7 @@ async function mergeCollectionPayload(payload, availableAssetKeys = null) {
   // for an owner we haven't imported yet leaves the user with an unfixable
   // orphan. processManifest re-runs the merge on each pass, so a deferred
   // merge applies as soon as the owner record lands.
-  let collection;
+  let collectionPromise;
   if (payload.universeId) {
     const localUniverse = await getUniverse(payload.universeId, { includeDeleted: true }).catch(() => null);
     if (!localUniverse) {
@@ -80,13 +80,10 @@ async function mergeCollectionPayload(payload, availableAssetKeys = null) {
     const universeName = typeof localUniverse.name === 'string' && localUniverse.name.trim()
       ? localUniverse.name
       : fallbackName;
-    collection = await findOrCreateUniverseCollection({
+    collectionPromise = findOrCreateUniverseCollection({
       universeId: payload.universeId,
       universeName,
       description: payload.description || '',
-    }).catch((err) => {
-      logFailureWithStack('⚠️ sharing.importer: findOrCreateUniverseCollection failed', err);
-      return null;
     });
   } else {
     const localSeries = await getSeries(payload.seriesId).catch(() => null);
@@ -113,13 +110,10 @@ async function mergeCollectionPayload(payload, availableAssetKeys = null) {
         // re-resolve the series→universe link.
         return { itemsAdded: 0, itemsDeferred: payload.items.length, tombstonedUniverse: localUniverse.id };
       }
-      collection = await findOrCreateUniverseCollection({
+      collectionPromise = findOrCreateUniverseCollection({
         universeId: localUniverse.id,
         universeName: localUniverse.name,
         description: payload.description || '',
-      }).catch((err) => {
-        logFailureWithStack('⚠️ sharing.importer: findOrCreateUniverseCollection (series re-route) failed', err);
-        return null;
       });
     } else {
       const fallbackRaw = typeof payload.name === 'string' ? payload.name : '';
@@ -127,19 +121,22 @@ async function mergeCollectionPayload(payload, availableAssetKeys = null) {
       const seriesName = typeof localSeries.name === 'string' && localSeries.name.trim()
         ? localSeries.name
         : fallbackName;
-      collection = await findOrCreateSeriesCollection({
+      collectionPromise = findOrCreateSeriesCollection({
         seriesId: payload.seriesId,
         seriesName,
         description: payload.description || '',
-      }).catch((err) => {
-        logFailureWithStack('⚠️ sharing.importer: findOrCreateSeriesCollection failed', err);
-        return null;
       });
     }
   }
-  if (!collection) return { itemsAdded: 0 };
+  const owner = payload.universeId ? `universe:${payload.universeId}` : `series:${payload.seriesId}`;
+  const collection = await collectionPromise.catch((err) => {
+    logFailureWithStack(`⚠️ sharing.importer: find or create collection for ${owner} failed`, err);
+    return null;
+  });
+  if (!collection) return { itemsAdded: 0, failures: [owner] };
   let added = 0;
   let deferred = 0;
+  const failures = [];
   for (const item of payload.items) {
     if (!item?.kind || !item?.ref) continue;
     if (availableAssetKeys && !availableAssetKeys.has(`${item.kind}:${basename(item.ref)}`)) {
@@ -149,11 +146,12 @@ async function mergeCollectionPayload(payload, availableAssetKeys = null) {
     const result = await addCollectionItem(collection.id, item).catch((err) => {
       if (err?.code === COLLECTION_ERR_DUPLICATE) return null;
       logFailureWithStack(`⚠️ sharing.importer: addCollectionItem failed for ${item.ref}`, err);
+      failures.push(`${item.kind}:${item.ref}`);
       return null;
     });
     if (result) added += 1;
   }
-  return { itemsAdded: added, itemsDeferred: deferred };
+  return { itemsAdded: added, itemsDeferred: deferred, failures };
 }
 
 function createRecordMerger(bucket, manifest) {
@@ -381,6 +379,7 @@ async function mergeLinkedCollection(manifest, availableAssetKeys) {
   let collectionPendingUniverse = null;
   let collectionPendingSeries = null;
   let collectionTombstonedUniverse = null;
+  let collectionMergeFailures = null;
   // `isPlainObject` (not bare truthiness) so this apply path agrees exactly
   // with the schema gate's `relevantSchemaCategoriesForManifest`, which only
   // counts a plain-object `collection` as carrying the mediaCollections
@@ -405,8 +404,9 @@ async function mergeLinkedCollection(manifest, availableAssetKeys) {
     if (r.missingUniverse) collectionPendingUniverse = manifest.collection.universeId;
     if (r.missingSeries) collectionPendingSeries = manifest.collection.seriesId;
     if (r.tombstonedUniverse) collectionTombstonedUniverse = r.tombstonedUniverse;
+    if (r.failures?.length) collectionMergeFailures = r.failures;
   }
-  return { itemsAdded, itemsDeferred, collectionPendingUniverse, collectionPendingSeries, collectionTombstonedUniverse };
+  return { itemsAdded, itemsDeferred, collectionPendingUniverse, collectionPendingSeries, collectionTombstonedUniverse, collectionMergeFailures };
 }
 
 /**
@@ -440,8 +440,9 @@ export async function applyAutoMerge(bucket, manifest, records, { availableAsset
     manifest.reviewRefs, 'reviews', 'manuscript-review', mergeReviewFromSync);
   const outlineMergeFailures = await mergeSeriesDocuments(bucket.path, records.series, skipSeriesMerge,
     manifest.outlineRefs, 'outlines', 'reverse-outline', mergeOutlineFromSync);
-  const { itemsAdded, itemsDeferred, collectionPendingUniverse, collectionPendingSeries, collectionTombstonedUniverse } =
-    await mergeLinkedCollection(manifest, availableAssetKeys);
+  const {
+    itemsAdded, itemsDeferred, collectionPendingUniverse, collectionPendingSeries, collectionTombstonedUniverse, collectionMergeFailures,
+  } = await mergeLinkedCollection(manifest, availableAssetKeys);
 
   let adoptedSubscription = null;
   if (inboundSub && inboundRecordsForKind(inboundSub.recordKind).some((record) => record.id === inboundSub.recordId)) {
@@ -465,6 +466,7 @@ export async function applyAutoMerge(bucket, manifest, records, { availableAsset
     collectionPendingUniverse,
     collectionPendingSeries,
     collectionTombstonedUniverse,
+    collectionMergeFailures,
     legacyCanonPendingUniverses: legacyCanonPendingUniverses.length > 0 ? legacyCanonPendingUniverses : null,
     legacyCanonPendingFailures: legacyCanonPendingFailures.length > 0 ? legacyCanonPendingFailures : null,
     recordImportFailures: outcome.failedInserts.length > 0 ? outcome.failedInserts : null,

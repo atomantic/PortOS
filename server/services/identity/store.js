@@ -111,7 +111,7 @@ export const DEFAULT_GOALS = {
 // === File I/O ===
 
 export async function ensureIdentityDir() {
-  await ensureDir(IDENTITY_DIR);
+  await ensureDir(IDENTITY_DIR, { mode: 0o700 });
 }
 
 /**
@@ -162,7 +162,7 @@ export async function loadJSON(filePath, defaultVal, { strict = false } = {}) {
 
 export async function saveJSON(filePath, data) {
   await ensureIdentityDir();
-  await atomicWrite(filePath, data);
+  await atomicWrite(filePath, data, { mode: 0o600, dirMode: 0o700 });
   if (filePath === LONGEVITY_FILE) meatspaceEvents.emit('death-clock:changed', {});
   if (filePath === GOALS_FILE) dashboardEvents.emit('goals:changed');
 }

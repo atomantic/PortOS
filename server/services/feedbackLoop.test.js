@@ -1,5 +1,5 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdir, readFile, rm, writeFile } from 'fs/promises';
+import { chmod, mkdir, readFile, rm, stat, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
 
@@ -50,6 +50,16 @@ describe('document attribution keyed by stored strings', () => {
 });
 
 describe('feedback peer merge vs local submit', () => {
+  it.skipIf(process.platform === 'win32')('writes local and peer feedback with owner-only permissions', async () => {
+    await feedback.submitFeedback({ contentType: 'enrichment', validation: 'sounds_like_me' });
+    expect((await stat(FILE)).mode & 0o777).toBe(0o600);
+
+    await chmod(FILE, 0o644);
+    const stamp = '2026-01-01T00:00:00.000Z';
+    expect(await merge(doc([entry('remote-1', stamp)], stamp))).toBe(true);
+    expect((await stat(FILE)).mode & 0o777).toBe(0o600);
+  });
+
   it('keeps synced entries when a local submit follows a peer merge (stale cache)', async () => {
     await feedback.submitFeedback({ contentType: 'enrichment', validation: 'sounds_like_me', contentSnippet: 'a' }); // primes cache
     expect(await merge(doc([entry('remote-1', '2026-01-01T00:00:00.000Z')], '2026-01-01T00:00:00.000Z'))).toBe(true);

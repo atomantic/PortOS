@@ -1,15 +1,50 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { copyFile, mkdir, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
+
+vi.mock('../../lib/fileUtils.js', async original => makePathsProxy(await original(), {
+  dataRoot: () => lazyTempDataRoot('portos-realesrgan-job-'),
+}));
 
 const mocks = vi.hoisted(() => ({
   enqueueJob: vi.fn(),
   getHistoryItem: vi.fn(),
   planUpscaleHistoryItem: vi.fn(),
+  mutateVideoHistory: vi.fn(),
 }));
 vi.mock('../mediaJobQueue/index.js', () => ({ enqueueJob: mocks.enqueueJob }));
-vi.mock('./history.js', () => ({ getHistoryItem: mocks.getHistoryItem, loadHistory: vi.fn(async () => []), mutateVideoHistory: vi.fn() }));
+vi.mock('./history.js', () => ({ getHistoryItem: mocks.getHistoryItem, mutateVideoHistory: mocks.mutateVideoHistory }));
 vi.mock('./upscaleVideo.js', () => ({ planUpscaleHistoryItem: mocks.planUpscaleHistoryItem }));
 
-const { enqueueRealesrganUpscale, frameRateArg, cancel } = await import('./realesrganUpscaleJob.js');
+vi.mock('./realesrganRuntime.js', () => ({
+  resolveRealesrganInvocation: async () => ({ bin: 'realesrgan-fixture' }),
+  realesrganArgs: ({ input, output }) => [input, output],
+}));
+vi.mock('../../lib/ffmpeg.js', async original => ({
+  ...await original(),
+  findFfmpeg: async () => 'ffmpeg-fixture',
+  vfrSyncArgs: async () => [],
+  bt709TagFilter: async () => null,
+  runFfmpegProcess: async ({ args, bin }) => {
+    const output = args.at(-1);
+    if (bin === 'realesrgan-fixture') await copyFile(join(args[0], '00000001.png'), join(output, '00000001.png'));
+    else await writeFile(output.replace('%08d', '00000001'), 'fixture');
+    return { ok: true };
+  },
+  generateThumbnail: async () => null,
+  probeVideoStreamInfo: async () => ({ width: 1708, height: 960, fps: 24, frameCount: 1 }),
+  probeVideoDuration: async () => 0.04,
+}));
+vi.mock('./upscaleFfmpeg.js', () => ({
+  finalizeUpscaleOutput: async (input, output) => {
+    await copyFile(input, output);
+    return { ok: true };
+  },
+}));
+
+const { PATHS } = await import('../../lib/fileUtils.js');
+const { enqueueRealesrganUpscale, runVideoUpscale, frameRateArg, cancel } = await import('./realesrganUpscaleJob.js');
 const { mediaJobExecutionLane } = await import('../../lib/generationModes.js');
 
 const SOURCE_ID = '11111111-2222-4333-8444-555555555555';
@@ -30,6 +65,27 @@ beforeEach(() => {
   mocks.planUpscaleHistoryItem.mockResolvedValue(READY_PLAN);
   mocks.getHistoryItem.mockResolvedValue({ id: SOURCE_ID, filename: `${SOURCE_ID}.mp4`, prompt: 'Example clip' });
   mocks.enqueueJob.mockResolvedValue({ jobId: 'job-1', position: 1, status: 'queued' });
+});
+
+afterAll(cleanupTempDataRoots);
+
+it('publishes the selected attribution, measured duration and timing through the Real-ESRGAN worker', async () => {
+  const item = { id: SOURCE_ID, filename: 'source.mp4', musicVideo: { projectId: 'mv-source', sceneId: 'shot-source' } };
+  await mkdir(PATHS.videos, { recursive: true });
+  await writeFile(join(PATHS.videos, item.filename), 'fixture');
+  mocks.getHistoryItem.mockResolvedValue(item);
+  let history = [item];
+  mocks.mutateVideoHistory.mockImplementation(async mutate => { history = mutate(history); });
+
+  await enqueueRealesrganUpscale(SOURCE_ID, { musicVideoProjectId: 'mv-other' });
+  const { params } = mocks.enqueueJob.mock.lastCall[0];
+  const result = await runVideoUpscale({ ...params, jobId: 'publication-fixture' });
+  expect(result).toMatchObject({
+    musicVideo: { projectId: 'mv-other' }, duration: 0.04, durationSec: 0.04,
+    renderMs: expect.any(Number), renderStartedAt: expect.any(String), renderCompletedAt: expect.any(String),
+  });
+  expect(result.musicVideo).toEqual({ projectId: 'mv-other' });
+  expect(history).toEqual([result, item]);
 });
 
 describe('enqueueRealesrganUpscale', () => {
@@ -58,6 +114,17 @@ describe('enqueueRealesrganUpscale', () => {
     });
     await enqueueRealesrganUpscale(SOURCE_ID, { musicVideoProjectId: 'mv-1', sceneId: 'mvs-1' });
     expect(mocks.enqueueJob.mock.calls[1][0].params.musicVideo).toEqual({ projectId: 'mv-1', sceneId: 'mvs-1', tier: 'final' });
+  });
+
+  it('inherits the source scene only within its Music Video project', async () => {
+    const musicVideo = { projectId: 'mv-source', sceneId: 'shot-source' };
+    mocks.getHistoryItem.mockResolvedValue({ id: SOURCE_ID, filename: `${SOURCE_ID}.mp4`, musicVideo });
+    await enqueueRealesrganUpscale(SOURCE_ID);
+    expect(mocks.enqueueJob.mock.lastCall[0].params).toMatchObject({
+      musicVideoProjectId: 'mv-source', musicVideo: { ...musicVideo, tier: 'final' },
+    });
+    await enqueueRealesrganUpscale(SOURCE_ID, { musicVideoProjectId: 'mv-other' });
+    expect(mocks.enqueueJob.mock.lastCall[0].params.musicVideo).toEqual({ projectId: 'mv-other', tier: 'final' });
   });
 
   it('refuses before queueing when the runtime is not set up, unsupported, or the source cannot be measured', async () => {

@@ -31,12 +31,16 @@ and passes a selection file via `PORTOS_CI_TEST_SELECTION` to avoid shell quotin
 and command-line limits. [Test memo](TEST_MEMO.md) can reuse a matching complete
 verdict inside the selected set.
 
-Server and client installs are cached separately through `.github/actions/`.
-Server cache reuse requires a matching trusted-rebuild stamp. Jobs still verify
-their inputs on a cache hit. If a selected suite needs the bundled slashdo
-renderer, the plan enables shallow initialization of `lib/slashdo` and
-`CI_EXPECT_SLASHDO_SUBMODULE` makes a missing submodule fail the contract
-suites. A gitlink change also selects those contracts.
+Server and client `node_modules` trees are cached separately through
+`.github/actions/`. Server cache reuse requires a matching trusted-rebuild stamp.
+The setup actions restore the npm download cache only when the workspace needs
+`npm ci`. Pull requests can restore these download caches. Other runs can also
+save them. Jobs still verify their inputs on a `node_modules` cache hit.
+
+If a selected suite needs the bundled slashdo renderer, the plan enables
+shallow initialization of `lib/slashdo`. With `CI_EXPECT_SLASHDO_SUBMODULE`,
+the contract suites fail if the submodule is missing. A gitlink change also
+selects those contracts.
 
 ### Full-suite sharding
 

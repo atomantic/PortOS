@@ -47,7 +47,6 @@ vi.mock('../mediaJobQueue/index.js', () => ({
 
 vi.mock('./history.js', () => ({
   getHistoryItem: vi.fn(async (id) => state.history.find((h) => h.id === id) || null),
-  loadHistory: vi.fn(async () => state.history),
   mutateVideoHistory: vi.fn(async (mutator) => mutator(state.history)),
 }));
 
@@ -345,6 +344,16 @@ describe('enqueueLtxUpscale', () => {
     expect(enqueueJob).toHaveBeenCalled();
   });
 
+  it('inherits the source scene only within its Music Video project', async () => {
+    state.history[0].musicVideo = { projectId: 'mv-source', sceneId: 'shot-source' };
+    await enqueueLtxUpscale(SOURCE_ID);
+    expect(state.enqueued[0].params).toMatchObject({
+      musicVideoProjectId: 'mv-source', musicVideo: { projectId: 'mv-source', sceneId: 'shot-source', tier: 'final' },
+    });
+    await enqueueLtxUpscale(SOURCE_ID, { musicVideoProjectId: 'mv-other' });
+    expect(state.enqueued[1].params.musicVideo).toEqual({ projectId: 'mv-other', tier: 'final' });
+  });
+
   it('keeps the already-upscaled guard, matching the inline path', async () => {
     state.plan.alreadyUpscaled = true;
     await expect(enqueueLtxUpscale(SOURCE_ID))
@@ -371,6 +380,19 @@ describe('local-only (#6511 item 7)', () => {
 });
 
 describe('runVideoUpscale — success', () => {
+  it('publishes the explicit shot attribution and measured duration', async () => {
+    state.history[0].musicVideo = { projectId: 'mv-source', sceneId: 'shot-source' };
+    const musicVideo = { projectId: 'mv-shot', sceneId: 'shot-new', tier: 'final', selectOnComplete: true };
+    const work = runVideoUpscale({ ...jobParams(), musicVideo });
+    await vi.waitFor(() => expect(state.child.listenerCount('close')).toBeGreaterThan(0));
+    finishChild();
+    await expect(work).resolves.toMatchObject({
+      musicVideo: { projectId: 'mv-shot', sceneId: 'shot-new' },
+      duration: state.duration, durationSec: state.duration, renderMs: expect.any(Number),
+    });
+    expect(state.history[0].musicVideo).toEqual({ projectId: 'mv-shot', sceneId: 'shot-new' });
+  });
+
   it('keeps the queue alive while finished output waits through a long backup', async () => {
     const { acquireBackupSnapshotCut, _backupSnapshotWaitersForTests } = await import('../../lib/backupSnapshotBoundary.js');
     const activity = vi.fn();
@@ -617,9 +639,18 @@ describe('runVideoUpscale — failure and cancellation leave the source alone', 
     videoGenEvents.on('failed', (e) => failures.push(e));
     const run = runVideoUpscale(jobParams());
     await vi.waitFor(() => expect(state.child.listenerCount('close')).toBeGreaterThan(0));
-    expect(cancel(JOB_ID)).toBe(true);
-    await run;
-    videoGenEvents.removeAllListeners('failed');
+    const log = vi.spyOn(console, 'log');
+    const errorLog = vi.spyOn(console, 'error');
+    try {
+      expect(cancel(JOB_ID)).toBe(true);
+      await run;
+      expect(log).toHaveBeenCalledWith(expect.stringMatching(/^🛑 .*canceled/));
+      expect(errorLog).not.toHaveBeenCalled();
+    } finally {
+      log.mockRestore();
+      errorLog.mockRestore();
+      videoGenEvents.removeAllListeners('failed');
+    }
     expectSourceIntact();
     expect(deliverables()).toHaveLength(0);
     expect(existsSync(renderOutputPath)).toBe(false);
