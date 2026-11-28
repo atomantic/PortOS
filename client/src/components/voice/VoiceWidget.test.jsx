@@ -301,6 +301,66 @@ describe('VoiceWidget async lifecycle', () => {
     expect(voiceClientMock.startCapture).not.toHaveBeenCalled();
     expect(mocks.startWebSpeechCapture).not.toHaveBeenCalled();
   });
+
+  it('serializes a rapid re-engage behind hideWidget mic teardown', async () => {
+    const widget = await renderWidget();
+    let releaseStop;
+    mocks.isContinuous.mockReturnValue(true);
+    mocks.stopContinuous.mockReturnValue(new Promise((r) => { releaseStop = r; }));
+    mocks.startContinuous.mockClear();
+
+    fireEvent.click(within(widget).getAllByRole('button', { name: 'Hide voice widget' })[0]);
+    act(() => { window.dispatchEvent(new Event(ENGAGE_EVENT)); });
+    await settle();
+    expect(mocks.startContinuous).not.toHaveBeenCalled();
+
+    mocks.isContinuous.mockReturnValue(false);
+    await act(async () => { releaseStop(); });
+    await settle();
+    expect(mocks.startContinuous).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('complementary', { name: 'Voice assistant' })).toBeInTheDocument();
+    expect(localStorage.getItem(HIDDEN_KEY)).toBe('0');
+  });
+
+  it('stops an active continuous capture on disengage even after sttEngine switches to web-speech', async () => {
+    await renderWidget();
+    mocks.isContinuous.mockReturnValue(true);
+    act(() => {
+      for (const handler of [...(mocks.socketHandlers.get('voice:config:changed') || [])]) {
+        handler({ sttEngine: 'web-speech' });
+      }
+    });
+    await settle();
+
+    act(() => { window.dispatchEvent(new Event(DISENGAGE_EVENT)); });
+    await settle();
+    expect(mocks.stopContinuous).toHaveBeenCalledTimes(1);
+    expect(mocks.interrupt).toHaveBeenCalled();
+  });
+
+  it('keeps engage waiting until all overlapping cancellations settle', async () => {
+    await renderWidget();
+    let releaseFirstStop;
+    mocks.isContinuous.mockReturnValue(true);
+    mocks.stopContinuous.mockReturnValueOnce(new Promise((r) => { releaseFirstStop = r; }));
+    mocks.startContinuous.mockClear();
+
+    // First disengage starts an async continuous-capture teardown.
+    act(() => { window.dispatchEvent(new Event(DISENGAGE_EVENT)); });
+    // Second disengage lands after isContinuous flipped false, so its teardown settles immediately.
+    mocks.isContinuous.mockReturnValue(false);
+    act(() => { window.dispatchEvent(new Event(DISENGAGE_EVENT)); });
+    await settle();
+
+    // Re-engage must still wait for the first teardown rather than starting early.
+    act(() => { window.dispatchEvent(new Event(ENGAGE_EVENT)); });
+    await settle();
+    expect(mocks.startContinuous).not.toHaveBeenCalled();
+
+    await act(async () => { releaseFirstStop(); });
+    await settle();
+    expect(mocks.startContinuous).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('Voice Call console', () => {
