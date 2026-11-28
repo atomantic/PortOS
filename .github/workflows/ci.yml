@@ -1030,11 +1030,12 @@ jobs:
           key: supercollider-buildx-${{ matrix.arch }}-${{ hashFiles('docker/supercollider/**') }}
 
       - name: Build and prove the shipped runtime
-        # Exact hits only import layers. A cold build exports layers while
-        # still loading the runtime image for the first setup's probe.
+        # Exact hits only import layers. A cold build exports layers only on
+        # default-branch non-PR runs that save the cache below, while still
+        # loading the runtime image for the first setup's probe.
         env:
           PORTOS_SUPERCOLLIDER_BUILDX_CACHE_FROM: ${{ steps.supercollider-layers.outputs.cache-hit == 'true' && format('{0}/sc-buildx-cache', runner.temp) || '' }}
-          PORTOS_SUPERCOLLIDER_BUILDX_CACHE_TO: ${{ steps.supercollider-layers.outputs.cache-hit != 'true' && format('{0}/sc-buildx-cache', runner.temp) || '' }}
+          PORTOS_SUPERCOLLIDER_BUILDX_CACHE_TO: ${{ steps.supercollider-layers.outputs.cache-hit != 'true' && github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && format('{0}/sc-buildx-cache', runner.temp) || '' }}
         run: |
           npm run setup:supercollider -- --yes --verbose | tee "$RUNNER_TEMP/supercollider-first-setup.log"
           cp "$PORTOS_DATA_ROOT/data/supercollider/runtime-evidence.json" "$RUNNER_TEMP/supercollider-first-evidence.json"
