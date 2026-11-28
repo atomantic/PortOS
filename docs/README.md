@@ -5,14 +5,16 @@ Start with the [project overview and quick start](../README.md) or read the [pro
 ## Use PortOS
 
 - [Install and configure PortOS](SETUP.md) covers first launch, private Tailscale access, HTTPS, and AI providers.
-- [Product surface map](features/product-surfaces.md) shows where to find features in the app.
-- [AI providers](AI_PROVIDERS.md) explains how harnesses, services, models, and presets fit together. See [model access](MODEL_ACCESS.md) for scoping provider catalogs and [model tiers](MODEL_TIERS.md) for tier routing.
+- [Product surface map](features/product-surfaces.md) shows where to find features in the app; [repo-study mapping](features/product-surfaces-repo-study.md) maps external repos onto those surfaces.
+- [AI providers](AI_PROVIDERS.md) explains how harnesses, services, models, and presets fit together. See [model access](MODEL_ACCESS.md) for scoping provider catalogs, [model tiers](MODEL_TIERS.md) for tier routing, and [Prompt Manager](features/prompt-manager.md) for reusable templates.
 - [Quota Burn](QUOTA-BURN.md) explains automated consumption of expiring subscription CLI quotas.
-- [Digital Twin](features/digital-twin.md), [Brain](features/brain-system.md), and [Privacy Center](features/privacy-center.md) cover personal context, capture, and privacy.
-- [Voice Mode](features/voice.md) covers voice setup, the call console and FaceTime Audio.
-- [Writers Room](features/writers-room.md) and [Blender Models](features/blender-models.md) cover drafting and reusable 3D assets.
-- [POST](features/post.md) covers cognitive practice and benchmarks. [Eidoverse Worlds](features/eidoverse.md) covers private world setup and visits.
-- [Music Video](features/music-video.md) walks through a project from brief and song to production. See [local cinema packages](MUSIC_VIDEO_DCP.md) for DCP export and the [artist submission profile](features/artist-submission-profile.md) for reusable press and festival materials.
+- [Digital Twin](features/digital-twin.md), [Brain](features/brain-system.md), [Privacy Center](features/privacy-center.md), and [operational goals](GOALS_OPERATIONAL.md) cover personal context, capture, privacy, and briefings.
+- [Voice Mode](features/voice.md) covers voice setup, the call console, realtime calls, and FaceTime Audio.
+- [Messages security](features/messages-security.md) and [Stacker News](features/stacker-news.md) cover comms channels and community moderation.
+- [Writers Room](features/writers-room.md), [Blender Models](features/blender-models.md), [Code Animation packages](CODE_ANIMATION_PACKAGES.md), [HTML compositions](HTML_COMPOSITIONS.md), and [sprite exports](features/sprite-export-contract.md) cover drafting and reusable assets.
+- [Catalog primitives](features/catalog-primitives.md), [catalog ingest](features/catalog-ingest.md), and [catalog local merge](CATALOG_LOCAL_MERGE.md) cover shared creative entities.
+- [POST](features/post.md) covers cognitive practice and benchmarks. [Eidoverse Worlds](features/eidoverse.md) and [Eidoverse video](EIDOVERSE_VIDEO.md) cover private world setup, visits, and video capture.
+- [Music Video](features/music-video.md) walks through a project from brief and song to production. See [video generation](features/video-generation.md), [music renderer benchmarks](features/music-renderer-benchmarks.md), [local cinema packages](MUSIC_VIDEO_DCP.md) for DCP export, and the [artist submission profile](features/artist-submission-profile.md) for reusable press and festival materials.
 - [Model Comparison](MODEL-COMPARISON.md) explains the catalog methodology. [Runway model options](RUNWAY_MODELS.md) covers hosted video model selection.
 
 ### Optional features
@@ -27,13 +29,13 @@ Enable GSD project planning, [Beeper](features/beeper.md), [OpenClaw Operator Ch
 - [Back up and restore](BACKUP.md) covers PostgreSQL and filesystem recovery.
 - [Self-update](SELF_UPDATE.md) explains updates for upstream and forked installs.
 - [Storage](STORAGE.md) and [port assignments](PORTS.md) describe the local deployment.
-- [Local LLM runtimes](features/local-llm-runtimes.md) covers MTPLX, vLLM, SGLang and llama-server. See [dedicated host setup](features/fleet-llm-host.md) for private fleet inference.
+- [Local LLM runtimes](features/local-llm-runtimes.md) covers MTPLX, vLLM, SGLang and llama-server, alongside [Slotstream](features/slotstream.md), [Splash](features/splash.md), [mkserve](features/mkserve.md), and [Claude on Ollama](features/claude-ollama.md). See [dedicated host setup](features/fleet-llm-host.md) for private fleet inference.
 - [App Wizard](features/app-wizard.md) registers or creates a managed app and explains its [update lifecycle](features/app-wizard.md#update-a-managed-app). See [managed-app forge accounts](MANAGED_APP_FORGE_ACCOUNTS.md) to configure a separate GitHub identity or [managed-app visitors](features/managed-visitors.md) to set up scoped visitor access.
-- [Agent skills](features/agent-skills.md) covers discovery, editing and curation.
-- [Self-improvement audits](features/self-improvement-audits.md) explains scheduled checks and Deep mode. The [development watchdog](features/development-watchdog.md) describes Persistent Mind maintainer scans and claim dispatch.
-- [Chief of Staff](features/chief-of-staff.md) and [peer administration](features/peer-administration.md) cover agent work and federation. [Tailcat peers](features/tailcat-peers.md) explains the private alternative for owned installs that cannot join your tailnet, and [peer push auth](PEER_PUSH_AUTH.md) documents pair-token authentication.
+- [Agent skills](features/agent-skills.md) and [Agent Tools (MCP)](features/agent-context.md) cover discovery, editing, curation, and context access.
+- [Self-improvement audits](features/self-improvement-audits.md) explains scheduled checks and Deep mode. The [development watchdog](features/development-watchdog.md), [Autofixer](features/autofixer.md), and [autonomous job reliability](features/autonomous-job-reliability.md) cover maintainer scans, crash recovery, and durable jobs.
+- [Chief of Staff](features/chief-of-staff.md), [Persistent Mind](features/persistent-mind-continuous-play.md) (see [CPU-only local mind](features/grok-box-local-mind.md)), and [peer administration](features/peer-administration.md) cover agent work and federation. [Tailcat peers](features/tailcat-peers.md) explains the private alternative for owned installs that cannot join your tailnet, [peer push auth](PEER_PUSH_AUTH.md) documents pair-token authentication, and [federated media providers](FEDERATED_MEDIA_PROVIDERS.md) covers media offloading.
 - [Agent API keys](AGENT_API_KEY.md) and [ACP stdio adapter](ACP.md) cover terminal and editor agent integration.
-- [Instance features](INSTANCE_FEATURES.md) covers optional feature toggles. [Remote Desktop](REMOTE_DESKTOP.md) covers optional remote-desktop setup, and [data maintenance](DATA_MAINTENANCE.md) covers dataset and LoRA maintenance.
+- [Instance features](INSTANCE_FEATURES.md) covers optional feature toggles. [Browser management](features/browser.md), [Remote Desktop](REMOTE_DESKTOP.md), [metrics](METRICS.md), and [data maintenance](DATA_MAINTENANCE.md) cover managed Chrome, VNC setup, operational telemetry, and dataset/LoRA maintenance.
 - [PM2 process management](PM2.md) covers starting, stopping and inspecting PortOS processes.
 - [Runtime locks](RUNTIME_LOCKS.md) covers dependency refresh and runtime readiness. [Jev](JEV_SETUP.md) covers local decision scoring setup and recovery.
 - [Prompt Guard setup and recovery](PROMPT_GUARD_SETUP.md) covers Abuse Guard runtime checks. [SuperCollider](SUPERCOLLIDER.md) covers the Music Designer render runtime.

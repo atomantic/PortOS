@@ -551,7 +551,7 @@ describe('syncAccount', () => {
   it('retains actionable browser selector failures in the HTTP result and socket completion', async () => {
     getAccount.mockResolvedValue({ id: VALID_UUID, name: 'Outlook', type: 'outlook', enabled: true });
     readFile.mockResolvedValue(JSON.stringify({ messages: [{ id: 'existing', externalId: 'existing-row' }] }));
-    const reason = 'Invalid Outlook messageRow selector. Edit it in Messages > Sync and test again.';
+    const reason = 'Invalid Outlook messageRow selector. Edit it in Comms → Sync and test again.';
     syncPlaywright.mockResolvedValue({ messages: [], status: 'extraction-failed', error: reason });
     updateSyncStatus.mockResolvedValue();
 

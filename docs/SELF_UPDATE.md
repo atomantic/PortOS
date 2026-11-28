@@ -8,7 +8,7 @@ Use **Update Now** for a newer release, **Reconcile Now** for an out-of-sync ins
 
 Manual updates close intake, stop PortOS before source/dependency changes and recheck executing work under the hold. If current work would be interrupted, the UI or terminal requests explicit consent. For a noninteractive run, `--interrupt` supplies that consent. Interrupted work retains failure or recovery evidence, and queued durable jobs stay queued. An active database maintenance operation, live installer, surviving runtime or unsafe checkout can still block the update.
 
-If an older UI cannot show the continuation, open the confirmation URL printed in the waiting step on the same instance and sign in. The URL is bound to its attempt and checkout. If the old server refuses to launch fresh scripts, **Dev Tools → Runner → Command** in the PortOS workspace can invoke `node scripts/manual-update-recovery.mjs --request`. That uses the normal path and retains interruption consent checks.
+If an older UI cannot show the continuation, open the confirmation URL printed in the waiting step on the same instance and sign in. The URL is bound to its attempt and checkout. If the old server refuses to launch fresh scripts, **Dev Tools → Code → Command** (`/devtools/runner`) in the PortOS workspace can invoke `node scripts/manual-update-recovery.mjs --request`. That uses the normal path and retains interruption consent checks.
 
 ## Releases, origin and forks
 
