@@ -257,4 +257,81 @@ describe('MakingOfStage', () => {
       { silent: true },
     ));
   });
+
+  it('starts posted cards collapsed by default, allows manual expand/collapse, and folds a card when marked posted', () => {
+    const projectWithPosted = {
+      ...baseProject,
+      makingOfStory: {
+        ...baseProject.makingOfStory,
+        posts: [
+          {
+            ...baseProject.makingOfStory.posts[0],
+            id: 'mop-done',
+            title: 'Already posted breakdown',
+            status: 'posted',
+            body: 'Hidden posted body text.',
+            publishedUrl: 'https://x.com/example/status/77',
+            publishedAt: '2026-11-26T12:00:00.000Z',
+          },
+          baseProject.makingOfStory.posts[0],
+        ],
+      },
+    };
+
+    const { rerender } = render(
+      <MakingOfStage
+        board={{
+          project: projectWithPosted,
+          onEditShot: vi.fn(),
+          openPreview: vi.fn(),
+          onCaptureMakingOf: vi.fn(),
+          onMakingOfStorySaved: vi.fn(),
+        }}
+      />,
+    );
+
+    // Posted card starts collapsed (title + published link visible, body hidden); staged card starts expanded.
+    const doneToggle = screen.getByRole('button', { name: 'Already posted breakdown' });
+    const stagedToggle = screen.getByRole('button', { name: 'Fixing character height drift' });
+    expect(doneToggle.getAttribute('aria-expanded')).toBe('false');
+    expect(screen.queryByText('Hidden posted body text.')).toBeNull();
+    expect(screen.getByRole('link', { name: /https:\/\/x\.com\/example\/status\/77/ })).toBeTruthy();
+    expect(stagedToggle.getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getByText('Part one text.')).toBeTruthy();
+
+    // Expanding the posted card reveals its body; collapsing the staged card hides its body.
+    fireEvent.click(doneToggle);
+    expect(doneToggle.getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getByText('Hidden posted body text.')).toBeTruthy();
+
+    fireEvent.click(stagedToggle);
+    expect(stagedToggle.getAttribute('aria-expanded')).toBe('false');
+    expect(screen.queryByText('Part one text.')).toBeNull();
+
+    // Re-expand the staged card, then mark it posted -> folds automatically.
+    fireEvent.click(stagedToggle);
+    expect(stagedToggle.getAttribute('aria-expanded')).toBe('true');
+    rerender(
+      <MakingOfStage
+        board={{
+          project: {
+            ...projectWithPosted,
+            makingOfStory: {
+              ...projectWithPosted.makingOfStory,
+              posts: [
+                projectWithPosted.makingOfStory.posts[0],
+                { ...projectWithPosted.makingOfStory.posts[1], status: 'posted', publishedUrl: 'https://x.com/example/status/88' },
+              ],
+            },
+          },
+          onEditShot: vi.fn(),
+          openPreview: vi.fn(),
+          onCaptureMakingOf: vi.fn(),
+          onMakingOfStorySaved: vi.fn(),
+        }}
+      />,
+    );
+    expect(screen.getByRole('button', { name: 'Fixing character height drift' }).getAttribute('aria-expanded')).toBe('false');
+    expect(screen.queryByText('Part one text.')).toBeNull();
+  });
 });

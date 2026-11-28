@@ -1,6 +1,6 @@
-import { useId, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import {
-  ArrowLeft, ArrowRight, Check, Copy, Download, ExternalLink, Film, Image as ImageIcon,
+  ArrowLeft, ArrowRight, Check, ChevronDown, ChevronRight, Copy, Download, ExternalLink, Film, Image as ImageIcon,
   Link as LinkIcon, LogIn, Pencil, Send, Sparkles, Trash2, Undo2, X,
 } from 'lucide-react';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair.jsx';
@@ -85,6 +85,15 @@ export default function MakingOfPostCard({
 }) {
   const prefix = useId();
   const [editing, setEditing] = useState(defaultEditing);
+  const isPosted = post.status === 'posted';
+  // Posted/done cards start collapsed so staged drafts stay front and center,
+  // and fold automatically as soon as a card is marked posted.
+  const [open, setOpen] = useState(() => defaultEditing || !isPosted);
+  const wasPosted = useRef(isPosted);
+  useEffect(() => {
+    if (isPosted && !wasPosted.current) setOpen(false);
+    wasPosted.current = isPosted;
+  }, [isPosted]);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [confirmDiscardDraft, setConfirmDiscardDraft] = useState(false);
   const [confirmPostAgain, setConfirmPostAgain] = useState(false);
@@ -144,6 +153,7 @@ export default function MakingOfPostCard({
     setSummary(post.summary || '');
     setBody(post.body || '');
     setPublishedUrl(post.publishedUrl || '');
+    setOpen(true);
     setEditing(true);
   };
 
@@ -241,11 +251,12 @@ export default function MakingOfPostCard({
   });
 
   const idFor = (name) => `${prefix}-${name}`;
-  const isPosted = post.status === 'posted';
   const fillDisabled = busy || !!xDraftBusy || resolvedParts.length === 0;
+  const Chevron = open ? ChevronDown : ChevronRight;
+  const expanded = editing || open;
 
   return (
-    <article className="min-w-0 rounded-lg border border-port-border bg-port-card p-3 space-y-3">
+    <article data-fold className="min-w-0 rounded-lg border border-port-border bg-port-card p-3 space-y-3">
       {editing ? (
         <form onSubmit={saveEdit} className="space-y-2.5">
           <div className="grid gap-2 sm:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1fr)]">
@@ -320,7 +331,19 @@ export default function MakingOfPostCard({
           <div className="flex flex-wrap items-start justify-between gap-2">
             <div className="min-w-0 flex-1 space-y-1">
               <div className="flex flex-wrap items-center gap-1.5">
-                <h4 className="text-sm font-semibold break-words">{post.title}</h4>
+                <h4 className="min-w-0 text-sm font-semibold break-words">
+                  <button
+                    type="button"
+                    data-fold-toggle
+                    aria-expanded={open}
+                    aria-controls={open ? idFor('content') : undefined}
+                    onClick={() => setOpen((v) => !v)}
+                    className="inline-flex min-h-[44px] items-center gap-1.5 text-left hover:text-port-accent pointer-fine:sm:min-h-0"
+                  >
+                    <Chevron size={14} aria-hidden="true" className="shrink-0 text-port-text-muted" />
+                    <span className="break-words">{post.title}</span>
+                  </button>
+                </h4>
                 <Pill size="xs" tone={STATUS_TONE[post.status] || 'muted'}>
                   {MAKING_OF_POST_STATUS_LABELS[post.status] || post.status}
                 </Pill>
@@ -332,11 +355,18 @@ export default function MakingOfPostCard({
                 <Pill size="xs" tone="muted">
                   {MAKING_OF_POST_PLATFORM_LABELS[post.platform] || post.platform}
                 </Pill>
-                {(post.tags || []).map((tag) => (
+                {!open && (resolvedParts.length > 0 || attachedItems.length > 0) && (
+                  <span className="text-[11px] text-port-text-muted">
+                    {resolvedParts.length > 1 ? `${formatCount(resolvedParts.length)} parts` : ''}
+                    {resolvedParts.length > 1 && attachedItems.length > 0 ? ' · ' : ''}
+                    {attachedItems.length > 0 ? `${formatCount(attachedItems.length)} media` : ''}
+                  </span>
+                )}
+                {open && (post.tags || []).map((tag) => (
                   <span key={tag} className="rounded bg-port-bg px-1.5 py-0.5 text-[11px] text-port-text-muted">#{tag}</span>
                 ))}
               </div>
-              {post.summary && <p className="text-xs text-port-text-muted break-words">{post.summary}</p>}
+              {open && post.summary && <p className="text-xs text-port-text-muted break-words">{post.summary}</p>}
               {isPosted && post.publishedUrl && (
                 <p className="text-xs">
                   <a href={post.publishedUrl} target="_blank" rel="noopener noreferrer"
@@ -353,48 +383,52 @@ export default function MakingOfPostCard({
                 </p>
               )}
             </div>
-            <div className="flex flex-wrap items-center gap-1.5">
-              {canFillX && (
-                isPosted && !xDraft ? (
-                  !confirmPostAgain && (
-                    <button type="button" disabled={fillDisabled} onClick={() => setConfirmPostAgain(true)} className={btnCls}>
-                      <Send size={12} aria-hidden="true" /> {xDraftBusy === 'prepare' ? 'Filling…' : 'Post again…'}
+            {open && (
+              <div className="flex flex-wrap items-center gap-1.5">
+                {canFillX && (
+                  isPosted && !xDraft ? (
+                    !confirmPostAgain && (
+                      <button type="button" disabled={fillDisabled} onClick={() => setConfirmPostAgain(true)} className={btnCls}>
+                        <Send size={12} aria-hidden="true" /> {xDraftBusy === 'prepare' ? 'Filling…' : 'Post again…'}
+                      </button>
+                    )
+                  ) : (
+                    <button type="button" disabled={fillDisabled}
+                      onClick={() => onPrepareXDraft(post.id, fillOptions(isPosted ? { again: true } : {}))}
+                      className="inline-flex min-h-[44px] items-center gap-1 rounded border border-port-accent/40 bg-port-accent/20 px-2.5 py-1 text-xs font-medium text-port-accent hover:bg-port-accent/25 disabled:opacity-50 pointer-fine:sm:min-h-[30px]">
+                      <Send size={12} aria-hidden="true" />
+                      {xDraftBusy === 'prepare' ? 'Filling…' : (xDraft ? 'Fill again' : 'Fill X draft')}
                     </button>
                   )
-                ) : (
-                  <button type="button" disabled={fillDisabled}
-                    onClick={() => onPrepareXDraft(post.id, fillOptions(isPosted ? { again: true } : {}))}
-                    className="inline-flex min-h-[44px] items-center gap-1 rounded border border-port-accent/40 bg-port-accent/20 px-2.5 py-1 text-xs font-medium text-port-accent hover:bg-port-accent/25 disabled:opacity-50 pointer-fine:sm:min-h-[30px]">
-                    <Send size={12} aria-hidden="true" />
-                    {xDraftBusy === 'prepare' ? 'Filling…' : (xDraft ? 'Fill again' : 'Fill X draft')}
+                )}
+                <button type="button" onClick={() => handleCopy(false)} className={btnCls}>
+                  <Copy size={12} aria-hidden="true" /> Copy text
+                </button>
+                {attachedItems.length > 0 && (
+                  <button type="button" onClick={() => handleCopy(true)} className={btnCls}>
+                    <Copy size={12} aria-hidden="true" /> Copy + media list
                   </button>
-                )
-              )}
-              <button type="button" onClick={() => handleCopy(false)} className={btnCls}>
-                <Copy size={12} aria-hidden="true" /> Copy text
-              </button>
-              {attachedItems.length > 0 && (
-                <button type="button" onClick={() => handleCopy(true)} className={btnCls}>
-                  <Copy size={12} aria-hidden="true" /> Copy + media list
+                )}
+                <button type="button" disabled={busy} onClick={startEdit} className={btnCls}>
+                  <Pencil size={12} aria-hidden="true" /> Edit
                 </button>
-              )}
-              <button type="button" disabled={busy} onClick={startEdit} className={btnCls}>
-                <Pencil size={12} aria-hidden="true" /> Edit
-              </button>
-              {isPosted && !confirmUndoPosted && (
-                <button type="button" disabled={busy} onClick={() => setConfirmUndoPosted(true)} className={btnCls}>
-                  <Undo2 size={12} aria-hidden="true" /> Not done…
-                </button>
-              )}
-              {!confirmDelete && (
-                <button type="button" disabled={busy} onClick={() => setConfirmDelete(true)}
-                  aria-label={`Delete post ${post.title}`}
-                  className={`${btnCls} min-h-[44px] min-w-[44px] justify-center text-port-error pointer-fine:sm:min-w-[30px]`}>
-                  <Trash2 size={12} aria-hidden="true" />
-                </button>
-              )}
-            </div>
+                {isPosted && !confirmUndoPosted && (
+                  <button type="button" disabled={busy} onClick={() => setConfirmUndoPosted(true)} className={btnCls}>
+                    <Undo2 size={12} aria-hidden="true" /> Not done…
+                  </button>
+                )}
+                {!confirmDelete && (
+                  <button type="button" disabled={busy} onClick={() => setConfirmDelete(true)}
+                    aria-label={`Delete post ${post.title}`}
+                    className={`${btnCls} min-h-[44px] min-w-[44px] justify-center text-port-error pointer-fine:sm:min-w-[30px]`}>
+                    <Trash2 size={12} aria-hidden="true" />
+                  </button>
+                )}
+              </div>
+            )}
           </div>
+
+          {open && <div id={idFor('content')} className="space-y-3">
 
           {confirmPostAgain && (
             <ConfirmButtonPair
@@ -659,11 +693,12 @@ export default function MakingOfPostCard({
               )}
             </div>
           )}
+          </div>}
         </>
       )}
 
       {/* Staged media pool strip */}
-      <div className="space-y-2 border-t border-port-border pt-2">
+      {expanded && <div className="space-y-2 border-t border-port-border pt-2">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <span className="text-xs font-medium text-port-text-muted">
             Staged media pool ({formatCount(attachedItems.length, { fallback: '0' })})
@@ -764,7 +799,7 @@ export default function MakingOfPostCard({
         ) : (
           <p className="text-xs text-port-text-muted">No media attached yet. Attach stills, clips, or references from your bank below.</p>
         )}
-      </div>
+      </div>}
     </article>
   );
 }
