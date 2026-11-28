@@ -8,7 +8,7 @@ speaks it as a follow-up turn. This is the Mac-side counterpart of Sophon's GPU 
 The Sophon engine is imported from its install folder (--app), not vendored. `_speak` adapts `Brain.reply` from that engine
 (Apache-2.0, adventists-ai/sophon-realtime mac/engine.py) so a reply can follow a tool result instead of new user speech.
 
-Wire protocol (one WebSocket, loopback only, `Authorization: Bearer <token>` or `?token=` must match PORTOS_REALTIME_TOKEN / --token):
+Wire protocol (one WebSocket, loopback only, `Authorization: Bearer <token>` must match PORTOS_REALTIME_TOKEN / --token, no browser Origin):
   in  binary   PCM16 mono at --rate (microphone, after the browser's own echo cancellation)
   in  text     {"type": "tool_result", "call_id": str, "output": str}   result of a delegated task, spoken as the next reply
                {"type": "interrupt"}                                    stop talking now
@@ -20,7 +20,6 @@ Wire protocol (one WebSocket, loopback only, `Authorization: Bearer <token>` or 
     PORTOS_REALTIME_TOKEN=T python portos_sophon.py --app ~/.portos/sophon-mac/app --models ~/.portos/sophon-mac/models --port 5569
 """
 import argparse, asyncio, hmac, json, os, re, signal, sys, threading, time, uuid
-from urllib.parse import parse_qs, urlparse
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--app", required=True, help="the Sophon Mac install's app folder (engine.py)")
@@ -32,10 +31,13 @@ ap.add_argument("--lang", default="en")
 ap.add_argument("--voice", default="chelsie")
 ap.add_argument("--persona", default=None, help="extra system prompt text (defaults to PORTOS_REALTIME_PERSONA env var)")
 a = ap.parse_args()
-token = a.token if a.token is not None else os.environ.get("PORTOS_REALTIME_TOKEN", "")
+# Remove the token from os.environ after reading it so child subprocesses do not inherit it.
+env_token = os.environ.pop("PORTOS_REALTIME_TOKEN", "")
+token = a.token if a.token is not None else env_token
 if not token:
     ap.error("--token or PORTOS_REALTIME_TOKEN is required")
-persona = a.persona if a.persona is not None else os.environ.get("PORTOS_REALTIME_PERSONA", "")
+env_persona = os.environ.pop("PORTOS_REALTIME_PERSONA", "")
+persona = a.persona if a.persona is not None else env_persona
 sys.path.insert(0, a.app)
 
 import numpy as np  # noqa: E402
@@ -268,6 +270,12 @@ class ToolSession(Session):
             self.history.pop(0)
 
 
+def _headers_for(headers, name):
+    target = name.lower()
+    entries = headers.raw_items() if hasattr(headers, "raw_items") else headers.items() if hasattr(headers, "items") else ()
+    return [str(v) for k, v in entries if str(k).lower() == target]
+
+
 async def main():
     print("Loading the model...", flush=True)
     brain = ToolBrain(a.models, lang=a.lang, voice=a.voice, sys_prompt=os.path.join(a.app, "system_prompt.json"), persona=persona)
@@ -275,13 +283,14 @@ async def main():
     busy = {"on": False}
 
     async def handle(ws):
-        headers = getattr(getattr(ws, "request", None), "headers", None) or getattr(ws, "request_headers", None)
-        auth = headers.get("Authorization", "") if headers is not None else ""
-        presented = auth[7:] if auth.startswith("Bearer ") else ""
-        if not presented:
-            path = getattr(getattr(ws, "request", None), "path", None) or getattr(ws, "path", "")
-            presented = parse_qs(urlparse(path).query).get("token", [""])[0]
-        if not hmac.compare_digest(presented.encode("utf-8"), token.encode("utf-8")):
+        headers = getattr(getattr(ws, "request", None), "headers", None) or getattr(ws, "request_headers", None) or {}
+        # Server-to-sidecar loopback only: never admit a browser-originated WebSocket.
+        if _headers_for(headers, "Origin"):
+            await ws.close(4403, "origin forbidden"); return
+        auth_headers = _headers_for(headers, "Authorization")
+        auth = auth_headers[0] if len(auth_headers) == 1 else ""
+        presented = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
+        if not presented or not hmac.compare_digest(presented.encode("utf-8"), token.encode("utf-8")):
             await ws.close(4401, "bad token"); return
         if busy["on"]:
             await ws.close(1013, "one conversation at a time"); return

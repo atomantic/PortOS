@@ -89,6 +89,8 @@ describe('isHostControlRoute (#16018)', () => {
       '/api/rigging/readiness',
       '/api/image-gen/setup/moss-install',
       '/api/voice/facetime/status',
+      '/api/voice/avatar/status',
+      '/api/voice/realtime/status',
       '/api/update/software',
       '/api/update/node-runtime',
       '/api/docker-containment/status',

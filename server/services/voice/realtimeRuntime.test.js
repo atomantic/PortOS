@@ -76,26 +76,54 @@ describe('ensureRealtimeSidecar', () => {
     }
   });
 
-  it('launches the sidecar with token and persona in env (not argv or URL) and reuses it', async () => {
+  it('launches the sidecar with secret-scrubbed env, token and persona in env (not argv or URL), and reuses it', async () => {
     const home = fakeInstall();
     const child = fakeChild();
     const launch = vi.fn(() => child);
-    const first = ensureRealtimeSidecar({ home }, { persona: 'You are Ada.', launch });
-    child.stdout.write('Loading the model...\n{"ready": true, "port": 5569}\n');
-    const { url, token } = await first;
-    expect(url).toBe('ws://127.0.0.1:5569/');
-    expect(token).toMatch(/^[0-9a-f]{36}$/);
-    const [bin, args, opts] = launch.mock.calls[0];
-    expect(bin).toBe(join(home, '.venv', 'bin', 'python'));
-    expect(args).toEqual(expect.arrayContaining(['--models', join(home, 'models')]));
-    expect(args).not.toContain('--token');
-    expect(args).not.toContain('--persona');
-    expect(args).not.toContain(token);
-    expect(args).not.toContain('You are Ada.');
-    expect(opts.env.PORTOS_REALTIME_TOKEN).toBe(token);
-    expect(opts.env.PORTOS_REALTIME_PERSONA).toBe('You are Ada.');
-    await expect(ensureRealtimeSidecar({ home }, { persona: 'You are Ada.', launch })).resolves.toEqual({ url, token });
-    expect(launch).toHaveBeenCalledTimes(1);
+    const prevSecret = process.env.PRIVACY_VAULT_KEY;
+    const prevPg = process.env.PGPASSWORD;
+    const prevApiToken = process.env.PORTOS_API_TOKEN;
+    const prevOpenAi = process.env.OPENAI_API_KEY;
+    const prevMalloc = process.env.MallocStackLogging;
+    process.env.PRIVACY_VAULT_KEY = 'example-vault-secret';
+    process.env.PGPASSWORD = 'example-db-secret';
+    process.env.PORTOS_API_TOKEN = 'example-portos-token';
+    process.env.OPENAI_API_KEY = 'example-openai-key';
+    process.env.MallocStackLogging = '1';
+    try {
+      const first = ensureRealtimeSidecar({ home }, { persona: 'You are Ada.', launch });
+      child.stdout.write('Loading the model...\n{"ready": true, "port": 5569}\n');
+      const { url, token } = await first;
+      expect(url).toBe('ws://127.0.0.1:5569/');
+      expect(token).toMatch(/^[0-9a-f]{36}$/);
+      const [bin, args, opts] = launch.mock.calls[0];
+      expect(bin).toBe(join(home, '.venv', 'bin', 'python'));
+      expect(args).toEqual(expect.arrayContaining(['--models', join(home, 'models')]));
+      expect(args).not.toContain('--token');
+      expect(args).not.toContain('--persona');
+      expect(args).not.toContain(token);
+      expect(args).not.toContain('You are Ada.');
+      expect(opts.env.PORTOS_REALTIME_TOKEN).toBe(token);
+      expect(opts.env.PORTOS_REALTIME_PERSONA).toBe('You are Ada.');
+      expect(opts.env.PRIVACY_VAULT_KEY).toBeUndefined();
+      expect(opts.env.PGPASSWORD).toBeUndefined();
+      expect(opts.env.PORTOS_API_TOKEN).toBeUndefined();
+      expect(opts.env.OPENAI_API_KEY).toBeUndefined();
+      expect(opts.env.MallocStackLogging).toBeUndefined();
+      await expect(ensureRealtimeSidecar({ home }, { persona: 'You are Ada.', launch })).resolves.toEqual({ url, token });
+      expect(launch).toHaveBeenCalledTimes(1);
+    } finally {
+      for (const [k, v] of [
+        ['PRIVACY_VAULT_KEY', prevSecret],
+        ['PGPASSWORD', prevPg],
+        ['PORTOS_API_TOKEN', prevApiToken],
+        ['OPENAI_API_KEY', prevOpenAi],
+        ['MallocStackLogging', prevMalloc],
+      ]) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+    }
   });
 
   it('scrubs the OS home directory from spawn errors', async () => {

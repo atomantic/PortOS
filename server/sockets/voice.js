@@ -22,7 +22,7 @@
 //           | voice:realtime:reply | voice:realtime:delegate | voice:realtime:result | voice:realtime:event
 
 import { SOCKET_MEDIA_MAX_BYTES } from '../lib/socketPayloadLimits.js';
-import { socketHasCurrentHostControl } from '../services/authGate.js';
+import { HOST_CONTROL_FORBIDDEN_MESSAGE, socketHasCurrentHostControl } from '../services/authGate.js';
 import { getVoiceConfig } from '../services/voice/config.js';
 import { registerEchoBuffer, unregisterEchoBuffer } from '../services/voice/echo.js';
 import {
@@ -430,6 +430,10 @@ export const registerVoiceHandlers = (socket) => {
       const parsed = parseImageAttachment(payload, { maxBytes: MAX_SCREENSHOT_BYTES });
       if (parsed.error) {
         if (parsed.id) socket.emit('voice:image', { id: parsed.id, status: 'error', error: parsed.error });
+        return;
+      }
+      if (!(await ensureEnabled('image'))) {
+        socket.emit('voice:image', { id: parsed.id, status: 'error', error: 'voice mode disabled' });
         return;
       }
       const { describeAttachedImage } = await import('../services/voice/pipeline.js');
@@ -878,6 +882,19 @@ export const registerVoiceHandlers = (socket) => {
     realtimeCtrl = ctrl;
     try {
       const cfg = await getVoiceConfig();
+      if (realtimeGeneration !== gen) return;
+      if (socket.disconnected || socket.connected === false) {
+        realtimeStarting = false;
+        if (realtimeCtrl === ctrl) realtimeCtrl = null;
+        return;
+      }
+      if (await socketHasCurrentHostControl(socket) !== true) {
+        if (realtimeGeneration !== gen) return;
+        realtimeStarting = false;
+        if (realtimeCtrl === ctrl) realtimeCtrl = null;
+        socket.emit('voice:realtime:state', { active: false, code: 'HOST_CONTROL_FORBIDDEN', error: HOST_CONTROL_FORBIDDEN_MESSAGE });
+        return;
+      }
       if (realtimeGeneration !== gen) return;
       if (!cfg.enabled || !cfg.realtime?.enabled) {
         realtimeStarting = false;

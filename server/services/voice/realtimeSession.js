@@ -27,7 +27,7 @@ export const realtimePersona = (cfg) => {
  * @param {(task: string) => Promise<string>} args.runDelegate  runs one delegated task, resolves the text to speak
  * @param {AbortSignal} [args.signal]  aborts startup and prevents emitting live state after hang-up
  * @param {(reason: string) => void} [args.onClose]  called when the session closes (hang-up or sidecar close)
- * @param {Function} [args.connect]  WebSocket factory (tests)
+ * @param {(url: string, options?: object) => any} [args.connect]  WebSocket factory (tests)
  * @param {Function} [args.ensureSidecar]
  */
 export const openRealtimeCall = async ({
