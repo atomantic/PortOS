@@ -194,10 +194,12 @@ export const storyboardFitSchema = z.object({
 }).strict();
 
 // Sync shots: the board and shot revisions the preview was built from, and
-// whether unmatched shots that already have media go too.
+// whether unmatched shots that already have media go too. `removeLocked` is
+// retained as an ignored legacy field so older clients don't 400 against .strict().
 export const storyboardShotSyncSchema = z.object({
   boardUpdatedAt: z.string().min(1).max(64),
   projectUpdatedAt: z.string().min(1).max(64).optional(),
+  removeLocked: z.boolean().optional(),
   removeWithMedia: z.boolean().optional(),
 }).strict();
 
