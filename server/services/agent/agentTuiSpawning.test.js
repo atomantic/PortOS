@@ -1748,6 +1748,39 @@ describe('spawnTuiAgent runtime', () => {
     expect(pasteFailSpy).not.toHaveBeenCalled();
   });
 
+  it('waits for a task-sized Windows Codex paste without retrying or submitting it early', async () => {
+    vi.stubGlobal('process', Object.create(process, { platform: { value: 'win32' } }));
+    try {
+      const line = 'Review this synthetic branch reconciliation report. 🔍';
+      const prompt = `${line}\r\n`.repeat(1160);
+      const pasteText = `${line}\n`.repeat(1160);
+      const paste = `\x1b[200~${pasteText}\x1b[201~`;
+      const halfSize = ([...line].length + 1) * 580;
+      const writes = () => vi.mocked(shellService.writeToSession).mock.calls.map(([, data]) => data);
+      runSpawn({ prompt, useDurableRunner: true });
+      await flushMicrotasks();
+      await sessionCallbacks.onData(Buffer.from('>_ OpenAI Codex (v0.171.0)\n' + CODEX_COMPOSER));
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(writes()).toEqual([paste]);
+
+      // Codex can paint one burst and go quiet while ConPTY still has more
+      // records queued. A repaint of the first chip must not confirm the rest.
+      await vi.advanceTimersByTimeAsync(50000);
+      await sessionCallbacks.onData(Buffer.from(`[Pasted Content ${halfSize} chars]\n`));
+      await vi.advanceTimersByTimeAsync(1000);
+      await sessionCallbacks.onData(Buffer.from(`[Pasted Content ${halfSize} chars]\n`));
+      await vi.advanceTimersByTimeAsync(24000);
+      expect(writes()).toHaveLength(1);
+      expect(agentLifecycle.finalizeAgent).not.toHaveBeenCalled();
+
+      await sessionCallbacks.onData(Buffer.from(`[Pasted Content ${halfSize} chars] #2\n`));
+      await vi.advanceTimersByTimeAsync(400);
+      expect(writes()).toEqual([paste, '\r']);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   // The patient window is for a paste codex QUEUED. During an MCP boot codex
   // renders its box early and SWALLOWS pastes outright, so there is nothing to
   // wait for and patience would only delay the 5s re-paste cadence that IS the

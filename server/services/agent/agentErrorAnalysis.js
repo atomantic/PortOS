@@ -206,7 +206,7 @@ export const COMPLETION_REASON_ANALYSES = {
     category: 'startup-failure',
     actionable: false,
     message: 'Prompt never rendered in the TUI input box',
-    suggestedFix: 'The provider CLI accepted the bracketed paste but the prompt never appeared, so nothing was ever submitted. Usually the TUI was still initializing, or a startup dialog (folder trust, an opt-in offer, an account banner) was up and swallowed the paste. Check the tail of the raw transcript for a modal — if it is one PortOS does not know about yet, it needs a dismissal branch in agentTuiSpawning.js.'
+    suggestedFix: 'PortOS wrote the bracketed paste but could not confirm it in the composer, so no Enter was sent. Check the raw transcript for an unfinished paste, a stalled initialization, or an unanswered startup dialog. On Windows, Codex can take over a minute to render a large prompt and may show it as several paste chips.'
   },
   // The TUI spawner's verdict for a prompt that was submitted but never started
   // a turn (createPromptSubmissionGate): bare Enters and every stall nudge went
@@ -876,7 +876,7 @@ export function resolveFailedTaskDecision(task, errorAnalysis, { agentId = null,
     const blockedAnalysis = {
       ...(errorAnalysis || {}),
       message: `Task failed ${failureCount} times: ${errorAnalysis?.message || 'unknown error'}`,
-      suggestedFix: `Task has failed ${failureCount} consecutive times with ${lastErrorCategory} errors. ${errorAnalysis?.suggestedFix || 'Investigate agent output logs.'}`,
+      suggestedFix: `The task has failed ${failureCount} times. The latest failure was classified as ${lastErrorCategory}. ${errorAnalysis?.suggestedFix || 'Investigate agent output logs.'}`,
       category: lastErrorCategory
     };
     return {

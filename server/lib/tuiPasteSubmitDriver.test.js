@@ -87,7 +87,7 @@ describe('createPasteSubmitDriver', () => {
     await vi.advanceTimersByTimeAsync(90_000);
     expect(enters()).toBe(0);
     expect(onFail).toHaveBeenCalledTimes(1);
-    expect(onFail).toHaveBeenCalledWith('paste-not-rendered', expect.stringContaining('paste was silently swallowed'));
+    expect(onFail).toHaveBeenCalledWith('paste-not-rendered', expect.stringContaining('No prompt was submitted'));
     expect(events.at(-1)).toMatchObject({ type: 'paste-not-rendered', mcpBootActive: false });
   });
 
@@ -115,6 +115,21 @@ describe('createPasteSubmitDriver', () => {
   });
 
   describe("settleRule: 'codex'", () => {
+    it('fails a partially rendered Windows paste at its deadline without re-pasting over it', async () => {
+      vi.stubGlobal('process', Object.create(process, { platform: { value: 'win32' } }));
+      try {
+        const { driver, enters, pastes, onFail } = makeDriver({ prompt: PROMPT.repeat(900), settleRule: 'codex' });
+        driver.start('ready');
+        driver.ingest('[Pasted Content 18000 chars]');
+        await vi.advanceTimersByTimeAsync(160000);
+        expect(enters()).toBe(0);
+        expect(pastes()).toBe(1);
+        expect(onFail).toHaveBeenCalledExactlyOnceWith('paste-not-rendered', expect.stringContaining('full Windows TUI paste'));
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
+
     it('gives the first paste its patient commit window instead of re-pasting', async () => {
       const { driver, pastes, enters } = makeDriver({ settleRule: 'codex' });
       driver.start('ready');
