@@ -84,7 +84,7 @@ export default function VoiceLlmSection({ cfg, patch, inputCls, traitsSyncRef })
         <ListLoadError what="the provider registry (LLM and coding-agent pickers)" error={providersError} onRetry={loadProviders} className="md:col-span-2" />
       )}
       <div className="md:col-span-2 space-y-1">
-        <p className="text-xs text-gray-500">Voice streams tokens, so only API providers (LM Studio, Ollama, llama.cpp, OpenAI-compatible) are listed. Configure providers under {PROVIDERS_PAGE_BREADCRUMB}. 'auto' uses the provider's default model.</p>
+        <p className="text-xs text-gray-500">Voice streams tokens, so only API providers (LM Studio, Ollama, llama.cpp, OpenAI-compatible) are listed. Configure providers under {PROVIDERS_PAGE_BREADCRUMB}. 'auto' uses the provider's default model. These are the defaults; each Voice Call channel can tune its own voice, LLM and persona.</p>
         <VoiceLlmFields
           provider={llmProvider}
           model={llmModel}

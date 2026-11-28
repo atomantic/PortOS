@@ -9,7 +9,7 @@
 import { transcribe } from './stt.js';
 import { createTurnTtsSpeaker, emitSyntheticReply } from './turnTtsSpeaker.js';
 import { streamChat } from './llm.js';
-import { getVoiceConfig } from './config.js';
+import { getAgentVoiceConfig } from './channelAgent.js';
 import { getToolSpecsForIntent, classifyIntent, dispatchTool, getAllToolNames, UI_KINDS } from './tools.js';
 import { isEchoOfRecentTts } from './echo.js';
 import { appendJournal, getToday } from '../brainJournal.js';
@@ -708,7 +708,8 @@ const executeTurnLlmLoop = async ({
  * @returns {Promise<{ transcript: string, reply: string }>}
  */
 export const runTurn = async ({ audio, text, mimeType, source, history = [], emit, signal, state, systemContext = null, hasHostControl }) => {
-  const cfg = await getVoiceConfig();
+  // The on-air Voice Call channel's agent: global settings plus that channel's overrides.
+  const cfg = await getAgentVoiceConfig();
   if (signal?.aborted) return { transcript: '', reply: '' };
 
   const turnStart = Date.now();

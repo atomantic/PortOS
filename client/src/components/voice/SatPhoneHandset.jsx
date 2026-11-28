@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { saveAvatarChannels } from '../../services/apiVoiceAvatar';
-import { activeChannelOf, useAvatarLibrary } from './useAvatarLibrary';
+import { activeChannelOf, channelLlm, channelVoiceLabel, useAvatarLibrary } from './useAvatarLibrary';
 import { SatPhoneFaceplate, SatPhoneSetup, SatPhoneSpeaker } from './SatPhoneFaceplate';
 import SatPhoneViewfinder from './SatPhoneViewfinder';
 import { SatPhoneActionKeys, SatPhoneTalkPaddle, SatPhoneTelemetry } from './SatPhoneControls';
@@ -71,11 +71,13 @@ export default function SatPhoneHandset({
   const { data: library, updateData: updateLibrary } = useAvatarLibrary();
   const channel = activeChannelOf(library);
   const channelCount = library?.channels?.length ?? 0;
+  // The telemetry shows what the on-air channel's agent actually runs.
+  const onAirLlm = channelLlm(channel, llmProvider, llmModel);
   const nextChannel = channelCount > 1
     ? () => saveAvatarChannels({ active: ((channel?.index ?? 0) + 1) % channelCount }).then(updateLibrary).catch(() => {})
     : undefined;
   const isFloating = variant === 'floating';
-  const ownResidency = useVoiceLlmResidency({ provider: llmProvider, model: llmModel, stage, enabled: llmResidency === undefined });
+  const ownResidency = useVoiceLlmResidency({ provider: onAirLlm.provider, model: onAirLlm.model, stage, enabled: llmResidency === undefined });
   const residency = llmResidency === undefined ? ownResidency : llmResidency;
   const caption = interimTranscript || history.at(-1)?.text;
   const liveAttr = capturing ? 'tx' : (stage === 'speaking' || stage === 'thinking' || stage === 'loading') ? 'rx' : 'idle';
@@ -163,9 +165,9 @@ export default function SatPhoneHandset({
           onNextChannel={nextChannel}
           volume={volume}
           muted={muted}
-          voiceLabel={voiceLabel}
-          llmProvider={llmProvider}
-          llmModel={llmModel}
+          voiceLabel={channelVoiceLabel(channel, voiceLabel)}
+          llmProvider={onAirLlm.provider}
+          llmModel={onAirLlm.model}
           llmResidency={residency}
           signalLevel={signalLevel}
           onVolumeChange={onVolumeChange}

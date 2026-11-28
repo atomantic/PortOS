@@ -1,7 +1,7 @@
 import { Link } from 'react-router';
 import { EyeOff, Maximize2, PanelBottomClose, ScanFace, SlidersHorizontal, Volume2, VolumeX, X } from 'lucide-react';
 import AvatarRuntimeSettings from './AvatarRuntimeSettings';
-import VoiceLlmQuickPicker from './VoiceLlmQuickPicker';
+import ChannelBrainPicker from './ChannelBrainPicker';
 
 const utilityBtn = 'inline-flex items-center justify-center rounded-md border border-transparent p-1 pointer-coarse:min-h-11 pointer-coarse:min-w-11 text-port-text-muted hover:border-port-border hover:bg-port-bg/60 hover:text-port-text transition-colors';
 
@@ -153,12 +153,12 @@ export function SatPhoneSetup({
 }) {
   return (
     <div className="space-y-2">
-      <VoiceLlmQuickPicker
+      <ChannelBrainPicker
         compact
-        provider={llmProvider}
-        model={llmModel}
+        globalProvider={llmProvider}
+        globalModel={llmModel}
         residency={llmResidency}
-        onSaved={onLlmSaved}
+        onGlobalSaved={onLlmSaved}
       />
       <AvatarRuntimeSettings
         compact

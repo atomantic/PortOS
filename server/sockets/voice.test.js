@@ -23,6 +23,12 @@ vi.mock('../services/auth.js', async (importOriginal) => ({
 vi.mock('../services/voice/tts.js', () => ({
   synthesize: vi.fn(async (text) => ({ wav: Buffer.from(`wav:${text}`), latencyMs: 1 })),
 }));
+// The opening line speaks in the on-air channel's voice; with no channel
+// overrides that is plain `synthesize`, minus the settings read.
+vi.mock('../services/voice/channelAgent.js', async () => {
+  const { synthesize: speak } = await import('../services/voice/tts.js');
+  return { synthesizeAgentSpeech: (text, opts) => speak(text, opts) };
+});
 // Meeting capture transcribes over the network (whisper.cpp's HTTP server);
 // stub it so the capture-routing tests below run offline and deterministically.
 vi.mock('../services/voice/stt.js', () => ({ transcribe: vi.fn() }));

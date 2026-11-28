@@ -52,7 +52,7 @@ export default function LightboxPromptSection({ item, onPromptChange, copy }) {
         <textarea id="media-prompt" value={promptDraft}
           onChange={(e) => { setPromptDraft(e.target.value.slice(0, PROMPT_MAX)); setPromptStatus('idle'); }}
           placeholder="Add the prompt used to create this media" rows={5} maxLength={PROMPT_MAX}
-          className="w-full bg-port-bg border border-port-border rounded p-2 text-xs text-gray-200 placeholder:text-gray-600 focus:outline-none focus:border-port-accent resize-y" />
+          className="w-full bg-port-bg border border-port-border rounded p-2 text-xs text-port-text placeholder:text-port-text-subtle focus:outline-none focus:border-port-accent resize-y" />
         <div className="flex justify-end mt-1">
           <button type="button" onClick={savePrompt} disabled={promptSaving || promptDraft === savedPromptOf(item)} className="min-h-[44px] min-w-[44px] px-2 py-1 rounded bg-port-accent text-white disabled:opacity-40">Save prompt</button>
         </div>

@@ -16,7 +16,7 @@ vi.mock('../services/socketIo.js', () => ({ emitToOperators: vi.fn(), emitToOper
 
 const { default: router } = await import('./voiceAvatar.js');
 const { getActiveAvatarFilename, loadAvatarPortrait, normalizeChannels } = await import('../services/voice/avatarLibrary.js');
-const { AVATAR_CHANNEL_LABEL_MAX } = await import('../lib/voiceValidation.js');
+const { AVATAR_CHANNEL_LABEL_MAX } = await import('../lib/voiceChannels.js');
 const { emitToOperators } = await import('../services/socketIo.js');
 
 const base = '/api/voice/avatar';
@@ -66,13 +66,13 @@ it('files gallery images into the fixed Avatars collection and assigns them to c
   const saved = await request(app).put(base + '/channels').send({ channels, active: 2 });
   expect(saved.status).toBe(200);
   expect(saved.body.active).toBe(2);
-  expect(saved.body.channels[2]).toEqual({ label: 'Scout', avatar: 'face.png' });
+  expect(saved.body.channels[2]).toEqual({ label: 'Scout', avatar: 'face.png', agent: {} });
   expect(await getActiveAvatarFilename()).toBe('face.png');
 
   const removed = await request(app).delete(base + '/library/face.png');
   expect(removed.status).toBe(200);
   expect(removed.body.avatars).toEqual([]);
-  expect(removed.body.channels[2]).toEqual({ label: 'Scout', avatar: null });
+  expect(removed.body.channels[2]).toEqual({ label: 'Scout', avatar: null, agent: {} });
   expect(await getActiveAvatarFilename()).toBeNull();
 });
 
@@ -99,7 +99,43 @@ it('preserves omitted fields on partial channel updates, emits library change ev
   const activeOnly = await request(app).put(base + '/channels').send({ active: 1 });
   expect(activeOnly.status).toBe(200);
   expect(activeOnly.body.active).toBe(1);
-  expect(activeOnly.body.channels[1]).toEqual({ label: 'Pilot', avatar: 'pilot.png' });
+  expect(activeOnly.body.channels[1]).toEqual({ label: 'Pilot', avatar: 'pilot.png', agent: {} });
+
+  // A channel's agent keeps only the overrides it was given; the rest inherit.
+  const tuned = activeOnly.body.channels.map((ch, idx) => (idx === 1
+    ? { ...ch, agent: { voiceId: 'qwen3:warm', provider: 'ollama', name: '  Scout ', traits: ['dry', 'dry', ''] } }
+    : ch));
+  const withAgent = await request(app).put(base + '/channels').send({ channels: tuned });
+  expect(withAgent.status).toBe(200);
+  expect(withAgent.body.channels[1].agent).toEqual({
+    voiceId: 'qwen3-tts:warm', provider: 'ollama', model: 'auto', name: 'Scout', traits: ['dry'],
+  });
+  const badAgent = await request(app).put(base + '/channels').send({
+    channels: tuned.map((ch, idx) => (idx === 1 ? { ...ch, agent: { temperature: 2 } } : ch)),
+  });
+  expect(badAgent.status).toBe(400);
+
+  // Single-channel edits merge server-side, so overlapping edits to different fields both land.
+  expect(isHostControlRoute('PATCH', base + '/channels/1')).toBe(true);
+  await request(app).patch(base + '/channels/1').send({ agent: null });
+  await Promise.all([
+    request(app).patch(base + '/channels/1').send({ label: 'Ranger' }),
+    request(app).patch(base + '/channels/1').send({ agent: { speechStyle: 'dry' } }),
+  ]);
+  const merged = await request(app).get(base + '/library');
+  expect(merged.body.channels[1]).toEqual({ label: 'Ranger', avatar: 'pilot.png', agent: { speechStyle: 'dry' } });
+  // Agent edits merge field by field: overlapping edits keep each other, null clears one, agent: null clears all.
+  await Promise.all([
+    request(app).patch(base + '/channels/1').send({ agent: { name: 'Scout' } }),
+    request(app).patch(base + '/channels/1').send({ agent: { provider: 'ollama', model: 'm' } }),
+  ]);
+  const fieldWise = await request(app).patch(base + '/channels/1').send({ agent: { speechStyle: null } });
+  expect(fieldWise.body.channels[1].agent).toEqual({ name: 'Scout', provider: 'ollama', model: 'm' });
+  const cleared = await request(app).patch(base + '/channels/1').send({ agent: { provider: null } });
+  expect(cleared.body.channels[1].agent).toEqual({ name: 'Scout' });
+  expect((await request(app).patch(base + '/channels/1').send({ agent: null })).body.channels[1].agent).toEqual({});
+  expect((await request(app).patch(base + '/channels/6').send({ label: 'x' })).status).toBe(400);
+  expect((await request(app).patch(base + '/channels/1').send({})).status).toBe(400);
 
   const sanitized = normalizeChannels({
     active: 99,
@@ -111,7 +147,7 @@ it('preserves omitted fields on partial channel updates, emits library change ev
   });
   expect(sanitized.active).toBe(0);
   expect(sanitized.channels).toHaveLength(6);
-  expect(sanitized.channels[0]).toEqual({ label: 'x'.repeat(AVATAR_CHANNEL_LABEL_MAX), avatar: null });
-  expect(sanitized.channels[1]).toEqual({ label: '', avatar: null });
-  expect(sanitized.channels[2]).toEqual({ label: 'Valid', avatar: 'ok.png' });
+  expect(sanitized.channels[0]).toEqual({ label: 'x'.repeat(AVATAR_CHANNEL_LABEL_MAX), avatar: null, agent: {} });
+  expect(sanitized.channels[1]).toEqual({ label: '', avatar: null, agent: {} });
+  expect(sanitized.channels[2]).toEqual({ label: 'Valid', avatar: 'ok.png', agent: {} });
 });
