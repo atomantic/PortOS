@@ -40,7 +40,6 @@ const EXTERNAL_CONSUMER_EVENTS = [
 ];
 const TRACKED_UNLISTENED_EVENTS = [
   'calendar:sync:failed', 'calendar:sync:started',
-  'health:xml:complete',
   'messages:sync:auth-required', 'messages:sync:failed', 'messages:sync:started',
   'provider:error',
 ];

@@ -77,3 +77,43 @@ describe('OrgDrawer linked social account picker', () => {
     expect(screen.queryByText(/Could not load Digital Twin social accounts/)).not.toBeInTheDocument();
   });
 });
+
+describe('OrgDrawer contact fields', () => {
+  it('loads, preserves, and updates contact portalUrl and mailingAddress', async () => {
+    getOrgHoldings.mockResolvedValue([]);
+    const onSaved = vi.fn();
+    const orgWithContact = {
+      ...ORG,
+      contact: {
+        email: 'privacy@example.com',
+        phone: '555-0100',
+        portalUrl: 'https://privacy.example.com/optout',
+        mailingAddress: '100 Example Ave, Suite 200',
+      },
+    };
+    render(<OrgDrawer open org={orgWithContact} vaultRecords={VAULT} onClose={() => {}} onSaved={onSaved} />);
+
+    const portalInput = screen.getByLabelText('Privacy portal URL');
+    const addressInput = screen.getByLabelText('Mailing address');
+    expect(portalInput).toHaveValue('https://privacy.example.com/optout');
+    expect(addressInput).toHaveValue('100 Example Ave, Suite 200');
+
+    fireEvent.change(portalInput, { target: { value: ' https://privacy.example.com/requests ' } });
+    fireEvent.change(addressInput, { target: { value: ' 200 Example Blvd ' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() => expect(onSaved).toHaveBeenCalled());
+    expect(updatePrivacyOrg).toHaveBeenCalledWith(
+      'org-1',
+      expect.objectContaining({
+        contact: {
+          email: 'privacy@example.com',
+          phone: '555-0100',
+          portalUrl: 'https://privacy.example.com/requests',
+          mailingAddress: '200 Example Blvd',
+        },
+      }),
+      { silent: true },
+    );
+  });
+});
