@@ -181,6 +181,9 @@ const beginSynthesizedReply = () => {
 
 // Only Voice Call registers a visualizer. It gets assistant output WAV, never mic audio.
 let outputVisualizer;
+/** The Voice Call avatar's renderer, for an output path (the realtime call) that plays its own audio. */
+export const getVoiceOutputVisualizer = () => outputVisualizer;
+
 export function bindVoiceOutputVisualizer(prepare) {
   outputVisualizer = prepare;
   return () => { if (outputVisualizer === prepare) outputVisualizer = undefined; };
