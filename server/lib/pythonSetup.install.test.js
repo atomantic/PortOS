@@ -106,11 +106,17 @@ describe('installLockedRuntime', () => {
 
 describe('installPackages generic repair', () => {
   it('on Apple Silicon repairs mflux-owned packages from the hash-pinned lock, never by bare name', async () => {
-    await installPackages('/image/python', ['mflux', 'transformers', 'opencv-python'], vi.fn(), { appleSilicon: true }).promise;
+    await installPackages('/image/python', ['mflux', 'transformers', 'huggingface_hub'], vi.fn(), { appleSilicon: true }).promise;
     const calls = spawned();
     expect(calls).toHaveLength(1);
     expect(calls[0]).toMatch(new RegExp(`^/image/python -m pip install (--user )?--require-hashes --no-deps --only-binary :all: -r .*requirements-mflux-mlx\\.lock\\.txt$`));
     expect(calls[0]).not.toContain('--upgrade');
+  });
+
+  it('on Apple Silicon dispatches cv2 repair to the mflux-video lock that owns opencv-python-headless', async () => {
+    await installPackages('/image/python', ['cv2'], vi.fn(), { appleSilicon: true }).promise;
+    const calls = spawned();
+    expect(calls.at(-1)).toMatch(/--require-hashes --no-deps --only-binary :all: -r .*requirements-mflux-video-mlx\.lock\.txt$/);
   });
 
   it('dispatches mlx_vlm / mlx_video repair to the video lock, restoring the real package after removing the wrong namesake', async () => {

@@ -2,6 +2,8 @@
 # Installed only from requirements-musicgen-mlx.lock.txt, which pins and hashes
 # every transitive package. After editing this file, regenerate the lock with
 # the command in the lock header.
+# scripts/ml/generate_musicgen.py writes WAV with stdlib wave and imports only
+# musicgen.MusicGen (never mlx-examples/musicgen/utils.py), so scipy is omitted.
 mlx==0.32.4
 mlx-metal==0.32.4
 numpy==2.5.4
@@ -9,4 +11,3 @@ torch==2.15.0
 transformers==5.22.2
 sentencepiece==0.2.3
 huggingface-hub[hf_xet]==2.4.0
-scipy==1.18.1

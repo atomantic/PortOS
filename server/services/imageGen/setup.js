@@ -93,7 +93,7 @@ export async function getSetupCheck(pythonPath) {
 // arbitrary package install is effectively arbitrary code execution.
 // Build the pip-spec allowlist from REQUIRED_PACKAGES via pipNameFor — that
 // translates import names (`cv2`) to their actual pip specs
-// (`opencv-python`). Without this mapping, the allowlist would contain
+// (`opencv-python-headless`). Without this mapping, the allowlist would contain
 // import-only names that can't actually be installed but ALSO don't appear
 // here as their pip specs, so the legitimate install request would 400.
 // Worse: an import name like `cv2` isn't a real PyPI package but if a

@@ -34,13 +34,31 @@ describe('locked runtime profiles', () => {
     for (const pin of mflux) expect(video).toContain(pin);
   });
 
+  it('omits unused PyTorch, GUI OpenCV, Matplotlib, release HTTP, and hf-transfer packages from the shared mflux lock', () => {
+    for (const name of [
+      'torch', 'sympy', 'mpmath', 'networkx', 'setuptools',
+      'opencv-python', 'matplotlib', 'contourpy', 'cycler', 'fonttools', 'kiwisolver',
+      'pyparsing', 'python-dateutil', 'tzdata', 'requests', 'urllib3', 'charset-normalizer', 'hf-transfer',
+    ]) {
+      expect(lockEntryText(LOCK_PROFILES.mflux, name), name).toBe('');
+    }
+    for (const name of [
+      'torch', 'sympy', 'mpmath', 'networkx', 'setuptools',
+      'opencv-python', 'matplotlib', 'contourpy', 'cycler', 'fonttools', 'kiwisolver',
+      'pyparsing', 'python-dateutil', 'tzdata', 'hf-transfer',
+    ]) {
+      expect(lockEntryText(LOCK_PROFILES['mflux-video'], name), name).toBe('');
+    }
+  });
+
   it('limits the mflux-video lock to shared mflux dependencies and the LTX-2 inference additions', () => {
     const packageNames = (profile) => new Set(
       Array.from(readFileSync(profile.lockFile, 'utf8').matchAll(/^([a-z0-9][a-z0-9-]*)==/gm), ([, name]) => name),
     );
     expect(packageNames(LOCK_PROFILES['mflux-video'])).toEqual(new Set([
       ...packageNames(LOCK_PROFILES.mflux),
-      'cffi', 'mlx-video-with-audio', 'mlx-vlm', 'pycparser', 'soundfile',
+      'cffi', 'charset-normalizer', 'mlx-video-with-audio', 'mlx-vlm',
+      'opencv-python-headless', 'pycparser', 'requests', 'soundfile', 'urllib3',
     ]));
   });
 
@@ -93,7 +111,8 @@ describe('locked runtime profiles', () => {
 
   describe('generic repair dispatch', () => {
     it('chooses the smallest lock owning every requested package, by pip name or specifier', () => {
-      expect(planLockedRepair(['mflux', 'transformers', 'opencv-python', 'huggingface_hub'], { appleSilicon: true }).profile.id).toBe('mflux');
+      expect(planLockedRepair(['mflux', 'transformers', 'huggingface_hub'], { appleSilicon: true }).profile.id).toBe('mflux');
+      expect(planLockedRepair(['mflux', 'opencv-python-headless'], { appleSilicon: true }).profile.id).toBe('mflux-video');
       expect(planLockedRepair(['mflux', 'mlx_vlm', 'mlx-video-with-audio>=0.1.35'], { appleSilicon: true }).profile.id).toBe('mflux-video');
     });
 

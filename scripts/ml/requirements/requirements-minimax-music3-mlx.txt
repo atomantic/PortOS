@@ -1,15 +1,21 @@
-# MiniMax Music 3 (MLX) runtime: direct pins for ~/.portos/venv-minimax-music3-mlx.
-# Installed only from requirements-minimax-music3-mlx.lock.txt, which pins and
-# hashes every transitive package. After editing this file, regenerate the lock
-# with the command in the lock header. The frozen NumPy/SciPy closure requires
-# Python 3.12+.
+# MiniMax Music 3 (MLX) runtime: direct inference inputs for ~/.portos/venv-minimax-music3-mlx.
+# Install only from requirements-minimax-music3-mlx.lock.txt. Regenerate using
+# the recipe in its header: resolve the inference dependencies below, then
+# hash-pin mlx-audio with --no-deps to omit sounddevice, cffi, pycparser,
+# miniaudio, scipy, sentencepiece, jinja2, and markupsafe that MiniMax Music 3
+# MLX inference (scripts/ml/generate_minimax_music3_mlx.py) never imports.
+# The frozen NumPy closure requires Python 3.12+.
 #
 # mlx-audio 0.5.0 is the first release containing the MiniMax Music 3 merge
 # (Blaizzy/mlx-audio@784b29e2, which earlier installs took from git); a git source
 # cannot be hash-pinned. Transformers/Hub are coordinated with the validated
 # tokenizer and transport closure in the generated lock.
-mlx-audio==0.6.4
 mlx==0.32.4
 mlx-metal==0.32.4
+numpy==2.5.4
+tqdm==4.70.1
 transformers==5.22.2
 huggingface-hub[hf_xet]==2.4.0
+
+# Hash-pin this wheel with --no-deps (see lock header).
+mlx-audio==0.6.4

@@ -6,15 +6,15 @@
 # FastVideo is checked out from hao-ai-lab/FastVideo at FASTVIDEO_PIN and
 # installed with `uv pip install --no-deps --no-build-isolation -e ~/.portos/fastvideo`
 # after the lock sync. Dependencies match the MLX video generation runtime stack
-# with OSV-clean pins (Pillow 13.0.0, torch 2.15.0, accelerate 1.15.0, diffusers 0.42.1,
-# filelock 4.2.9, mlx 0.32.4).
+# with OSV-clean pins (Pillow 13.0.0, torch 2.15.0, diffusers 0.42.1,
+# filelock 4.2.9, mlx 0.32.4). PortOS's scripts/ml/generate_fastvideo.py only
+# launches local MLX video scripts (never FastVideo's training, VBench eval,
+# CUDA audio, or OpenAI media-policy/streaming server entrypoints), so peft,
+# accelerate, loguru, timm, torchaudio, omegaconf, and duplicate httpx/httpcore
+# 0.x (alongside huggingface-hub's httpx2/httpcore2) are omitted.
 torch==2.15.0
 torchvision==0.29.2
-torchaudio==2.11.1
-accelerate==1.15.0
 diffusers==0.42.1
-peft==0.21.2
-timm==1.0.31
 mlx==0.32.4
 mlx-metal==0.32.4
 pillow==13.0.0
@@ -25,8 +25,6 @@ filelock==4.2.9
 tokenizers==0.23.3
 transformers==5.22.2
 huggingface-hub[hf_xet]==2.4.0
-# Independent FastVideo media-policy/streaming clients still import HTTPX 0.x.
-httpx==0.28.1
 safetensors==0.8.0
 sentencepiece==0.2.3
 protobuf==7.36.2
@@ -37,11 +35,11 @@ opencv-python-headless>=4.10.0.84
 imageio>=2.36.0
 imageio-ffmpeg==0.8.1
 einops
-loguru
-omegaconf
 # Unconditional top-level imports in FastVideo@fa2d1324 (`import fastvideo` fails without them):
-# fastvideo/utils.py:29 and fastvideo/models/registry.py:17 (cloudpickle), fastvideo/utils.py:39 (remote_pdb).
+# fastvideo/utils.py:29 and fastvideo/models/registry.py:17 (cloudpickle), fastvideo/utils.py:39 (remote_pdb),
+# and fastvideo/worker/multiproc_executor.py:24 (psutil, previously supplied transitively by accelerate).
 cloudpickle
+psutil==7.2.2
 remote-pdb
 # Build backend of the editable FastVideo install (its pyproject: setuptools >= 61.0),
 # pinned here so `--no-build-isolation` never fetches an unlocked builder.

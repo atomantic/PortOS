@@ -88,12 +88,12 @@ describe('diagnoseLocalRuntime remedies', () => {
   });
 
   it('offers the pip install, with the pip-spec names, for a missing mflux package', async () => {
-    getSetupCheck.mockResolvedValue({ missing: ['cv2'], missingPip: ['opencv-python'], archMismatch: false });
+    getSetupCheck.mockResolvedValue({ missing: ['cv2'], missingPip: ['opencv-python-headless'], archMismatch: false });
 
     await expect(diagnoseLocalRuntime()).resolves.toMatchObject({
       readiness: 'unavailable',
       runtime: 'mflux-python',
-      remedy: { kind: 'install-packages', pythonPath: '/test/python3', packages: ['opencv-python'] },
+      remedy: { kind: 'install-packages', pythonPath: '/test/python3', packages: ['opencv-python-headless'] },
     });
   });
 

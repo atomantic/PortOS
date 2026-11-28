@@ -888,6 +888,17 @@ source "$1"
     expect(result.stdout).not.toContain('venv ready');
   });
 
+  it('omits unused GUI opencv-python, fonttools, release HTTP, and hf-transfer packages from the Wan 2.2 MLX lock', () => {
+    const lock = readFileSync(join(REQUIREMENTS_DIR, 'requirements-wan22-mlx.lock.txt'), 'utf8');
+    const names = new Set(Array.from(lock.matchAll(/^([a-z0-9][a-z0-9._-]*)==/gim), ([, name]) => name.toLowerCase()));
+    for (const omitted of ['opencv-python', 'fonttools', 'requests', 'urllib3', 'charset-normalizer', 'hf-transfer']) {
+      expect(names.has(omitted), omitted).toBe(false);
+    }
+    for (const kept of ['av', 'ftfy', 'mlx', 'mlx-metal', 'torch', 'transformers', 'huggingface-hub', 'pillow', 'piexif', 'toml']) {
+      expect(names.has(kept), kept).toBe(true);
+    }
+  });
+
   it('reports a missing bootstrap prerequisite before mutating the private tool or runtime venv', () => {
     const install = installer('INSTALL_LTX2');
     const result = install.run({ NO_BOOTSTRAP_MODULES: '1' });
@@ -1473,6 +1484,16 @@ describe.each([
     expect(section).toContain(`pip install --require-hashes --no-deps${binaryOnly} -r "$SCRIPT_DIR/ml/requirements/${lockName}"`);
     expect(section).not.toMatch(/pip install --upgrade/);
   });
+
+  if (lockName === 'requirements-musicgen-mlx.lock.txt') {
+    it('omits unused scipy from the MusicGen MLX lock', () => {
+      const names = new Set(Array.from(lock.matchAll(/^([a-z0-9][a-z0-9._-]*)==/gim), ([, name]) => name.toLowerCase()));
+      expect(names.has('scipy')).toBe(false);
+      for (const kept of ['mlx', 'mlx-metal', 'numpy', 'torch', 'transformers', 'sentencepiece', 'huggingface-hub']) {
+        expect(names.has(kept), kept).toBe(true);
+      }
+    });
+  }
 });
 
 describe('MiniMax Music 3 MLX Install/Repair', () => {
@@ -1558,6 +1579,17 @@ ${section}`;
     expect(result.status).not.toBe(0);
     expect(result.stdout).not.toContain('venv ready');
     if (failure.INSTALL_EXIT) expect(result.calls).not.toContain('from mlx_audio.music');
+  });
+
+  it('omits unused sounddevice, miniaudio, cffi, scipy, sentencepiece, and jinja2 packages from the MiniMax Music 3 MLX lock', () => {
+    const lock = readFileSync(join(REQUIREMENTS_DIR, 'requirements-minimax-music3-mlx.lock.txt'), 'utf8');
+    const names = new Set(Array.from(lock.matchAll(/^([a-z0-9][a-z0-9._-]*)==/gim), ([, name]) => name.toLowerCase()));
+    for (const omitted of ['sounddevice', 'cffi', 'pycparser', 'miniaudio', 'scipy', 'sentencepiece', 'jinja2', 'markupsafe']) {
+      expect(names.has(omitted), omitted).toBe(false);
+    }
+    for (const kept of ['mlx-audio', 'mlx', 'mlx-metal', 'numpy', 'transformers', 'huggingface-hub', 'tokenizers', 'safetensors']) {
+      expect(names.has(kept), kept).toBe(true);
+    }
   });
 });
 
@@ -1957,6 +1989,16 @@ ${section}`;
     expect(oldPy.status).toBe(1);
     expect(oldPy.stderr).toContain('FastVideo on Apple Silicon needs Python 3.11+');
     expect(oldPy.calls).not.toContain('uv pip sync');
+  });
+
+  it('omits unused peft, accelerate, loguru, timm, torchaudio, omegaconf, and duplicate httpx/httpcore packages', () => {
+    const names = new Set(Array.from(lock.matchAll(/^([a-z0-9][a-z0-9._-]*)==/gim), ([, name]) => name.toLowerCase()));
+    for (const omitted of ['peft', 'accelerate', 'loguru', 'timm', 'torchaudio', 'omegaconf', 'httpx', 'httpcore']) {
+      expect(names.has(omitted), omitted).toBe(false);
+    }
+    for (const kept of ['psutil', 'cloudpickle', 'remote-pdb', 'mlx', 'diffusers', 'transformers', 'huggingface-hub', 'httpx2', 'httpcore2']) {
+      expect(names.has(kept), kept).toBe(true);
+    }
   });
 });
 
