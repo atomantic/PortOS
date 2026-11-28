@@ -37,6 +37,7 @@ export function useGoalOrganize(onRefresh) {
     busy.current = false;
     setApplyingOrg(false);
     setOrgSuggestion(null);
+    organizeButtonRef.current?.focus({ preventScroll: true });
     // A failed apply can still have created part of the hierarchy.
     onRefresh();
     if (!applied) { toast.error('Failed to apply goal hierarchy'); return; }

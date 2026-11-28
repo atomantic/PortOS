@@ -13,7 +13,7 @@ export default function MediaUsageChip({ usages }) {
         type="button"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
-        aria-controls={panelId}
+        aria-controls={open ? panelId : undefined}
         title={`Used in ${usages.length} ${usages.length === 1 ? 'place' : 'places'}`}
         className="px-1.5 py-0.5 pointer-coarse:min-h-11 rounded inline-flex items-center gap-0.5 bg-port-accent/20 text-port-accent hover:bg-port-accent/30 focus:outline-none focus-visible:ring-1 focus-visible:ring-port-accent"
       >

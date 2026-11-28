@@ -477,4 +477,12 @@ describe('MediaCollections', () => {
     expect(joinMediaCollections).toHaveBeenCalledWith({ name: 'Alpha', collectionIds: ['col-1', 'col-2'], keepOriginals: true }, { silent: true });
     await waitFor(() => expect(screen.getByTestId('pathname')).toHaveTextContent('/media/collections/col-1'));
   });
+
+  it('gives coverless collection cover links an accessible name and labels item counts', async () => {
+    renderPage('/media/collections?empty=1');
+    await screen.findByText('Beta');
+    const betaLinks = screen.getAllByRole('link', { name: 'Beta' });
+    expect(betaLinks.length).toBe(2);
+    expect(screen.getAllByText('image', { exact: false }).length).toBeGreaterThan(0);
+  });
 });
