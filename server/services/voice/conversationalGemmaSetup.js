@@ -29,6 +29,11 @@ import { getHfToken } from '../hfToken.js';
 import { emitToOperators } from '../socketIo.js';
 import { checkConversationalGemmaAccess } from './conversationalGemmaAccess.js';
 
+// A Voice turn carries the persona prompt (~1.3k tokens), the intent-gated tool
+// schemas (up to ~1k), and the last 24 history messages. 4096 overflowed after
+// roughly a dozen turns and llama-server rejected the request outright.
+export const CONVERSATIONAL_GEMMA_CTX_SIZE = 16384;
+
 const CONVERTER_ROOT = join(PATHS.data, 'cache', 'conversational-gemma-converter');
 const CONVERTER_SCRIPT = join(PATHS.root, 'scripts', 'ml', 'convert_conversational_gemma.py');
 const LLAMA_CPP_REPO_URL = 'https://github.com/ggml-org/llama.cpp.git';
@@ -266,7 +271,13 @@ async function runSetupPipeline(signal, deps = {}) {
 
   publish({ phase: 'starting', detail: 'Starting llama-server with Conversational Gemma 4 31B…', percent: 92 });
   const currentStatus = await llamaLifecycleMod.getLlamaServerStatus().catch(() => null);
-  const alreadyServing = currentStatus?.running && currentStatus?.config?.alias === CONVERSATIONAL_GEMMA.id;
+  // A managed server launched with a smaller window (an earlier setup) is
+  // relaunched so the larger window takes effect.
+  const ctxTooSmall = currentStatus?.managed
+    && Number(currentStatus?.config?.ctxSize || 0) < CONVERSATIONAL_GEMMA_CTX_SIZE;
+  const alreadyServing = currentStatus?.running
+    && currentStatus?.config?.alias === CONVERSATIONAL_GEMMA.id
+    && !ctxTooSmall;
   if (!alreadyServing) {
     if (currentStatus?.running && currentStatus?.managed) {
       await llamaLifecycleMod.stopLlamaServer();
@@ -276,7 +287,7 @@ async function runSetupPipeline(signal, deps = {}) {
       model: CONVERSATIONAL_GEMMA.localGgufPath,
       alias: CONVERSATIONAL_GEMMA.id,
       specType: 'none',
-      ctxSize: 4096,
+      ctxSize: CONVERSATIONAL_GEMMA_CTX_SIZE,
       port: PORTS.LLAMA_SERVER,
     });
     signal.throwIfAborted();
