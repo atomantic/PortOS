@@ -1,6 +1,6 @@
 # Agent skills
 
-Open **Prompt Manager → Agent Skills** to find, read and maintain skills available to PortOS agents. Skills use the [Agent Skills](https://agentskills.io) directory format. Put a `SKILL.md` with a short name and description in a directory under `data/skills/`. Keep lengthy references, templates, scripts and examples in the corresponding support subdirectories so agents can request them only when needed.
+Open **Settings → Agent Skills** to find, read and maintain skills available to PortOS agents. Skills use the [Agent Skills](https://agentskills.io) directory format. Put a `SKILL.md` with a short name and description in a directory under `data/skills/`. Keep lengthy references, templates, scripts and examples in the corresponding support subdirectories so agents can request them only when needed.
 
 ## Discovery and editing
 

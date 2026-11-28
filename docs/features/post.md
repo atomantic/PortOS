@@ -1,6 +1,6 @@
 # POST (Power On Self Test)
 
-Open **MeatSpace → POST** to practice mental math, memory, wordplay, verbal agility, ideation and cognitive drills. A **Full** session runs the enabled drills. A **Quick** session samples one from each enabled domain. Morse practice is training-only.
+Open **POST → Launcher** to practice mental math, memory, wordplay, verbal agility, ideation and cognitive drills. A **Full** session runs the enabled drills. A **Quick** session samples one from each enabled domain. Morse practice is training-only.
 
 ## Choose a session
 

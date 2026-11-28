@@ -28,7 +28,7 @@ Manage local applications, terminal environments, system resources, and develope
 | **Dashboard** | `/` | System overview, active agent count, PM2 process vitals, Quick Capture widget, fast jump to recent projects. | [ARCHITECTURE.md](../ARCHITECTURE.md) |
 | **Apps Manager** | `/apps`, `/apps/:id` | Managed app registry: launch, stop, restart processes, live process logs, environment variables, Git branch switcher, and per-app feature tabs. | [PM2.md](../PM2.md) |
 | **App Templates & Scaffolding** | `/templates` | Pre-configured starter stacks (React, Vite, Node, Python) and interactive project scaffolding. | [App Wizard](./app-wizard.md) |
-| **PortOS Submodules** | `/apps/portos-default/submodules`, `/devtools/submodules` | Git submodule management for PortOS and managed repositories, submodule update checks, and recursive synchronization. | [CONTRIBUTING.md](../../CONTRIBUTING.md#development-setup) |
+| **PortOS Submodules** | `/apps/portos-default/submodules` | Git submodule management for PortOS and managed repositories, submodule update checks, and recursive synchronization. | [CONTRIBUTING.md](../../CONTRIBUTING.md#development-setup) |
 | **Web Shell** | `/shell` | Browser-based interactive terminal multiplexer for host command execution and active debugging. | — |
 | **Process Manager** | `/devtools/processes` | Real-time PM2 process table, status inspection, memory/CPU usage, and manual process restarts. | [PM2.md](../PM2.md) |
 | **Security Camera** | `/security` | Live webcam and microphone monitor with audio level meter, device selection, and a feed that can route host microphone audio to the speakers. | — |
@@ -142,7 +142,7 @@ callback. For neural mesh installation, use the separate
 
 ### Local image model setup
 
-Select a model in **Image Gen → Local** and follow its runtime status actions.
+Select a model in **Create → Media Gen** (**Image**, **Local** mode at `/media/image`) and follow its runtime status actions.
 
 | Model | Setup | Supported inputs |
 | --- | --- | --- |

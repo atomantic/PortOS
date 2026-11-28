@@ -587,7 +587,7 @@ async function generateOutreachDraftImpl({
   });
   const body = aiResult?.body;
   if (!body) {
-    throw new ServerError('Could not generate an outreach draft — check your reply provider in Messages > Config', { status: 502 });
+    throw new ServerError('Could not generate an outreach draft — check your reply provider in Comms → Config', { status: 502 });
   }
 
   // Recipient: `to` is a string[] (the shape every draft consumer expects —

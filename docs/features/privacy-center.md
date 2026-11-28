@@ -20,7 +20,7 @@ Data in the Vault is stored encrypted at rest (`server/lib/vaultCrypto.js`) usin
 #### Website logins
 Website logins (`/api/privacy/logins`, type `website_login`) are origin-bound credentials for the [model-blind browser fill](./browser.md#model-blind-website-login-fill): a username, a password and an optional TOTP setup key (raw Base32 or an `otpauth://totp/...` URI), bound to one or more exact origins such as `https://example.com`. A pasted URL is reduced to its origin; there is no subdomain, suffix or scheme matching.
 
-Manage them in **Privacy Center → Vault → Website logins**. Each saved login shows its label, masked username and exact origins, plus a **2FA Auto** badge when a setup key is saved. Editing never shows the stored username, password or key: leave a field blank to keep it, or tick *Remove the saved 2FA setup key*.
+Manage them in **Identity → Vault → Website logins**. Each saved login shows its label, masked username and exact origins, plus a **2FA Auto** badge when a setup key is saved. Editing never shows the stored username, password or key: leave a field blank to keep it, or tick *Remove the saved 2FA setup key*.
 
 The secrets live only inside the encrypted payload. Listing returns the label, exact origins, a masked username and `hasTotp`, and never decrypts. Website logins are **write-only secrets**: no endpoint returns the password or setup key, the generic reveal refuses the type, and they never join the twin context, broker scans, change declarations or prompt scrubbing. Only the host-side fill decrypts one, right before typing it into a verified tab. 2FA codes are generated on demand by a dependency-free RFC 6238 implementation (`server/lib/totp.js`).
 
@@ -82,7 +82,7 @@ The response includes the saved blocklist, newly `added` handles, and the counts
 
 ```mermaid
 flowchart TD
-    User["User Interface (Settings / Privacy)"]
+    User["User Interface (Identity / Privacy)"]
     Vault["Vault Storage (Postgres privacy_vault_records)"]
     Crypto["AES-256-GCM Encryption (vaultCrypto.js)"]
     Orgs["Organizations & Changes (Postgres DB)"]
