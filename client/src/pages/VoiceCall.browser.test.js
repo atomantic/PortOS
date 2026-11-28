@@ -221,7 +221,7 @@ describe.skipIf(!chrome)('Voice Call console in Chrome', () => {
     }
   });
 
-  it('streams continuous idle and speech frames when running, and stops on reduced motion or runtime stop', async () => {
+  it('streams continuous idle and speech frames when running, and stops on reduced motion', async () => {
     // Keep a shared deadline so several slow steps still leave Vitest time to report the active one.
     const deadline = performance.now() + TEST_TIMEOUT_MS - 2500;
     async function step(name, run) {
@@ -334,14 +334,11 @@ describe.skipIf(!chrome)('Voice Call console in Chrome', () => {
 
       if (!avatarTarget) {
         await step('the idle canvas to become visible after restoring motion', () => canvas.waitFor({ state: 'visible' }));
-        await step('Avatar settings to open', () => button('Avatar settings').click());
-        const stop = await clickAndWaitForPost('Stop', '/api/voice/avatar/runtime', 'with the runtime running');
-        expect(stop.postDataJSON()).toEqual({ action: 'stop' });
-        await step('Still portrait with the canvas hidden after runtime Stop', async () => {
-          await status('Still portrait').waitFor();
-          await canvas.waitFor({ state: 'hidden' });
+        // A running avatar stays on: the runtime panel offers no way to stop it.
+        await step('no avatar stop control while running', async () => {
+          expect(await button('Stop').count()).toBe(0);
+          expect(await page.getByRole('button', { name: /Avatar settings/ }).count()).toBe(0);
         });
-        await speakWithoutAvatar('after runtime Stop');
       }
     } finally {
       await page.close();

@@ -7,8 +7,8 @@ function AvatarActions({ data, ask, terms, pending }) {
   const action = (name, label, enabled = true) => <button type="button" className={button}
     onClick={() => ask(name)} disabled={pending || !enabled}>{label}</button>;
   if (data.phase === 'installing') return action('cancel', 'Cancel install');
-  if (['running', 'starting'].includes(data.phase)) return action('stop', 'Stop');
-  if (data.phase === 'stopping') return null;
+  // A running avatar stays on: there is no stop control.
+  if (['running', 'starting', 'stopping'].includes(data.phase)) return null;
   if (!data.installed) return action('install', 'Install AvatarForcing', terms);
   return <>
     {data.updateAvailable ? action('update', 'Update AvatarForcing', terms) : action('start', 'Start AvatarForcing')}
@@ -17,7 +17,6 @@ function AvatarActions({ data, ask, terms, pending }) {
 }
 
 export default function AvatarRuntimeSettings({ data, error, updateData, refetch, compact = false }) {
-  const [showControls, setShowControls] = useState(false);
   const [terms, setTerms] = useState(false);
   const [pending, setPending] = useState(false);
   const [failure, setFailure] = useState('');
@@ -53,14 +52,12 @@ export default function AvatarRuntimeSettings({ data, error, updateData, refetch
           {running ? 'AvatarForcing live' : 'Avatar setup'}
         </h2>
       </div>
-      {running && <button type="button" className={button} aria-expanded={showControls}
-        onClick={() => setShowControls(!showControls)}>{showControls ? 'Hide avatar settings' : 'Avatar settings'}</button>}
     </div>
     {!running && <p className="text-xs text-port-text-muted">Calls still work with a still portrait.</p>}
     {(error || !data) && <p role="status" className="text-xs">{error ? 'Could not load avatar status.' : 'Checking avatar runtime…'}</p>}
     {error && <button type="button" className={button} onClick={refetch}>Retry status</button>}
     {data && !data.supported && <p className="text-xs text-port-text-muted">This runtime needs an Apple Silicon host running macOS 26 or later.</p>}
-    {!error && data?.supported && (!running || showControls) && <>
+    {!error && data?.supported && !running && <>
       {!data.installed || data.updateAvailable ? <label className="flex items-start gap-2 text-xs leading-relaxed">
         <input type="checkbox" checked={terms} disabled={pending} onChange={event => setTerms(event.target.checked)} className="mt-0.5 shrink-0" />
         <span>I accept the <a href="https://github.com/johnrobinsn/avatarforcing-mlx/blob/d83df52b1d891cae7d12d68b247af7be6e6def07/NOTICE"

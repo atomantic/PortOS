@@ -1,8 +1,7 @@
 import { useState } from 'react';
 import { Link } from 'react-router';
-import { AudioLines, Brain, EyeOff, Maximize2, PanelBottomClose, ScanFace, SlidersHorizontal, Video, Volume2, VolumeX, X } from 'lucide-react';
+import { AudioLines, Brain, EyeOff, Maximize2, PanelBottomClose, SlidersHorizontal, Volume2, VolumeX, X } from 'lucide-react';
 import RealtimeCallPanel from './RealtimeCallPanel';
-import AvatarRuntimeSettings from './AvatarRuntimeSettings';
 import ChannelBrainPicker from './ChannelBrainPicker';
 import TabPills from '../ui/TabPills';
 import useMediaQuery from '../../hooks/useMediaQuery';
@@ -48,8 +47,8 @@ export function SatPhoneFaceplate({
   capturing,
   runningAvatar,
   avatarData,
-  showAvatarSetup,
-  onToggleAvatarSetup,
+  showSetup,
+  onToggleSetup,
   onCompactMode,
   onMinimizeMobile,
   onHideWidget,
@@ -90,11 +89,11 @@ export function SatPhoneFaceplate({
           <div className="flex items-center gap-0.5 pl-1 border-l border-port-border/70">
             <button
               type="button"
-              onClick={onToggleAvatarSetup}
-              aria-expanded={showAvatarSetup}
-              aria-label="Voice LLM and avatar setup"
-              title="Voice LLM & AvatarForcing setup"
-              className={`${utilityBtn} ${showAvatarSetup ? 'text-port-accent border-port-accent/40' : ''}`}
+              onClick={onToggleSetup}
+              aria-expanded={showSetup}
+              aria-label="Voice setup"
+              title="Voice brain & realtime setup"
+              className={`${utilityBtn} ${showSetup ? 'text-port-accent border-port-accent/40' : ''}`}
             >
               <SlidersHorizontal size={13} aria-hidden="true" />
             </button>
@@ -150,7 +149,6 @@ const SETUP_TAB_KEY = 'portos.voice.setupTab';
 const SETUP_TABS = [
   { id: 'setup-brain', label: 'Brain', icon: Brain },
   { id: 'setup-realtime', label: 'Realtime', icon: AudioLines },
-  { id: 'setup-avatar', label: 'Avatar', icon: Video },
 ];
 
 /**
@@ -163,10 +161,6 @@ export function SatPhoneSetup({
   llmModel,
   llmResidency = null,
   onLlmSaved,
-  avatarData,
-  avatarError,
-  onUpdateAvatarData,
-  onRefetchAvatar,
 }) {
   const tabbed = useMediaQuery('(min-width: 768px) and (pointer: fine)');
   const [tab, setTab] = useState(() => {
@@ -191,22 +185,6 @@ export function SatPhoneSetup({
       </div>
       <div id="satphone-setup-realtime" role={tabbed ? 'tabpanel' : undefined} aria-labelledby={tabbed ? 'tab-setup-realtime' : undefined} hidden={!shown('setup-realtime')}>
         <RealtimeCallPanel compact />
-      </div>
-      <div id="satphone-setup-avatar" role={tabbed ? 'tabpanel' : undefined} aria-labelledby={tabbed ? 'tab-setup-avatar' : undefined} hidden={!shown('setup-avatar')} className="space-y-2">
-        <AvatarRuntimeSettings
-          compact
-          data={avatarData}
-          error={avatarError}
-          updateData={onUpdateAvatarData}
-          refetch={onRefetchAvatar}
-        />
-        <Link
-          to="/voice/call"
-          className="satphone-key inline-flex min-h-11 w-full items-center justify-center gap-1.5 rounded-lg border px-3 font-mono text-[10px] font-semibold uppercase tracking-wider"
-        >
-          <ScanFace size={12} aria-hidden="true" />
-          Avatars & channels
-        </Link>
       </div>
     </div>
   );

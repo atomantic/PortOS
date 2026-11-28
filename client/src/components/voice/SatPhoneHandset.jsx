@@ -43,9 +43,6 @@ export default function SatPhoneHandset({
   llmResidency,
   onLlmSaved,
   avatarData,
-  avatarError,
-  onUpdateAvatarData,
-  onRefetchAvatar,
   runningAvatar,
   volume,
   muted,
@@ -69,7 +66,7 @@ export default function SatPhoneHandset({
   onHideWidget,
   onMinimizeMobile,
 }) {
-  const [showFloatingAvatarSetup, setShowFloatingAvatarSetup] = useState(false);
+  const [showFloatingSetup, setShowFloatingSetup] = useState(false);
   const { data: library, updateData: updateLibrary } = useAvatarLibrary();
   const channel = activeChannelOf(library);
   const channelCount = library?.channels?.length ?? 0;
@@ -117,23 +114,19 @@ export default function SatPhoneHandset({
           capturing={capturing}
           runningAvatar={runningAvatar}
           avatarData={avatarData}
-          showAvatarSetup={showFloatingAvatarSetup}
-          onToggleAvatarSetup={() => setShowFloatingAvatarSetup((value) => !value)}
+          showSetup={showFloatingSetup}
+          onToggleSetup={() => setShowFloatingSetup((value) => !value)}
           onCompactMode={onCompactMode}
           onMinimizeMobile={onMinimizeMobile}
           onHideWidget={onHideWidget}
         />
 
-        {isFloating && showFloatingAvatarSetup && (
+        {isFloating && showFloatingSetup && (
           <SatPhoneSetup
             llmProvider={llmProvider}
             llmModel={llmModel}
             llmResidency={residency}
             onLlmSaved={onLlmSaved}
-            avatarData={avatarData}
-            avatarError={avatarError}
-            onUpdateAvatarData={onUpdateAvatarData}
-            onRefetchAvatar={onRefetchAvatar}
           />
         )}
 
