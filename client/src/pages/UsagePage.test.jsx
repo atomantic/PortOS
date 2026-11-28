@@ -1825,6 +1825,11 @@ describe('UsagePage custom date range inputs', () => {
     // before we read the input value, avoiding act warnings from deferred state updates.
     await act(async () => {});
     const from = await screen.findByLabelText('From date');
+    const periodGroup = within(screen.getByRole('group', { name: 'Usage report period' }));
+    expect(periodGroup.getByRole('button', { name: '7 days', pressed: true })).toBeInTheDocument();
+    await act(async () => { fireEvent.click(periodGroup.getByRole('button', { name: '30 days' })); });
+    expect(periodGroup.getByRole('button', { name: '30 days', pressed: true })).toBeInTheDocument();
+    expect(periodGroup.getByRole('button', { name: '7 days', pressed: false })).toBeInTheDocument();
     const callsBefore = api.getUsage.mock.calls.length;
 
     // Partially typed segments surface as value "" (happy-dom lacks badInput, so
@@ -1838,6 +1843,9 @@ describe('UsagePage custom date range inputs', () => {
     await act(async () => { fireEvent.change(from, { target: { value: '2026-09-29' } }); });
     expect(api.getUsage.mock.calls.length).toBeGreaterThan(callsBefore);
     expect(from.value).toBe('2026-09-29');
+    const presets = periodGroup.getAllByRole('button', { pressed: false });
+    expect(presets).toHaveLength(4);
+    for (const button of presets) expect(button).toHaveAttribute('type', 'button');
   });
 });
 

@@ -72,14 +72,14 @@ describe('detectForgeCli', () => {
 
 describe('pickGhAccountForOwner', () => {
   it('matches owner to account case-insensitively', () => {
-    expect(pickGhAccountForOwner('atomantic', ['atomantic', 'ClawedCode'])).toBe('atomantic');
-    expect(pickGhAccountForOwner('Atomantic', ['atomantic', 'ClawedCode'])).toBe('atomantic');
-    expect(pickGhAccountForOwner('clawedcode', ['atomantic', 'ClawedCode'])).toBe('ClawedCode');
-    expect(pickGhAccountForOwner('CLAWEDCODE', ['atomantic', 'ClawedCode'])).toBe('ClawedCode');
+    expect(pickGhAccountForOwner('atomantic', ['atomantic', 'ExampleBot'])).toBe('atomantic');
+    expect(pickGhAccountForOwner('Atomantic', ['atomantic', 'ExampleBot'])).toBe('atomantic');
+    expect(pickGhAccountForOwner('examplebot', ['atomantic', 'ExampleBot'])).toBe('ExampleBot');
+    expect(pickGhAccountForOwner('EXAMPLEBOT', ['atomantic', 'ExampleBot'])).toBe('ExampleBot');
   });
 
   it('returns null when no account matches the owner', () => {
-    expect(pickGhAccountForOwner('someorg', ['atomantic', 'ClawedCode'])).toBeNull();
+    expect(pickGhAccountForOwner('someorg', ['atomantic', 'ExampleBot'])).toBeNull();
   });
 
   it('returns null with empty inputs', () => {

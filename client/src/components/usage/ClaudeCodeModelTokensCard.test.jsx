@@ -25,6 +25,8 @@ describe('ClaudeCodeModelTokensCard', () => {
     expect(await screen.findByText(/all instances/)).toBeTruthy();
     expect(screen.getAllByText('model-x').length).toBeGreaterThan(0);
     expect(screen.getByText(/API-billed/)).toBeTruthy();
+    const columnHeaders = screen.getAllByRole('columnheader');
+    for (const header of columnHeaders) expect(header).toHaveAttribute('scope', 'col');
     expect(getClaudeCodeModelUsage).toHaveBeenCalledWith({ period: '30d' }, { silent: true });
   });
 
