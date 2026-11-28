@@ -205,4 +205,13 @@ describe('GraphTab viewport and controls', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     expect(await screen.findByText('1 nodes, 0 edges')).toBeInTheDocument();
   });
+
+  it('retains the loaded graph and shows a retryable error banner when refresh fails', async () => {
+    await renderCanvas();
+    getNotesVaultGraph.mockRejectedValueOnce(new Error('temporary refresh failure'));
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load the knowledge graph');
+    expect(screen.getByText('1 nodes, 0 edges')).toBeInTheDocument();
+    expect(screen.getByRole('application', { name: /knowledge graph/i })).toBeInTheDocument();
+  });
 });

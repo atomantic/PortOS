@@ -124,6 +124,24 @@ describe('BrowseTab responsive list/detail', () => {
     expect(tagsBtn).toHaveAttribute('aria-pressed', 'false');
     expect(getNotesVaultTags).toHaveBeenCalledTimes(2);
   });
+
+  it('drops a stale tags response when the panel is closed and reopened', async () => {
+    let rejectFirst;
+    getNotesVaultTags
+      .mockImplementationOnce(() => new Promise((_, reject) => { rejectFirst = reject; }))
+      .mockResolvedValueOnce({ tags: [{ tag: 'fresh', count: 3 }], skippedUnavailable: 0 });
+    renderTab();
+
+    const tagsBtn = screen.getByRole('button', { name: 'Tags' });
+    fireEvent.click(tagsBtn); // open (request 1 pending)
+    fireEvent.click(tagsBtn); // close
+    fireEvent.click(tagsBtn); // reopen (request 2 resolves)
+    expect(await screen.findByText('#fresh')).toBeInTheDocument();
+
+    await act(async () => { rejectFirst(new Error('stale failure')); });
+    expect(screen.getByText('#fresh')).toBeInTheDocument();
+    expect(screen.queryByText('Could not load tags')).toBeNull();
+  });
 });
 
 /**

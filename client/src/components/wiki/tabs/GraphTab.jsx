@@ -36,7 +36,7 @@ export default function GraphTab({ vaultId }) {
   const connectionCountsRef = useRef(new Map());
   const beginLoad = useLatestRequest();
   const { text: labelColor, axis: mutedLabelColor } = useChartColors();
-  const hasGraph = !loading && !loadFailed && Boolean(graphData?.totalNodes);
+  const hasGraph = !loading && Boolean(graphData?.totalNodes);
 
   const loadGraph = useCallback(async () => {
     const isCurrent = beginLoad();
@@ -49,9 +49,6 @@ export default function GraphTab({ vaultId }) {
     if (ok) {
       setGraphData(data);
       layoutNodes(data);
-    } else {
-      setGraphData(null);
-      nodesRef.current = [];
     }
     setLoading(false);
   }, [vaultId, beginLoad]);
@@ -316,7 +313,7 @@ export default function GraphTab({ vaultId }) {
     );
   }
 
-  if (loadFailed) {
+  if (loadFailed && !graphData) {
     return (
       <div className="w-full p-4">
         <ListLoadError what="the knowledge graph" onRetry={loadGraph} />
@@ -372,6 +369,9 @@ export default function GraphTab({ vaultId }) {
           </button>
         </div>
         <OfflineNotesNotice count={graphData.skippedUnavailable} className="w-full max-w-md pointer-events-auto" />
+        {loadFailed && (
+          <ListLoadError what="the knowledge graph" onRetry={loadGraph} className="w-full max-w-md pointer-events-auto" />
+        )}
       </div>
 
       {/* Legend */}

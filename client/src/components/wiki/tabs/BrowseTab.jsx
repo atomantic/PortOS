@@ -8,6 +8,7 @@ import { WIKI_CATEGORIES } from '../constants.jsx';
 import OfflineNotesNotice from '../../OfflineNotesNotice.jsx';
 import { useNoteSave } from '../../../hooks/useNoteSave.js';
 import useMounted from '../../../hooks/useMounted';
+import useLatestRequest from '../../../hooks/useLatestRequest.js';
 import NoteDetailPane from '../../notes/NoteDetailPane.jsx';
 import useVaultNote from '../../../hooks/useVaultNote.js';
 
@@ -35,6 +36,7 @@ export default function BrowseTab({ vaultId, notes, rawNotes, allNotes, onRefres
   const [showTags, setShowTags] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(null);
   const mountedRef = useMounted();
+  const beginTagsLoad = useLatestRequest();
 
   // Owns the write plus the iCloud force-save escape hatch (#3717).
   const { saving, save, forceOffered, dismissForce, bufferChangedSince } = useNoteSave({
@@ -84,9 +86,10 @@ export default function BrowseTab({ vaultId, notes, rawNotes, allNotes, onRefres
   };
 
   const loadTags = async () => {
+    const isCurrent = beginTagsLoad();
     setTagsStatus('loading');
     const data = await getNotesVaultTags(vaultId, { silent: true }).catch(() => null);
-    if (!mountedRef.current) return;
+    if (!mountedRef.current || !isCurrent()) return;
     if (data && !data.error && Array.isArray(data.tags)) {
       setTags(data.tags);
       setSkippedTagNotes(data.skippedUnavailable || 0);
@@ -102,6 +105,7 @@ export default function BrowseTab({ vaultId, notes, rawNotes, allNotes, onRefres
     const next = !showTags;
     setShowTags(next);
     if (next) loadTags();
+    else beginTagsLoad();
   };
 
   const toggleFolder = (folder) => {
