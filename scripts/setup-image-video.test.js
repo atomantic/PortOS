@@ -1,7 +1,7 @@
 import { execFileSync, spawnSync } from 'child_process';
 import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
-import { dirname, join } from 'path';
+import { dirname, join, sep } from 'path';
 import { fileURLToPath } from 'url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { resolveBashBinary } from '../server/lib/bashResolver.js';
@@ -880,7 +880,10 @@ source "$1"
     expect(result.status).toBe(2);
     expect(result.stderr).toContain('fixture: package index connection refused');
     expect(result.stderr).toContain('LTX-2.5 MLX dependency sync failed (exit 2)');
-    expect(result.stderr).toContain(`${install.home}/.portos/tools/uv-0.13.7/bin/uv`);
+    const shellHome = execFileSync(resolveBashBinary(), ['-c', 'cd -- "$1" && pwd', 'bash', install.home], {
+      encoding: 'utf8',
+    }).trim();
+    expect(result.stderr).toContain(`${shellHome}/.portos/tools/uv-0.13.7/bin/uv`);
     expect(result.stderr).toContain('Little Snitch');
     expect(result.stderr).toContain('pypi.org and files.pythonhosted.org');
     expect(result.stderr).toContain('retry Install/Repair');
@@ -1748,7 +1751,8 @@ describe.each([
 });
 
 describe('shared mflux Apple Silicon install is hash-pinned', () => {
-  const lockPath = join(REQUIREMENTS_DIR, 'requirements-mflux-mlx.lock.txt');
+  const scriptDir = join(REPO_ROOT, 'scripts').split(sep).join('/');
+  const lockPath = `${scriptDir}/ml/requirements/requirements-mflux-mlx.lock.txt`;
   const lock = readFileSync(lockPath, 'utf8');
   const directPins = readFileSync(join(REQUIREMENTS_DIR, 'requirements-mflux-mlx.txt'), 'utf8');
   const block = source.slice(source.indexOf('if [[ "$INSTALL_MFLUX" == "1" ]]; then'), source.indexOf('if [[ "$INSTALL_VIDEO" == "1" ]]; then'));
@@ -1771,7 +1775,7 @@ exit 0
 `);
     chmodSync(fakePython, 0o755);
     const script = `set -euo pipefail
-INSTALL_MFLUX=1; PYTHON_BIN="${fakePython}"; SCRIPT_DIR="${join(REPO_ROOT, 'scripts')}"; HOME="${dir}"
+INSTALL_MFLUX=1; PYTHON_BIN="${fakePython}"; SCRIPT_DIR="${scriptDir}"; HOME="${dir}"
 is_apple_silicon() { return ${appleSilicon ? 0 : 1}; }
 have() { return 0; }
 portos_uv() { echo "uv $*" >> "${log}"; }
@@ -1784,6 +1788,7 @@ ${block}`;
     expect(result.status, result.stderr).toBe(0);
     return {
       calls: readFileSync(log, 'utf8'),
+      home: dir,
       selfReq: existsSync(`${log}.self-req`) ? readFileSync(`${log}.self-req`, 'utf8') : null,
     };
   };
@@ -1834,11 +1839,12 @@ ${block}`;
   });
 
   it('an older PYTHON_BIN syncs the dedicated venv to the lock instead', () => {
-    const { calls } = runBlock({ oldPython: true });
+    const { calls, home } = runBlock({ oldPython: true });
+    const venvPython = `${home}/.portos/venv-mflux/bin/python3`;
     expect(calls).not.toMatch(/pip install --user/);
-    expect(calls).toMatch(new RegExp(`^uv pip sync --python \\S+/\\.portos/venv-mflux/bin/python3 --require-hashes --only-binary :all: ${lockPath.replace(/[.]/g, '\\.')}$`, 'm'));
+    expect(calls.split(/\r?\n/)).toContain(`uv pip sync --python ${venvPython} --require-hashes --only-binary :all: ${lockPath}`);
     expect(calls).not.toMatch(/^uv pip install/m);
-    expect(calls).toMatch(/^probe \S+venv-mflux\/bin\/python3 -c from mflux\.models\.flux\.cli\.flux_generate import main/m);
+    expect(calls).toContain(`probe ${venvPython} -c from mflux.models.flux.cli.flux_generate import main`);
   });
 });
 
