@@ -41,6 +41,7 @@ import { mergeTombstones, normalizeTombstones, recordTombstone, isTombstoned } f
 import { canonicalSnapshotChecksum } from '../lib/snapshotChecksum.js';
 import { roundCents } from '../lib/subscriptionSavings.js';
 import { isFreeProvider } from '../lib/modelPricing.js';
+import { USAGE_COUNT_FIELDS } from '../lib/usageFields.js';
 import { familyForProvider, familyLabel, PROVIDER_FAMILY_IDS } from '../lib/provider/providerFamilies.js';
 import { sanitizeQuotaCards } from '../lib/fleetQuotas.js';
 import { resolveEffectiveCategories } from '../lib/instanceSyncCategories.js';
@@ -86,16 +87,10 @@ const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
 const str = (v, max) => (isNonBlankStr(v) ? v.slice(0, max) : null);
 
 // The media units, long-context subsets and speed subsets are priced at read
-// time (usage.js countFields), so a peer's digest has to carry them or its
-// Grok/Antigravity images, video seconds, 200k-context premium and Fast
-// premium vanish from the fleet report. Older peers ignore unknown keys.
-const COUNT_FIELDS = [
-  'sessions', 'messages', 'tokens', 'tokensIn', 'tokensOut', 'cacheReadTokens', 'cacheWriteTokens',
-  'longTokensIn', 'longTokensOut', 'longCacheReadTokens', 'longCacheWriteTokens',
-  'fastTokensIn', 'fastTokensOut', 'fastCacheReadTokens', 'fastCacheWriteTokens',
-  'ultrafastTokensIn', 'ultrafastTokensOut', 'ultrafastCacheReadTokens', 'ultrafastCacheWriteTokens',
-  'images', 'videoSeconds', 'inputImages'
-];
+// time (usageReport.js countFields / usageFields.js USAGE_COUNT_FIELDS), so a
+// peer's digest has to carry them or its Grok/Antigravity images, video seconds,
+// 200k-context premium and Fast premium vanish from the fleet report. Older peers ignore unknown keys.
+const COUNT_FIELDS = Object.freeze(['sessions', 'tokens', ...USAGE_COUNT_FIELDS]);
 
 function takeCounts(source, target) {
   for (const field of COUNT_FIELDS) {

@@ -10,7 +10,7 @@ import { join, resolve } from 'path';
 import { clearTimeout as cancelBatchTimer, setTimeout as scheduleBatchTimer } from 'node:timers';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { atomicWrite, ensureDir, PATHS, readJSONFile } from '../lib/fileUtils.js';
-import { SPEED_LEDGER_FIELDS } from '../lib/modelPricing.js';
+import { LONG_USAGE_FIELDS, SPEED_LEDGER_FIELDS } from '../lib/usageFields.js';
 import { UNKNOWN_PROVIDER_ID, UNKNOWN_PROVIDER_NAME, isUsageKey, usageModelKey, normalizeProvider, hasUsageCounts, mergeSource } from '../lib/usageReport.js';
 import { getLocalParts, todayInTimezone } from '../lib/timezone.js';
 import { getUserTimezone } from './userTimezone.js';
@@ -616,10 +616,7 @@ function applyMessageUsage(providerId, rawModel, messageCount, outputTokens, inp
   const model = usageModelKey(rawModel);
   const cacheReadTokens = Math.max(0, extra?.cacheReadTokens || 0);
   const cacheWriteTokens = Math.max(0, extra?.cacheWriteTokens || 0);
-  const longTokensIn = Math.max(0, extra?.longTokensIn || 0);
-  const longTokensOut = Math.max(0, extra?.longTokensOut || 0);
-  const longCacheReadTokens = Math.max(0, extra?.longCacheReadTokens || 0);
-  const longCacheWriteTokens = Math.max(0, extra?.longCacheWriteTokens || 0);
+  const longCounts = Object.fromEntries(LONG_USAGE_FIELDS.map((field) => [field, Math.max(0, extra?.[field] || 0)]));
   const speed = Object.fromEntries(SPEED_LEDGER_FIELDS.map((field) => [field, Math.max(0, extra?.[field] || 0)]));
   const source = extra?.source === 'measured' ? 'measured' : 'estimate';
 
@@ -657,19 +654,18 @@ function applyMessageUsage(providerId, rawModel, messageCount, outputTokens, inp
     // pass over its whole history.
     bucket.cacheReadTokens = (bucket.cacheReadTokens ?? 0) + cacheReadTokens;
     bucket.cacheWriteTokens = (bucket.cacheWriteTokens ?? 0) + cacheWriteTokens;
-    // Long-context counts are a subset. Write them only when this call has
-    // some, so a short turn does not stamp zeros onto an older bucket.
-    if (longTokensIn || bucket.longTokensIn != null) bucket.longTokensIn = (bucket.longTokensIn ?? 0) + longTokensIn;
-    if (longTokensOut || bucket.longTokensOut != null) bucket.longTokensOut = (bucket.longTokensOut ?? 0) + longTokensOut;
-    if (longCacheReadTokens || bucket.longCacheReadTokens != null) bucket.longCacheReadTokens = (bucket.longCacheReadTokens ?? 0) + longCacheReadTokens;
-    if (longCacheWriteTokens || bucket.longCacheWriteTokens != null) bucket.longCacheWriteTokens = (bucket.longCacheWriteTokens ?? 0) + longCacheWriteTokens;
+    // Long-context and speed counts are subsets. Write them only when this call
+    // has some, so a short/standard turn does not stamp zeros onto an older bucket.
+    for (const field of LONG_USAGE_FIELDS) {
+      if (longCounts[field] || bucket[field] != null) bucket[field] = (bucket[field] ?? 0) + longCounts[field];
+    }
     for (const field of SPEED_LEDGER_FIELDS) {
       if (speed[field] || bucket[field] != null) bucket[field] = (bucket[field] ?? 0) + speed[field];
     }
     if (source === 'estimate' || extra.nativeUsageUnpersisted) {
       const counts = {
         messages: messageCount, tokensIn: inputTokens, tokensOut: outputTokens, cacheReadTokens, cacheWriteTokens,
-        longTokensIn, longTokensOut, longCacheReadTokens, longCacheWriteTokens,
+        ...longCounts,
         ...speed,
       };
       if (source === 'estimate') adjustEstimated(bucket, counts, 1);
@@ -722,23 +718,17 @@ function recordRunUsageDraft(record, { reconciledRunId = null, siblings = false,
       tokensOut = 0,
       cacheReadTokens = 0,
       cacheWriteTokens = 0,
-      longTokensIn = 0,
-      longTokensOut = 0,
-      longCacheReadTokens = 0,
-      longCacheWriteTokens = 0,
       source = 'estimate',
       nativeUsageUnpersisted = false,
       repairIds = null,
     } = entry || {};
     if (Array.isArray(repairIds)) rememberRepairIds(repairIds);
+    const longCounts = Object.fromEntries(LONG_USAGE_FIELDS.map((field) => [field, entry?.[field] || 0]));
     const speedCounts = Object.fromEntries(SPEED_LEDGER_FIELDS.map((field) => [field, entry?.[field] || 0]));
     applyMessageUsage(providerId, model, messages, tokensOut, tokensIn, {
       cacheReadTokens,
       cacheWriteTokens,
-      longTokensIn,
-      longTokensOut,
-      longCacheReadTokens,
-      longCacheWriteTokens,
+      ...longCounts,
       ...speedCounts,
       source, nativeUsageUnpersisted,
     }, at);

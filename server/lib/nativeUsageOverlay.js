@@ -8,6 +8,12 @@
  */
 
 import { familyForProvider, familyLabel } from './provider/providerFamilies.js';
+import {
+  ALL_TOKEN_FIELDS as TOKEN_FIELDS,
+  BASE_TOKEN_FIELDS as BILLED_FIELDS,
+  rebuildDayTotals,
+  SPEED_CLASS_FIELDS as SPEED_CLASSES,
+} from './usageFields.js';
 
 /**
  * Put each provider app's own usage history in place of the PortOS ledger's
@@ -39,13 +45,6 @@ import { familyForProvider, familyLabel } from './provider/providerFamilies.js';
  * Pure. Returns a new `dailyActivity`; the input is not modified.
  */
 
-const TOKEN_FIELDS = ['messages', 'tokensIn', 'tokensOut', 'cacheReadTokens', 'cacheWriteTokens',
-  'longTokensIn', 'longTokensOut', 'longCacheReadTokens', 'longCacheWriteTokens',
-  'fastTokensIn', 'fastTokensOut', 'fastCacheReadTokens', 'fastCacheWriteTokens',
-  'ultrafastTokensIn', 'ultrafastTokensOut', 'ultrafastCacheReadTokens', 'ultrafastCacheWriteTokens'];
-const BILLED_FIELDS = ['tokensIn', 'tokensOut', 'cacheReadTokens', 'cacheWriteTokens'];
-const SPEED_CLASSES = [['fastTokensIn', 'fastTokensOut', 'fastCacheReadTokens', 'fastCacheWriteTokens'],
-  ['ultrafastTokensIn', 'ultrafastTokensOut', 'ultrafastCacheReadTokens', 'ultrafastCacheWriteTokens']];
 const STORE_FIELDS = { messages: 'messages', tokensIn: 'input', tokensOut: 'output', cacheReadTokens: 'cacheRead',
   cacheWriteTokens: 'cacheWrite', longTokensIn: 'longInput', longTokensOut: 'longOutput',
   longCacheReadTokens: 'longCacheRead', longCacheWriteTokens: 'longCacheWrite',
@@ -164,15 +163,6 @@ function applyFamilyDay(day, nativeModels, { ids, target }, mode) {
     bucket.source = ['estimate', 'mixed'].includes(bucket.source) ? 'mixed' : 'measured';
   }
   return true;
-}
-
-function rebuildDayTotals(day) {
-  const providers = Object.values(day.byProvider || {});
-  day.sessions = providers.reduce((sum, provider) => sum + num(provider.sessions), 0);
-  day.messages = providers.reduce((sum, provider) => sum + num(provider.messages), 0);
-  day.tokensIn = providers.reduce((sum, provider) => sum + num(provider.tokensIn), 0);
-  day.tokensOut = providers.reduce((sum, provider) => sum + num(provider.tokensOut), 0);
-  day.tokens = day.tokensOut;
 }
 
 /**
