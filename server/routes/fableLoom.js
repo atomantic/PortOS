@@ -438,7 +438,10 @@ router.post('/:id/episodes/:episodeId/sessions/preflight', asyncHandler(async (r
 
 router.post('/:id/episodes/:episodeId/sessions/host', asyncHandler(async (req, res) => {
   const input = validateRequest(hostedSessionCreateSchema, req.body);
-  res.status(201).json(await createHostedSession(req.params.id, req.params.episodeId, input));
+  const options = req.portosAuthContext?.sessionId
+    ? { ...input, ownerSessionId: req.portosAuthContext.sessionId }
+    : input;
+  res.status(201).json(await createHostedSession(req.params.id, req.params.episodeId, options));
 }));
 
 router.get('/sessions/:sessionId', asyncHandler(async (req, res) => {

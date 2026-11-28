@@ -10,6 +10,9 @@ vi.mock('../services/auth.js', async (importOriginal) => ({
   ...await importOriginal(),
   isAuthEnabled: vi.fn(async () => auth.enabled),
   verifyRequestSession: vi.fn(async ({ headers }) => auth.enabled && headers?.authorization === 'Bearer example-agent-session'),
+  verifyRequestSessionIdentity: vi.fn(async ({ headers }) => (auth.enabled && headers?.authorization === 'Bearer example-agent-session'
+    ? { kind: 'session', sessionId: 'example-agent-session', label: 'agent' }
+    : null)),
 }));
 
 const auth = vi.hoisted(() => ({ enabled: false }));

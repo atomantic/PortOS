@@ -51,6 +51,18 @@ const protagonistVoiceCharacter = (loom, universe) => loom.protagonistCharacterI
 
 // Active hosted sessions in memory (ephemeral, machine-local)
 const activeSessions = new Map();
+const pendingCreations = new Set();
+// Recently revoked operator session IDs (128-bit random, never reused); catches
+// revocations that fired between authGate admission and createHostedSession entry.
+const revokedOwnerSessions = new Set();
+const MAX_REVOKED_OWNER_SESSIONS = 1024;
+const recordRevokedOwner = (id) => {
+  if (!id) return;
+  revokedOwnerSessions.add(id);
+  if (revokedOwnerSessions.size > MAX_REVOKED_OWNER_SESSIONS) {
+    revokedOwnerSessions.delete(revokedOwnerSessions.values().next().value);
+  }
+};
 let revocationGeneration = 0;
 
 // Default session time-to-live: 30 minutes
@@ -254,100 +266,114 @@ export async function createHostedSession(loomId, episodeId, {
   startNodeId,
   ttlMinutes = DEFAULT_SESSION_TTL_MINUTES,
   baseUrl,
+  ownerSessionId = null,
 } = {}) {
   const generation = revocationGeneration;
-  const loom = await getLoom(loomId);
-  if (!loom) {
-    throw new ServerError('Loom not found', { status: 404, code: 'NOT_FOUND' });
-  }
-  const episode = loom.episodes?.find((e) => e.id === episodeId) || null;
-  if (!episode) {
-    throw new ServerError('Episode not found', { status: 404, code: 'NOT_FOUND' });
-  }
-
-  // Run preflight readiness
-  const preflight = await checkHostedSessionReadiness({ loomId, episodeId, loom, episode });
-  // Preflight awaits disk and network state. A request admitted before a
-  // revocation must not mint credentials after it.
-  if (generation !== revocationGeneration) {
+  if (ownerSessionId && revokedOwnerSessions.has(ownerSessionId)) {
     throw new ServerError('PortOS sessions were revoked while preparing hosted play', {
       status: 409,
       code: 'HOSTED_SESSION_REVOKED',
     });
   }
-  if (!preflight.ready) {
-    throw new ServerError(`Hosted session preflight failed: ${preflight.errors.join('; ')}`, {
-      status: 412,
-      code: 'HOSTED_SESSION_PREFLIGHT_FAILED',
-      context: preflight,
-    });
+  const pending = { ownerSessionId, revoked: false };
+  pendingCreations.add(pending);
+  try {
+    const loom = await getLoom(loomId);
+    if (!loom) {
+      throw new ServerError('Loom not found', { status: 404, code: 'NOT_FOUND' });
+    }
+    const episode = loom.episodes?.find((e) => e.id === episodeId) || null;
+    if (!episode) {
+      throw new ServerError('Episode not found', { status: 404, code: 'NOT_FOUND' });
+    }
+
+    // Run preflight readiness
+    const preflight = await checkHostedSessionReadiness({ loomId, episodeId, loom, episode });
+    // Preflight awaits disk and network state. A request admitted before a
+    // full or targeted revocation must not mint credentials after it.
+    if (generation !== revocationGeneration || pending.revoked) {
+      throw new ServerError('PortOS sessions were revoked while preparing hosted play', {
+        status: 409,
+        code: 'HOSTED_SESSION_REVOKED',
+      });
+    }
+    if (!preflight.ready) {
+      throw new ServerError(`Hosted session preflight failed: ${preflight.errors.join('; ')}`, {
+        status: 412,
+        code: 'HOSTED_SESSION_PREFLIGHT_FAILED',
+        context: preflight,
+      });
+    }
+
+    const startNode = episode.nodes?.find((n) => n.id === (startNodeId || episode.startNodeId)) || null;
+    if (!startNode) {
+      throw new ServerError('Start scene not found', { status: 400, code: 'INVALID_START_NODE' });
+    }
+
+    const sessionId = randomUUID();
+    // Generate 256-bit cryptographically secure tokens. The audience (QR/join
+    // link) token and the host token are DISTINCT secrets — the audience token
+    // must never grant `role: 'host'` (#8357), so each is hashed and verified
+    // independently.
+    const token = randomBytes(32).toString('hex');
+    const hashedToken = createHash('sha256').update(token).digest('hex');
+    const hostToken = randomBytes(32).toString('hex');
+    const hashedHostToken = createHash('sha256').update(hostToken).digest('hex');
+
+    const boundedTtl = Math.max(1, Math.min(MAX_SESSION_TTL_MINUTES, Number.isInteger(ttlMinutes) ? ttlMinutes : DEFAULT_SESSION_TTL_MINUTES));
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + boundedTtl * 60 * 1000).toISOString();
+
+    const rootBaseUrl = baseUrl || preflight.https.url;
+    // Fragment-based QR URL: #session=...&token=... — carries ONLY the audience
+    // token. The host token is returned in the create response and never
+    // appears here.
+    const joinUrl = `${rootBaseUrl}/fableloom/join#session=${sessionId}&token=${token}`;
+
+    const session = {
+      id: sessionId,
+      loomId,
+      episodeId,
+      universeId: loom.universeId || null,
+      ownerSessionId,
+      hashedToken,
+      hashedHostToken,
+      status: 'active',
+      audioTarget: FABLELOOM_AUDIO_TARGETS.includes(audioTarget) ? audioTarget : 'host',
+      currentNodeId: startNode.id,
+      playbackPhase: initialPhaseForNode(startNode),
+      activeHoldIndex: 0,
+      turnPhase: 'idle',
+      transcript: [{
+        id: randomUUID(),
+        role: 'narrator',
+        text: startNode.prose || startNode.title || '',
+        timestamp: now.toISOString(),
+      }],
+      recentTts: [],
+      hostSocketId: null,
+      audienceSocketId: null,
+      activeTurn: null,
+      pendingSpeech: null,
+      sceneGeneration: 0,
+      switchingEpisode: false,
+      episodeSwitchGeneration: 0,
+      createdAt: now.toISOString(),
+      expiresAt,
+    };
+
+    activeSessions.set(sessionId, session);
+
+    return {
+      session: sanitizeHostedSession(session),
+      token, // audience token — returned ONLY once to session creator; also embedded in joinUrl
+      hostToken, // host token — returned ONLY once to session creator; NEVER embedded in joinUrl
+      joinUrl,
+      preflight,
+    };
+  } finally {
+    pendingCreations.delete(pending);
   }
-
-  const startNode = episode.nodes?.find((n) => n.id === (startNodeId || episode.startNodeId)) || null;
-  if (!startNode) {
-    throw new ServerError('Start scene not found', { status: 400, code: 'INVALID_START_NODE' });
-  }
-
-  const sessionId = randomUUID();
-  // Generate 256-bit cryptographically secure tokens. The audience (QR/join
-  // link) token and the host token are DISTINCT secrets — the audience token
-  // must never grant `role: 'host'` (#8357), so each is hashed and verified
-  // independently.
-  const token = randomBytes(32).toString('hex');
-  const hashedToken = createHash('sha256').update(token).digest('hex');
-  const hostToken = randomBytes(32).toString('hex');
-  const hashedHostToken = createHash('sha256').update(hostToken).digest('hex');
-
-  const boundedTtl = Math.max(1, Math.min(MAX_SESSION_TTL_MINUTES, Number.isInteger(ttlMinutes) ? ttlMinutes : DEFAULT_SESSION_TTL_MINUTES));
-  const now = new Date();
-  const expiresAt = new Date(now.getTime() + boundedTtl * 60 * 1000).toISOString();
-
-  const rootBaseUrl = baseUrl || preflight.https.url;
-  // Fragment-based QR URL: #session=...&token=... — carries ONLY the audience
-  // token. The host token is returned in the create response and never
-  // appears here.
-  const joinUrl = `${rootBaseUrl}/fableloom/join#session=${sessionId}&token=${token}`;
-
-  const session = {
-    id: sessionId,
-    loomId,
-    episodeId,
-    universeId: loom.universeId || null,
-    hashedToken,
-    hashedHostToken,
-    status: 'active',
-    audioTarget: FABLELOOM_AUDIO_TARGETS.includes(audioTarget) ? audioTarget : 'host',
-    currentNodeId: startNode.id,
-    playbackPhase: initialPhaseForNode(startNode),
-    activeHoldIndex: 0,
-    turnPhase: 'idle',
-    transcript: [{
-      id: randomUUID(),
-      role: 'narrator',
-      text: startNode.prose || startNode.title || '',
-      timestamp: now.toISOString(),
-    }],
-    recentTts: [],
-    hostSocketId: null,
-    audienceSocketId: null,
-    activeTurn: null,
-    pendingSpeech: null,
-    sceneGeneration: 0,
-    switchingEpisode: false,
-    episodeSwitchGeneration: 0,
-    createdAt: now.toISOString(),
-    expiresAt,
-  };
-
-  activeSessions.set(sessionId, session);
-
-  return {
-    session: sanitizeHostedSession(session),
-    token, // audience token — returned ONLY once to session creator; also embedded in joinUrl
-    hostToken, // host token — returned ONLY once to session creator; NEVER embedded in joinUrl
-    joinUrl,
-    preflight,
-  };
 }
 
 /** Shared constant-time comparison against a session's stored token hash. */
@@ -607,10 +633,28 @@ export function endHostedSession(sessionId, { reason = 'ended', io } = {}) {
 /** Revoke hosted credentials and close any remaining hosted sockets. */
 export function revokeAllHostedSessions({ reason = 'sessions_revoked', io } = {}) {
   revocationGeneration += 1;
-  for (const id of activeSessions.keys()) {
+  for (const pending of pendingCreations) pending.revoked = true;
+  for (const id of [...activeSessions.keys()]) {
     endHostedSession(id, { reason, io });
   }
   if (io) io.of('/fableloom-hosted').disconnectSockets(true);
+}
+
+/** Revoke hosted sessions created by any of the revoked operator session IDs. */
+export function revokeHostedSessionsByOwner(sessionIds, { reason = 'sessions_revoked', io } = {}) {
+  const revoked = new Set(sessionIds);
+  if (!revoked.size) return 0;
+  for (const id of revoked) recordRevokedOwner(id);
+  for (const pending of pendingCreations) {
+    if (pending.ownerSessionId && revoked.has(pending.ownerSessionId)) pending.revoked = true;
+  }
+  let count = 0;
+  for (const [id, session] of [...activeSessions.entries()]) {
+    if (!session.ownerSessionId || !revoked.has(session.ownerSessionId)) continue;
+    endHostedSession(id, { reason, io });
+    count += 1;
+  }
+  return count;
 }
 
 /**
@@ -1281,4 +1325,6 @@ export function _resetHostedSessions() {
     }
   }
   activeSessions.clear();
+  pendingCreations.clear();
+  revokedOwnerSessions.clear();
 }

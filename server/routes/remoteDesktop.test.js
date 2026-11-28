@@ -56,13 +56,29 @@ describe('remote desktop routes', () => {
 
   it('creates a viewer session for an authenticated instance', async () => {
     const response = await fetchApp(
-      createApp({ enabled: true, authenticated: true }),
+      createApp({ enabled: true, authenticated: true, sessionId: 'sess-owner-1' }),
       '/api/remote-desktop/sessions',
       { method: 'POST' },
     );
 
     expect(response.status).toBe(201);
     expect(response.body.viewerPath).toContain('/remote-desktop?token=');
+    expect(broker.createSession).toHaveBeenCalledWith({ ownerSessionId: 'sess-owner-1' });
+  });
+
+  it('maps a mid-creation session revocation to 401', async () => {
+    broker.createSession.mockRejectedValue(Object.assign(new Error('PortOS session was revoked'), {
+      code: 'REMOTE_DESKTOP_SESSION_REVOKED',
+    }));
+
+    const response = await fetchApp(
+      createApp({ enabled: true, authenticated: true, sessionId: 'sess-revoked' }),
+      '/api/remote-desktop/sessions',
+      { method: 'POST' },
+    );
+
+    expect(response.status).toBe(401);
+    expect(response.body.code).toBe('REMOTE_DESKTOP_SESSION_REVOKED');
   });
 
   it('refuses to create a session when instance authentication is disabled', async () => {
