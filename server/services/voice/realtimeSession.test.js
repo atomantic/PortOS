@@ -16,18 +16,20 @@ class FakeSocket extends EventEmitter {
 const open = async ({ runDelegate = vi.fn().mockResolvedValue('It is 9 PM.') } = {}) => {
   const ws = new FakeSocket();
   const emit = vi.fn();
-  const ensureSidecar = vi.fn().mockResolvedValue({ url: 'ws://127.0.0.1:5569/?token=t' });
-  const pending = openRealtimeCall({ cfg: { realtime: { size: '4B' }, llm: { personality: { name: 'Ada' } } }, emit, runDelegate, connect: () => ws, ensureSidecar });
+  const connect = vi.fn(() => ws);
+  const ensureSidecar = vi.fn().mockResolvedValue({ url: 'ws://127.0.0.1:5569/', token: 'secret-tok' });
+  const pending = openRealtimeCall({ cfg: { realtime: { size: '4B' }, llm: { personality: { name: 'Ada' } } }, emit, runDelegate, connect, ensureSidecar });
   await Promise.resolve();
   ws.text({ type: 'ready' });
   const call = await pending;
-  return { ws, emit, call, runDelegate, ensureSidecar };
+  return { ws, emit, call, runDelegate, ensureSidecar, connect };
 };
 
 describe('openRealtimeCall', () => {
-  it('starts the sidecar with the persona and reports the call live once it is ready', async () => {
-    const { emit, ensureSidecar } = await open();
+  it('starts the sidecar with the persona, authenticates via Bearer header, and reports the call live once ready', async () => {
+    const { emit, ensureSidecar, connect } = await open();
     expect(ensureSidecar).toHaveBeenCalledWith({ size: '4B' }, { persona: expect.stringContaining('You are Ada') });
+    expect(connect).toHaveBeenCalledWith('ws://127.0.0.1:5569/', { headers: { Authorization: 'Bearer secret-tok' } });
     expect(emit).toHaveBeenCalledWith('voice:realtime:state', { active: true });
   });
 

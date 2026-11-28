@@ -27,9 +27,9 @@ export const realtimePersona = (cfg) => {
  * @param {Function} [args.connect]  WebSocket factory (tests)
  * @param {Function} [args.ensureSidecar]
  */
-export const openRealtimeCall = async ({ cfg, emit, runDelegate, connect = (url) => new WebSocket(url), ensureSidecar = ensureRealtimeSidecar }) => {
-  const { url } = await ensureSidecar(cfg.realtime, { persona: realtimePersona(cfg) });
-  const ws = connect(url);
+export const openRealtimeCall = async ({ cfg, emit, runDelegate, connect = (url, options) => new WebSocket(url, options), ensureSidecar = ensureRealtimeSidecar }) => {
+  const { url, token } = await ensureSidecar(cfg.realtime, { persona: realtimePersona(cfg) });
+  const ws = connect(url, token ? { headers: { Authorization: `Bearer ${token}` } } : undefined);
   ws.binaryType = 'nodebuffer';
   let closed = false;
   const pending = new Set();
