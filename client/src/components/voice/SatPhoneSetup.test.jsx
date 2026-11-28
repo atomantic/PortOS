@@ -1,17 +1,15 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
-import { MemoryRouter } from 'react-router';
 
 vi.mock('./ChannelBrainPicker', () => ({ default: () => <div>brain picker</div> }));
 vi.mock('./RealtimeCallPanel', () => ({ default: () => <div>realtime panel</div> }));
-vi.mock('./AvatarRuntimeSettings', () => ({ default: () => <div>avatar settings</div> }));
 
 import { SatPhoneSetup } from './SatPhoneFaceplate';
 
 const setDesktop = (matches) => {
   window.matchMedia = vi.fn().mockReturnValue({ matches, addEventListener: vi.fn(), removeEventListener: vi.fn() });
 };
-const renderSetup = () => render(<MemoryRouter><SatPhoneSetup llmProvider="ollama" llmModel="auto" /></MemoryRouter>);
+const renderSetup = () => render(<SatPhoneSetup llmProvider="ollama" llmModel="auto" />);
 
 afterEach(() => { window.localStorage.clear(); });
 
@@ -20,7 +18,7 @@ describe('SatPhoneSetup', () => {
     setDesktop(false);
     renderSetup();
     expect(screen.queryByRole('tablist')).toBeNull();
-    for (const text of ['brain picker', 'realtime panel', 'avatar settings']) expect(screen.getByText(text)).toBeVisible();
+    for (const text of ['brain picker', 'realtime panel']) expect(screen.getByText(text)).toBeVisible();
   });
 
   it('shows one section at a time behind tabs on desktop, keeping the others mounted', () => {
@@ -32,6 +30,6 @@ describe('SatPhoneSetup', () => {
     expect(screen.getByRole('tab', { name: /Realtime/ })).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByText('realtime panel')).toBeVisible();
     expect(screen.getByText('brain picker')).not.toBeVisible();
-    expect(screen.getByText('avatar settings')).toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: /Avatar/ })).toBeNull();
   });
 });

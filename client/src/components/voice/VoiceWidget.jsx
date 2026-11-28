@@ -282,12 +282,7 @@ export default function VoiceWidget({ config, claimHeld, consoleHost }) {
   }, []);
 
   const floatingFullVisible = enabled && !hidden && !consoleHost && visualMode === 'full';
-  const {
-    data: floatingAvatarData,
-    error: floatingAvatarError,
-    updateData: updateFloatingAvatarData,
-    refetch: refetchFloatingAvatar,
-  } = useAvatarRuntime(floatingFullVisible);
+  const { data: floatingAvatarData, error: floatingAvatarError } = useAvatarRuntime(floatingFullVisible);
   const runningFloatingAvatar = Boolean(!floatingAvatarError && floatingAvatarData?.supported && floatingAvatarData.phase === 'running');
 
   useEffect(() => {
@@ -718,9 +713,6 @@ export default function VoiceWidget({ config, claimHeld, consoleHost }) {
             {...sharedSurfaceProps}
             variant="floating"
             avatarData={floatingAvatarData}
-            avatarError={floatingAvatarError}
-            onUpdateAvatarData={updateFloatingAvatarData}
-            onRefetchAvatar={refetchFloatingAvatar}
             runningAvatar={runningFloatingAvatar}
             isVoiceOutputTab={isVoiceOutputTab}
             onClaimVoiceOutput={claimSpeaker}
