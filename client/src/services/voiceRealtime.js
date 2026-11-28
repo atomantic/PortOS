@@ -21,6 +21,19 @@ class RealtimeMic extends AudioWorkletProcessor {
 registerProcessor('portos-realtime-mic', RealtimeMic);
 `;
 
+// A realtime call owns the microphone and the conversation. The voice widget listens for this event and stops its own
+// listening and speech, so the regular pipeline does not answer the same words as a second conversation.
+export const REALTIME_ACTIVE_EVENT = 'portos:voice-realtime';
+let activeCalls = 0;
+const announce = (delta) => {
+  activeCalls = Math.max(0, activeCalls + delta);
+  if (typeof window.dispatchEvent === 'function') {
+    window.dispatchEvent(new CustomEvent(REALTIME_ACTIVE_EVENT, { detail: { active: activeCalls > 0 } }));
+  }
+};
+/** True from the moment a realtime call starts (model still loading included) until it ends. */
+export const isRealtimeCallActive = () => activeCalls > 0;
+
 /** Float32 [-1, 1] samples to little-endian PCM16 bytes. */
 export const floatToPcm16 = (samples) => {
   const out = new Int16Array(samples.length);
@@ -48,6 +61,9 @@ export const startRealtimeCall = async (handlers = {}) => {
   const stream = await navigator.mediaDevices.getUserMedia({
     audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 },
   });
+  announce(1);
+  let announced = true;
+  const release = () => { if (announced) { announced = false; announce(-1); } };
   const Ctor = window.AudioContext || window.webkitAudioContext;
   let micCtx;
   let outCtx;
@@ -67,6 +83,7 @@ export const startRealtimeCall = async (handlers = {}) => {
     stream.getTracks().forEach((t) => t.stop());
     micCtx?.close().catch(() => {});
     outCtx?.close().catch(() => {});
+    release();
     throw err;
   } finally {
     URL.revokeObjectURL(url);
@@ -113,6 +130,7 @@ export const startRealtimeCall = async (handlers = {}) => {
     if (stopped) return;
     stopped = true;
     live = false;
+    release();
     if (emitStop) socket.emit('voice:realtime:stop');
     for (const [event, fn] of Object.entries(listeners)) socket.off(event, fn);
     flush();

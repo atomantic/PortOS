@@ -197,3 +197,27 @@ describe('startRealtimeCall', () => {
     expect(onState).toHaveBeenCalledWith({ active: false, error: 'Connection to PortOS was lost.' });
   });
 });
+
+describe('realtime call ownership', () => {
+  it('announces the call to the voice widget from start to hang-up, and on a failed start', async () => {
+    const { startRealtimeCall, isRealtimeCallActive, REALTIME_ACTIVE_EVENT } = await import('./voiceRealtime');
+    const target = new EventTarget();
+    const seen = [];
+    target.addEventListener(REALTIME_ACTIVE_EVENT, (e) => seen.push(e.detail.active));
+    const AudioContextCtor = vi.fn(function Ctx() {
+      this.audioWorklet = { addModule: vi.fn().mockRejectedValue(new Error('no worklet')) };
+      this.close = vi.fn(() => Promise.resolve());
+    });
+    vi.stubGlobal('window', Object.assign(target, { AudioContext: AudioContextCtor }));
+    const track = { stop: vi.fn() };
+    vi.stubGlobal('navigator', { mediaDevices: { getUserMedia: vi.fn().mockResolvedValue({ getTracks: () => [track] }) } });
+    try {
+      await expect(startRealtimeCall()).rejects.toThrow('no worklet');
+      expect(seen).toEqual([true, false]);
+      expect(isRealtimeCallActive()).toBe(false);
+      expect(track.stop).toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});

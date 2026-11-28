@@ -1381,6 +1381,22 @@ describe('realtime speech-to-speech voice call', () => {
   });
 
   it.each([
+    ['voice:text', { text: 'what time is it', source: 'voice' }],
+    ['voice:turn', { audio: Buffer.alloc(64), mimeType: 'audio/wav' }],
+  ])('drops %s while a realtime call is live, so the pipeline does not answer as a second conversation', async (event, payload) => {
+    openRealtimeCall.mockResolvedValue(makeSession());
+    const socket = makeFakeSocket();
+    registerVoiceHandlers(socket);
+    await socket.fire('voice:realtime:start');
+    runTurn.mockClear();
+
+    await socket.fire(event, payload);
+
+    expect(runTurn).not.toHaveBeenCalled();
+    expect(socket.emitted).toContainEqual({ event: 'voice:idle', payload: { reason: 'realtime-active' } });
+  });
+
+  it.each([
     ['voice disabled', { enabled: false, realtime: { enabled: true } }, 'Voice mode is turned off in Voice settings.'],
     ['realtime disabled', { enabled: true, realtime: { enabled: false } }, 'Realtime voice is turned off in Voice settings.'],
     ['realtime omitted', { enabled: true }, 'Realtime voice is turned off in Voice settings.'],

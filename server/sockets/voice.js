@@ -233,6 +233,17 @@ export const registerVoiceHandlers = (socket) => {
   // run the LLM/TTS pipeline either. Small race (config change mid-turn) is
   // acceptable: the per-turn check runs at event dispatch, not inside the
   // streaming loop.
+  // A realtime call owns the conversation: the realtime voice hears the mic
+  // and speaks. A pipeline turn arriving meanwhile (the widget's hands-free
+  // listener, a typed line) would answer separately in the Piper voice as a
+  // second conversation, so it is dropped while the call is live or starting.
+  const realtimeOwnsTurn = (stage) => {
+    if (!realtime && !realtimeStarting) return false;
+    socket.emit('voice:idle', { reason: 'realtime-active' });
+    socket.emit('voice:error', { stage, code: 'REALTIME_ACTIVE', message: 'A realtime call is live. Hang up the realtime call to use the regular voice.' });
+    return true;
+  };
+
   const ensureEnabled = async (stage) => {
     const cfg = await getVoiceConfig();
     if (cfg.enabled) return true;
@@ -243,6 +254,7 @@ export const registerVoiceHandlers = (socket) => {
   socket.on('voice:turn', async (payload = {}) => {
     try {
       if (!(await ensureEnabled('turn'))) return;
+      if (realtimeOwnsTurn('turn')) return;
       const { audio, mimeType: rawMime } = payload && typeof payload === 'object' ? payload : {};
       if (!audio) {
         socket.emit('voice:error', { stage: 'turn', message: 'audio is required' });
@@ -277,6 +289,7 @@ export const registerVoiceHandlers = (socket) => {
   socket.on('voice:text', async (payload = {}) => {
     try {
       if (!(await ensureEnabled('text'))) return;
+      if (realtimeOwnsTurn('text')) return;
       const raw = payload?.text;
       if (typeof raw !== 'string' && typeof raw !== 'number') {
         socket.emit('voice:error', { stage: 'text', message: 'text is required' });
