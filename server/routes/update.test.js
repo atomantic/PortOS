@@ -7,12 +7,13 @@ import { recordingOperatorIo } from '../test/recordingOperatorIo.js';
 import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
-import { errorMiddleware, errorEvents } from '../lib/errorHandler.js';
+import { errorMiddleware, errorEvents, ServerError } from '../lib/errorHandler.js';
 
 // Mock the services the execute route depends on. Completion is fire-and-
 // forget in the route (not awaited), so a resolved stub is enough.
 vi.mock('../services/updateChecker.js', () => ({
   getUpdateStatus: vi.fn(),
+  getAutoUpdateRuntime: vi.fn(),
   checkForUpdate: vi.fn(),
   ignoreVersion: vi.fn(),
   clearIgnored: vi.fn(),
@@ -52,11 +53,34 @@ vi.mock('../services/cos/cosState.js', () => ({
   withStateLock: vi.fn(async (fn) => fn()),
 }));
 
+vi.mock('../services/nodeRuntime.js', () => ({
+  getNodeRuntimeStatus: vi.fn(),
+  repairStartup: vi.fn(),
+  startNodeUpdate: vi.fn(),
+  startPm2Update: vi.fn(),
+}));
+vi.mock('../services/settings.js', () => ({ getSettings: vi.fn() }));
+vi.mock('../services/updateRepoReadiness.js', () => ({ checkUpdateRepoReadiness: vi.fn() }));
+vi.mock('../services/runtimeUpdateReview.js', () => ({ getBrowserUpdateSnapshot: vi.fn() }));
+vi.mock('../services/blenderInstaller.js', () => ({ startBlenderInstall: vi.fn() }));
+vi.mock('../services/homebrewUpgrades.js', () => ({
+  startHomebrewJob: vi.fn(),
+  setHomebrewHold: vi.fn(),
+}));
+
 import * as updateChecker from '../services/updateChecker.js';
 import { launchUpdate } from '../services/updateExecutor.js';
 import { getActiveAgentIds } from '../services/agent/agentState.js';
 import { readPersistentMindStateForSafetyCheck } from '../services/cos/cosState.js';
 import { filterLiveAgentIds } from '../services/cos/cosAgentLifecycle.js';
+import { getSystemActivity } from '../services/activeProcessing.js';
+import { getSettings } from '../services/settings.js';
+import { checkUpdateRepoReadiness } from '../services/updateRepoReadiness.js';
+import { repairStartup, startNodeUpdate, startPm2Update } from '../services/nodeRuntime.js';
+import { runtimeUpdateEvents } from '../services/runtimeUpdateEvents.js';
+import { getBrowserUpdateSnapshot } from '../services/runtimeUpdateReview.js';
+import { startBlenderInstall } from '../services/blenderInstaller.js';
+import { startHomebrewJob, setHomebrewHold } from '../services/homebrewUpgrades.js';
 import updateRoutes from './update.js';
 
 // The execute route streams all progress over `req.app.get('io')`; without one
@@ -566,4 +590,175 @@ describe('POST /api/update/check', () => {
     expect(res.status).toBe(200);
     expect(updateChecker.checkForUpdate).toHaveBeenCalledWith({ manual: true });
   });
+});
+
+describe('GET /api/update/auto', () => {
+  const runtime = { lastOutcome: 'idle' };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    updateChecker.getAutoUpdateRuntime.mockResolvedValue(runtime);
+  });
+
+  it('returns the disabled config and runtime without checking readiness or activity', async () => {
+    getSettings.mockResolvedValue({
+      autoUpdate: { enabled: false, channel: 'main', minIntervalHours: 12, resolveBlockersWithAgent: false },
+    });
+    const res = await request(makeApp()).get('/api/update/auto');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      config: { enabled: false, channel: 'main', minIntervalHours: 12, resolveBlockersWithAgent: false },
+      bounds: { minIntervalHours: { min: 1, max: 720 } },
+      runtime,
+      repo: null,
+      activity: null,
+    });
+    expect(checkUpdateRepoReadiness).not.toHaveBeenCalled();
+    expect(getSystemActivity).not.toHaveBeenCalled();
+  });
+
+  it('reports readiness without fetching and returns the activity verdict when enabled', async () => {
+    const repo = { ready: true };
+    const activity = { idle: false, reason: 'Work in progress' };
+    getSettings.mockResolvedValue({ autoUpdate: { enabled: true } });
+    checkUpdateRepoReadiness.mockResolvedValue(repo);
+    getSystemActivity.mockResolvedValueOnce({ activity, jobs: [] });
+    const res = await request(makeApp()).get('/api/update/auto');
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ config: { enabled: true }, runtime, repo, activity });
+    expect(checkUpdateRepoReadiness).toHaveBeenCalledExactlyOnceWith({ fetch: false });
+    expect(getSystemActivity).toHaveBeenCalledExactlyOnceWith();
+  });
+});
+
+describe('POST and DELETE /api/update/ignore', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('strips the leading v before saving and returns the refreshed status', async () => {
+    const status = { ignoredVersions: ['1.27.0'] };
+    updateChecker.getUpdateStatus.mockResolvedValueOnce(status);
+    const res = await request(makeApp()).post('/api/update/ignore').send({ version: 'v1.27.0' });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(status);
+    expect(updateChecker.ignoreVersion).toHaveBeenCalledExactlyOnceWith('1.27.0');
+    expect(updateChecker.ignoreVersion).toHaveBeenCalledBefore(updateChecker.getUpdateStatus);
+  });
+
+  it('rejects an empty version before writing', async () => {
+    const res = await request(makeApp()).post('/api/update/ignore').send({ version: '' });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+    expect(updateChecker.ignoreVersion).not.toHaveBeenCalled();
+  });
+
+  it('clears the ignore list and returns the refreshed status', async () => {
+    const status = { ignoredVersions: [] };
+    updateChecker.getUpdateStatus.mockResolvedValueOnce(status);
+    const res = await request(makeApp()).delete('/api/update/ignore');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(status);
+    expect(updateChecker.clearIgnored).toHaveBeenCalledExactlyOnceWith();
+    expect(updateChecker.clearIgnored).toHaveBeenCalledBefore(updateChecker.getUpdateStatus);
+  });
+});
+
+describe('POST /api/update/node-runtime/startup', () => {
+  const onChange = vi.fn();
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    runtimeUpdateEvents.on('changed', onChange);
+    return () => runtimeUpdateEvents.off('changed', onChange);
+  });
+
+  it('returns 409 when startup cannot be fixed and emits no change', async () => {
+    repairStartup.mockResolvedValue(false);
+    const res = await request(makeApp()).post('/api/update/node-runtime/startup');
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('STARTUP_NOT_FIXABLE');
+    expect(mockIo.emit.mock.calls.map(([event]) => event)).not.toContain('portos:node-runtime:changed');
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it('notifies operators and runtime listeners after a successful repair', async () => {
+    repairStartup.mockResolvedValue(true);
+    const res = await request(makeApp()).post('/api/update/node-runtime/startup');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ fixed: true });
+    expect(mockIo.emit).toHaveBeenCalledExactlyOnceWith('portos:node-runtime:changed', { reason: 'startup' });
+    expect(onChange).toHaveBeenCalledExactlyOnceWith();
+  });
+});
+
+describe.each([
+  {
+    path: '/node-runtime', operation: startNodeUpdate, status: 202,
+    input: { version: 'v26.12.1', acknowledgeBusy: true },
+    invalid: { version: 'latest' },
+    expected: { version: 'v26.12.1', acknowledgeBusy: true },
+  },
+  {
+    path: '/pm2', operation: startPm2Update, status: 202,
+    input: { acknowledgeBusy: false },
+    invalid: { acknowledgeBusy: 'false' },
+    expected: { acknowledgeBusy: false },
+  },
+  {
+    path: '/software/blender', operation: startBlenderInstall, status: 202,
+    input: { acknowledgeBusy: true },
+    invalid: { acknowledgeBusy: 'true' },
+    expected: { acknowledgeBusy: true },
+  },
+  {
+    path: '/software/homebrew/upgrade', operation: startHomebrewJob, status: 202,
+    input: { names: ['example/tool/tool@2'], acknowledgeRisk: true, acknowledgeBusy: false },
+    invalid: { names: ['-invalid'] },
+    expected: { kind: 'upgrade', names: ['example/tool/tool@2'], acknowledgeRisk: true, acknowledgeBusy: false },
+  },
+  {
+    path: '/software/homebrew/repair', operation: startHomebrewJob, status: 202,
+    input: {},
+    invalid: { acknowledgeBusy: 1 },
+    expected: { kind: 'repair', acknowledgeBusy: undefined },
+  },
+  {
+    path: '/software/homebrew/hold', operation: setHomebrewHold, status: 200,
+    input: { names: ['example-tool'], hold: false },
+    invalid: { names: ['example-tool'] },
+    expected: { names: ['example-tool'], hold: false },
+  },
+])('POST /api/update$path', ({ path, operation, status, input, invalid, expected }) => {
+  beforeEach(() => operation.mockReset());
+
+  it('returns the operation result with the route status and passes the socket publisher', async () => {
+    const result = { accepted: true };
+    operation.mockResolvedValue(result);
+    const res = await request(makeApp()).post(`/api/update${path}`).send(input);
+    expect(res.status).toBe(status);
+    expect(res.body).toEqual(result);
+    expect(operation).toHaveBeenCalledExactlyOnceWith({ ...expected, io: mockIo });
+  });
+
+  it('rejects invalid input before invoking the operation', async () => {
+    const res = await request(makeApp()).post(`/api/update${path}`).send(invalid);
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+    expect(operation).not.toHaveBeenCalled();
+  });
+});
+
+it('POST /api/update/node-runtime surfaces a busy restart refusal instead of 202', async () => {
+  const message = 'PortOS is busy (active work). Updating Node waits until that finishes.';
+  startNodeUpdate.mockRejectedValueOnce(new ServerError(message, { status: 409, code: 'SYSTEM_BUSY' }));
+  const res = await request(makeApp()).post('/api/update/node-runtime').send({ version: 'v26.12.1' });
+  expect(res.status).toBe(409);
+  expect(res.body).toMatchObject({ code: 'SYSTEM_BUSY', error: message });
+});
+
+it('GET /api/update/browser returns the observed browser snapshot', async () => {
+  const snapshot = { installedVersion: '140.0.0.0', availableVersion: '141.0.0.0' };
+  getBrowserUpdateSnapshot.mockReturnValue(snapshot);
+  const res = await request(makeApp()).get('/api/update/browser');
+  expect(res.status).toBe(200);
+  expect(res.body).toEqual(snapshot);
 });
