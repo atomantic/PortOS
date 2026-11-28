@@ -23,6 +23,10 @@ describe('the checkout-scoped corpus', () => {
       expect(ast.errors.map(error => error.reasonCode)).toEqual(['IllegalReturn']);
       expect(corpus.parseAst(path)).toBe(ast);
       expect(corpus.parseAst('./module.js')).toBe(ast);
+      const tokenless = corpus.parseAst(path, { tokens: false });
+      expect(tokenless.tokens).toBeUndefined();
+      expect(tokenless.program).toEqual(ast.program);
+      expect(corpus.parseAst('module.js', { tokens: false })).toBe(tokenless);
     } finally {
       rmSync(scratch, { recursive: true, force: true });
     }

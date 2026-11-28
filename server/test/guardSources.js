@@ -46,8 +46,13 @@ export const mayHavePm2LogRead = (source) => source.includes('getLogs') || sourc
 
 /** Retain ASTs only for sources that more than one guard can visit. */
 export function parseRuntimeAst(path, source = guardCorpus().read(path)) {
-  return JSON_AST_CANDIDATE.test(source) || mayHaveSocketBroadcast(source) || mayHavePm2LogRead(source)
-    ? guardCorpus().parseAst(path) : parseGuardSource(source);
+  // Only the JSON scanner uses tokens to key expressions. Socket and PM2
+  // checks can reuse the floating-async AST without allocating token objects.
+  if (JSON_AST_CANDIDATE.test(source)) return guardCorpus().parseAst(path);
+  if (mayHaveSocketBroadcast(source) || mayHavePm2LogRead(source)) {
+    return guardCorpus().parseAst(path, { tokens: false });
+  }
+  return parseGuardSource(source);
 }
 
 /** Consumers that used strict Babel parsing must also reject recovered errors. */
